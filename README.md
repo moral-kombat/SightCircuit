@@ -64,6 +64,10 @@ for details and troubleshooting.
 
 ## Design and next steps
 
+Continuing from a web terminal or development session on the headset? Start with
+the [on-device handoff and inventory](docs/on-device.md) before installing the
+desktop development dependencies there.
+
 The intended live path is:
 
 ```text
