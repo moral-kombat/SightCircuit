@@ -1,0 +1,19 @@
+{
+  "assets": [
+    {
+      "name": "MobileNetSSD_deploy.prototxt",
+      "url": "https://raw.githubusercontent.com/chuanqi305/MobileNet-SSD/bb17b6c3eef36d80be441ae8e5339be66e8e3b7a/deploy.prototxt",
+      "sha256": "2d180f723b3109e21f8287f6b3c691390d07b60eed998327cd3259ffa0e50608"
+    },
+    {
+      "name": "MobileNetSSD_deploy.caffemodel",
+      "url": "https://raw.githubusercontent.com/chuanqi305/MobileNet-SSD/bb17b6c3eef36d80be441ae8e5339be66e8e3b7a/mobilenet_iter_73000.caffemodel",
+      "sha256": "52eed8be80522c152a17fb56740de705b79881bde1a167e0e747310523685fc7"
+    },
+    {
+      "name": "dog.jpg",
+      "url": "https://raw.githubusercontent.com/pjreddie/darknet/f6afaabcdf85f77e7aff2ec55c020c0e297c77f9/data/dog.jpg",
+      "sha256": "5a9522051c3cec2bbd2f6323fccba32e8fbf3ddcc2b3e2fd46b04c720bc6f866"
+    }
+  ]
+}

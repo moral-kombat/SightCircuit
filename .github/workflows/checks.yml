@@ -1,0 +1,27 @@
+name: Development checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install setup tool
+        run: python -m pip install uv==0.12.23
+      - name: Check shell syntax
+        run: bash -n scripts/setup.sh
+      - name: Install dependencies and verified fixtures
+        run: bash scripts/setup.sh
+      - name: Validate decoding, inference and offscreen rendering
+        run: .venv/bin/python scripts/smoke_check.py

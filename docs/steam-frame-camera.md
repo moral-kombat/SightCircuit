@@ -1,0 +1,204 @@
+# Steam Frame and Arcturus camera integration
+
+Research snapshot: 2026-10-15. Sources were inspected on GitHub. This cloud
+environment has no headset, physical camera, display server, or GPU; the hardware
+results below are attributed to their authors, not reproduced here.
+
+## What the available sources establish
+
+Valve publishes a general application camera interface, `IVRTrackedCamera_006`,
+in the [OpenVR SDK][openvr-api]. It does not establish that the Steam Frame
+runtime exposes the Arcturus RGB camera through that interface. No public,
+stable Steam Frame/Arcturus-specific live capture SDK or electrical connector
+pinout was found in the GitHub sources reviewed.
+
+The most relevant Frame-specific live-capture source found is the community
+[steam-frame-hand-tracking project][hand-report]. Its investigation reports that
+the public API fails to deliver frames on its tested runtime, while an
+experimental Vulkan capture path delivers the Arcturus passthrough pair.
+Treat this as evidence for an implementation experiment, not a vendor support
+contract or a result for every firmware version.
+
+| Source | Information useful to Framejacker | Evidence and limits |
+| --- | --- | --- |
+| [Valve OpenVR camera interface][openvr-api] | Discovery, shared streaming, CPU RGBA frames, GL textures, intrinsics and projection | Official SDK contract; Arcturus support must be probed on-device |
+| [Valve tracked-camera sample][openvr-sample] | Buffer allocation, sequence checking, frame copy and cleanup | Official general example; not a Steam Frame compatibility test |
+| [Valve OpenCV sandbox][openvr-geometry] | Per-camera intrinsics and camera-to-head transforms | Official geometry example; properties may be unavailable on Frame |
+| [Community camera investigation][hand-findings] | Failed public API probes, XRService ownership, recording/calibration findings | Author-reported hardware results from October 2026 |
+| [Community capture implementation][hand-capture] | Vulkan DMA-BUF import, GPU luma extraction and shared-memory output | Experimental integration inside `vrcompositor`; not a public camera SDK |
+| [Frame Passthrough Shortcuts][source-switch] | Arcturus presence detection and RGB/monochrome switching | Uses private interfaces; source selection does not provide image frames |
+
+## Valve's documented application interface
+
+The [public header][openvr-api] and [official sample][openvr-sample] define this
+capture pattern:
+
+1. Initialize OpenVR and obtain `vr::VRTrackedCamera()`. The official sample
+   queries the HMD using `vr::k_unTrackedDeviceIndex_Hmd`.
+2. Call `HasCamera`, query `GetCameraFrameSize` for the chosen frame type, and
+   check every returned error. A true `HasCamera` result alone is insufficient.
+3. Query calibration with `GetCameraIntrinsics` and `GetCameraProjection`.
+   Inspect camera count/layout properties rather than assuming a stereo layout.
+4. Acquire a shared stream with `AcquireVideoStreamingService`. Allocate the
+   buffer size returned by `GetCameraFrameSize`, rather than deriving allocation
+   from guessed dimensions.
+5. Poll `GetVideoStreamFrameBuffer`, supplying
+   `sizeof(vr::CameraVideoStreamFrameHeader_t)` as the header size. Header-first
+   polling and `nFrameSequence` comparison can avoid copying the same frame
+   repeatedly. The header suggests approximately 16 ms polling intervals.
+6. Release the streaming handle with `ReleaseVideoStreamingService`, including
+   on error exits. The GL texture path has an additional
+   `ReleaseVideoStreamTextureGL` call.
+
+Important details from the header:
+
+- The CPU frame API returns **RGBA, four bytes per pixel**. Convert explicitly
+  for a BGR/RGB detector. Driver-side native formats such as NV12 are a different
+  interface contract.
+- `AcquireVideoStreamingService` takes a tracked-device index, with no documented
+  RGB/monochrome source selector. The `nCameraIndex` argument to calibration calls
+  is not documented as a camera-source selection mechanism.
+- [Layout flags][openvr-layout] describe mono/stereo and horizontal or vertical
+  packing. Frame types distinguish distorted, undistorted and maximum-undistorted
+  images; zero alpha marks invalid maximum-undistorted pixels.
+- The [frame header][openvr-frame] carries dimensions, bytes per pixel, sequence,
+  a tracked-device pose and exposure midpoint in **host-system ticks**. Preserve
+  its timebase; do not assume milliseconds, Unix time or seconds.
+- [`NoFrameAvailable`][openvr-errors] can occur during startup/reactivation.
+  Handle it separately from unsupported-device, size, handle and IPC failures.
+  The camera is shared and may become inactive while the headset is idle.
+- [`IVRCameraComponent_003`][openvr-driver] is the driver-facing interface for
+  adding device support. It is not the application capture API.
+
+## Steam Frame observations from community code
+
+These findings apply to the cited projects and tested runtimes. Recheck them on
+the target headset after SteamOS/SteamVR updates.
+
+### Public API and camera ownership
+
+The [hand-tracking investigation][hand-findings] reports:
+
+- `HasCamera=1` and successful streaming-handle acquisition, but
+  `GetCameraFrameSize` fails for all frame types and calibration properties are
+  unavailable. Acquiring a handle therefore does not demonstrate usable capture.
+- `/dev/video99` is a composited headset mirror, not raw stereo input.
+- Physical camera nodes are owned by XRService. Their existence does not make
+  `cv2.VideoCapture(0)` a valid Arcturus capture method.
+- The investigated XRService IPC path is single-session and already used by
+  the tracking driver. It is not established as a supported second-client API.
+
+The [source-switching implementation][source-switch] discovers sensor nodes by
+the `arcimx616 ` name prefix and uses a private connection query. It switches
+passthrough sources with `IVRCameraPassthroughInternal_001`, using private vtable
+slots verified by that author on one firmware build. This is useful evidence
+about source control, but supplies no capture buffer and no stable public ABI.
+Do not confuse these sensor nodes with proof of USB UVC compatibility.
+
+### Experimental live capture
+
+The [community report][hand-report] describes this path:
+
+```text
+Arcturus passthrough pair → XRService → vrcompositor
+                                         ↓ passive Vulkan layer shares DMA-BUFs
+                               separate Vulkan process (ptgrab)
+                                         ↓ GPU extraction/downscale
+                               shared-memory luma frames → inference
+```
+
+The author reports 2464 × 2464 NV12 camera images at 60 fps, with Qualcomm UBWC
+compression. These are observed values, not dimensions or performance to hardcode.
+The Vulkan importer needs image format, plane offsets/row pitches and DRM
+modifier metadata; the compressed buffers cannot be treated as ordinary linear
+NV12 byte arrays.
+
+The [actual capture implementation][hand-capture] publishes downscaled **luma**
+frames, commonly 640 × 640 per camera, to `/dev/shm/mrhand-pt`. Its
+[shared-memory contract][hand-protocol] includes dimensions, camera slots,
+seqlocks, observation times and local frame counters. It does not provide a
+ready-made color RGB stream for our detector.
+
+The author's [timestamp description][hand-timebase] and
+[capture caveats][hand-timing] are material: producer frame sequence and producer
+synchronization fences are unavailable through this path. Capture timestamps are
+observation-time estimates, not exposure timestamps, and some frames are missed.
+Consumer-side Vulkan fences do not establish synchronization with the camera
+producer. Avoid presenting these estimates as exact exposure times or guaranteed
+stereo synchronization.
+
+This layer changes compositor startup. Keep it as a separately evaluated,
+optional backend, with the upstream rollback process available. It has not been
+installed in the cloud environment or on a headset as part of this project.
+
+## Calibration, spatial labels and Gaussian splats
+
+For 3D labels, retain camera intrinsics/distortion, per-camera extrinsics, the
+camera-to-head transform, frame timebase and the matching headset pose. Detecting
+an object in 2D does not determine its 3D location; add measured/estimated depth
+and transform it into the chosen tracking space. Use calibration from the actual
+camera/headset, rather than copying another author's numerical parameters.
+
+The community [dataset recorder findings][hand-recorder] describe factory rig
+calibration and beginning/end stereo RGB snapshots. Its continuous video was
+**one SLAM camera**, not continuous Arcturus stereo color video. This diagnostic
+recording is distinct from the Arcturus camera app's stereo recordings.
+
+[Splat Workshop][splat-workshop] documents the latter as `*_stereo.mp4` with two
+video tracks plus calibration/pose metadata. Its workflow is recorded capture →
+vendor AV1-to-3DGS scripts → Arcturus's [Spirula Studio fork][spirula] on a GPU
+computer → scene conversion/viewing in Gaussian XR on Frame. Spirula supports a
+Vulkan backend; this path does not inherently require an NVIDIA/CUDA-only setup.
+The vendor fork also documents [calibrated-camera manifests][spirula-manifest].
+
+Keep reconstruction separate from live detection. Start splat experiments with
+mostly static scenes; the community recording guide reports smearing from moving
+people and pets. Preserve original camera recordings and metadata for
+reconstruction; our generated MJPEG environment fixture does not reproduce that
+recording format. The CPU-only cloud environment has not validated splat training
+or headset splat rendering.
+
+## Implementation sequence and remaining checks
+
+1. Keep a file/replay input backend for camera-independent detector and window
+   development. Add a capture abstraction so hardware experiments do not affect
+   inference or presentation.
+2. On the actual headset, record the architecture and SteamOS/SteamVR versions,
+   then run a public OpenVR capability probe. Exercise discovery, frame sizes,
+   calibration, acquisition, an actual frame copy and release. Log named errors
+   without changing camera settings. Test camera connection and headset wake/idle.
+3. If public capture fails, obtain the supported live capture contract from
+   Arcturus/Valve. Evaluate the cited Vulkan path separately if no supported
+   interface is available. Verify color conversion, stereo identity, image
+   orientation, timestamps, synchronization and behavior after runtime updates.
+4. Pass frames to the detector with explicit pixel format/stride, camera identity,
+   timestamp and timebase provenance, optional producer sequence, calibration
+   reference and pose validity. Use a bounded latest-frame queue and measure
+   dropped frames, latency and contention with XRService/compositor work.
+5. Start with a 2D annotated window or VR panel. Use Valve's
+   [overlay sample][openvr-overlay] as a public API reference, then validate it
+   on Frame. Add world-space labels only after calibration and depth checks.
+
+No on-device probe, camera SDK installation, Vulkan capture deployment or VR
+overlay test has been performed here. Public SDK documentation and community
+hardware reports should remain distinct in implementation and readiness claims.
+
+[openvr-api]: https://github.com/ValveSoftware/openvr/blob/0924064316de3effbcd1acf1e309182a2deb1c05/headers/openvr.h#L4919
+[openvr-sample]: https://github.com/ValveSoftware/openvr/blob/0924064316de3effbcd1acf1e309182a2deb1c05/samples/tracked_camera_openvr_sample/tracked_camera_openvr_sample.cpp#L349
+[openvr-geometry]: https://github.com/ValveSoftware/openvr/blob/0924064316de3effbcd1acf1e309182a2deb1c05/samples/hmd_opencv_sandbox/opencv_process.cpp#L81
+[openvr-layout]: https://github.com/ValveSoftware/openvr/blob/0924064316de3effbcd1acf1e309182a2deb1c05/headers/openvr.h#L2073
+[openvr-frame]: https://github.com/ValveSoftware/openvr/blob/0924064316de3effbcd1acf1e309182a2deb1c05/headers/openvr.h#L2102
+[openvr-errors]: https://github.com/ValveSoftware/openvr/blob/0924064316de3effbcd1acf1e309182a2deb1c05/headers/openvr.h#L2052
+[openvr-driver]: https://github.com/ValveSoftware/openvr/blob/0924064316de3effbcd1acf1e309182a2deb1c05/headers/openvr_driver.h#L3168
+[openvr-overlay]: https://github.com/ValveSoftware/openvr/blob/0924064316de3effbcd1acf1e309182a2deb1c05/samples/helloworldoverlay/openvroverlaycontroller.cpp
+[hand-findings]: https://github.com/spyjacob/steam-frame-hand-tracking/blob/ff6a2b29bc50c9497d66fd7ff07e00b61f9eb082/FINDINGS.md#L6-L20
+[hand-report]: https://github.com/spyjacob/steam-frame-hand-tracking/blob/ff6a2b29bc50c9497d66fd7ff07e00b61f9eb082/REPORT.md#L26-L48
+[hand-capture]: https://github.com/spyjacob/steam-frame-hand-tracking/blob/ff6a2b29bc50c9497d66fd7ff07e00b61f9eb082/capture/ptgrab.cpp
+[hand-protocol]: https://github.com/spyjacob/steam-frame-hand-tracking/blob/ff6a2b29bc50c9497d66fd7ff07e00b61f9eb082/capture/handcam_proto.h#L30-L44
+[hand-timebase]: https://github.com/spyjacob/steam-frame-hand-tracking/blob/ff6a2b29bc50c9497d66fd7ff07e00b61f9eb082/REPORT.md#L116-L117
+[hand-timing]: https://github.com/spyjacob/steam-frame-hand-tracking/blob/ff6a2b29bc50c9497d66fd7ff07e00b61f9eb082/REPORT.md#L174-L180
+[hand-recorder]: https://github.com/spyjacob/steam-frame-hand-tracking/blob/ff6a2b29bc50c9497d66fd7ff07e00b61f9eb082/FINDINGS.md#L23-L34
+[source-switch]: https://github.com/KominoVR/frame-passthrough-shortcuts/blob/032841dcde61059b25d33a487bf202a30fbf58f1/src/openvr_camera_source.cpp#L29-L117
+[splat-workshop]: https://github.com/thunderheronight/splat-workshop/blob/a4ef32f28aab0b8372c09a8c221ef0f59bfeff4a/README.md
+[spirula]: https://github.com/arcturus-vision/spirula-studio/blob/069fb5e489fb81c4c8d04b515330851ab88c7965/README.md
+[spirula-manifest]: https://github.com/arcturus-vision/spirula-studio/blob/069fb5e489fb81c4c8d04b515330851ab88c7965/src/sfm/README.md#L300

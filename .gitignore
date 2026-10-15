@@ -1,0 +1,21 @@
+# Local Python environments and generated files
+/.venv/
+/.cache/
+/artifacts/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Local inputs and models; keep private camera recordings out of source control
+/recordings/
+/calibration/
+/models/
+
+# Local credentials and editor files
+.env
+.env.*
+!.env.example
+.DS_Store
+*.swp
+*.swo
