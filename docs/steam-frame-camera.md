@@ -1,8 +1,10 @@
 # Steam Frame and Arcturus camera integration
 
-Research snapshot: 2026-10-15. Sources were inspected on GitHub and the official
-Arcturus website. This cloud environment has no headset, physical camera,
-display server, or GPU. Project device results below are reports from the user
+Initial research snapshot: 2026-10-15; the
+[source review and stream strategy](capture-reference-review.md) adds
+implementation findings checked on 2026-10-16. Sources were inspected on GitHub
+and the official Arcturus website. This cloud environment has no headset,
+physical camera, display server, or GPU. Project device results below are reports from the user
 running commands and apps on their Frame; community results are attributed to
 their authors. Cloud validation covers native builds and controlled
 missing-runtime behavior, not working camera capture.
@@ -130,6 +132,9 @@ The [hand-tracking investigation][hand-findings] reports:
   `GetCameraFrameSize` fails for all frame types and calibration properties are
   unavailable. Acquiring a handle therefore does not demonstrate usable capture.
 - `/dev/video99` is a composited headset mirror, not raw stereo input.
+  It may still be useful for a first 2D recognition demo if it includes live
+  passthrough on our runtime. That content and output-panel feedback must be
+  checked; the mirror has not been captured by this project.
 - Physical camera nodes are owned by XRService. Their existence does not make
   `cv2.VideoCapture(0)` a valid Arcturus capture method.
 - The investigated XRService IPC path is single-session and already used by
@@ -165,6 +170,13 @@ frames, commonly 640 × 640 per camera, to `/dev/shm/mrhand-pt`. Its
 [shared-memory contract][hand-protocol] includes dimensions, camera slots,
 seqlocks, observation times and local frame counters. It does not provide a
 ready-made color RGB stream for our detector.
+
+Code review confirms that `ptgrab` filters for 2464 × 2464 images, assigns two
+camera slots by sorted buffer IDs and uses pixel-strip changes to infer frame
+readiness. The author's report says built-in-camera-sized buffers stayed empty.
+The current implementation therefore establishes an Arcturus-specific lead,
+not a general built-in-camera backend. The [source review](capture-reference-review.md)
+details lifecycle, descriptor and synchronization work needed for adaptation.
 
 The author's [timestamp description][hand-timebase] and
 [capture caveats][hand-timing] are material: producer frame sequence and producer

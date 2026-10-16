@@ -1,9 +1,11 @@
 # Live capture plan
 
 The replay window and head-relative VR panel work on the user's Frame, including
-playback and controls. Live capture is not implemented. The next engineering
-task is a standalone capture-only reader, tested with a controlled producer
-before attempting a device capture trial.
+playback and controls. Live capture is not implemented. The
+[source review and strategy](capture-reference-review.md) adds a short
+feasibility check of an existing composited mirror before a compositor-layer
+trial. The next dedicated-camera task remains a standalone capture-only reader,
+tested with a controlled producer before attempting that device trial.
 
 ## Choose a frame provider
 
@@ -17,17 +19,20 @@ image.
 | --- | --- | --- |
 | Supported Arcturus/Valve interface | No public live-frame contract found in the reviewed sources | Seek SDK or frame-sharing documentation; prefer it if available |
 | Public OpenVR tracked-camera API | Our probe returned no frames and interrupted passthrough | Retain the result; do not repeat the unchanged probe |
+| Existing SteamVR composited mirror | Upstream identifies `/dev/video99` as a mirror, not raw camera input | Time-box a 2D feasibility check if already present; verify passthrough content and prevent output feedback |
 | Community Vulkan layer and `ptgrab` | Upstream reports live Arcturus buffers and publishes downscaled luma in shared memory | Audit the pinned producer and implement an isolated consumer first |
 | Built-in passthrough | Live access and compatibility with that producer are unverified | Identify and test the source separately after establishing a usable provider |
 
 The [official apps page](https://arcturus.vision/apps), rechecked on 2026-10-16,
 documents viewing/recording and transfer/conversion. Those features do not
 establish a live-frame API. The community source remains pinned to
-`ff6a2b29bc50c9497d66fd7ff07e00b61f9eb082`; this plan does not claim that pin is
-the latest upstream revision. See the [camera research](steam-frame-camera.md)
-for the public API findings and capture limitations.
+`ff6a2b29bc50c9497d66fd7ff07e00b61f9eb082`, which matched the default-branch head
+when rechecked for the source review. Its capture tool filters for Arcturus-sized
+images; the author reports built-in-camera-sized buffers stayed empty. See the
+[camera research](steam-frame-camera.md) for public API findings and the
+[review](capture-reference-review.md) for code-level limits and source pins.
 
-## Next code deliverable: capture-only reader
+## Next dedicated-camera deliverable: capture-only reader
 
 Keep the reader separate from inference, Qt and OpenVR. It should consume an
 already running provider; it must not install or activate a compositor layer,
@@ -67,7 +72,9 @@ These are operational changes, not consequences of building the reader. Do
 not run those installers as a routine inventory check or rerun the old public
 camera probe.
 
-At the next Frame session:
+An existing virtual mirror can be checked first under the separate procedure
+in the source review. It must not be assumed to contain passthrough or exclude
+our output panel. For the dedicated camera trial:
 
 1. Run `python3 scripts/device_check.py`, note the current SteamVR version and
    confirm the vendor app and normal passthrough still work before any change.

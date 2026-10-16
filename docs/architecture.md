@@ -13,8 +13,11 @@ See [Steam Frame camera integration](steam-frame-camera.md) for pinned sources,
 known interface limits, calibration requirements, and the device checks still
 needed.
 
-The [live capture plan](live-capture.md) specifies provider selection, the
-standalone reader to implement next and the first device acceptance checks.
+The [source review](capture-reference-review.md) recommends a bounded feasibility
+test of an existing mirror before a compositor-layer trial. The
+[live capture plan](live-capture.md) specifies the dedicated camera reader and
+its device acceptance checks. A mirror may include UI and our own output;
+dedicated camera frames avoid that feedback path.
 
 ## Frame processing
 

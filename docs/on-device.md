@@ -10,9 +10,11 @@ backend is unimplemented. The user has also confirmed the native VR panel's
 playback, controls and image following their head. See the
 [overlay guide](vr-overlay.md) to launch the confirmed replay path or test a new
 runtime. Next, check detection quality, readability and playback performance.
-For live input, follow the [capture plan](live-capture.md): first prepare and
-test the isolated reader, then attempt a capture-only device trial. No live
-reader or compositor-layer installation is included in the current setup.
+For live input, follow the [source review](capture-reference-review.md) and
+[capture plan](live-capture.md): check an existing mirror as a conditional 2D
+shortcut, then prepare the dedicated camera reader and trial. No live reader,
+mirror diagnostic or compositor-layer installation is included in the current
+setup.
 
 ## Confirm where commands run
 
@@ -391,6 +393,10 @@ video playback and the image following their head with replay_window.py --overla
 Read docs/vr-overlay.md to resume replay. Next check object labels, readability
 and playback performance using the recording. Live capture is unresolved;
 accuracy, color and performance still need measurements.
+Read docs/capture-reference-review.md for the stream strategy: a bounded check
+of an existing mirror first, then the isolated Arcturus shared-memory reader.
+The upstream dedicated capture tool filters for Arcturus-sized images; built-in
+camera capture is not established. Neither planned diagnostic is implemented.
 Treat device presence as inventory and keep vendor capture separate from public API results.
 ```
 
