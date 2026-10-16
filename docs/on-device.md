@@ -477,6 +477,8 @@ The first trial saw chair/tvmonitor labels at some earlier points, but the last
 processed frame had no detections. `labels_seen` aggregates the entire run;
 the final PNG corresponds only to `last_result`, so it can correctly have no
 boxes even when the aggregate is nonempty.
+The user confirmed that both a chair and a TV/monitor were in view during this
+run; their intermediate boxes were not retained, so localization remains unverified.
 This initial check measures capture/inference interaction without introducing
 our result into its own input. A future live window/VR panel still requires a
 display-feedback check. [Cloud evidence](status.md#e16-bounded-mirror-recognition-cloud-checks)

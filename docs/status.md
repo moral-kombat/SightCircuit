@@ -485,8 +485,11 @@ timing do not establish exposure timing or end-to-end camera latency.
 
 The final result has no boxes above threshold even though earlier processed
 images contributed chair/tvmonitor to `labels_seen`. That aggregate is not a
-list of objects in the saved final frame. The report does not establish that
-those labels were correct; the rug false positive from E15 remains part of the
+list of objects in the saved final frame. In a follow-up received 2026-10-16,
+the user confirmed that both a chair and a TV/monitor were in view during the
+run. This supports class presence, but does not identify which image regions
+were labeled or validate their box placement. No intermediate annotated frames
+were retained by this run. The rug false positive from E15 remains part of the
 quality evidence. The saved pixels have not been supplied to the cloud.
 
 The user confirms normal, accurate-looking passthrough during this trial. This
