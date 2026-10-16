@@ -46,11 +46,13 @@ and license must be recorded together for reproducible results.
 
 ## Camera backend boundary
 
-Valve's public OpenVR tracked-camera interface is a candidate to probe on the
-actual headset. Its existence does not demonstrate Arcturus support. Community
-reports describe failed public camera probes and an experimental Vulkan path
-that shares compositor camera buffers. Those reports are implementation
-references, not a vendor-supported live capture contract.
+User-supplied headset reports show no frames through Valve's public OpenVR
+tracked-camera interface. The user also reports visible passthrough going black
+while our probe runs, although the official Arcturus app's live preview and
+recording work. Do not repeat the unchanged test; a usable live capture interface
+is still needed. Community reports describe failed public camera probes and an
+experimental Vulkan path that shares compositor camera buffers. Those reports
+are implementation references, not a vendor-supported live capture contract.
 
 The cited community capture tool outputs downscaled luma, not a ready-made color
 RGB stream. Its observation-time estimates are not exposure timestamps and do
@@ -95,8 +97,8 @@ not been validated here.
    and frame association, open the window on a real display, and check clean
    shutdown. Headless smoke rendering is useful dependency validation, but does
    not complete the interactive window check.
-2. **Live capture:** probe public camera capabilities on the target headset,
-   select a usable backend, and verify real frames, pixel conversion, camera
+2. **Live capture:** select a usable backend based on the documented headset
+   findings, and verify real frames, pixel conversion, camera
    identity/orientation, disconnect/reconnect, and wake/idle behavior. Record
    SteamOS/SteamVR versions and timing provenance.
 3. **VR panel:** render annotated frames through a tested overlay backend. Measure

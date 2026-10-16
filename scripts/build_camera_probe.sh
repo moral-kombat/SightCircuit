@@ -69,4 +69,5 @@ echo "Building the native camera probe against OpenVR $OPENVR_REVISION."
 mv -- "$framejacker_build/framejacker-camera-probe.tmp" \
     "$framejacker_build/framejacker-camera-probe"
 echo "Built: $framejacker_build/framejacker-camera-probe"
-echo "Run it in the headset's normal user session while SteamVR is active."
+echo "The probe has interrupted headset passthrough; default execution makes no runtime calls."
+echo "Use --help to read the explicit opt-in. Do not repeat the unchanged headset test."

@@ -1,4 +1,5 @@
-// Public OpenVR capability probe. No images, device nodes, or settings are written.
+// Public OpenVR capability probe. Runtime calls require explicit opt-in because
+// on-device testing has shown that this probe interrupts visible passthrough.
 #include <openvr.h>
 
 #include <algorithm>
@@ -21,6 +22,10 @@ constexpr std::uint64_t kMaxBufferBytes = 64ULL * 1024 * 1024;
 constexpr auto kCaptureBudget = std::chrono::seconds(3);
 constexpr auto kPollInterval = std::chrono::milliseconds(16);
 constexpr int kMaxCalibrationCameras = 4;
+constexpr const char* kStreamOptIn = "--allow-passthrough-interruption";
+constexpr const char* kPassthroughWarning =
+    "This probe has interrupted Steam Frame passthrough without receiving frames. "
+    "Do not repeat it on the unchanged tested runtime.";
 
 // A small JSON value/writer keeps the probe independent of third-party libraries.
 class Json {
@@ -419,24 +424,45 @@ int probe(Json& report) {
 
 } // namespace
 
-int main() {
+int main(int argc, char* argv[]) {
+    if (argc == 2 && std::string(argv[1]) == "--help") {
+        std::cout << "Usage: framejacker-camera-probe " << kStreamOptIn << '\n'
+                  << kPassthroughWarning << '\n'
+                  << "Without the flag, no OpenVR initialization or camera calls occur.\n";
+        return 0;
+    }
     auto report = Json::object({
         {"probe", "framejacker_public_openvr_camera"},
         {"schema_version", Json::number(1)},
         {"scope", "Public HMD tracked-camera API; source identity and Arcturus RGB support unverified"},
         {"status", "not_started"},
+        {"passthrough_warning", kPassthroughWarning},
     });
     int exit_code = 1;
-    try {
-        exit_code = probe(report);
-    } catch (const std::bad_alloc&) {
-        report.set("status", "allocation_failed");
-    } catch (const std::exception& error) {
-        report.set("status", "probe_error");
-        report.set("error", error.what());
-    } catch (...) {
-        report.set("status", "probe_error");
-        report.set("error", "Unknown exception");
+    if (argc == 1) {
+        report.set("status", "not_run");
+        report.set("reason", "explicit_passthrough_interruption_opt_in_required");
+        report.set("required_argument", kStreamOptIn);
+        report.set("initialization", Json::object({{"status", "not_attempted"}}));
+        exit_code = 3;
+    } else if (argc != 2 || std::string(argv[1]) != kStreamOptIn) {
+        report.set("status", "invalid_arguments");
+        report.set("required_argument", kStreamOptIn);
+        report.set("initialization", Json::object({{"status", "not_attempted"}}));
+        exit_code = 64;
+    } else {
+        std::cerr << "Warning: " << kPassthroughWarning << '\n';
+        try {
+            exit_code = probe(report);
+        } catch (const std::bad_alloc&) {
+            report.set("status", "allocation_failed");
+        } catch (const std::exception& error) {
+            report.set("status", "probe_error");
+            report.set("error", error.what());
+        } catch (...) {
+            report.set("status", "probe_error");
+            report.set("error", "Unknown exception");
+        }
     }
     report.set("exit_code", Json::number(exit_code));
     report.write(std::cout);

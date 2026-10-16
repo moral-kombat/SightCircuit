@@ -82,5 +82,9 @@ See the [camera guide](steam-frame-camera.md) and
 
 The [GitHub Actions workflow](../.github/workflows/checks.yml) runs the same setup
 and smoke check on an Ubuntu runner with Python 3.12. It needs network access to
-the fixture sources. It does not stand in for a headset test. Local execution
+the fixture sources. A separate job builds the native OpenVR probe, verifies that
+default and invalid invocations stop before OpenVR initialization, and checks
+missing-runtime diagnostics with explicit opt-in. The probe has interrupted
+visible passthrough on the tested headset; do not repeat that unchanged hardware
+test. CI does not stand in for a headset test. Local execution
 of these commands is separate from a successful GitHub Actions run after push.

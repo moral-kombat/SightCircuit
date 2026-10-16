@@ -33,20 +33,47 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build the native OpenVR camera probe
         run: bash scripts/build_camera_probe.sh
-      - name: Verify missing-runtime diagnostics
+      - name: Verify runtime opt-in and missing-runtime diagnostics
         shell: bash
         run: |
-          probe_exit=0
-          VR_PATHREG_OVERRIDE="$RUNNER_TEMP/framejacker-missing-runtime.vrpath" \
-            artifacts/camera-probe/framejacker-camera-probe \
-            > artifacts/camera-probe/no-runtime.json || probe_exit=$?
-          test "$probe_exit" -eq 1
           python3 - <<'PY'
           import json
+          import os
+          import subprocess
+          import tempfile
           from pathlib import Path
-          report = json.loads(Path('artifacts/camera-probe/no-runtime.json').read_text())
-          assert report['status'] == 'initialization_failed'
-          assert report['initialization']['error_name'] == 'VRInitError_Init_PathRegistryNotFound'
-          assert report['exit_code'] == 1
-          print('Missing runtime produces JSON diagnostics and a failing exit code.')
+
+          binary = 'artifacts/camera-probe/framejacker-camera-probe'
+          opt_in = '--allow-passthrough-interruption'
+          with tempfile.TemporaryDirectory() as temporary:
+              env = dict(os.environ, VR_PATHREG_OVERRIDE=str(Path(temporary) / 'missing.vrpath'))
+              for arguments, expected_status, expected_exit in (
+                  ([], 'not_run', 3),
+                  (['--unknown'], 'invalid_arguments', 64),
+                  ([opt_in, '--unknown'], 'invalid_arguments', 64),
+                  ([opt_in, opt_in], 'invalid_arguments', 64),
+                  (['--help', opt_in], 'invalid_arguments', 64),
+              ):
+                  result = subprocess.run([binary, *arguments], env=env,
+                                          capture_output=True, text=True, timeout=10)
+                  report = json.loads(result.stdout)
+                  assert result.returncode == report['exit_code'] == expected_exit
+                  assert report['status'] == expected_status
+                  assert report['initialization']['status'] == 'not_attempted'
+                  assert report['required_argument'] == opt_in
+                  assert not result.stderr, result.stderr
+
+              help_result = subprocess.run([binary, '--help'], env=env,
+                                           capture_output=True, text=True, timeout=10)
+              assert help_result.returncode == 0
+              assert opt_in in help_result.stdout and not help_result.stderr
+
+              result = subprocess.run([binary, opt_in], env=env,
+                                      capture_output=True, text=True, timeout=10)
+              report = json.loads(result.stdout)
+              assert result.returncode == report['exit_code'] == 1
+              assert report['status'] == 'initialization_failed'
+              assert report['initialization']['error_name'] == 'VRInitError_Init_PathRegistryNotFound'
+              assert 'Warning:' in result.stderr
+          print('Default/invalid invocations do not initialize OpenVR; explicit opt-in preserves runtime diagnostics.')
           PY

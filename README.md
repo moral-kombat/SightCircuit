@@ -14,14 +14,18 @@ application itself have not been implemented.
 | --- | --- |
 | Linux development setup | Tested on x86_64 with Python 3.12 |
 | Video decoding, CPU detection and offscreen window rendering | Verified with the included smoke check |
-| Native public OpenVR camera probe | Implemented; target headset capture test pending |
-| Live Arcturus camera access | Requires an on-headset capability probe |
+| Arcturus app live preview and recording | Confirmed working by the user on Steam Frame |
+| Native public OpenVR camera probe | No frames on the tested headset; interrupts passthrough; explicit opt-in required |
+| Live camera access from Framejacker | Unimplemented; a usable capture interface is still needed |
 | Interactive camera window and VR overlay | Planned |
 | Stereo depth and labels anchored in the room | Planned; requires calibration, depth and pose alignment |
 | Gaussian splat reconstruction | Optional future experiment using recorded data and a GPU computer |
 
-Valve documents a general OpenVR camera API, but community Steam Frame testing
-reports that it cannot retrieve Arcturus frames on the tested runtime. A
+Valve documents a general OpenVR camera API. Our user-supplied headset reports
+show no frames through that API, and the user reports passthrough going black
+while the probe runs. The vendor app's preview and recording work. Do not repeat
+the probe on the unchanged tested runtime. Community Steam Frame testing also
+reports failed public camera capture. A
 community implementation instead captures passthrough buffers through an
 experimental Vulkan layer. Read the [camera integration guide](docs/steam-frame-camera.md)
 before choosing a capture backend; standard USB webcam access is not established.
@@ -75,9 +79,10 @@ The intended live path is:
 camera or replay input → preprocessing → detector → annotated window → VR overlay
 ```
 
-Capture, inference and presentation will be separate components. First verify
-camera access on the actual headset, then build a replay-backed application and
-connect live capture. World-space labels come after depth and pose validation.
+Capture, inference and presentation will be separate components. Use a short
+recording from the working Arcturus app to build a replay-backed application,
+then connect a verified live capture backend. World-space labels come after
+depth and pose validation.
 
 Gaussian splats could provide a persistent visual map of a mostly static room.
 Reconstruction remains a separate recorded-data workflow; object recognition

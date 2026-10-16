@@ -1,8 +1,11 @@
 # Steam Frame and Arcturus camera integration
 
-Research snapshot: 2026-10-15. Sources were inspected on GitHub. This cloud
-environment has no headset, physical camera, display server, or GPU; the hardware
-results below are attributed to their authors, not reproduced here.
+Research snapshot: 2026-10-15. Sources were inspected on GitHub and the official
+Arcturus website. This cloud environment has no headset, physical camera,
+display server, or GPU. Project device results below are reports from the user
+running commands and apps on their Frame; community results are attributed to
+their authors. Cloud validation covers native builds and controlled
+missing-runtime behavior, not working camera capture.
 
 ## What the available sources establish
 
@@ -10,7 +13,9 @@ Valve publishes a general application camera interface, `IVRTrackedCamera_006`,
 in the [OpenVR SDK][openvr-api]. It does not establish that the Steam Frame
 runtime exposes the Arcturus RGB camera through that interface. No public,
 stable Steam Frame/Arcturus-specific live capture SDK or electrical connector
-pinout was found in the GitHub sources reviewed.
+pinout was found in the sources reviewed. The official [Arcturus apps page][arcturus-apps]
+documents Camera recording/viewing, recording transfer/conversion and Gaussian
+XR workflows; these capabilities do not establish a public live-frame API.
 
 The most relevant Frame-specific live-capture source found is the community
 [steam-frame-hand-tracking project][hand-report]. Its investigation reports that
@@ -27,6 +32,36 @@ contract or a result for every firmware version.
 | [Community camera investigation][hand-findings] | Failed public API probes, XRService ownership, recording/calibration findings | Author-reported hardware results from October 2026 |
 | [Community capture implementation][hand-capture] | Vulkan DMA-BUF import, GPU luma extraction and shared-memory output | Experimental integration inside `vrcompositor`; not a public camera SDK |
 | [Frame Passthrough Shortcuts][source-switch] | Arcturus presence detection and RGB/monochrome switching | Uses private interfaces; source selection does not provide image frames |
+
+## Project device results
+
+The user's Frame inventory reports `aarch64`, SteamOS 0.4.5 build
+`20261007.6125817`, an active SteamVR user service, and `arcimx616` sensor-driver
+nodes. The user confirms that the [official Arcturus Camera app][arcturus-camera]
+shows live passthrough and can record video. This is evidence of a functioning
+vendor capture path on that device.
+
+Our public OpenVR probe was run by the user before and after toggling
+passthrough. Both reports show successful background initialization,
+`IVRTrackedCamera_006` availability, `HasCamera=true`, camera count zero, and
+`OperationFailed` (`100`) from all three frame-size queries before and after
+acquisition. Acquisition reports success with a nonzero handle, but header-only
+retrieval and stream release return `InvalidHandle` (`101`). No valid frame was
+copied. The schema-1 `handle_valid` field records only a nonzero value; it does
+not demonstrate that the runtime accepts the handle.
+
+The user also reports that **passthrough goes black while the probe runs**.
+This associates the disruption with the probe as a whole; it does not isolate
+the responsible call or prove a hardware fault. A successful vendor app and a
+failing public API are separate results. The public API report cannot identify
+the Arcturus RGB source because it received no frames.
+
+Do not repeat the unchanged probe on this tested runtime. The binary now does
+no OpenVR work by default and requires `--allow-passthrough-interruption` for a
+deliberate future test after a material change. See the
+[device guide](on-device.md#then-verify-camera-access) for the guard and advanced
+procedure. The next development step is recording replay for the detector and
+window, while a supported live-capture interface remains unresolved.
 
 ## Valve's documented application interface
 
@@ -72,8 +107,9 @@ Important details from the header:
 
 ## Steam Frame observations from community code
 
-These findings apply to the cited projects and tested runtimes. Recheck them on
-the target headset after SteamOS/SteamVR updates.
+These findings apply to the cited projects and tested runtimes. Runtime updates
+may change them; any future probe must account for the passthrough interruption
+observed on our user's device.
 
 ### Public API and camera ownership
 
@@ -160,18 +196,22 @@ or headset splat rendering.
 
 ## Implementation sequence and remaining checks
 
-1. Keep a file/replay input backend for camera-independent detector and window
-   development. Add a capture abstraction so hardware experiments do not affect
-   inference or presentation.
-2. On the actual headset, record the architecture and SteamOS/SteamVR versions,
-   then run the [native public OpenVR probe](on-device.md#then-verify-camera-access).
-   Exercise discovery, frame sizes,
-   calibration, acquisition, an actual frame copy and release. Log named errors
-   without changing camera settings. Test camera connection and headset wake/idle.
-3. If public capture fails, obtain the supported live capture contract from
-   Arcturus/Valve. Evaluate the cited Vulkan path separately if no supported
-   interface is available. Verify color conversion, stereo identity, image
-   orientation, timestamps, synchronization and behavior after runtime updates.
+1. Implement a file/replay input backend using a short recording from the working
+   Arcturus Camera app. Preserve the original video tracks and metadata; verify
+   decoding, pixel format and stereo layout before feeding the detector. The
+   existing generated cloud fixture does not validate vendor-recording decoding.
+   Add a capture abstraction so hardware experiments do not affect inference or
+   presentation.
+2. Retain the device inventory and failed public-probe reports with their tested
+   runtime versions. Do not rerun the unchanged public probe or deploy an
+   experimental capture layer as the next diagnostic step. Its current
+   [advanced procedure](on-device.md#then-verify-camera-access) requires an
+   explicit interruption flag before any OpenVR calls.
+3. Establish a supported live capture contract from Arcturus/Valve before
+   selecting a live backend. The cited Vulkan path remains a separate
+   experimental option. Any eventual live backend must verify color conversion,
+   stereo identity, orientation, timestamps, synchronization and behavior after
+   runtime updates.
 4. Pass frames to the detector with explicit pixel format/stride, camera identity,
    timestamp and timebase provenance, optional producer sequence, calibration
    reference and pose validity. Use a bounded latest-frame queue and measure
@@ -180,9 +220,11 @@ or headset splat rendering.
    [overlay sample][openvr-overlay] as a public API reference, then validate it
    on Frame. Add world-space labels only after calibration and depth checks.
 
-No on-device probe, camera SDK installation, Vulkan capture deployment or VR
-overlay test has been performed here. Public SDK documentation and community
-hardware reports should remain distinct in implementation and readiness claims.
+The user has run the native probe on Frame and verified vendor-app capture.
+Those results were not reproduced by the cloud agent. No camera SDK
+installation, Vulkan capture deployment or working VR overlay has been
+validated by this project. Keep public SDK documentation, user device results,
+community hardware reports and cloud checks distinct in readiness claims.
 
 [openvr-api]: https://github.com/ValveSoftware/openvr/blob/0924064316de3effbcd1acf1e309182a2deb1c05/headers/openvr.h#L4919
 [openvr-sample]: https://github.com/ValveSoftware/openvr/blob/0924064316de3effbcd1acf1e309182a2deb1c05/samples/tracked_camera_openvr_sample/tracked_camera_openvr_sample.cpp#L349
@@ -203,3 +245,5 @@ hardware reports should remain distinct in implementation and readiness claims.
 [splat-workshop]: https://github.com/thunderheronight/splat-workshop/blob/a4ef32f28aab0b8372c09a8c221ef0f59bfeff4a/README.md
 [spirula]: https://github.com/arcturus-vision/spirula-studio/blob/069fb5e489fb81c4c8d04b515330851ab88c7965/README.md
 [spirula-manifest]: https://github.com/arcturus-vision/spirula-studio/blob/069fb5e489fb81c4c8d04b515330851ab88c7965/src/sfm/README.md#L300
+[arcturus-apps]: https://arcturus.vision/apps
+[arcturus-camera]: https://store.steampowered.com/app/4103250
