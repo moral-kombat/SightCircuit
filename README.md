@@ -15,6 +15,7 @@ application itself have not been implemented.
 | Linux development setup | Tested on x86_64 with Python 3.12 |
 | Video decoding, CPU detection and offscreen window rendering | Verified with the included smoke check |
 | Arcturus app live preview and recording | Confirmed working by the user on Steam Frame |
+| Recorded MP4 metadata inspection | Python standard library; decoding on Frame still unverified |
 | Native public OpenVR camera probe | No frames on the tested headset; interrupts passthrough; explicit opt-in required |
 | Live camera access from Framejacker | Unimplemented; a usable capture interface is still needed |
 | Interactive camera window and VR overlay | Planned |

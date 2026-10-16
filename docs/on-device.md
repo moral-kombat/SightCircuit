@@ -131,19 +131,39 @@ update or a revised capture implementation.
 Record and stop a short clip in the Arcturus app. Community
 [transfer code][recording-folder] uses `~/Videos/ArcturusVisionCamera` and
 `*_stereo.mp4` filenames for camera recordings. Verify that against the installed
-app version. List recent recordings and check whether a metadata inspector is
-already available:
+app version. A metadata inspector using only Python's standard library is
+available even when `ffprobe` is absent. Run it on a completed recording:
 
 ```bash
-find "$HOME/Videos/ArcturusVisionCamera" -maxdepth 1 -type f \
-  -name '*_stereo.mp4' \
-  -printf '%TY-%Tm-%Td %TH:%TM:%TS  %s bytes  %p\n' | sort -r | head -n 5
-command -v ffprobe || true
+python3 scripts/recording_check.py "$HOME/Videos/ArcturusVisionCamera/REPLACE_stereo.mp4"
 ```
 
-This only lists files; it does not read the camera or change the recording.
-Inspect the selected file's streams with `ffprobe` if available before choosing
-a decoder. A recording is replay input, not a live capture backend.
+Replace the filename with the selected recording. With no path argument, the
+script selects the most recently modified `*_stereo.mp4` in that folder. Stop
+recording in the vendor app first so the container metadata is complete.
+
+The JSON report identifies track/sample-entry types, video dimensions and track
+durations when present. The script reads container headers and skips media
+payloads; it never changes the recording or accesses the camera. It does not
+decode images, establish left/right camera identity, validate calibration, or
+prove that the headset has a compatible decoder. Keep that metadata report as
+the input to the replay implementation. A recording is replay input, not a live
+capture backend.
+
+The user has listed two completed recordings on Frame:
+`2026-10-15_21-20-34_stereo.mp4` (15,923,629 bytes) and
+`2026-10-15_21-17-18_stereo.mp4` (149,778,747 bytes). No `ffprobe` executable was
+reported on PATH. The next device check is:
+
+```bash
+python3 scripts/recording_check.py \
+  "$HOME/Videos/ArcturusVisionCamera/2026-10-15_21-20-34_stereo.mp4"
+```
+
+The inspector has been checked in the cloud against generated AV1 and two-video
+MP4 files and malformed-container tests. It has not yet been run on either user
+recording. Actual recording decoding and detector/window behavior on Frame
+remain unverified.
 
 ### Advanced probe, only for a deliberate future retest
 

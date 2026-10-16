@@ -78,6 +78,19 @@ alignment, performance, acceleration and VR presentation remain untested here.
 See the [camera guide](steam-frame-camera.md) and
 [implementation milestones](architecture.md).
 
+## Recorded MP4 inspection
+
+`python3 scripts/recording_check.py /path/to/recording.mp4` inspects container
+headers without opening a camera, decoding frames, or installing packages. With
+no path it selects the latest `*_stereo.mp4` in
+`~/Videos/ArcturusVisionCamera`. Stop the recording before inspection. Track
+sample-entry codes and dimensions guide decoder selection; successful metadata
+inspection does not establish decoding or detection support for that recording.
+
+Run the dependency-free parser checks with
+`python3 -m unittest discover -s tests -v`. They cover track metadata, malformed
+containers, parsing limits, media-payload skipping and nonregular-file rejection.
+
 ## Continuous integration
 
 The [GitHub Actions workflow](../.github/workflows/checks.yml) runs the same setup
