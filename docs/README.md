@@ -14,6 +14,7 @@ owns the current capture work plan.
 | Decode a completed recording | [File decode procedure](on-device.md#decode-one-recorded-video-track) |
 | Run the annotated replay window | [Window launch procedure](on-device.md#open-the-annotated-replay-window) |
 | Run and position the VR panel | [VR overlay guide](vr-overlay.md) |
+| Discover and test an existing SteamVR mirror | [Bounded mirror diagnostic](on-device.md#check-an-existing-steamvr-mirror) |
 | Set up cloud or desktop development | [Development setup](development.md) |
 | Continue live capture development | [Active capture plan](live-capture.md#current-work-order) |
 | Investigate camera access and upstream projects | [Camera interface reference](steam-frame-camera.md) and [dated code review](capture-reference-review.md) |

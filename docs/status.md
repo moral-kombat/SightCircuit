@@ -16,8 +16,9 @@ unknown unless explicitly recorded below.
 | Annotated Qt replay window | Device-confirmed | User confirms visible playback; controlled offscreen tests exercise detection and frame association; [E6](#e6-window-and-vr-panel), [E7](#e7-cloud-validation) |
 | Native head-relative VR replay panel | Device-confirmed | Timed test panel, replay, controls and following head movement reported working; detailed performance unmeasured; [E6](#e6-window-and-vr-panel) |
 | Public OpenVR tracked-camera probe | Device-confirmed failure | No frames and observed passthrough interruption; do not repeat the unchanged test; [E3](#e3-public-camera-probe) |
-| Live camera capture in Framejacker | Planned; unimplemented | No working capture backend; [active work plan](live-capture.md) |
-| Existing-mirror diagnostic and shared-memory reader | Planned; unimplemented | Upstream research exists; neither diagnostic has been added to Framejacker |
+| Live input in the detector/VR application | Planned; unimplemented | No integrated live capture backend; [active work plan](live-capture.md) |
+| Existing-mirror diagnostic | Implemented; cloud-tested | Metadata-only discovery, guarded read-only capture, bounded worker and explicit preview; Frame capture/ARM64 execution pending; [E8](#e8-mirror-diagnostic-cloud-checks) |
+| Dedicated-camera shared-memory reader | Planned; unimplemented | Protocol and upstream implementation reviewed; no Framejacker consumer yet |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
 | Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; our project has received no live frames |
 | Stereo depth and world-space labels | Planned | Calibration, depth and pose/timebase alignment remain unresolved |
@@ -41,7 +42,9 @@ Source: user-supplied `device_check.py` report. Exact execution date and checkou
 revision were not recorded. The baseline reports `aarch64`, SteamOS 0.4.5 build
 `20261007.6125817`, Python 3.12.3, an active `steamvr.service`, native
 `g++`/CMake/Ninja tools, a graphics render node and `arcimx616` sensor-driver
-nodes. No exact SteamVR version was supplied.
+nodes. The report also lists `/dev/video99` with name `SteamVR`; its virtual
+sysfs path and working mirror frames were not established by that inventory.
+No exact SteamVR version was supplied.
 
 This establishes the reported execution context. An active service, render node
 or camera node does not prove camera access, GPU capture or access to the
@@ -167,6 +170,29 @@ submits zero headset frames. Missing-runtime tests check diagnostics, not
 compatibility with the user's runtime. The
 [CI workflow](../.github/workflows/checks.yml) describes configured checks; its
 existence and a Git push do not establish a successful GitHub Actions run.
+
+### E8: Mirror diagnostic cloud checks
+
+Execution date: 2026-10-16, Linux x86_64 cloud environment. The new
+[mirror diagnostic](../scripts/mirror_check.py) and
+[V4L2 reader](../scripts/mirror_capture.py) were exercised with controlled sources
+and [behavioral tests](../tests/test_mirror_check.py). No physical or virtual
+camera is available in this cloud environment.
+
+Checks cover sysfs-only discovery, physical/unverified-device rejection,
+read-only opens and get-only ioctls, native Linux-header ABI agreement, pixel
+layout/stride bounds, static/changing/short/missing input, abnormal worker exit,
+deadline escalation, SIGTERM cancellation and process reaping. An explicit PNG
+is encoded after source closure and published without overwriting an existing
+destination; with PyAV installed, a real decoder also opens that PNG.
+
+The default invocation here reports `discovery_only` with
+`video_sysfs_absent`; opt-in capture reports `unavailable` and exits `1` without
+opening a device. The complete decoder/window/native-transport suite also passed
+locally alongside these checks. These results do not demonstrate actual mirror
+capture, camera content, compatibility with the Frame's driver, ARM64 execution
+or a GitHub Actions result. Follow the
+[device procedure](on-device.md#check-an-existing-steamvr-mirror) for those checks.
 
 ## Maintaining the evidence
 

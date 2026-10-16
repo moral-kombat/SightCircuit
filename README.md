@@ -12,7 +12,7 @@ Start with the [documentation index](docs/README.md) for task-based navigation.
 | Area | Current summary |
 | --- | --- |
 | Recorded-video decoding, replay and VR panel | Confirmed working by the user on Frame, including controls and head-relative placement |
-| Live capture from Arcturus or built-in cameras | Unimplemented; capture interfaces remain under investigation |
+| Live input in the recognition application | Unimplemented; the existing-mirror diagnostic is ready for Frame testing |
 | Detection quality, color and performance | Not systematically measured on Frame |
 | Stereo depth, world-space labels and Gaussian splats | Future work; splat reconstruction is a separate recorded-data experiment |
 
@@ -72,8 +72,10 @@ camera or replay input → preprocessing → detector → annotated window / VR 
 
 The [active live-capture plan](docs/live-capture.md#current-work-order) owns the
 next tasks: a bounded diagnostic for an existing headset mirror, followed by an
-isolated Arcturus shared-memory reader and capture-only device trial. Both
-diagnostics are planned, not implemented. Built-in camera capture needs separate
+isolated Arcturus shared-memory reader and capture-only device trial. The
+[mirror diagnostic](docs/on-device.md#check-an-existing-steamvr-mirror) is
+implemented and cloud-tested; actual Frame acquisition remains unverified.
+The shared-memory reader is still planned. Built-in camera capture needs separate
 validation. The [dated reference review](docs/capture-reference-review.md)
 explains the strategy; [architecture](docs/architecture.md) describes components,
 frame ownership and longer-term acceptance criteria.

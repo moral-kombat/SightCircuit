@@ -170,6 +170,37 @@ of these commands is separate from a successful GitHub Actions run after push.
 
 The replay-window job installs the window requirements and exercises decoding,
 inference, Qt offscreen presentation and file-protection behavior end to end.
+The dependency-free mirror job exercises discovery, native Linux UAPI layout,
+read-only capture guards, pixel bounds, deadlines, cancellation and optional
+preview publication without camera hardware.
+
+## Existing SteamVR mirror diagnostic
+
+`python3 scripts/mirror_check.py` performs sysfs-only discovery. Opt-in capture
+uses Python's standard library and the current V4L2 format; no PyAV, OpenCV, Qt,
+OpenVR or system package installation is needed. It supports Linux x86_64 and
+ARM64 single-plane V4L2 loopback mirrors named `SteamVR` that advertise `read()`.
+Format support is intentionally explicit: GREY, NV12/NV21, YU12/YV12,
+YUYV/UYVY/YVYU/VYUY and RGB3/BGR3. Other formats/capabilities are reported.
+
+The worker opens the verified node with `O_RDONLY | O_NONBLOCK | O_NOFOLLOW`,
+uses only `VIDIOC_QUERYCAP` and `VIDIOC_G_FMT`, and calls nonblocking `read()`.
+No `S_FMT`, buffer-queue setup or explicit stream-on operation is requested.
+Raw buffers are bounded at 64 MiB and dimensions at 16 Mi pixels; samples skip
+padding and chroma. The supervisor enforces the driver deadline and handles
+Ctrl+C/SIGTERM; Linux parent-death signaling stops the worker if its launcher dies.
+
+```bash
+python3 -m unittest discover -s tests -p test_mirror_check.py -v
+```
+
+Tests use controlled sysfs/device backends and real subprocesses. The ABI test
+compiles a tiny Linux-header program when `g++` and UAPI headers are installed;
+otherwise that check is explicitly skipped. With PyAV available, preview testing
+also decodes the generated PNG. No test opens an actual camera. Read the
+[device procedure](on-device.md#check-an-existing-steamvr-mirror) before opt-in
+acquisition, and [status](status.md#e8-mirror-diagnostic-cloud-checks) for actual
+validation evidence.
 
 ## Native VR panel build and validation
 

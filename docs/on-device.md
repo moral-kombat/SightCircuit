@@ -4,7 +4,8 @@ Use this guide for device access, inventory and recorded-video replay. Start
 with [status and evidence](status.md) for compatibility and verified results,
 then the [overlay guide](vr-overlay.md) to run the VR panel. The
 [active capture plan](live-capture.md#current-work-order) owns upcoming live-input
-work; its planned diagnostics are not installed by these procedures.
+work. The mirror diagnostic below is implemented; dedicated camera capture and
+its shared-memory reader remain planned.
 
 ## Confirm where commands run
 
@@ -240,6 +241,88 @@ initializes OpenVR in a separate native process; see the
 [Status](status.md#e6-window-and-vr-panel) records device confirmations and
 unmeasured accuracy, color, readability and performance.
 
+### Check an existing SteamVR mirror
+
+This Python-standard-library diagnostic discovers existing virtual mirror
+metadata by default. It does not open video devices or call OpenVR in that
+mode. Close the replay window and its VR panel before a capture trial so our
+output cannot become part of its own input. Keep normal passthrough working.
+
+On Frame:
+
+```bash
+(
+  set -e
+  cd "$HOME/framejacker"
+  git pull --ff-only
+  python3 scripts/mirror_check.py
+)
+```
+
+The JSON has `status: discovery_only` and exit code `0` even when no candidate
+exists. Inspect `discovery.status` and `discovery.candidates`. A candidate needs
+the exact sysfs name `SteamVR`, a virtual-video sysfs path and readable device
+identity metadata. The earlier inventory listed a device named SteamVR at
+`/dev/video99`; the diagnostic discovers by metadata rather than assuming that
+number. Named nodes with unverified metadata are reported but never selected.
+
+If exactly one candidate is reported, opt in to acquisition:
+
+```bash
+python3 scripts/mirror_check.py --capture --seconds 10
+```
+
+With multiple candidates, add `--device /dev/videoN` using the exact candidate
+path from discovery. No arbitrary physical device or symlink fallback is
+accepted. The worker rechecks sysfs/device identity, opens read-only and
+nonblocking, verifies the V4L2 loopback driver/card and current capabilities,
+then queries the current format. It does not request format changes, start a
+service, install a layer, or use the public tracked-camera API. Only existing
+single-plane `read()` capture is supported; unsupported drivers, capabilities
+or formats produce an explicit result instead of trying another source.
+
+Reads are capped at 10 per second. The worker budget is the requested duration
+plus three seconds for startup/driver calls, followed by up to 2.5 seconds of
+bounded stop/terminate/kill cleanup. Ctrl+C requests cancellation. A worker
+terminated forcibly has `cleanup_ok: false`; OS descriptor closure is distinct
+from confirmation of the normal close path.
+
+To explicitly save one grayscale PNG after acquisition has closed the source:
+
+```bash
+mkdir -p artifacts/mirror-check
+python3 scripts/mirror_check.py --capture --seconds 10 \
+  --preview artifacts/mirror-check/new-preview.png
+```
+
+Choose a new `.png` path in an existing directory. The tool refuses overwrites,
+including a destination created during capture, and publishes the still only
+after successful acquisition and shutdown. It fits within 640 × 640 and is not
+a color/HDR fidelity check. Without `--preview`, no image is saved. Open the
+still after the command ends and confirm that a moving physical object appears
+in the selected passthrough view; changing game/UI pixels alone are insufficient.
+
+The report includes driver/capabilities, current format, `frames_read`, observed
+read rate, maximum read gap, changed/unchanged grayscale samples, short reads
+and worker cleanup. The sampled grid is at most 32 × 32. Identical samples can
+mean a static scene; changed samples cannot prove a live physical camera.
+Neither V4L2 producer sequence nor exposure timestamps are supplied by this
+read-based diagnostic. Physical source identity stays explicitly unverified.
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | Discovery completed, or capture read images and confirmed normal cleanup; inspect mode/status |
+| `1` | Unavailable/unverified input, unsupported format/capabilities, no frames, deadline or another diagnostic error |
+| `2` | Invalid command-line arguments; capture did not start |
+| `130` / `143` | Cancelled by Ctrl+C / SIGTERM |
+
+Retain the JSON for unavailable/unsupported results. An unsupported format is a
+limit of the current reader, not proof that the mirror is unusable or the camera
+is faulty. Do not activate a new mirror service or force a physical camera path
+to make this check pass. Device capture and ARM64 execution remain pending;
+see [cloud evidence](status.md#e8-mirror-diagnostic-cloud-checks) and the
+[active plan](live-capture.md#current-work-order).
+
 ### Advanced probe, only for a deliberate future retest
 
 Building the probe does not initialize OpenVR:
@@ -338,7 +421,9 @@ The public camera probe returned no frames and interrupted passthrough.
 Do not repeat it on the unchanged runtime; its explicit flag is for a deliberate
 future retest after a material change.
 Read docs/live-capture.md#current-work-order for the next engineering task.
-The mirror diagnostic and shared-memory reader are planned, not implemented.
+The mirror diagnostic is implemented; run python3 scripts/mirror_check.py first
+for metadata-only discovery. Actual mirror acquisition remains unverified.
+The dedicated-camera shared-memory reader is still planned.
 Keep user observations, cloud checks and upstream capture claims distinct.
 Record new results in docs/status.md, including unknown dates/versions explicitly.
 ```

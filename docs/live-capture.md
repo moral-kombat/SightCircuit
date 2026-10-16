@@ -3,14 +3,14 @@
 This is the authoritative current capture work plan. [Status](status.md) owns
 capability and validation evidence; the [dated source review](capture-reference-review.md)
 explains the code findings behind this sequence. Every deliverable below is
-planned and unimplemented unless a task explicitly says otherwise. No capture
+planned unless a task explicitly says otherwise. No capture
 layer has been deployed by Framejacker.
 
 ## Current work order
 
 | Order | Deliverable | State | Acceptance |
 | --- | --- | --- | --- |
-| 1 | Bounded diagnostic for an existing SteamVR mirror | Next; unimplemented | Identify an existing virtual feed, report fresh frames or explicit unavailability, exit within a deadline, and verify whether physical passthrough is present |
+| 1 | Bounded diagnostic for an existing SteamVR mirror | Implemented and cloud-tested; next is Frame validation | Discover existing virtual feed metadata, exit within a deadline and obtain device evidence of actual mirror/passthrough content; [procedure](on-device.md#check-an-existing-steamvr-mirror) |
 | 2 | Isolated shared-memory reader and controlled producer | Planned; unimplemented | Validate the pinned layout, consistent frame copies, stale/malformed/restarted input and shutdown; test synchronization on ARM64 before a Frame claim |
 | 3 | Dedicated Arcturus capture provider | Planned; not deployed | Pin only the capture components, address lifecycle findings, build natively and prepare exact configuration restoration for a controlled trial |
 | 4 | Capture-only device trial | Planned | Ten seconds of fresh images from one identified source, correct orientation, clean exit and working normal passthrough |
@@ -30,9 +30,12 @@ prerequisite for offline reader development.
 
 ## Next deliverable: mirror diagnostic
 
-Prepare a standalone diagnostic with a bounded worker lifetime; a blocking
-device read must not prevent its launcher from ending the check. There is no
-Framejacker command for this diagnostic yet.
+The standalone diagnostic is implemented in `scripts/mirror_check.py` with
+read-only V4L2 handling in `scripts/mirror_capture.py`. It has passed controlled
+cloud checks; actual Frame acquisition and ARM64 execution remain pending.
+Use the [device procedure](on-device.md#check-an-existing-steamvr-mirror) for
+metadata-only discovery before opt-in capture. The requirements below define
+the implemented scope and remaining device acceptance checks.
 
 - Identify the existing SteamVR virtual mirror using inventory and device
   metadata before selecting an input. Upstream mentions `/dev/video99`; do not
@@ -56,9 +59,9 @@ Framejacker command for this diagnostic yet.
   does not establish dedicated camera calibration, exposure time or stereo.
 
 Use the [on-device inventory procedure](on-device.md#run-the-device-inventory-first)
-for execution context. Once the diagnostic exists, add its actual command,
-dependencies, output fields, exit behavior and shutdown instructions to the
-operating guide in the same implementation change.
+for execution context. The operating guide now records commands, dependencies,
+output fields, exit behavior and shutdown. The read rate and sampled image
+changes are diagnostic observations, not producer frame/exposure timestamps.
 
 ## Choose a frame provider
 
