@@ -24,7 +24,8 @@ unknown unless explicitly recorded below.
 | Native capture prerequisite report | Frame report received | aarch64 SteamOS 0.5.6, GCC 15.1.1 and Vulkan 1.4.309 development metadata/headers; no capture configuration at checked paths; [E21](#e21-capture-prerequisites-on-frame) |
 | Pinned capture reference build | Cloud and Frame ARM64 compile/link checks passed | Unmodified upstream inspection artifacts only; no activation, runtime fixes still required; [E23](#e23-reference-build-and-controlled-reader-on-frame) |
 | Descriptor transport adaptation | Controlled cloud and Frame ARM64 checks passed | Adapted components compile/link on Frame and fixture reports seven groups passed; live callbacks and remaining provider work unverified; [E25](#e25-descriptor-transport-on-frame) |
-| Provider publication and loop controls | Implemented; controlled cloud checks passed | Exclusive private runtime file, ordered writer and bounded loop controls; eight generated-data process tests passed; ARM64 writer/control checks and full GPU/provider lifecycle pending; [E26](#e26-publication-and-loop-controls-cloud-checks) |
+| Provider publication and loop controls | Controlled cloud and Frame tests passed | Exclusive private runtime file, ordered writer and bounded loop controls; all eight generated-data process tests passed on Frame; full GPU/provider lifecycle pending; [E27](#e27-publication-and-loop-controls-on-frame) |
+| Bounded Vulkan capability query | Implemented; controlled cloud tests passed; Frame result pending | Eleven fake-loader/process tests; no usable cloud driver; no camera or actual external-memory import; [E28](#e28-vulkan-capability-query-cloud-checks) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
 | Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; no source-identified built-in-camera frames have been received |
 | Stereo depth and world-space labels | Planned | Calibration, depth and pose/timebase alignment remain unresolved |
@@ -746,11 +747,63 @@ also passed address/undefined-behavior sanitizer checks. CI was extended to
 build the new mode and run its tests; hosted results have not been checked.
 
 These are controlled CPU/shared-memory observations, not a real GPU stream.
-ARM64 publisher/control validation, GPU import/resource cleanup, registry
+ARM64 publisher/control validation was pending at this point; see the subsequent
+Frame result in E27. GPU import/resource cleanup, registry
 refresh, the external watchdog, layer lifetime and exact restoration remain
 pending. The local loop deadline does not establish that every driver call
 returns on time. Camera identity, source-buffer completion, color and
 calibration remain unverified. Use [the next device check](on-device.md#test-owned-publication-without-capture).
+
+### E27: Publication and loop controls on Frame
+
+Source: user-supplied output received 2026-10-16 from the Frame checkout under
+`/home/steamos/framejacker`. Exact execution time, checkout revision and fresh
+runtime versions were not included. The complete build-report JSON was not
+supplied, so no new artifact hashes are recorded here.
+
+The publication reference and native reader/fixture builders reported completion.
+All **eight publication process tests passed in 1.562 seconds**, with no skips:
+native publisher/options validation, two-slot generated copies through the real
+reader, existing-file/symlink/FIFO preservation, deadline and signal cleanup,
+replacement preservation, and parent-death/stale-file handling. This extends
+E26's controlled publication evidence to the Frame environment. The build
+completion explicitly reports that nothing was installed or run; the subsequent
+tests run the original CPU/shared-memory fixtures, not the capture binaries.
+
+This validates generated-data publication/control behavior on Frame, not GPU
+import, original camera completion, physical source identity or live capture.
+No layer activation or camera trial is established by this result.
+
+### E28: Vulkan capability query cloud checks
+
+Source: local x86_64 cloud execution on 2026-10-16 of the capability-query
+worktree based on `69e7261`. The standalone query compiled with clean pinned
+Vulkan-Headers `952f776f6573aafbb62ea717d871cd1d6816c387`. Building the tool
+does not load Vulkan, execute it or install a layer.
+
+All **eleven tests passed**, with no skips. A test-only fake loader exercises
+the actual native query structures/function pointers and verifies supported
+and unsupported capabilities, four modifier memory planes, R8/image limits,
+bounded counts, error teardown, startup/destruction hangs, native crashes,
+cancellation, parent death/reaping, bounded stdout/stderr and default opt-in
+guards. These are controlled tests, not GPU observations. The CI workflow now
+includes this build/test job; hosted results have not been checked.
+
+Fresh pinned-header fetching and compiler-provided-header builds both passed.
+An altered header cache was refused and preserved with existing outputs intact.
+Address/undefined-behavior sanitizer checks passed supported, unsupported,
+oversized-modifier and driver-error paths against the fake loader.
+
+An explicit query of the installed cloud Vulkan loader reported API 1.4.309,
+then `vkCreateInstance` returned `-9` (`VK_ERROR_INCOMPATIBLE_DRIVER`). It exited
+`1` without creating an instance and reported cleanup/reaping success, with no
+forced termination. This cloud environment supplies no usable driver for the
+query; Frame GPU capabilities remain unknown. No logical device, camera,
+external-memory import or capture configuration change was made.
+
+Use [the next device command](on-device.md#query-vulkan-capture-capabilities).
+A positive capability report would still leave real-buffer import and producer
+synchronization, resource cleanup and complete provider lifecycle unverified.
 
 ## Maintaining the evidence
 

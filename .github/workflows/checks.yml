@@ -9,6 +9,16 @@ permissions:
   contents: read
 
 jobs:
+  capture-gpu-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build capability query without loading Vulkan
+        run: bash scripts/build_capture_gpu_check.sh
+      - name: Verify dispatch, capability limits and process containment with a fake loader
+        run: python3 -m unittest discover -s tests -p test_capture_gpu_check.py -v
+
   capture-reference:
     runs-on: ubuntu-24.04
     timeout-minutes: 10

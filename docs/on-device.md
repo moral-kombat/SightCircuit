@@ -641,9 +641,11 @@ capture binary is run and no layer configuration is created by this procedure.
 
 ### Test owned publication without capture
 
-The next adaptation replaces the producer's shared-memory writer and adds
-bounded loop controls. The eight controlled cloud tests passed; native ARM64
-writer/control validation is pending. In the existing Frame checkout, run:
+This adaptation replaces the producer's shared-memory writer and adds bounded
+loop controls. All eight tests passed on cloud x86_64 and on Frame in 1.562
+seconds; see [E27](status.md#e27-publication-and-loop-controls-on-frame).
+Retain this procedure for changed code/runtime; the next check is the GPU query
+below. In the existing Frame checkout, run:
 
 ```bash
 cd "$HOME/framejacker" &&
@@ -675,6 +677,57 @@ The stream loop has a 1–10 second deadline and signal checks. GPU driver calls
 GPU resource cleanup, registry refresh, layer lifetime and exact restoration
 still need work; this is not a live-capture procedure. No layer manifest or
 enable marker is generated, and no capture binary is run by these commands.
+
+### Query Vulkan capture capabilities
+
+This is the next device check. It queries the GPU requirements of the reviewed
+Arcturus import path, using only the compiler and standard-library Python:
+
+```bash
+cd "$HOME/framejacker" &&
+git pull --ff-only &&
+bash scripts/build_capture_gpu_check.sh &&
+python3 scripts/capture_gpu_check.py --query-device
+```
+
+The builder compiles without loading Vulkan. The Python command starts a child
+with a ten-second query budget, then terminates/kills and reaps a stuck worker.
+The worker disables core dumps and is killed if its parent dies. Output sizes
+and driver-provided counts are capped. With no arguments the Python command
+returns `not_run`/exit `3` without starting a worker or loading Vulkan. Use the
+Python command for the watchdog; do not run the native binary directly.
+
+The opt-in loads the installed Vulkan loader, creates an instance, and queries
+physical-device properties, features, memory/queues and image-format support.
+It creates no logical device, queue, image or GPU allocation; it opens no camera,
+connects to no provider and imports no FD. It installs no layer, changes no
+source selection and restarts no service. Existing Vulkan configuration,
+including already configured implicit layers, is honored during instance creation.
+
+Share the complete build and query JSON, plus any change to normal passthrough.
+`native.devices` lists GPU identity/API, missing required extensions, sampler
+conversion, host-visible/cached memory types, graphics queues, R8 blit features
+and image limits, and the NV12 `0x0500000000000001` modifier's **memory**-plane
+count. Compressed memory planes are not necessarily the two NV12 color planes.
+The external-image query uses DMA-BUF, sampled/transfer-source usage and
+exclusive sharing; it reports importability and the dedicated-allocation flag.
+The reviewed size is 2464 × 2464, with support for up to two array layers.
+
+Exit `0`/`queried` means the queries completed, even if a device reports missing
+capabilities. `capability_checks_passed` describes only the queried requirements,
+not a working import or deployment readiness. Exit `1` means a query/driver,
+format-report, timeout or cleanup failure; inspect the reason and native error.
+`cleanup_ok: false` after forced termination means graceful Vulkan teardown was
+not confirmed. Instance creation is `null` when no complete worker report exists.
+Ctrl+C/SIGTERM yields `cancelled` and exit `128 + signal`. Invalid Python options
+exit `2`. On success, the instance is destroyed before the report is emitted.
+
+The cloud has no usable Vulkan driver (`VK_ERROR_INCOMPATIBLE_DRIVER`); its
+fake-loader tests validate dispatch and failure containment, not Frame support.
+Even a positive Frame capability result leaves actual FD import, producer
+completion, camera identity, resource lifetime and layer restoration unverified.
+Follow the [active provider work order](live-capture.md#next-provider-step-query-gpu-capabilities)
+before any camera trial.
 
 ### Check existing luma shared memory
 
@@ -860,8 +913,9 @@ and Vulkan 1.4.309 with development headers. Earlier capture tests have their
 own runtime evidence; do not silently attach this newer build to them.
 The pinned reference compiled/linked on aarch64 with system Vulkan headers; all
 14 synthetic reader tests passed in 7.204 seconds. The descriptor transport
-adaptation also passed seven fixture groups on ARM64. Next test the owned
-publisher and loop controls with the generated-data suite, then finish GPU import
+adaptation also passed seven fixture groups on ARM64. The publication build
+completed and all eight generated-data tests passed in 1.562 seconds on Frame.
+Next run the bounded Vulkan capability query, then finish GPU import
 validation/resource cleanup/watchdog, registry refresh, layer lifetime and exact
 restoration before deployment. Physical camera identity and scene freshness remain unverified.
 The isolated shared-memory reader and synthetic fixture are implemented and

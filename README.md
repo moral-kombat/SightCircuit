@@ -84,9 +84,9 @@ The [fixed-panel check](docs/on-device.md#check-whether-the-vr-panel-appears-in-
 confirmed that this mirror captures our VR output. Arcturus is connected; its
 selection for passthrough is unknown. The Frame reports GCC 15 and Vulkan 1.4.309
 development files. The reference build and all 14 synthetic reader tests passed
-on Frame ARM64. The transport adaptation also built and passed seven fixture
-groups on Frame. Next verify the
-[publisher and loop controls](docs/on-device.md#test-owned-publication-without-capture)
+on Frame ARM64. The transport adaptation passed seven fixture groups and the
+publisher/control suite passed all eight tests on Frame. Next run the bounded
+[Vulkan capability query](docs/on-device.md#query-vulkan-capture-capabilities)
 and finish GPU/provider lifecycle work for input independent of our output before
 continuous VR image display. Bounded recognition and snapshots shown after
 capture remain useful. The model's class coverage and false positives need separate work.

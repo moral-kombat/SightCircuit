@@ -377,8 +377,48 @@ in environments that run discovery without building them.
 The loop deadline cannot bound every driver call, and a concurrent truncation
 can still fault a mapping between checks. Complete the external process watchdog,
 GPU import/resource cleanup, registry refresh, layer lifetime and restoration
-before activation. ARM64 publication testing uses the
-[on-device procedure](on-device.md#test-owned-publication-without-capture).
+before activation. All eight publication tests also passed on Frame ARM64;
+retain the [on-device procedure](on-device.md#test-owned-publication-without-capture)
+for changed code/runtime.
+
+### Build and test the GPU capability query
+
+```bash
+bash scripts/build_capture_gpu_check.sh
+python3 -m unittest discover -s tests -p test_capture_gpu_check.py -v
+```
+
+The builder uses system Vulkan headers or the same pinned clean Vulkan-Headers
+cache as the reference builder. It fetches no capture code and runs no output.
+The report and binary are under `artifacts/capture-gpu-check/`. The original
+native query uses `VK_NO_PROTOTYPES` and links `libdl`, not Vulkan; `dlopen` and
+instance creation occur only after explicit opt-in. The default/invalid-option
+tests use a fake loader constructor to verify that it is never loaded.
+
+The opt-in queries Vulkan 1.1 physical-device interfaces; the reviewed path
+requires a device advertising 1.3. It enumerates all devices without selecting
+the first one, caps devices/extensions/modifiers/queues/memory types, and checks
+the reviewed NV12 modifier plus external DMA-BUF sampled/transfer-source usage.
+It reports memory planes, importability/dedicated-only flags, extent/layer limits,
+sampler conversion, host-visible/cached types, graphics queues and R8 linear blit
+features/transfer image limits. No logical device or camera access is involved.
+
+`scripts/capture_gpu_check.py` provides a ten-second worker watchdog with bounded
+stdout/stderr, process-group termination, SIGKILL fallback and worker reaping.
+The native child sets parent-death SIGKILL and disables core dumps before loading
+Vulkan. Normal/error paths destroy the owned instance and unload the library;
+forced termination reports unconfirmed API cleanup instead of success. Existing
+loader/layer configuration is not overridden, installed or removed.
+
+The eleven tests build a test-only dispatch library in a private temporary
+directory. They validate query structures and real function-pointer dispatch,
+four memory planes for a two-color-plane format, absent features/extensions,
+image/extent limits, oversized counts, driver errors, hangs during creation and
+destruction, crash containment, cancellation, parent death and bounded output.
+They make no GPU or camera calls. Native tests explicitly skip if the query is
+unbuilt; the dedicated CI job builds it before running them. Hosted CI results
+are separate from local results. For the real Frame query, use
+[the supervised device command](on-device.md#query-vulkan-capture-capabilities).
 
 ## Isolated luma reader and synthetic producer
 

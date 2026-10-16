@@ -92,13 +92,19 @@ publication/control helpers and a generated-data fixture. Capture binaries remai
 non-executable inspection artifacts; tests run only the original synthetic fixture
 and the existing reader. No upstream installer or camera operation is executed.
 
-If compiler-search-path Vulkan headers are unavailable, the builder fetches
+The standalone `scripts/build_capture_gpu_check.sh` builds original physical-device
+query code. It uses the same header cache and loads the installed Vulkan loader
+only through the query tool's explicit opt-in; it fetches no camera capture code.
+The synthetic dispatch library in its tests is original test code.
+
+If compiler-search-path Vulkan headers are unavailable, either builder fetches
 [Khronos Vulkan-Headers v1.4.309](https://github.com/KhronosGroup/Vulkan-Headers/tree/952f776f6573aafbb62ea717d871cd1d6816c387)
 at `952f776f6573aafbb62ea717d871cd1d6816c387` into ignored
 `.cache/vulkan-headers`. Its [license notice](https://github.com/KhronosGroup/Vulkan-Headers/blob/952f776f6573aafbb62ea717d871cd1d6816c387/LICENSE.md)
 and `LICENSES` texts are retained; per-file Apache-2.0/MIT notices apply.
 No Vulkan loader/driver binary is downloaded. The existing system loader is
-linked for the compile-only compatibility check.
+linked for the compile-only capture compatibility check; the query binary links
+`libdl` and resolves Vulkan functions only when requested.
 
 ## Research references
 

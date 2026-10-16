@@ -16,7 +16,7 @@ layer has been deployed by Framejacker.
 | 1c | Check capture of our own display | Confirmed: the VR panel appears in captured output | Current composited mirror does not exclude our output; no continuous live-image panel from this source; [E18](status.md#e18-vr-panel-included-in-mirror-input) |
 | 1d | Detector quality and class coverage | Needs evaluation | Include the rug false positive; select supported target classes and evaluate correct labels, boxes and misses before claiming useful accuracy |
 | 2 | Isolated shared-memory reader and controlled producer | Controlled x86_64 and Frame ARM64 checks passed; real provider unverified | All 14 native/supervisor tests pass on Frame; upstream writer ordering and original GPU completion remain unresolved; [E23](status.md#e23-reference-build-and-controlled-reader-on-frame) |
-| 3 | Dedicated camera provider | Transport build/tests pass on Frame; publication adaptation cloud-tested; not deployed | Verify publisher/control tests on ARM64, then finish GPU import/resource cleanup/watchdog, registry refresh, layer lifetime and restoration; physical source and built-in support unresolved |
+| 3 | Dedicated camera provider | Transport and publication build/tests pass on Frame; not deployed | Query actual GPU capabilities next, then finish GPU import/resource cleanup/watchdog, registry refresh, layer lifetime and restoration; physical source and built-in support unresolved |
 | 4 | Capture-only device trial | Planned | Ten seconds of fresh images from one identified source, correct orientation, clean exit and working normal passthrough |
 | 5 | Continuous live input in the existing display | Planned; needs input independent of our output | Reuse detector/display after a dedicated provider or supported overlay-excluded mirror mode is validated; current mirror includes the panel |
 | 6 | Color, built-in camera support and later geometry | Planned | Validate each source and color conversion separately; require calibration and stronger timing evidence before stereo depth or spatial labels |
@@ -62,9 +62,10 @@ shows GCC 15.1.1 and Vulkan 1.4.309 development files on SteamOS 0.5.6; see
 [E21](status.md#e21-capture-prerequisites-on-frame). The reference build and all
 14 controlled reader tests now pass on Frame; see [E23](status.md#e23-reference-build-and-controlled-reader-on-frame).
 The descriptor transport adaptation now builds and passes seven fixture groups
-on Frame; see [E25](status.md#e25-descriptor-transport-on-frame). The next
-adaptation replaces publication and adds loop controls; run its
-[generated-data checks on ARM64](on-device.md#test-owned-publication-without-capture)
+on Frame; see [E25](status.md#e25-descriptor-transport-on-frame). The publication
+adaptation and all eight generated-data tests also passed on Frame; see
+[E27](status.md#e27-publication-and-loop-controls-on-frame). The next device step
+is the [bounded GPU query](on-device.md#query-vulkan-capture-capabilities)
 while the remaining provider work continues. The inspection builds are not
 deployment-ready. Identify the selected source
 during capture validation; connection alone does not identify past mirror frames.
@@ -191,10 +192,37 @@ The optional publication adaptation adds a private runtime file, exclusive
 creation, identity/size/permission checks, the ARM64 odd-marker barrier and
 monotonic publication. Its stream has explicit duration/rate/opt-in parsing,
 signal checks and parent-death killing. Eight controlled cloud tests cover the
-same publisher helper and actual reader together; ARM64 publication validation
-is next. Normal cleanup removes its file; abrupt death may leave a stale file
+same publisher helper and actual reader together; all eight also passed on
+Frame ARM64. Normal cleanup removes its file; abrupt death may leave a stale file
 that is refused on restart. The implementation does not yet supply automatic
 lease recovery or an external watchdog for blocked GPU calls.
+
+## Next provider step: query GPU capabilities
+
+The standalone `capture_gpu_check.py` supervises an explicit Vulkan query with
+a ten-second worker deadline. It is implemented and passes controlled tests
+with a fake loader; the Frame GPU result is pending. Follow the
+[device procedure](on-device.md#query-vulkan-capture-capabilities). Its default
+does not load Vulkan. The opt-in creates an instance and queries physical-device
+properties without creating a logical device, opening a camera, connecting to
+the provider or importing any FD. Existing loader/driver/layer configuration
+is honored; the check changes none of it.
+
+Use the report to choose a physical device and validate the reviewed importer's
+advertised API/extensions, sampler conversion, graphics queue, host-cached memory,
+NV12 Qualcomm modifier/memory-plane count, external DMA-BUF image support and
+R8 downscaling requirements. These are capability queries, not proof that an
+actual buffer can be imported or safely read. Missing capabilities should guide
+the next implementation change rather than trigger a camera trial.
+
+Next adapt GPU imports using the actual report: validate the full format,
+modifier, dimensions/layers, pitches/offsets and memory-type compatibility;
+use RAII for imported FDs and every GPU resource, and retain an external process
+watchdog around driver calls. The query's supervisor is not yet a capture
+supervisor. Do not infer XRService completion from our own command fence or
+from a successful CPU publication. Review producer synchronization/ownership
+before any live import. Registry changes, provider loss and layer lifecycle
+must also stop or rebuild the stream safely.
 
 Before deployment, finish GPU import validation/resource cleanup, the process
 watchdog, registry refresh, layer lifetime/socket ownership and exact restoration.
