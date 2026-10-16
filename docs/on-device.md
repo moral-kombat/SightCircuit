@@ -2,10 +2,11 @@
 
 The Arcturus Camera app has been confirmed by the user to show live passthrough
 and record video on the headset. Our public OpenVR probe returns no frames and
-blacks out passthrough while it runs. The next development step is a replay
-backend using a vendor recording. The repository is published at
+blacks out passthrough while it runs. File decoding now works on Frame; the next
+device step is to launch the annotated replay window. The repository is published at
 [moral-kombat/framejacker](https://github.com/moral-kombat/framejacker).
-The application, live capture backend and VR overlay are still unimplemented.
+An annotated file-replay window is implemented and tested offscreen in the
+cloud. The live capture backend and VR overlay are still unimplemented.
 
 ## Confirm where commands run
 
@@ -168,9 +169,13 @@ sample/timeline handling. Fragmentation alone does not establish a corrupt or
 undecodable file. The video `mdhd` headers report 0.515174 seconds; the full
 fragmented timeline has not been validated.
 
-Actual recording decoding and detector/window behavior on Frame remain
-unverified. Avoid assuming OpenCV or the desktop development environment is
-installed on the headset.
+The user subsequently installed PyAV 16.1.0 on Frame and decoded three frames
+from video-stream ordinal 0, container stream index 0, track ID 1. All were
+2464 × 2464, converted from full-range `yuvj420p` to `rgb24` with a 7,392-byte
+stride. Reported media timestamps were 0, 0.016787 and 0.033532 seconds. This
+confirms that selected-track file decoding and RGB conversion work on Frame.
+Detector/window behavior on Frame still needs validation. Avoid assuming the
+desktop development environment is installed there.
 
 For the next session, one command runs the read-only inventory and selects the
 newest completed stereo recording automatically:
@@ -223,8 +228,51 @@ This does not access cameras or OpenVR, save images, display a window, verify
 HDR appearance, validate the complete file, or measure real-time performance.
 Exit `0` means frames were decoded and converted; exit `1` means a missing
 dependency, input error, timeout or decode failure. The generated fragmented
-HEVC cloud tests pass; the user's recording and ARM64 runtime still need this
-device check. Use its result to implement the annotated replay window next.
+HEVC cloud tests pass, and the user's three-frame ARM64 check also passed.
+Continue with the annotated replay window below.
+
+### Open the annotated replay window
+
+Run this from the same normal-user graphical session on Frame:
+
+```bash
+(
+  set -e
+  cd "$HOME/framejacker"
+  git pull --ff-only
+  bash scripts/setup_window.sh
+  .venv-replay/bin/python scripts/replay_window.py \
+    "$HOME/Videos/ArcturusVisionCamera/2026-10-15_21-20-34_stereo.mp4"
+)
+```
+
+Setup extends `.venv-replay` with pinned NumPy, OpenCV headless and PySide6
+Essentials and downloads the checksum-verified demo detector. The desktop
+`.venv` is separate. The pinned Qt ARM64 wheel requires glibc 2.39 or later and
+system Qt/X11 dependencies. Pip installs binary wheels only. Missing libraries
+reported by the X11 preflight should be investigated before changing system
+packages; share the exact output if setup or launch fails.
+
+The window shows the selected video track with boxes and confidence labels for
+the model's 20 common-object classes. Pause/resume, Replay and Loop controls
+operate on the file. The short clip loops by default. No path argument uses
+the newest stereo recording; the default video-track ordinal is 0. Close the
+window to stop the worker and release the file. A JSON summary appears in the
+terminal on exit.
+
+Frames are resized to fit within 960 × 960 for processing and shown without
+changing aspect ratio. Playback is capped at 10 processed fps by default and
+may be slower than the source recording. `--max-fps` changes that cap;
+`--threshold` changes the default 0.5 confidence threshold. No detections above
+threshold is a valid result for a scene outside the demo model's classes.
+
+The prototype does not open camera nodes, call OpenVR, change SteamVR or save
+images by default. It is an ordinary Qt window, not a VR overlay. Offscreen
+cloud tests verify decoding, object labels, stream selection and a nonblank
+rendered window. Its visibility, controls, orientation, color appearance and
+performance still need observation on Frame. If the process runs but no window
+is visible in the headset, that display-session result needs investigation;
+do not treat the cloud screenshot as proof of headset presentation.
 
 ### Advanced probe, only for a deliberate future retest
 
@@ -321,8 +369,10 @@ First confirm where this terminal executes and run python3 scripts/device_check.
 The official Arcturus Camera app's live view and recording work. Our public
 OpenVR probe gets no frames and blacks out passthrough while running. Do not
 repeat it on the unchanged runtime; it now requires an explicit interruption
-flag. Develop recording replay and the detector/window first. Treat device
-presence as inventory and keep vendor capture separate from public API results.
+flag. File decoding of three HEVC frames works on Frame. The annotated Qt replay
+window is implemented and tested offscreen in the cloud. Run setup_window.sh
+and replay_window.py to check actual Frame visibility and detection next.
+Treat device presence as inventory and keep vendor capture separate from public API results.
 ```
 
 [valve-setup]: https://partner.steamgames.com/doc/steamhardware/steamframe/setup

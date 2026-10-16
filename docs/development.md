@@ -62,10 +62,10 @@ default fixture directory.
 ## Window rendering and hardware
 
 The default smoke check sets `QT_QPA_PLATFORM=offscreen` when unset. It shows no
-visible desktop UI and exits after checking the frames. A visible window on a
-Linux desktop needs a working display server and Qt platform libraries; that
-interactive application is future work. OpenCV is installed headless, so use Qt
-for display rather than `cv2.imshow`.
+visible desktop UI and exits after checking the frames. Visible presentation
+needs a working display server and Qt platform libraries. The interactive
+prototype is `scripts/replay_window.py`. OpenCV is installed headless; the
+replay app uses Qt for presentation.
 
 OpenCV 4.12 is pinned because the Caffe importer needed by this fixture was
 removed from OpenCV 5. The wheel includes its own FFmpeg backend; the current
@@ -114,6 +114,45 @@ different video-track dimensions, exercise both selections, and check failures
 for absent streams and invalid/nonregular files. They do not reproduce Arcturus
 calibration, metadata payloads, dependent stereo views or HDR color management.
 
+## Annotated replay window
+
+```bash
+bash scripts/setup_window.sh
+.venv-replay/bin/python scripts/replay_window.py /path/to/recording.mp4
+```
+
+Setup extends `.venv-replay` using `requirements-window.txt` and verifies the
+existing model/image fixtures. The window runs PyAV and CPU MobileNet-SSD on a
+worker thread, keeps one latest annotated result, and presents it on the Qt
+thread. The prototype has pause/resume, replay and loop controls. Processing
+replay is capped at 10 fps by default and preserves every processed frame's
+association with its detections; this is not a real-time source-timing player.
+
+To run a finite, offscreen check with explicit output files:
+
+```bash
+mkdir -p artifacts/replay-window
+QT_QPA_PLATFORM=offscreen .venv-replay/bin/python scripts/replay_window.py \
+  /path/to/recording.mp4 --max-frames 4 \
+  --preview artifacts/replay-window/preview.png \
+  --report artifacts/replay-window/report.json
+```
+
+Output paths must be new and distinct from the input recording. Without these
+flags the app saves no images or reports; it prints a JSON summary on exit.
+Use a new output path for subsequent checks. `--video-stream` selects a video
+track; no stereo-side identity is inferred. `--threshold` selects detection
+confidence. The demo has 20 classes and is not a selected production detector.
+Visible device presentation, orientation, color/HDR, accuracy and performance
+are still on-device acceptance work. Linux ARM64 Qt wheels require glibc 2.39+
+and graphical-system dependencies; the native X11 path checks `ldd` output for
+missing plugin libraries before creating a QApplication.
+
+Run `.venv-replay/bin/python -m unittest discover -s tests -v` after window
+setup for the complete parser, decoder and offscreen display checks. The window
+tests generate two-track replay video and require bicycle/car/dog detections,
+a nonblank preview, correct track selection and input-file preservation.
+
 ## Continuous integration
 
 The [GitHub Actions workflow](../.github/workflows/checks.yml) runs the same setup
@@ -125,3 +164,6 @@ missing-runtime diagnostics with explicit opt-in. The probe has interrupted
 visible passthrough on the tested headset; do not repeat that unchanged hardware
 test. CI does not stand in for a headset test. Local execution
 of these commands is separate from a successful GitHub Actions run after push.
+
+The replay-window job installs the window requirements and exercises decoding,
+inference, Qt offscreen presentation and file-protection behavior end to end.

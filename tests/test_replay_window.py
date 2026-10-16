@@ -1,0 +1,155 @@
+"""Run file decoding, inference and Qt presentation together in an offscreen UI."""
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = ROOT / "scripts/replay_window.py"
+ASSETS = ROOT / ".cache/framejacker/assets"
+AVAILABLE = all(importlib.util.find_spec(name) for name in ("av", "cv2", "numpy", "PySide6"))
+
+
+@unittest.skipUnless(AVAILABLE, "Run scripts/setup_window.sh for display integration tests")
+class ReplayWindowTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import av
+        import cv2
+        import numpy as np
+
+        cls.temporary = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.temporary.cleanup)
+        cls.directory = Path(cls.temporary.name)
+        cls.clip = cls.directory / "two-video.mp4"
+        image = cv2.imread(str(ASSETS / "dog.jpg"))
+        if image is None:
+            raise AssertionError("Missing test fixture; run bash scripts/setup_window.sh")
+        cls.dimensions = image.shape[:2]
+        with av.open(str(cls.clip), mode="w") as output:
+            streams = []
+            for _ in range(2):
+                stream = output.add_stream("mpeg4", rate=5)
+                stream.width, stream.height = image.shape[1], image.shape[0]
+                stream.pix_fmt = "yuv420p"
+                streams.append(stream)
+            for _ in range(4):
+                for stream, pixels in zip(streams, (image, np.zeros_like(image))):
+                    frame = av.VideoFrame.from_ndarray(pixels, format="bgr24")
+                    for packet in stream.encode(frame):
+                        output.mux(packet)
+            for stream in streams:
+                for packet in stream.encode():
+                    output.mux(packet)
+
+    def run_window(self, *arguments):
+        env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
+        result = subprocess.run([sys.executable, str(SCRIPT), str(self.clip),
+                                 "--max-frames", "4", "--max-fps", "60", *arguments],
+                                env=env, capture_output=True, text=True, timeout=30)
+        return result, json.loads(result.stdout)
+
+    def test_annotated_window_and_preview(self):
+        import cv2
+
+        preview, summary = self.directory / "preview.png", self.directory / "summary.json"
+        result, report = self.run_window("--preview", str(preview), "--report", str(summary))
+        self.assertEqual(result.returncode, 0, (report, result.stderr))
+        self.assertEqual(report["status"], "finished")
+        self.assertEqual(report["frames_processed"], 4)
+        self.assertGreater(report["frames_presented"], 0)
+        self.assertTrue({"bicycle", "car", "dog"}.issubset(report["labels_seen"]))
+        self.assertEqual(report["qt_platform"], "offscreen")
+        self.assertTrue(report["images_saved"])
+        self.assertEqual(json.loads(summary.read_text()), report)
+        image = cv2.imread(str(preview))
+        self.assertIsNotNone(image)
+        self.assertGreater(image.std(), 10)
+
+    def test_second_track_is_selectable(self):
+        result, report = self.run_window("--video-stream", "1")
+        self.assertEqual(result.returncode, 0, report)
+        self.assertEqual(report["container_stream_index"], 1)
+        self.assertGreater(report["frames_presented"], 0)
+        self.assertFalse(report["images_saved"])
+
+    def test_missing_stream_fails_cleanly(self):
+        result, report = self.run_window("--video-stream", "2")
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(report["status"], "error")
+        self.assertIn("absent", report["error"])
+
+    def test_pause_and_restart_from_beginning(self):
+        from scripts.replay_window import ReplayWorker
+
+        worker = ReplayWorker(self.clip, 0, 0.5, 10, 0)
+
+        def wait_for(predicate):
+            deadline = time.monotonic() + 5
+            while not predicate():
+                self.assertIsNone(worker.error)
+                self.assertLess(time.monotonic(), deadline, "Playback state timed out")
+                time.sleep(0.01)
+
+        worker.start()
+        try:
+            wait_for(lambda: worker.frames_processed > 0)
+            worker.playing.clear()
+            time.sleep(0.2)  # Allow the one in-progress frame to complete.
+            paused_count = worker.frames_processed
+            time.sleep(0.2)
+            self.assertEqual(worker.frames_processed, paused_count)
+            worker.take_latest()
+            # Stop on the first resumed result so the latest-image handoff cannot
+            # replace it before a slow test runner observes the restart timestamp.
+            worker.limit = paused_count + 1
+            worker.restart.set()
+            worker.playing.set()
+            wait_for(worker.done.is_set)
+            restarted = worker.take_latest()
+            self.assertIsNotNone(restarted)
+            self.assertEqual(restarted["media_time"], 0)
+            worker.playing.clear()
+        finally:
+            worker.stop()
+            worker.join(timeout=5)
+        self.assertFalse(worker.is_alive())
+        self.assertTrue(worker.done.is_set())
+        self.assertIsNone(worker.error)
+
+    def test_shutdown_while_paused(self):
+        from scripts.replay_window import ReplayWorker
+
+        worker = ReplayWorker(self.clip, 0, 0.5, 10, 0)
+        worker.playing.clear()
+        worker.start()
+        try:
+            deadline = time.monotonic() + 5
+            while worker.stream_index is None:
+                self.assertIsNone(worker.error)
+                self.assertLess(time.monotonic(), deadline, "File did not open")
+                time.sleep(0.01)
+            self.assertEqual(worker.frames_processed, 0)
+        finally:
+            worker.stop()
+            worker.join(timeout=5)
+        self.assertFalse(worker.is_alive())
+        self.assertTrue(worker.done.is_set())
+        self.assertIsNone(worker.error)
+
+    def test_recording_cannot_be_overwritten_by_preview(self):
+        before = hashlib.sha256(self.clip.read_bytes()).hexdigest()
+        result, report = self.run_window("--preview", str(self.clip))
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(report["status"], "error")
+        self.assertEqual(hashlib.sha256(self.clip.read_bytes()).hexdigest(), before)
+
+
+if __name__ == "__main__":
+    unittest.main()

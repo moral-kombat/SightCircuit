@@ -1,11 +1,12 @@
-# Proposed architecture and roadmap
+# Architecture and roadmap
 
 Framejacker's first application target is an annotated Linux window showing
 objects detected in camera frames. The eventual target is a Steam Frame VR
-overlay using the Arcturus Vision Camera. Initial tooling is for environment
-smoke checks with generated or replayed inputs; it does not establish live camera
-capture, application readiness, or headset compatibility. The application design
-below is proposed, not an implemented capture or VR stack.
+overlay using the Arcturus Vision Camera. A file-replay prototype now decodes one
+selected track with PyAV, runs the demo MobileNet-SSD detector and presents
+annotated images in a Qt window. Its offscreen cloud tests pass; the user has
+verified three-frame decoding on Frame. Visible window behavior and detection
+on Frame still need testing. Live capture and the VR stack remain proposed.
 
 See [Steam Frame camera integration](steam-frame-camera.md) for pinned sources,
 known interface limits, calibration requirements, and the device checks still
@@ -36,8 +37,8 @@ misplace labels.
 | Capture adapter | Read replay files or a selected hardware backend; report unavailable devices, disconnects, and idle states explicitly |
 | Frame metadata | Carry dimensions, stride, pixel format, camera identity, orientation, timestamp/timebase provenance, optional producer sequence, calibration reference, and pose validity |
 | Preprocessing | Convert the actual source format to the model's input; retain crop/resize transforms so detections map back to source pixels |
-| Detector | Run a selected object detection model through a suitable runtime, initially ONNX Runtime; return class, confidence, and image-space bounds |
-| Presentation | Draw annotations in a regular window first; add a separately validated headset overlay backend later |
+| Detector | Prototype: MobileNet-SSD through OpenCV DNN on CPU; select a production model/runtime using device measurements |
+| Presentation | Prototype: annotated Qt replay window; add a separately validated headset overlay backend later |
 
 Choose the model, input size, execution provider, and update rate using measured
 accuracy and latency. CPU execution in the cloud does not establish the same
@@ -63,6 +64,15 @@ camera nodes already owned by XRService. Details and sources are in the
 [camera guide](steam-frame-camera.md#experimental-live-capture).
 
 ## Presentation and spatial labels
+
+`scripts/replay_window.py` implements the first window prototype. A worker thread
+owns PyAV decoding, resizing and CPU inference, then publishes one latest
+completed annotated image under a lock. The Qt thread copies that image into
+an owned QImage and paints it with aspect ratio preserved. Each annotation
+belongs to the image it was inferred from; queued results do not accumulate.
+The worker checks pause/replay/stop events and closes the file between loops.
+Playback processes each frame at up to 10 fps by default, rather than promising
+the recording's original timing. The UI offers pause/resume, replay and looping.
 
 A regular window or a VR panel can display the camera image with 2D detections.
 This is the initial proof of concept. Overlay creation and rendering still need

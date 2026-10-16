@@ -36,6 +36,11 @@ PyAV binary wheels also include FFmpeg libraries and their dependencies; consult
 the installed wheel's notices and upstream licenses for those components. They
 are installed in ignored `.venv-replay/`, not committed to this repository.
 
+[requirements-window.txt](requirements-window.txt) extends that environment
+with NumPy, OpenCV headless, PySide6 Essentials and Shiboken. The annotated
+replay prototype reuses the checksum-verified MobileNet-SSD files listed above
+as a demo detector; their upstream notices continue to apply.
+
 ## Native OpenVR probe
 
 The native camera probe fetches Valve's OpenVR SDK at commit

@@ -61,7 +61,15 @@ no OpenVR work by default and requires `--allow-passthrough-interruption` for a
 deliberate future test after a material change. See the
 [device guide](on-device.md#then-verify-camera-access) for the guard and advanced
 procedure. The next development step is recording replay for the detector and
-window, while a supported live-capture interface remains unresolved.
+window validation on Frame, while a supported live-capture interface remains unresolved.
+
+The user's separate file-decode check now succeeds on Frame: PyAV 16.1.0 decoded
+three 2464 × 2464 HEVC frames from video-stream ordinal 0 and converted
+`yuvj420p` to RGB. The recording has two `hvc1` video tracks, `gpmd` metadata,
+audio and fragmented MP4 structure. This establishes selected-file decoding,
+not stereo camera identity, calibration or live capture. An annotated Qt replay
+window is implemented and tested offscreen in the cloud; see the
+[window launch guide](on-device.md#open-the-annotated-replay-window).
 
 ## Valve's documented application interface
 
@@ -196,12 +204,12 @@ or headset splat rendering.
 
 ## Implementation sequence and remaining checks
 
-1. Implement a file/replay input backend using a short recording from the working
-   Arcturus Camera app. Preserve the original video tracks and metadata; verify
-   decoding, pixel format and stereo layout before feeding the detector. The
-   existing generated cloud fixture does not validate vendor-recording decoding.
-   Add a capture abstraction so hardware experiments do not affect inference or
-   presentation.
+1. Validate the implemented Qt replay window on Frame using the recording whose
+   three-frame decode succeeded. Check visibility, object labels, orientation,
+   color, pause/replay/loop controls and clean shutdown. Preserve original video
+   tracks and metadata; track ordinal does not establish stereo-side identity.
+   The generated cloud fixtures cover detector/presentation integration, not
+   vendor color, calibration or stereo alignment.
 2. Retain the device inventory and failed public-probe reports with their tested
    runtime versions. Do not rerun the unchanged public probe or deploy an
    experimental capture layer as the next diagnostic step. Its current
