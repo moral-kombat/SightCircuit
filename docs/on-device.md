@@ -542,10 +542,38 @@ placement and runtime. Repeat deliberately at other poses/positions before a
 general claim; ordinary Qt windows need their own check. If no panel appeared in
 the headset or it was not visible during capture, this comparison is inconclusive.
 The user observed the included panel with both tools reporting clean shutdown.
-The next task is confirming the connected/selected camera and preparing input
-independent of our output. The mirror can still provide bounded recognition
+Arcturus is now confirmed connected; the selected passthrough source remains
+unknown. The next task is the native prerequisite check below and preparing
+input independent of our output. The mirror can still provide bounded recognition
 and snapshots displayed after capture closes. This procedure does not install
 layers, switch camera sources or repeat the public tracked-camera probe.
+
+### Check native capture prerequisites
+
+Use the normal Frame terminal to collect the build metadata needed for a
+capture-only provider. Arcturus is connected, but its selection as the current
+passthrough source is unknown; this command does not select or identify it.
+Update a clean checkout and run:
+
+```bash
+cd "$HOME/framejacker" &&
+git pull --ff-only &&
+python3 scripts/device_check.py --capture-prerequisites
+```
+
+This standard-library check reports architecture/OS, the C++ compiler version,
+Vulkan `pkg-config` metadata, known header/library paths and existing community
+capture configuration paths. It inspects file metadata without reading images,
+connecting to a socket, loading Vulkan or initializing OpenVR. It does not
+install packages, enable a layer, change settings or restart SteamVR.
+
+Share the JSON report. Missing development files describe build prerequisites,
+not a camera failure. A runtime `libvulkan.so.1` alone does not establish that
+headers or linker files are installed. Search locations are limited, and
+symlink targets are not verified. Do not unlock SteamOS or run the upstream
+installer to fill gaps; choose the build approach from the report first.
+The [development guide](development.md#dedicated-capture-build-prerequisites)
+explains the distinction. Native Frame results are still pending.
 
 ### Check existing luma shared memory
 
@@ -725,8 +753,9 @@ Bounded mirror recognition then processed 51/100 reads at 4.993 fps with normal
 passthrough and clean shutdown. Earlier labels were chair/tvmonitor; the final
 frame had no detections. The fixed-panel test then confirmed our panel appears
 in mirror input; its grayscale/no-label output was expected because no detector ran.
-Next confirm the connected/selected camera and prepare input before overlay
-composition. Physical camera identity and scene freshness remain unverified.
+Arcturus is connected; its selection for passthrough is unknown. Next run
+python3 scripts/device_check.py --capture-prerequisites and prepare input before
+overlay composition. Physical camera identity and scene freshness remain unverified.
 The isolated shared-memory reader and synthetic fixture are implemented and
 cloud-tested; ARM64/provider validation and capture-layer deployment are pending.
 Keep user observations, cloud checks and upstream capture claims distinct.

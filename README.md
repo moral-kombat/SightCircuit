@@ -72,8 +72,8 @@ camera or replay input → preprocessing → detector → annotated window / VR 
 ```
 
 The [active live-capture plan](docs/live-capture.md#current-work-order) owns the
-next tasks: a bounded diagnostic for an existing headset mirror, followed by an
-isolated Arcturus shared-memory reader and capture-only device trial. The
+next tasks: prepare a dedicated camera provider and capture-only device trial,
+using the implemented isolated shared-memory reader. The
 [mirror diagnostic](docs/on-device.md#check-an-existing-steamvr-mirror) is
 implemented and has delivered 1920 × 1080 RGB3 frames on Frame at the diagnostic's
 10 reads/second limit. The user confirms its saved grayscale preview shows the
@@ -81,9 +81,11 @@ room. Recognition on that still completed but mislabeled a rug as sofa. The
 [bounded mirror recognizer](docs/on-device.md#run-bounded-recognition-from-the-mirror)
 then processed 51 reads at 4.993 fps, with clean shutdown and normal passthrough.
 The [fixed-panel check](docs/on-device.md#check-whether-the-vr-panel-appears-in-mirror-input)
-confirmed that this mirror captures our VR output. Next confirm the active
-physical camera and prepare an input independent of our output before continuous
-VR image display. Bounded recognition and snapshots shown after capture remain
+confirmed that this mirror captures our VR output. Arcturus is connected; its
+selection for passthrough is unknown. Next collect
+[native build prerequisites](docs/on-device.md#check-native-capture-prerequisites)
+and prepare an input independent of our output before continuous VR image
+display. Bounded recognition and snapshots shown after capture remain
 useful. The model's class coverage and false positives need separate work.
 The [isolated shared-memory reader](docs/on-device.md#check-existing-luma-shared-memory)
 also passes controlled cloud tests; no dedicated capture provider has been

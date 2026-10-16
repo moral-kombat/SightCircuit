@@ -21,6 +21,7 @@ unknown unless explicitly recorded below.
 | Bounded mirror recognition | Frame-confirmed execution | 100 captured / 51 processed reads, 4.993 processed fps, 42.044 ms mean inference and clean shutdown; user reports normal passthrough; label accuracy and live display remain separate; [E17](#e17-bounded-mirror-recognition-on-frame) |
 | Existing-mirror diagnostic | Frame capture confirmed; VR panel included in input | Physical-room preview and bounded inference work, but this composited view includes our overlay; physical camera identity/timing remain unknown; [E14](#e14-physical-room-visible-in-the-mirror-preview), [E18](#e18-vr-panel-included-in-mirror-input) |
 | Dedicated-camera shared-memory reader | Implemented; cloud-tested | Read-only native consumer, bounded supervisor and synthetic producer; actual provider and ARM64 validation pending; [E9](#e9-shared-memory-reader-cloud-checks) |
+| Native capture prerequisite report | Implemented; cloud-checked | Compiler, Vulkan build-file and existing configuration metadata only; Frame results pending; [E20](#e20-capture-prerequisite-report-cloud-checks) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
 | Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; no source-identified built-in-camera frames have been received |
 | Stereo depth and world-space labels | Planned | Calibration, depth and pose/timebase alignment remain unresolved |
@@ -543,8 +544,36 @@ capture closes. Continuous VR image output needs camera input independent of
 our panel, or a supported and validated mirror mode that excludes it. The
 current mirror path has no such exclusion mode. Do not treat cropping or
 hiding the panel as demonstrated general exclusion. Dedicated-provider work
-remains conditional on confirming the connected/selected camera and preparing
-a reviewed build and exact configuration restoration before deployment.
+requires a reviewed build and exact configuration restoration before deployment.
+The subsequent connection confirmation below does not resolve source selection.
+
+### E19: Arcturus connection confirmed, source selection unknown
+
+Source: user observation received 2026-10-16. The user confirms the Arcturus
+Vision Camera is physically connected but is unsure whether it is selected for
+passthrough. No fresh runtime inventory or source-identified capture accompanied
+this confirmation. Connection is sufficient to prepare the Arcturus build path;
+it does not identify which camera supplied E14–E18's mirror images or establish
+that a dedicated provider is running. Verify source selection and identity
+during the capture-only trial.
+
+### E20: Capture prerequisite report cloud checks
+
+Source: local cloud execution on 2026-10-16 of the prerequisite-report worktree
+based on `770f3bf`. Both default inventory and
+`device_check.py --capture-prerequisites` emitted valid JSON with their expected
+report kinds. The focused report recorded `runtime_initialized: false`,
+`capture_started: false` and `files_changed: false`. It reported x86_64,
+Debian g++ 14.2.0, absent Vulkan `pkg-config` metadata/known headers and two
+runtime-library symlink entries. These are cloud observations, not Frame results.
+
+Controlled checks covered missing tools, command timeout/nonzero status,
+missing/inaccessible paths and regular-file/directory/socket/symlink metadata.
+The default inventory retained `capture_validation: not_performed`.
+Documentation links, existing anchors, shell-example syntax and documented
+Python options were checked. No camera, Vulkan-loader, native provider build
+or ARM64 execution was exercised. Frame prerequisite output remains pending;
+use [the read-only procedure](on-device.md#check-native-capture-prerequisites).
 
 ## Maintaining the evidence
 

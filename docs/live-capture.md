@@ -16,7 +16,7 @@ layer has been deployed by Framejacker.
 | 1c | Check capture of our own display | Confirmed: the VR panel appears in captured output | Current composited mirror does not exclude our output; no continuous live-image panel from this source; [E18](status.md#e18-vr-panel-included-in-mirror-input) |
 | 1d | Detector quality and class coverage | Needs evaluation | Include the rug false positive; select supported target classes and evaluate correct labels, boxes and misses before claiming useful accuracy |
 | 2 | Isolated shared-memory reader and controlled producer | Implemented and cloud-tested; ARM64 and real-provider validation pending | Validate the pinned layout, consistent frame copies, stale/malformed/restarted input and shutdown; [cloud evidence](status.md#e9-shared-memory-reader-cloud-checks) |
-| 3 | Dedicated camera provider | Next engineering path; not deployed | Confirm connected/selected camera, then prepare a supported interface or capture-only adaptation; Arcturus community route is not established for built-in cameras |
+| 3 | Dedicated camera provider | Arcturus connected; selected source unknown; not deployed | Check native build prerequisites, prepare a supported interface or capture-only adaptation, then identify the source during capture validation; Arcturus community route is not established for built-in cameras |
 | 4 | Capture-only device trial | Planned | Ten seconds of fresh images from one identified source, correct orientation, clean exit and working normal passthrough |
 | 5 | Continuous live input in the existing display | Planned; needs input independent of our output | Reuse detector/display after a dedicated provider or supported overlay-excluded mirror mode is validated; current mirror includes the panel |
 | 6 | Color, built-in camera support and later geometry | Planned | Validate each source and color conversion separately; require calibration and stronger timing evidence before stereo depth or spatial labels |
@@ -56,8 +56,12 @@ the headset and in the saved mirror still; see
 [the inclusion result](status.md#e18-vr-panel-included-in-mirror-input). This
 closes the mirror feasibility branch for continuous VR image output in the
 tested mode. Keep bounded/no-display recognition and post-capture snapshots as
-the baseline. Next confirm the connected/selected physical camera and prepare
-input before overlay composition. Prefer a supported interface; the reviewed
+the baseline. The user confirms Arcturus is physically connected, but does not
+know which passthrough source is selected. Run the read-only
+[native prerequisite check](on-device.md#check-native-capture-prerequisites)
+and prepare input before overlay composition. Identify the selected source
+during capture validation; connection alone does not identify past mirror frames.
+Prefer a supported interface; the reviewed
 community Arcturus provider remains an experimental alternative, with no
 established built-in-camera support. Verify source identity, orientation and
 freshness before connecting it to the existing display.
@@ -162,6 +166,8 @@ Dedicated-provider preparation remains an independent offline task: pin only its
 capture components, repair descriptor/publication lifecycle issues from the
 source review, and prepare a native ARM64 build and exact layer-configuration
 restoration. Deployment and the first camera trial remain separate steps.
+The prerequisite report distinguishes runtime-library metadata from compiler,
+Vulkan headers and linker files; it does not install or activate a provider.
 
 ## First live device trial
 

@@ -249,6 +249,35 @@ after capture/inference finishes. Read [the device procedure](on-device.md#run-b
 before the first Frame trial; [status](status.md#e16-bounded-mirror-recognition-cloud-checks)
 records cloud-only validation and the model-quality limitation.
 
+## Dedicated capture build prerequisites
+
+Collect metadata on the target machine before preparing a native capture build:
+
+```bash
+python3 scripts/device_check.py --capture-prerequisites
+```
+
+The focused report needs only Python's standard library. It runs bounded
+`g++ --version` and `pkg-config` queries and inspects known paths with `lstat`.
+It does not load Vulkan, initialize OpenVR, connect to a provider or read images.
+The default command without this option still produces the original device
+inventory. Missing tools/files are reported rather than installed.
+
+The reviewed community layer needs a C++17 compiler and Vulkan development
+headers, including `vulkan/vulkan.h` and `vulkan/vk_layer.h`. Its `ptgrab` producer
+also links Vulkan. Runtime `libvulkan.so.1`, unversioned linker `libvulkan.so`,
+headers and `pkg-config` metadata are separate prerequisites. Known-path presence
+does not prove that a symlink resolves, a build links or the target GPU imports
+camera buffers; these searches are not an exhaustive library discovery process.
+Use missing-file results to prepare a pinned build dependency in an ignored
+cache when appropriate, without changing SteamOS protections as a routine step.
+
+The report also lists metadata for the reviewed community layer manifest,
+library, enable marker, runtime socket and luma shared-memory path. Presence
+does not establish compatibility or a running provider. No installer or capture
+build is invoked. See [the operating procedure](on-device.md#check-native-capture-prerequisites)
+and [the capture plan](live-capture.md#current-work-order) for the next device step.
+
 ## Isolated luma reader and synthetic producer
 
 The shared-memory diagnostic is independent of inference, Qt, OpenVR and Vulkan.
