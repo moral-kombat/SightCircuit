@@ -3,7 +3,7 @@
 The repository's MIT license covers original Framejacker code and documentation.
 Dependencies, reused code and downloaded fixtures retain their upstream terms.
 No model weights, images or SDK binaries are bundled. The protocol header and
-adaptation patch identified below are the bundled capture-project code.
+adaptation patches identified below are the bundled capture-project code.
 
 ## Development fixtures
 
@@ -62,7 +62,7 @@ unmodified from `spyjacob/steam-frame-hand-tracking` at commit
 `ff6a2b29bc50c9497d66fd7ff07e00b61f9eb082`. Its
 [upstream MIT license](third_party/mrhand/LICENSE) and
 [provenance](third_party/mrhand/README.md) are included. Framejacker uses the
-luma shared-memory layout. The separate transport patch below includes upstream
+luma shared-memory layout. The adaptation patches below include upstream
 source context; no complete upstream capture layer, `ptgrab`, installer, driver
 or hand-tracking model is bundled or activated. The controlled producer is
 original test code, not a camera source.
@@ -85,6 +85,13 @@ and compiles separate inspection artifacts. The transport helper and synthetic
 socket fixture are original Framejacker code. This mode also installs nothing
 and does not run the capture binaries.
 
+[patches/mrhand/0002-owned-bounded-publication.patch](patches/mrhand/0002-owned-bounded-publication.patch)
+applies after the transport patch at the same pin and retains the same MIT
+attribution. The optional `--publication-fixes` build adds original Framejacker
+publication/control helpers and a generated-data fixture. Capture binaries remain
+non-executable inspection artifacts; tests run only the original synthetic fixture
+and the existing reader. No upstream installer or camera operation is executed.
+
 If compiler-search-path Vulkan headers are unavailable, the builder fetches
 [Khronos Vulkan-Headers v1.4.309](https://github.com/KhronosGroup/Vulkan-Headers/tree/952f776f6573aafbb62ea717d871cd1d6816c387)
 at `952f776f6573aafbb62ea717d871cd1d6816c387` into ignored
@@ -97,6 +104,6 @@ linked for the compile-only compatibility check.
 
 The [camera guide](docs/steam-frame-camera.md) links Valve's OpenVR SDK, Arcturus's
 Spirula fork and community capture/reconstruction projects. Those links provide
-research context. Apart from the protocol header and patch above, their code
+research context. Apart from the protocol header and patches above, their code
 and binaries have not been vendored. Consult their licenses and preserve attribution when
 integrating any implementation.

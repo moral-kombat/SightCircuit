@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
-# Compile the pinned reference or transport-only adaptation for inspection.
+# Compile the pinned reference or a selected adaptation for inspection.
 set -euo pipefail
 
 if [ "$#" -eq 1 ] && { [ "$1" = --help ] || [ "$1" = -h ]; }; then
-    echo "Usage: bash scripts/build_capture_reference.sh [--transport-fixes]"
-    echo "Builds the reference, or its transport-only adaptation, as inspection artifacts."
+    echo "Usage: bash scripts/build_capture_reference.sh [--transport-fixes|--publication-fixes]"
+    echo "Builds the reference or a selected adaptation as inspection artifacts."
     echo "Does not install, load or run it. Runtime fixes are required before deployment."
     exit 0
 fi
 framejacker_mode=reference
 if [ "$#" -eq 1 ] && [ "$1" = --transport-fixes ]; then
     framejacker_mode=transport
+elif [ "$#" -eq 1 ] && [ "$1" = --publication-fixes ]; then
+    framejacker_mode=publication
 elif [ "$#" -ne 0 ]; then
     echo "Unexpected arguments; use --help." >&2
     exit 64
@@ -23,8 +25,8 @@ framejacker_headers_revision=952f776f6573aafbb62ea717d871cd1d6816c387
 framejacker_reference="$framejacker_root/.cache/capture-reference"
 framejacker_headers="$framejacker_root/.cache/vulkan-headers"
 framejacker_build="$framejacker_root/artifacts/capture-reference"
-if [ "$framejacker_mode" = transport ]; then
-    framejacker_build="$framejacker_root/artifacts/capture-transport-reference"
+if [ "$framejacker_mode" != reference ]; then
+    framejacker_build="$framejacker_root/artifacts/capture-$framejacker_mode-reference"
 fi
 framejacker_fetch=""
 framejacker_stage=""
@@ -85,7 +87,7 @@ fetch_pinned "$framejacker_reference" https://github.com/spyjacob/steam-frame-ha
 
 framejacker_stage="$(mktemp -d "$framejacker_build/.build.XXXXXX")"
 framejacker_sources="$framejacker_reference"
-if [ "$framejacker_mode" = transport ]; then
+if [ "$framejacker_mode" != reference ]; then
     framejacker_sources="$framejacker_stage/source"
     mkdir -p "$framejacker_sources/capture"
     cp -- "$framejacker_reference/LICENSE" "$framejacker_sources/LICENSE"
@@ -99,6 +101,19 @@ if [ "$framejacker_mode" = transport ]; then
         "$framejacker_root/patches/mrhand/0001-bounded-descriptor-transport.patch"
     git -C "$framejacker_sources" apply \
         "$framejacker_root/patches/mrhand/0001-bounded-descriptor-transport.patch"
+    if [ "$framejacker_mode" = publication ]; then
+        for framejacker_header in capture_publication.hpp shm_common.hpp; do
+            cp -- "$framejacker_root/tools/$framejacker_header" "$framejacker_sources/capture/"
+        done
+        git -C "$framejacker_sources" apply --check \
+            "$framejacker_root/patches/mrhand/0002-owned-bounded-publication.patch"
+        git -C "$framejacker_sources" apply \
+            "$framejacker_root/patches/mrhand/0002-owned-bounded-publication.patch"
+        "$framejacker_compiler" -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -pthread \
+            -I"$framejacker_root/tools" -I"$framejacker_root/third_party/mrhand" \
+            "$framejacker_root/tools/capture_publication_fixture.cpp" \
+            -o "$framejacker_stage/framejacker-publication-fixture"
+    fi
     "$framejacker_compiler" -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -pthread \
         -I"$framejacker_root/tools" -I"$framejacker_root/third_party/mrhand" \
         "$framejacker_root/tools/capture_transport_fixture.cpp" \
@@ -123,13 +138,14 @@ import subprocess
 import sys
 
 stage, reference = map(Path, sys.argv[1:3])
-adapted = sys.argv[6] == "transport"
+mode = sys.argv[6]
+adapted = mode != "reference"
 def digest(path):
     return {"name": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             "size_bytes": path.stat().st_size}
 report = {
-    "report_kind": "capture_transport_reference_build" if adapted else "capture_reference_build",
-    "schema_version": 1, "status": "built_transport_reference" if adapted else "built_reference",
+    "report_kind": f"capture_{mode}_reference_build" if adapted else "capture_reference_build",
+    "schema_version": 1, "status": f"built_{mode}_reference" if adapted else "built_reference",
     "machine": platform.machine(),
     "compiler_target": subprocess.check_output([sys.argv[5], "-dumpmachine"], text=True).strip(),
     "capture_revision": sys.argv[3], "vulkan_headers": sys.argv[4],
@@ -148,10 +164,18 @@ if adapted:
     report["sources"].append(digest(reference / "capture/capture_transport.hpp"))
     report["transport_patch"] = digest(Path(sys.argv[7]) / "patches/mrhand/0001-bounded-descriptor-transport.patch")
     report["notes"][2] = "Transport fixes only; GPU import, writer ordering, provider lifecycle and restoration remain pending."
+if mode == "publication":
+    report["sources"].extend(digest(reference / "capture" / name)
+                             for name in ("capture_publication.hpp", "shm_common.hpp"))
+    report["publication_patch"] = digest(Path(sys.argv[7]) / "patches/mrhand/0002-owned-bounded-publication.patch")
+    report["notes"][2] = "Publication and loop controls added; GPU import/resource cleanup, registry refresh and layer lifetime/restoration remain pending."
 (stage / "build-report.json").write_text(json.dumps(report, indent=2) + "\n")
 PY
-if [ "$framejacker_mode" = transport ]; then
+if [ "$framejacker_mode" != reference ]; then
     mv -- "$framejacker_stage/framejacker-transport-fixture" "$framejacker_build/"
+fi
+if [ "$framejacker_mode" = publication ]; then
+    mv -- "$framejacker_stage/framejacker-publication-fixture" "$framejacker_build/"
 fi
 for framejacker_file in reference-libVkLayer_mrhand.so reference-ptgrab build-report.json; do
     mv -- "$framejacker_stage/$framejacker_file" "$framejacker_build/$framejacker_file"

@@ -333,6 +333,52 @@ seven groups and checks both build modes. Live layer callbacks, GPU imports and
 provider publication are not exercised by those tests. The active plan owns
 remaining provider work and the [device guide](on-device.md#test-the-transport-adaptation-without-capture)
 owns ARM64 execution.
+The user reports the adapted build and seven fixture groups passed on Frame;
+see [E25](status.md#e25-descriptor-transport-on-frame).
+
+### Build and test owned publication
+
+```bash
+bash scripts/build_capture_reference.sh --publication-fixes
+bash scripts/build_shm_reader.sh
+python3 -m unittest discover -s tests -p test_capture_publication.py -v
+```
+
+This mode applies both pinned adaptation patches and adds
+`tools/capture_publication.hpp` plus the existing `shm_common.hpp`. Its separate
+inspection artifacts are under `artifacts/capture-publication-reference/`.
+The report includes both patch hashes and all helper hashes. No produced capture
+binary is loaded/executed. Native fixtures are original test programs.
+
+The publisher keeps the pinned 96-byte/two-slot ABI. It requires an owned private
+parent directory, creates a new ordinary file exclusively, maps at most two
+16 MiB planes, checks identity/size/permissions before publication and rejects
+invalid or regressing metadata. Older or more-than-one-second-old observations
+are skipped. The writer places a full barrier after the odd sequence marker
+and release-publishes even after payload/metadata. This protects publication;
+it does not synchronize the original XRService GPU writes.
+
+Normal cleanup unmaps/closes and removes its identity-checked file; existing or
+replaced paths are preserved. The future runtime source is
+`$XDG_RUNTIME_DIR/framejacker-capture/frames.shm`. The adaptation drops image-dump
+mode, parses explicit duration/rate/opt-in before capture work and checks a
+1–10 second deadline/SIGINT/SIGTERM in its stream loop. Parent death uses SIGKILL;
+its stale file may remain, and overwrite is refused. No automatic stale-file
+recovery is implemented.
+
+The eight process tests use the actual publisher helper, generated 1024 × 1024
+luma slots and the existing reader. They check byte/metadata association in
+both slots, no-overwrite behavior, replaced-file preservation, signals, deadline
+and parent death/reaping. The native self-check also covers invalid bounds,
+stale/order/counter handling, truncation before a write and private runtime paths.
+CI builds the tools before these tests; absent binaries cause explicit skips
+in environments that run discovery without building them.
+
+The loop deadline cannot bound every driver call, and a concurrent truncation
+can still fault a mapping between checks. Complete the external process watchdog,
+GPU import/resource cleanup, registry refresh, layer lifetime and restoration
+before activation. ARM64 publication testing uses the
+[on-device procedure](on-device.md#test-owned-publication-without-capture).
 
 ## Isolated luma reader and synthetic producer
 

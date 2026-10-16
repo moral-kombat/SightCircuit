@@ -16,7 +16,7 @@ layer has been deployed by Framejacker.
 | 1c | Check capture of our own display | Confirmed: the VR panel appears in captured output | Current composited mirror does not exclude our output; no continuous live-image panel from this source; [E18](status.md#e18-vr-panel-included-in-mirror-input) |
 | 1d | Detector quality and class coverage | Needs evaluation | Include the rug false positive; select supported target classes and evaluate correct labels, boxes and misses before claiming useful accuracy |
 | 2 | Isolated shared-memory reader and controlled producer | Controlled x86_64 and Frame ARM64 checks passed; real provider unverified | All 14 native/supervisor tests pass on Frame; upstream writer ordering and original GPU completion remain unresolved; [E23](status.md#e23-reference-build-and-controlled-reader-on-frame) |
-| 3 | Dedicated camera provider | Reference builds on Frame; transport adaptation cloud-tested; not deployed | Verify transport adaptation on ARM64, then finish GPU import validation, writer ordering, bounded lifetime and restoration; source identity and built-in support unresolved |
+| 3 | Dedicated camera provider | Transport build/tests pass on Frame; publication adaptation cloud-tested; not deployed | Verify publisher/control tests on ARM64, then finish GPU import/resource cleanup/watchdog, registry refresh, layer lifetime and restoration; physical source and built-in support unresolved |
 | 4 | Capture-only device trial | Planned | Ten seconds of fresh images from one identified source, correct orientation, clean exit and working normal passthrough |
 | 5 | Continuous live input in the existing display | Planned; needs input independent of our output | Reuse detector/display after a dedicated provider or supported overlay-excluded mirror mode is validated; current mirror includes the panel |
 | 6 | Color, built-in camera support and later geometry | Planned | Validate each source and color conversion separately; require calibration and stronger timing evidence before stereo depth or spatial labels |
@@ -61,10 +61,12 @@ know which passthrough source is selected. The native prerequisite report now
 shows GCC 15.1.1 and Vulkan 1.4.309 development files on SteamOS 0.5.6; see
 [E21](status.md#e21-capture-prerequisites-on-frame). The reference build and all
 14 controlled reader tests now pass on Frame; see [E23](status.md#e23-reference-build-and-controlled-reader-on-frame).
-The first provider adaptation addresses descriptor transport. Its
-[synthetic socket check](on-device.md#test-the-transport-adaptation-without-capture)
-is ready for ARM64 verification while the remaining provider work continues.
-The reference and transport-only adaptation are not deployment-ready. Identify the selected source
+The descriptor transport adaptation now builds and passes seven fixture groups
+on Frame; see [E25](status.md#e25-descriptor-transport-on-frame). The next
+adaptation replaces publication and adds loop controls; run its
+[generated-data checks on ARM64](on-device.md#test-owned-publication-without-capture)
+while the remaining provider work continues. The inspection builds are not
+deployment-ready. Identify the selected source
 during capture validation; connection alone does not identify past mirror frames.
 Prefer a supported interface; the reviewed
 community Arcturus provider remains an experimental alternative, with no
@@ -182,10 +184,22 @@ lock and sends a single registry generation. Its shared sender/receiver handles
 partial messages, validates ancillary FD counts and metadata bounds, closes
 rejected descriptors and applies one 500 ms socket deadline per exchange.
 Controlled cloud tests cover disconnects, stalls, malformed responses and FD
-lifetime. ARM64 transport tests remain pending. It does not yet repair GPU
-import validation/completion, ongoing registry refresh, writer ordering,
-exclusive shared-memory ownership, provider shutdown or layer socket ownership.
-Finish those and exact restoration before a capture-only device deployment.
+lifetime. The same seven fixture groups now pass on Frame ARM64. These tests do
+not exercise live layer callbacks.
+
+The optional publication adaptation adds a private runtime file, exclusive
+creation, identity/size/permission checks, the ARM64 odd-marker barrier and
+monotonic publication. Its stream has explicit duration/rate/opt-in parsing,
+signal checks and parent-death killing. Eight controlled cloud tests cover the
+same publisher helper and actual reader together; ARM64 publication validation
+is next. Normal cleanup removes its file; abrupt death may leave a stale file
+that is refused on restart. The implementation does not yet supply automatic
+lease recovery or an external watchdog for blocked GPU calls.
+
+Before deployment, finish GPU import validation/resource cleanup, the process
+watchdog, registry refresh, layer lifetime/socket ownership and exact restoration.
+Original camera-buffer completion and source identity remain separate hardware
+acceptance checks even after shared-memory publication is correct.
 
 ## First live device trial
 

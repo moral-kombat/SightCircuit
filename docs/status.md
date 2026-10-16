@@ -23,7 +23,8 @@ unknown unless explicitly recorded below.
 | Dedicated-camera shared-memory reader | Controlled x86_64 and Frame ARM64 tests passed | All 14 reader/supervisor tests pass on Frame; actual provider and upstream writer ordering remain unverified; [E23](#e23-reference-build-and-controlled-reader-on-frame) |
 | Native capture prerequisite report | Frame report received | aarch64 SteamOS 0.5.6, GCC 15.1.1 and Vulkan 1.4.309 development metadata/headers; no capture configuration at checked paths; [E21](#e21-capture-prerequisites-on-frame) |
 | Pinned capture reference build | Cloud and Frame ARM64 compile/link checks passed | Unmodified upstream inspection artifacts only; no activation, runtime fixes still required; [E23](#e23-reference-build-and-controlled-reader-on-frame) |
-| Descriptor transport adaptation | Implemented; controlled cloud checks passed | Versioned layer/consumer patch and seven synthetic socket groups; native ARM64 transport tests and remaining provider fixes pending; [E24](#e24-descriptor-transport-adaptation-cloud-checks) |
+| Descriptor transport adaptation | Controlled cloud and Frame ARM64 checks passed | Adapted components compile/link on Frame and fixture reports seven groups passed; live callbacks and remaining provider work unverified; [E25](#e25-descriptor-transport-on-frame) |
+| Provider publication and loop controls | Implemented; controlled cloud checks passed | Exclusive private runtime file, ordered writer and bounded loop controls; eight generated-data process tests passed; ARM64 writer/control checks and full GPU/provider lifecycle pending; [E26](#e26-publication-and-loop-controls-cloud-checks) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
 | Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; no source-identified built-in-camera frames have been received |
 | Stereo depth and world-space labels | Planned | Calibration, depth and pose/timebase alignment remain unresolved |
@@ -684,11 +685,72 @@ or camera calls. The layer snapshot duplicates each FD under its registry lock
 and freezes a single generation; live Vulkan callbacks were not exercised.
 
 Address/undefined-behavior sanitizer checks also passed the fixture. CI includes
-the adapted build and fixture; hosted results have not been checked. Native
-ARM64 transport verification remains pending. The adaptation still leaves GPU
+the adapted build and fixture; hosted results have not been checked. The
+subsequent ARM64 result is recorded in E25. The transport-only adaptation leaves GPU
 import validation, writer ordering, ongoing registry/provider lifetime, shared
 memory ownership and layer socket restoration unresolved; it is not ready for
 activation. Use [the synthetic device procedure](on-device.md#test-the-transport-adaptation-without-capture).
+
+### E25: Descriptor transport on Frame
+
+Source: user-supplied build report and fixture output received 2026-10-16.
+Exact execution time, checkout revision and fresh runtime versions were not
+provided. The final fixture JSON was cut off in its `scope` field; the supplied
+fields report `status: passed`, `tests_run: 7`, `descriptor_leak_detected: false`,
+`runtime_initialized: false` and `capture_started: false`. No shell exit status
+was included.
+
+The transport adaptation compiled/linked on `aarch64`, target
+`aarch64-unknown-linux-gnu`, with system Vulkan headers and `-l:libvulkan.so.1`.
+Capture revision remains `ff6a2b29bc50c9497d66fd7ff07e00b61f9eb082`.
+Patch SHA-256 is
+`db48ff5ff0899ab8bbd9b4b935b7f14559e8c37b0bbc59e8f91d80b1eef5d72c`;
+transport helper SHA-256 is
+`8f48c48fba25d48fc53931cc5e6c75fd6a59df45bb9d2c68af28d58399068a90`.
+The reported artifacts are:
+
+| Artifact | Bytes | SHA-256 |
+| --- | --- | --- |
+| `reference-libVkLayer_mrhand.so` | 81,048 | `06ba2f08240141f20b0e6fff43156ba53ce06ae269eeeb5f9e7a9b5b5d4d22e4` |
+| `reference-ptgrab` | 80,528 | `a359eb92dd684da328b3f516eabf327adb8d64247eb1d5686d935f60ed17f247` |
+
+The build report records modified upstream sources, no runtime initialization,
+capture or layer installation, and `deployment_ready: false`. The builder
+reports non-executable inspection artifacts. This supports controlled ARM64
+transport compatibility, not execution of the actual layer callbacks, GPU
+imports, shared-memory provider or live camera capture. Arcturus selection and
+physical source identity remain unresolved.
+
+### E26: Publication and loop controls cloud checks
+
+Source: local x86_64 cloud execution on 2026-10-16 of the publication worktree
+based on `ddadeb6`. The build applies both versioned patches to disposable
+source and compiles/links the adapted layer and producer. Capture binaries
+remain non-executable inspection artifacts, with no layer activation or capture
+execution. The publisher/control helper is shared with the original fixture.
+
+All **eight process tests passed in 1.535 seconds**, with no skips. They exercise
+the production option parser through the fixture, validate publisher dimensions,
+metadata and private paths, preserve existing files/symlinks/FIFOs, and copy real
+generated 1024 × 1024 publications through the existing reader in both slots.
+The saved generated PGM payloads match their frame counters and uniform values.
+Other tests check normal deadline removal, SIGINT/SIGTERM cleanup, replacement
+preservation and parent-death SIGKILL/reaping. The killed writer leaves a stale
+file; a retry refuses it without overwriting it. Truncation before a write is
+rejected by the native validation check; a concurrent truncate race can still
+fault a mapping and needs process containment.
+
+All three build modes passed local compilation and artifact/hash/permission
+checks; pinned source caches remained clean. The native publication self-check
+also passed address/undefined-behavior sanitizer checks. CI was extended to
+build the new mode and run its tests; hosted results have not been checked.
+
+These are controlled CPU/shared-memory observations, not a real GPU stream.
+ARM64 publisher/control validation, GPU import/resource cleanup, registry
+refresh, the external watchdog, layer lifetime and exact restoration remain
+pending. The local loop deadline does not establish that every driver call
+returns on time. Camera identity, source-buffer completion, color and
+calibration remain unverified. Use [the next device check](on-device.md#test-owned-publication-without-capture).
 
 ## Maintaining the evidence
 

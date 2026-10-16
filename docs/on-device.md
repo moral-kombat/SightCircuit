@@ -615,8 +615,9 @@ permission or run `ptgrab` as the next step.
 ### Test the transport adaptation without capture
 
 The first provider adaptation repairs descriptor ownership and bounded socket
-messages. It has passed controlled cloud tests; native ARM64 transport checks
-are next. Run this separately from the completed unmodified-reference test:
+messages. The adapted build and all seven fixture groups have now passed on
+Frame ARM64; see [E25](status.md#e25-descriptor-transport-on-frame). Keep this
+procedure for a changed implementation/runtime; the next check is publication below.
 
 ```bash
 cd "$HOME/framejacker" &&
@@ -637,6 +638,43 @@ directory is removed after its test. Share the build report and fixture JSON.
 This remains a transport-only adaptation. GPU import, shared-memory publication,
 provider lifetime and exact restoration still need work before deployment; no
 capture binary is run and no layer configuration is created by this procedure.
+
+### Test owned publication without capture
+
+The next adaptation replaces the producer's shared-memory writer and adds
+bounded loop controls. The eight controlled cloud tests passed; native ARM64
+writer/control validation is pending. In the existing Frame checkout, run:
+
+```bash
+cd "$HOME/framejacker" &&
+git pull --ff-only &&
+bash scripts/build_capture_reference.sh --publication-fixes &&
+bash scripts/build_shm_reader.sh &&
+.venv-replay/bin/python -m unittest discover -s tests -p test_capture_publication.py -v
+```
+
+This build applies both versioned patches to a disposable source copy and keeps
+the pinned cache and earlier builds intact. Capture inspection binaries remain
+non-executable in `artifacts/capture-publication-reference/`. The tests run an
+original fixture using the same publication/control helpers as the adaptation,
+plus the existing native reader. They create generated grayscale frames in
+private temporary directories, validate both slots, preserve existing/foreign
+files, and check deadlines, signals and parent death. No camera, Vulkan or
+OpenVR calls occur. Share the build report and final test summary; expect eight
+tests with no skips.
+
+The future provider source is a private runtime file at
+`$XDG_RUNTIME_DIR/framejacker-capture/frames.shm`; the upstream
+`/dev/shm/mrhand-pt` file is not used by this publication adaptation. The tests
+use temporary paths and remove their generated inputs. Normal publisher cleanup
+removes only the identity-checked file it created. Abrupt parent death kills
+the writer; a stale file can remain and a new publisher refuses to overwrite it.
+Recovery/lease handling remains part of provider preparation.
+
+The stream loop has a 1–10 second deadline and signal checks. GPU driver calls,
+GPU resource cleanup, registry refresh, layer lifetime and exact restoration
+still need work; this is not a live-capture procedure. No layer manifest or
+enable marker is generated, and no capture binary is run by these commands.
 
 ### Check existing luma shared memory
 
@@ -821,10 +859,11 @@ prerequisite report is aarch64 SteamOS 0.5.6 build 20261015.6141207, GCC 15.1.1
 and Vulkan 1.4.309 with development headers. Earlier capture tests have their
 own runtime evidence; do not silently attach this newer build to them.
 The pinned reference compiled/linked on aarch64 with system Vulkan headers; all
-14 synthetic reader tests passed in 7.204 seconds. Next verify the descriptor
-transport adaptation with its synthetic socket fixture on ARM64, then finish
-GPU import validation, writer ordering, bounded lifetime and exact restoration
-before deployment. Physical camera identity and scene freshness remain unverified.
+14 synthetic reader tests passed in 7.204 seconds. The descriptor transport
+adaptation also passed seven fixture groups on ARM64. Next test the owned
+publisher and loop controls with the generated-data suite, then finish GPU import
+validation/resource cleanup/watchdog, registry refresh, layer lifetime and exact
+restoration before deployment. Physical camera identity and scene freshness remain unverified.
 The isolated shared-memory reader and synthetic fixture are implemented and
 tested on cloud x86_64 and Frame ARM64; real-provider validation and capture-layer
 deployment are pending.

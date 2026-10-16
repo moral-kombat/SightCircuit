@@ -24,6 +24,11 @@ jobs:
         run: |
           bash scripts/build_capture_reference.sh --transport-fixes
           artifacts/capture-transport-reference/framejacker-transport-fixture --self-test
+      - name: Build publication adaptation and verify generated frames and shutdown
+        run: |
+          bash scripts/build_capture_reference.sh --publication-fixes
+          bash scripts/build_shm_reader.sh
+          python3 -m unittest discover -s tests -p test_capture_publication.py -v
       - name: Check inspection artifacts without executing them
         run: |
           python3 - <<'PY'
@@ -31,11 +36,12 @@ jobs:
           import json
           from pathlib import Path
 
-          for directory, adapted in (('capture-reference', False),
-                                     ('capture-transport-reference', True)):
+          for directory, status, adapted in (('capture-reference', 'built_reference', False),
+                                             ('capture-transport-reference', 'built_transport_reference', True),
+                                             ('capture-publication-reference', 'built_publication_reference', True)):
               root = Path('artifacts') / directory
               report = json.loads((root / 'build-report.json').read_text())
-              assert report['status'] == ('built_transport_reference' if adapted else 'built_reference')
+              assert report['status'] == status
               assert report['upstream_sources_modified'] is adapted
               for field in ('runtime_initialized', 'capture_started',
                             'layer_installation_performed', 'deployment_ready'):
