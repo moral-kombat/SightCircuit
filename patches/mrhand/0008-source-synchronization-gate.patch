@@ -1,0 +1,29 @@
+diff --git a/capture/ptgrab.cpp b/capture/ptgrab.cpp
+index 7cf2de7..75c4f99 100644
+--- a/capture/ptgrab.cpp
++++ b/capture/ptgrab.cpp
+@@ -479,14 +479,22 @@ int main(int argc, char **argv) {
+     try { options = parse_options(argc, argv); }
+     catch (...) { fprintf(stderr, "invalid_arguments\n"); return 64; }
+     if (options.mode == Mode::help) {
+-        printf("Experimental bounded stream: --allow-experimental-capture --seconds 1..10 [--max-fps 1..10]\n");
+-        printf("Inspection build: GPU/resource and layer lifecycle work still required before deployment.\n");
++        printf("Reserved worker options: --allow-experimental-capture --seconds 1..10 [--max-fps 1..10]\n");
++        printf("Capture blocked: exporter synchronization contract unavailable; no override.\n");
+         return 0;
+     }
+     if (options.mode == Mode::not_run) {
+         printf("{\"status\":\"not_run\",\"runtime_initialized\":false,\"capture_started\":false,\"exit_code\":3}\n");
+         return 3;
+     }
++    // MrhandBufInfo carries no exporter fence, lease or producer ownership epoch.
++    // Neither a strip comparison nor our own completion fence proves that the
++    // external producer has finished writing or permits our read. No override.
++    printf("{\"report_kind\":\"capture_worker\",\"schema_version\":1,"
++           "\"status\":\"blocked\",\"reason\":\"exporter_synchronization_unavailable\","
++           "\"runtime_initialized\":false,\"capture_started\":false,"
++           "\"cleanup_ok\":true,\"exit_code\":3}\n");
++    return 3;
+     try {
+         rlimit core{0, 0};
+         if (setrlimit(RLIMIT_CORE, &core) != 0) throw Error("core_limit_failed");

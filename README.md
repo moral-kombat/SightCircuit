@@ -113,3 +113,9 @@ with bounded process shutdown and generated-publication hang tests. The import
 inspection build also owns host-buffer allocations and mappings through failure
 and normal cleanup. Neither change enables live capture or establishes deployment
 readiness.
+
+GPU/device/downscaler ownership and provider lifecycle now have
+[offline fault-injection coverage](docs/development.md#validate-gpu-and-provider-lifetime-offline).
+The guarded native worker explicitly blocks capture because the provider protocol
+lacks exporter synchronization; neither synthetic tests nor a GPU query remove
+that requirement.

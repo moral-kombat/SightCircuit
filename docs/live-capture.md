@@ -201,8 +201,8 @@ lease recovery or an external watchdog for blocked GPU calls.
 ## Offline provider work while the Frame is unavailable
 
 The Frame GPU report is needed before a device trial, not before all provider
-development. The `--import-fixes` inspection build applies a third versioned
-patch and shares its actual import helper with a fake Vulkan dispatch fixture.
+development. The `--import-fixes` inspection build applies the versioned provider patches
+and shares its actual import helper with a fake Vulkan dispatch fixture.
 Ten cloud tests now pass. It rejects unsupported metadata, nonzero binding
 offsets, modifier/memory-plane mismatches and incompatible requirements; it
 owns duplicate FDs and imported image/memory resources through failure and
@@ -217,24 +217,35 @@ possibly active resources or adding an unbounded device-idle wait. This does
 not supply XRService's missing producer fence. The real capture binaries stay
 non-executable, and no layer has been installed or activated.
 
-Continue these independent tasks without waiting for the headset:
+The next offline ownership/lifecycle portion is implemented in inspection patches
+5–8 and tested against fake Vulkan callbacks and synthetic Unix peers:
 
-1. Extend the buffer contract where needed for exporter flags/sharing and device
-   provenance. The initial importer rejects arrayed images because array-stride
-   metadata is absent. Host-buffer allocation/mapping ownership and rollback are
-   now implemented in the fourth inspection patch with six fake-dispatch tests.
-   Finish device/bootstrap, downscaler image and command/fence ownership,
-   including rollback after every partial initialization. The import/host owners
-   do not complete cleanup for those other resources.
-2. The external watchdog primitive and generated-publication fault tests are
-   implemented; [offline validation](development.md#validate-the-capture-watchdog-offline)
-   covers startup/runtime/shutdown hangs and cancellation. Wire the real capture
-   worker only after the other lifecycle gates; API cleanup and stale-file
-   recovery remain explicitly unconfirmed after forced termination.
-3. Handle registry changes/provider loss by stopping before using old image
-   bindings; test generation changes and shutdown with synthetic peers.
-4. Repair layer endpoint ownership, callback/device registry lifetime and server
-   shutdown. Prepare exact configuration backup/restoration before activation.
+1. Instance/device, pool, probe/downscaler command/fence and downscaler image
+   owners now roll back partial initialization. All owners share the completion
+   gate; uncertain submitted work prevents API destruction through the root
+   device/instance. Physical-device ambiguity, missing graphics queues and
+   malformed bootstrap inventories fail closed.
+2. The watchdog can run `--check-worker` against the actual guarded worker. It
+   deliberately returns exit 3 with `exporter_synchronization_unavailable` before
+   any registry/GPU access. There is no live-capture override.
+3. Registry refresh checks endpoint identity, peer, generation, buffer metadata
+   and descriptor identity before GPU copies and after copies before publication.
+   Provider loss/change stops the diagnostic; it does not silently reimport.
+4. Provider callbacks retain dispatch ownership while executing; retirement waits
+   for callbacks, then removes only that device's records and descriptor copies.
+   The server has a joined lifetime and refuses existing socket/file names instead
+   of replacing them or repairing directory permissions.
+
+[Development validation](development.md#validate-gpu-and-provider-lifetime-offline)
+records the executable tests and their limits. The meaningful remaining validation
+requires Frame capability/runtime evidence and an exporter synchronization contract.
+The pinned `MrhandBufInfo` supplies no producer completion fence, ownership lease
+or epoch authorizing reads. Neither another registry snapshot, stable pixels nor
+our own GPU fence repairs that omission. A vendor-supported interface or reviewed
+exporter cooperation is needed before live imports can be enabled. The hard gate
+must remain until that contract can be implemented and validated; a successful GPU
+query alone is insufficient. Exact deployment configuration backup/restoration
+also remains pending the user's controlled session.
 
 Use the Frame query later to choose/validate device capabilities and revise any
 conservative profile restrictions against real metadata. The helper validates
@@ -264,15 +275,14 @@ the next implementation change rather than trigger a camera trial.
 
 Image import validation/ownership is now implemented offline in the inspection
 adaptation above. Use the actual report for GPU selection and capability policy;
-finish ownership for the remaining GPU resources and an external process
-watchdog around capture driver calls. The query's supervisor is not yet a capture
-supervisor. Do not infer XRService completion from our own command fence or
+use the implemented resource owners and watchdog as the offline baseline.
+The guarded capture worker is supervised but cannot activate capture. Do not infer XRService completion from our own command fence or
 from a successful CPU publication. Review producer synchronization/ownership
 before any live import. Registry changes, provider loss and layer lifecycle
 must also stop or rebuild the stream safely.
 
-Before deployment, finish GPU import validation/resource cleanup, the process
-watchdog, registry refresh, layer lifetime/socket ownership and exact restoration.
+Before deployment, validate the new GPU/provider lifecycle on the target, resolve
+exporter synchronization and prepare exact configuration restoration.
 Original camera-buffer completion and source identity remain separate hardware
 acceptance checks even after shared-memory publication is correct.
 

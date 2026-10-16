@@ -1,0 +1,218 @@
+diff --git a/capture/ptgrab.cpp b/capture/ptgrab.cpp
+index 6477880..691f033 100644
+--- a/capture/ptgrab.cpp
++++ b/capture/ptgrab.cpp
+@@ -30,6 +30,7 @@
+ #include "capture_publication.hpp"
+ #include "capture_import.hpp"
+ #include "capture_host.hpp"
++#include "capture_resource.hpp"
+ #include <sys/resource.h>
+ 
+ #define CHECK(x) do { VkResult r_ = (x); if (r_ != VK_SUCCESS) { fprintf(stderr, "%s:%d %s -> %d\n", __FILE__, __LINE__, #x, r_); throw std::runtime_error("Vulkan_operation_failed"); } } while (0)
+@@ -46,33 +47,56 @@ static std::vector<Buf> fetchBuffers() {
+     return receive_registry(connection.get(), deadline);
+ }
+ 
++template <typename T> using Owned = framejacker::capture_resource::Unique<T>;
+ struct Gpu {
+-    VkInstance inst;
+-    VkPhysicalDevice phys;
+-    VkDevice dev;
+-    VkQueue queue;
+-    uint32_t qfam = 0;
+-    VkCommandPool pool;
+-    VkPhysicalDeviceMemoryProperties mp;
+-    PFN_vkGetMemoryFdPropertiesKHR getFdProps;
+     framejacker::capture_import::Completion importCompletion;
+-
++    Owned<VkInstance> instanceOwner{importCompletion, [](VkInstance value) { vkDestroyInstance(value, nullptr); }};
++    Owned<VkDevice> deviceOwner{importCompletion, [](VkDevice value) { vkDestroyDevice(value, nullptr); }};
++    Owned<VkCommandPool> poolOwner;
++    Owned<VkCommandBuffer> probeCommand;
++    Owned<VkFence> probeFence;
++    VkInstance inst = VK_NULL_HANDLE;
++    VkPhysicalDevice phys = VK_NULL_HANDLE;
++    VkDevice dev = VK_NULL_HANDLE;
++    VkQueue queue = VK_NULL_HANDLE;
++    uint32_t qfam = UINT32_MAX;
++    VkCommandPool pool = VK_NULL_HANDLE;
++    VkPhysicalDeviceMemoryProperties mp{};
++    PFN_vkGetMemoryFdPropertiesKHR getFdProps = nullptr;
++    Gpu() = default;
++    Gpu(const Gpu &) = delete;
++    Gpu &operator=(const Gpu &) = delete;
++    bool close() {
++        bool clean = probeFence.close();
++        clean = probeCommand.close() && clean;
++        clean = poolOwner.close() && clean;
++        clean = deviceOwner.close() && clean;
++        clean = instanceOwner.close() && clean;
++        return clean && !importCompletion.cleanup_deferred;
++    }
+     void init() {
+         VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+         app.pApplicationName = "ptgrab";
+         app.apiVersion = VK_API_VERSION_1_3;
+         VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+         ici.pApplicationInfo = &app;
+-        CHECK(vkCreateInstance(&ici, nullptr, &inst));
+-        uint32_t n = 1;
+-        vkEnumeratePhysicalDevices(inst, &n, &phys);
++        instanceOwner.acquire([&](VkInstance *out) { return vkCreateInstance(&ici, nullptr, out); });
++        inst = instanceOwner.get();
++        uint32_t n = 0;
++        CHECK(vkEnumeratePhysicalDevices(inst, &n, nullptr));
++        if (n != 1) throw std::runtime_error("explicit_GPU_selection_required");
++        CHECK(vkEnumeratePhysicalDevices(inst, &n, &phys));
++        if (n != 1 || !phys) throw std::runtime_error("GPU_inventory_changed");
+         vkGetPhysicalDeviceMemoryProperties(phys, &mp);
+         uint32_t qn = 0;
+         vkGetPhysicalDeviceQueueFamilyProperties(phys, &qn, nullptr);
++        if (!qn || qn > 256) throw std::runtime_error("queue_family_count_bounds");
+         std::vector<VkQueueFamilyProperties> qp(qn);
+         vkGetPhysicalDeviceQueueFamilyProperties(phys, &qn, qp.data());
++        if (qn > qp.size()) throw std::runtime_error("queue_inventory_changed");
+         for (uint32_t i = 0; i < qn; i++)
+-            if (qp[i].queueFlags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) { qfam = i; break; }
++            if (qp[i].queueCount && (qp[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)) { qfam = i; break; }
++        if (qfam == UINT32_MAX) throw std::runtime_error("graphics_queue_unavailable");
+         float prio = 0.0f;   // lowest priority: never compete with the compositor
+         VkDeviceQueueCreateInfo q{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
+         q.queueFamilyIndex = qfam;
+@@ -87,13 +111,23 @@ struct Gpu {
+         dci.pQueueCreateInfos = &q;
+         dci.enabledExtensionCount = 4;
+         dci.ppEnabledExtensionNames = exts;
+-        CHECK(vkCreateDevice(phys, &dci, nullptr, &dev));
++        deviceOwner.acquire([&](VkDevice *out) { return vkCreateDevice(phys, &dci, nullptr, out); });
++        dev = deviceOwner.get();
+         vkGetDeviceQueue(dev, qfam, 0, &queue);
+         VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+         pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+         pci.queueFamilyIndex = qfam;
+-        CHECK(vkCreateCommandPool(dev, &pci, nullptr, &pool));
++        if (!queue) throw std::runtime_error("queue_unavailable");
++        poolOwner = Owned<VkCommandPool>(importCompletion, [device = dev](VkCommandPool value) {
++            vkDestroyCommandPool(device, value, nullptr);
++        });
++        poolOwner.acquire([&](VkCommandPool *out) { return vkCreateCommandPool(dev, &pci, nullptr, out); });
++        pool = poolOwner.get();
+         getFdProps = (PFN_vkGetMemoryFdPropertiesKHR)vkGetDeviceProcAddr(dev, "vkGetMemoryFdPropertiesKHR");
++        if (!getFdProps) throw std::runtime_error("memory_FD_dispatch_missing");
++        if (!mp.memoryTypeCount || mp.memoryTypeCount > VK_MAX_MEMORY_TYPES ||
++            !mp.memoryHeapCount || mp.memoryHeapCount > VK_MAX_MEMORY_HEAPS)
++            throw std::runtime_error("memory_properties_bounds");
+     }
+     uint32_t memType(uint32_t bits, VkMemoryPropertyFlags want) {
+         for (uint32_t i = 0; i < mp.memoryTypeCount; i++)
+@@ -157,15 +191,19 @@ struct Region { size_t image; uint32_t y0, rows; VkDeviceSize dstOffset; };
+ 
+ // Copy luma rows [y0, y0+rows) of the given images into dst (tightly packed).
+ static void copyRegions(Gpu &g, std::vector<CamImage> &ims, const std::vector<Region> &regs, HostBuf &dst) {
+-    static VkCommandBuffer cb = VK_NULL_HANDLE;
+-    static VkFence fence = VK_NULL_HANDLE;
+-    if (!cb) {
++    if (!g.probeCommand.get()) {
++        g.probeCommand = Owned<VkCommandBuffer>(g.importCompletion,
++            [device = g.dev, pool = g.pool](VkCommandBuffer value) { vkFreeCommandBuffers(device, pool, 1, &value); });
+         VkCommandBufferAllocateInfo ca{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, nullptr, g.pool,
+                                        VK_COMMAND_BUFFER_LEVEL_PRIMARY, 1};
+-        CHECK(vkAllocateCommandBuffers(g.dev, &ca, &cb));
++        g.probeCommand.acquire([&](VkCommandBuffer *out) { return vkAllocateCommandBuffers(g.dev, &ca, out); });
++        g.probeFence = Owned<VkFence>(g.importCompletion,
++            [device = g.dev](VkFence value) { vkDestroyFence(device, value, nullptr); });
+         VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+-        CHECK(vkCreateFence(g.dev, &fci, nullptr, &fence));
++        g.probeFence.acquire([&](VkFence *out) { return vkCreateFence(g.dev, &fci, nullptr, out); });
+     }
++    const auto cb = g.probeCommand.get();
++    const auto fence = g.probeFence.get();
+     VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+     CHECK(vkResetCommandBuffer(cb, 0));
+@@ -204,12 +242,18 @@ static void copyRegions(Gpu &g, std::vector<CamImage> &ims, const std::vector<Re
+ struct Downscaler {
+     uint32_t outSize = 640;
+     VkImage full = VK_NULL_HANDLE, mid = VK_NULL_HANDLE, out = VK_NULL_HANDLE;
+-    VkDeviceMemory mem[3] = {};
++    struct ImageStorage {
++        Owned<VkDeviceMemory> memory;
++        Owned<VkImage> image; // reverse destruction: image before its memory
++    };
++    ImageStorage storage[3];
+     HostBuf host{};
++    Owned<VkCommandBuffer> commandOwner;
++    Owned<VkFence> fenceOwner;
+     VkCommandBuffer cb = VK_NULL_HANDLE;
+     VkFence fence = VK_NULL_HANDLE;
+ 
+-    VkImage makeImage(Gpu &g, uint32_t w, uint32_t h, VkDeviceMemory &m) {
++    VkImage makeImage(Gpu &g, uint32_t w, uint32_t h, ImageStorage &storage) {
+         VkImageCreateInfo ic{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+         ic.imageType = VK_IMAGE_TYPE_2D;
+         ic.format = VK_FORMAT_R8_UNORM;
+@@ -218,27 +262,43 @@ struct Downscaler {
+         ic.samples = VK_SAMPLE_COUNT_1_BIT;
+         ic.tiling = VK_IMAGE_TILING_OPTIMAL;
+         ic.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+-        VkImage img;
+-        CHECK(vkCreateImage(g.dev, &ic, nullptr, &img));
++        storage.memory = Owned<VkDeviceMemory>(g.importCompletion,
++            [device = g.dev](VkDeviceMemory value) { vkFreeMemory(device, value, nullptr); });
++        storage.image = Owned<VkImage>(g.importCompletion,
++            [device = g.dev](VkImage value) { vkDestroyImage(device, value, nullptr); });
++        storage.image.acquire([&](VkImage *out) { return vkCreateImage(g.dev, &ic, nullptr, out); });
++        const auto img = storage.image.get();
+         VkMemoryRequirements req;
+         vkGetImageMemoryRequirements(g.dev, img, &req);
++        if (!req.size || req.size > framejacker::capture_import::maximum_allocation ||
++            !req.alignment || (req.alignment & (req.alignment - 1)))
++            throw std::runtime_error("downscale_requirements_bounds");
+         VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, nullptr, req.size,
+                                 g.memType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)};
+-        CHECK(vkAllocateMemory(g.dev, &ai, nullptr, &m));
+-        CHECK(vkBindImageMemory(g.dev, img, m, 0));
++        if (g.mp.memoryTypes[ai.memoryTypeIndex].heapIndex >= g.mp.memoryHeapCount ||
++            g.mp.memoryHeaps[g.mp.memoryTypes[ai.memoryTypeIndex].heapIndex].size < req.size)
++            throw std::runtime_error("downscale_heap_bounds");
++        storage.memory.acquire([&](VkDeviceMemory *out) { return vkAllocateMemory(g.dev, &ai, nullptr, out); });
++        CHECK(vkBindImageMemory(g.dev, img, storage.memory.get(), 0));
+         return img;
+     }
+     void init(Gpu &g, uint32_t W, uint32_t size) {
+         outSize = size;
+-        full = makeImage(g, W, W, mem[0]);
+-        mid = makeImage(g, size * 2, size * 2, mem[1]);
+-        out = makeImage(g, size, size, mem[2]);
++        full = makeImage(g, W, W, storage[0]);
++        mid = makeImage(g, size * 2, size * 2, storage[1]);
++        out = makeImage(g, size, size, storage[2]);
+         host = hostBuffer(g, (VkDeviceSize)size * size);
+         VkCommandBufferAllocateInfo ca{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, nullptr, g.pool,
+                                        VK_COMMAND_BUFFER_LEVEL_PRIMARY, 1};
+-        CHECK(vkAllocateCommandBuffers(g.dev, &ca, &cb));
++        commandOwner = Owned<VkCommandBuffer>(g.importCompletion,
++            [device = g.dev, pool = g.pool](VkCommandBuffer value) { vkFreeCommandBuffers(device, pool, 1, &value); });
++        commandOwner.acquire([&](VkCommandBuffer *out) { return vkAllocateCommandBuffers(g.dev, &ca, out); });
++        cb = commandOwner.get();
++        fenceOwner = Owned<VkFence>(g.importCompletion,
++            [device = g.dev](VkFence value) { vkDestroyFence(device, value, nullptr); });
+         VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+-        CHECK(vkCreateFence(g.dev, &fci, nullptr, &fence));
++        fenceOwner.acquire([&](VkFence *out) { return vkCreateFence(g.dev, &fci, nullptr, out); });
++        fence = fenceOwner.get();
+     }
+     static void barrier(VkCommandBuffer cb, VkImage img, VkImageLayout from, VkImageLayout to, VkAccessFlags src,
+                         VkAccessFlags dst, VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT,
+@@ -441,8 +501,8 @@ int main(int argc, char **argv) {
+         try {
+             const int code = stream(g, ims, options.fps, 640, limit);
+             ims.clear();
+-            if (g.importCompletion.cleanup_deferred) throw Error("import_cleanup_deferred");
+-            printf("{\"event\":\"imports_closed\",\"gpu_import_cleanup_ok\":true}\n");
++            if (!g.close()) throw Error("GPU_cleanup_deferred");
++            printf("{\"event\":\"gpu_closed\",\"gpu_cleanup_ok\":true}\n");
+             return code;
+         } catch (...) {
+             ims.clear();

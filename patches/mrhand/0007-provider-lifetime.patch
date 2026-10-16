@@ -1,0 +1,414 @@
+diff --git a/capture/handcam_layer.cpp b/capture/handcam_layer.cpp
+index 5c080ff..cfcf712 100644
+--- a/capture/handcam_layer.cpp
++++ b/capture/handcam_layer.cpp
+@@ -36,6 +36,9 @@
+ 
+ #include "handcam_proto.h"
+ #include "capture_transport.hpp"
++#include "capture_endpoint.hpp"
++#include <memory>
++#include <map>
+ 
+ #define EXPORT extern "C" __attribute__((visibility("default")))
+ 
+@@ -113,9 +116,8 @@ static bool processAllowed() {
+     const char *base = strrchr(exe, '/');
+     base = base ? base + 1 : exe;
+     if (strcmp(base, "vrcompositor")) return false;
+-    static int decided = -1;   // evaluate (and count the start) once per process
+-    if (decided < 0) decided = compositorAllowed() ? 1 : 0;
+-    return decided == 1;
++    static const bool decided = compositorAllowed(); // C++ thread-safe initialization
++    return decided;
+ }
+ 
+ // ---------------------------------------------------------------- registry
+@@ -128,6 +130,7 @@ struct ImageRec {
+     VkExternalMemoryHandleTypeFlags extTypes = 0;
+ };
+ struct MemRec {
++    VkDevice device = VK_NULL_HANDLE;
+     int fd = -1;              // our dup
+     uint64_t size = 0;        // dma-buf size (lseek) or allocationSize
+     uint32_t handleType = 0;
+@@ -139,10 +142,14 @@ struct MemRec {
+ template <typename T> static void *key(T h) { return *(void **)h; }
+ 
+ struct InstanceData {
++    std::mutex calls;
++    bool retiring = false;
+     PFN_vkGetInstanceProcAddr gipa;
+     PFN_vkDestroyInstance DestroyInstance;
+ };
+ struct DeviceData {
++    std::mutex calls;
++    bool retiring = false;
+     VkDevice device;
+     PFN_vkGetDeviceProcAddr gdpa;
+     PFN_vkDestroyDevice DestroyDevice;
+@@ -155,14 +162,32 @@ struct DeviceData {
+ };
+ 
+ static std::mutex g_mapM;
+-static std::unordered_map<void *, InstanceData *> g_inst;
+-static std::unordered_map<void *, DeviceData *> g_dev;
++static std::unordered_map<void *, std::shared_ptr<InstanceData>> g_inst;
++static std::unordered_map<void *, std::shared_ptr<DeviceData>> g_dev;
+ 
+ static std::mutex g_regM;
+-static std::unordered_map<VkImage, ImageRec> g_images;
+-static std::unordered_map<VkDeviceMemory, MemRec> g_mems;
++using ObjectKey = std::pair<uintptr_t, uint64_t>;
++template <typename T> static ObjectKey objectKey(VkDevice device, T handle) {
++    return {reinterpret_cast<uintptr_t>(device), (uint64_t)handle};
++}
++static std::map<ObjectKey, ImageRec> g_images;
++static std::map<ObjectKey, MemRec> g_mems;
+ static uint32_t g_nextId = 1;
+ static std::atomic<uint32_t> g_generation{1};
++// Declared after registry/maps: join the server before their static destruction.
++static framejacker::capture_endpoint::Server g_server;
++static std::shared_ptr<InstanceData> instanceData(VkInstance instance) {
++    if (!instance) return {};
++    std::lock_guard<std::mutex> lock(g_mapM);
++    auto found = g_inst.find(key(instance));
++    return found == g_inst.end() ? nullptr : found->second;
++}
++static std::shared_ptr<DeviceData> deviceData(VkDevice device) {
++    if (!device) return {};
++    std::lock_guard<std::mutex> lock(g_mapM);
++    auto found = g_dev.find(key(device));
++    return found == g_dev.end() ? nullptr : found->second;
++}
+ 
+ static const void *findPNext(const void *p, VkStructureType t) {
+     for (auto *b = (const VkBaseInStructure *)p; b; b = b->pNext)
+@@ -173,7 +198,7 @@ static const void *findPNext(const void *p, VkStructureType t) {
+ // ---------------------------------------------------------------- socket server
+ static void serveClient(int c) {
+     using namespace framejacker::transport;
+-    Fd client(c);
++    auto client = duplicate(c);
+     try {
+         require_same_user(client.get());
+         std::vector<Record> out;
+@@ -193,7 +218,7 @@ static void serveClient(int c) {
+                 bi.size = m.size;
+                 bi.handleType = m.handleType;
+                 bi.bindOffset = m.bindOffset;
+-                auto it = g_images.find(m.image);
++                auto it = g_images.find(objectKey(m.device, m.image));
+                 if (m.image && it != g_images.end()) {
+                     const ImageRec &ir = it->second;
+                     bi.hasImage = 1;
+@@ -228,41 +253,13 @@ static void serveClient(int c) {
+     }
+ }
+ 
+-static void serverThread() {
+-    const char *rt = getenv("XDG_RUNTIME_DIR");
+-    std::string dir = std::string(rt ? rt : "/tmp") + "/mrhand";
+-    mkdir(dir.c_str(), 0700);
+-    chmod(dir.c_str(), 0700);
+-    std::string path = dir + "/cam.sock";
+-    unlink(path.c_str());
+-    int s = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+-    sockaddr_un a{};
+-    a.sun_family = AF_UNIX;
+-    snprintf(a.sun_path, sizeof a.sun_path, "%s", path.c_str());
+-    if (s < 0 || bind(s, (sockaddr *)&a, sizeof a) != 0 || listen(s, 4) != 0) {
+-        LOG("socket server failed: %s", strerror(errno));
+-        if (s >= 0) close(s);
+-        return;
+-    }
+-    chmod(path.c_str(), 0600);
+-    LOG("serving %s", path.c_str());
+-    while (true) {
+-        int c = accept4(s, nullptr, nullptr, SOCK_CLOEXEC);
+-        if (c < 0) {
+-            if (errno == EINTR) continue;
+-            LOG("accept: %s", strerror(errno));
+-            return;
+-        }
+-        serveClient(c);
+-    }
+-}
+-static std::once_flag g_serverOnce;
+-
+ // ---------------------------------------------------------------- hooks
+ static VKAPI_ATTR VkResult VKAPI_CALL CreateImage(VkDevice dev, const VkImageCreateInfo *ci,
+                                                   const VkAllocationCallbacks *a, VkImage *out) {
+-    DeviceData *d;
+-    { std::lock_guard<std::mutex> l(g_mapM); d = g_dev[key(dev)]; }
++    auto d = deviceData(dev);
++    if (!d) return VK_ERROR_DEVICE_LOST;
++    std::lock_guard<std::mutex> call(d->calls);
++    if (d->retiring) return VK_ERROR_DEVICE_LOST;
+     VkResult r = d->CreateImage(dev, ci, a, out);
+     if (r != VK_SUCCESS) return r;
+     auto *ext = (const VkExternalMemoryImageCreateInfo *)findPNext(
+@@ -287,25 +284,36 @@ static VKAPI_ATTR VkResult VKAPI_CALL CreateImage(VkDevice dev, const VkImageCre
+     for (uint32_t p = 0; p < ir.planeCount; p++)
+         LOG("    plane%u offset=%llu rowPitch=%llu size=%llu", p, (unsigned long long)ir.planes[p].offset,
+             (unsigned long long)ir.planes[p].rowPitch, (unsigned long long)ir.planes[p].size);
+-    std::lock_guard<std::mutex> l(g_regM);
+-    g_images[*out] = ir;
++    try {
++        std::lock_guard<std::mutex> l(g_regM);
++        g_images.emplace(objectKey(dev, *out), ir);
++        g_generation++;
++    } catch (...) { LOG("image tracking unavailable"); }
+     return r;
+ }
+ 
+ static VKAPI_ATTR void VKAPI_CALL DestroyImage(VkDevice dev, VkImage img, const VkAllocationCallbacks *a) {
+-    DeviceData *d;
+-    { std::lock_guard<std::mutex> l(g_mapM); d = g_dev[key(dev)]; }
++    auto d = deviceData(dev);
++    if (!d) return ;
++    std::lock_guard<std::mutex> call(d->calls);
++    if (d->retiring) return ;
+     {
+         std::lock_guard<std::mutex> l(g_regM);
+-        g_images.erase(img);
++        if (g_images.erase(objectKey(dev, img))) {
++            for (auto &entry : g_mems)
++                if (entry.second.device == dev && entry.second.image == img) entry.second.image = VK_NULL_HANDLE;
++            g_generation++;
++        }
+     }
+     d->DestroyImage(dev, img, a);
+ }
+ 
+ static VKAPI_ATTR VkResult VKAPI_CALL AllocateMemory(VkDevice dev, const VkMemoryAllocateInfo *ai,
+                                                      const VkAllocationCallbacks *a, VkDeviceMemory *out) {
+-    DeviceData *d;
+-    { std::lock_guard<std::mutex> l(g_mapM); d = g_dev[key(dev)]; }
++    auto d = deviceData(dev);
++    if (!d) return VK_ERROR_DEVICE_LOST;
++    std::lock_guard<std::mutex> call(d->calls);
++    if (d->retiring) return VK_ERROR_DEVICE_LOST;
+     auto *imp = (const VkImportMemoryFdInfoKHR *)findPNext(ai->pNext, VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR);
+     int dupfd = -1;
+     if (imp && imp->fd >= 0) dupfd = fcntl(imp->fd, F_DUPFD_CLOEXEC, 0);   // before the driver takes ownership
+@@ -317,30 +325,39 @@ static VKAPI_ATTR VkResult VKAPI_CALL AllocateMemory(VkDevice dev, const VkMemor
+     auto *ded = (const VkMemoryDedicatedAllocateInfo *)findPNext(ai->pNext,
+                                                                  VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO);
+     MemRec m;
++    m.device = dev;
+     m.fd = dupfd;
+     m.handleType = imp->handleType;
+-    off_t sz = dupfd >= 0 ? lseek(dupfd, 0, SEEK_END) : -1;
+-    if (dupfd >= 0) lseek(dupfd, 0, SEEK_SET);
+-    m.size = sz > 0 ? (uint64_t)sz : ai->allocationSize;
++    // Preserve the exporter's shared file offset. This is the declared allocation
++    // bound, not proof of the DMA-BUF payload length.
++    m.size = ai->allocationSize;
+     if (ded && ded->image) m.image = ded->image;
+-    {
++    framejacker::transport::Fd retained(dupfd);
++    try {
+         std::lock_guard<std::mutex> l(g_regM);
++        if (!g_nextId || !g_generation.load()) return r; // exhausted identity space: no reuse
+         m.id = g_nextId++;
+-        g_mems[*out] = m;
++        if (!g_mems.emplace(objectKey(dev, *out), m).second) return r;
++        retained.release();
+         g_generation++;
+-    }
++    } catch (...) { LOG("memory tracking unavailable"); return r; }
+     LOG("ImportMemory #%u mem=%p handleType=0x%x size=%llu alloc=%llu dedicatedImage=%p dup=%d", m.id, (void *)*out,
+         imp->handleType, (unsigned long long)m.size, (unsigned long long)ai->allocationSize, (void *)m.image, dupfd);
+-    std::call_once(g_serverOnce, [] { std::thread(serverThread).detach(); });
++    try {
++        const char *runtime = getenv("XDG_RUNTIME_DIR");
++        g_server.start(runtime ? runtime : "", serveClient);
++    } catch (const std::exception &error) { LOG("capture endpoint unavailable: %s", error.what()); }
+     return r;
+ }
+ 
+ static VKAPI_ATTR void VKAPI_CALL FreeMemory(VkDevice dev, VkDeviceMemory mem, const VkAllocationCallbacks *a) {
+-    DeviceData *d;
+-    { std::lock_guard<std::mutex> l(g_mapM); d = g_dev[key(dev)]; }
++    auto d = deviceData(dev);
++    if (!d) return ;
++    std::lock_guard<std::mutex> call(d->calls);
++    if (d->retiring) return ;
+     {
+         std::lock_guard<std::mutex> l(g_regM);
+-        auto it = g_mems.find(mem);
++        auto it = g_mems.find(objectKey(dev, mem));
+         if (it != g_mems.end()) {
+             LOG("FreeMemory #%u", it->second.id);
+             if (it->second.fd >= 0) close(it->second.fd);
+@@ -351,14 +368,14 @@ static VKAPI_ATTR void VKAPI_CALL FreeMemory(VkDevice dev, VkDeviceMemory mem, c
+     d->FreeMemory(dev, mem, a);
+ }
+ 
+-static void noteBind(VkImage img, VkDeviceMemory mem, VkDeviceSize off) {
++static void noteBind(VkDevice dev, VkImage img, VkDeviceMemory mem, VkDeviceSize off) {
+     std::lock_guard<std::mutex> l(g_regM);
+-    auto it = g_mems.find(mem);
++    auto it = g_mems.find(objectKey(dev, mem));
+     if (it == g_mems.end()) return;
+     it->second.image = img;
+     it->second.bindOffset = off;
+     g_generation++;
+-    auto ii = g_images.find(img);
++    auto ii = g_images.find(objectKey(dev, img));
+     if (ii != g_images.end())
+         LOG("Bind #%u -> image %p fmt=%d %ux%u off=%llu", it->second.id, (void *)img, ii->second.ci.format,
+             ii->second.ci.extent.width, ii->second.ci.extent.height, (unsigned long long)off);
+@@ -366,19 +383,23 @@ static void noteBind(VkImage img, VkDeviceMemory mem, VkDeviceSize off) {
+ 
+ static VKAPI_ATTR VkResult VKAPI_CALL BindImageMemory(VkDevice dev, VkImage img, VkDeviceMemory mem,
+                                                       VkDeviceSize off) {
+-    DeviceData *d;
+-    { std::lock_guard<std::mutex> l(g_mapM); d = g_dev[key(dev)]; }
++    auto d = deviceData(dev);
++    if (!d) return VK_ERROR_DEVICE_LOST;
++    std::lock_guard<std::mutex> call(d->calls);
++    if (d->retiring) return VK_ERROR_DEVICE_LOST;
+     VkResult r = d->BindImageMemory(dev, img, mem, off);
+-    if (r == VK_SUCCESS) noteBind(img, mem, off);
++    if (r == VK_SUCCESS) noteBind(dev, img, mem, off);
+     return r;
+ }
+ 
+ static VKAPI_ATTR VkResult VKAPI_CALL BindImageMemory2(VkDevice dev, uint32_t n, const VkBindImageMemoryInfo *b) {
+-    DeviceData *d;
+-    { std::lock_guard<std::mutex> l(g_mapM); d = g_dev[key(dev)]; }
++    auto d = deviceData(dev);
++    if (!d) return VK_ERROR_DEVICE_LOST;
++    std::lock_guard<std::mutex> call(d->calls);
++    if (d->retiring) return VK_ERROR_DEVICE_LOST;
+     VkResult r = d->BindImageMemory2(dev, n, b);
+     if (r == VK_SUCCESS)
+-        for (uint32_t i = 0; i < n; i++) noteBind(b[i].image, b[i].memory, b[i].memoryOffset);
++        for (uint32_t i = 0; i < n; i++) noteBind(dev, b[i].image, b[i].memory, b[i].memoryOffset);
+     return r;
+ }
+ 
+@@ -398,22 +419,31 @@ static VKAPI_ATTR VkResult VKAPI_CALL CreateInstance(const VkInstanceCreateInfo
+     auto create = (PFN_vkCreateInstance)gipa(VK_NULL_HANDLE, "vkCreateInstance");
+     VkResult r = create(ci, a, out);
+     if (r != VK_SUCCESS) return r;
+-    auto *id = new InstanceData{gipa, (PFN_vkDestroyInstance)gipa(*out, "vkDestroyInstance")};
+-    std::lock_guard<std::mutex> l(g_mapM);
+-    g_inst[key(*out)] = id;
++    auto destroy = (PFN_vkDestroyInstance)gipa(*out, "vkDestroyInstance");
++    try {
++        auto id = std::make_shared<InstanceData>();
++        id->gipa = gipa; id->DestroyInstance = destroy;
++        std::lock_guard<std::mutex> lock(g_mapM);
++        g_inst.emplace(key(*out), std::move(id));
++    } catch (...) {
++        if (destroy) destroy(*out, a);
++        return VK_ERROR_OUT_OF_HOST_MEMORY;
++    }
+     LOG("CreateInstance");
+     return r;
+ }
+ 
+ static VKAPI_ATTR void VKAPI_CALL DestroyInstance(VkInstance inst, const VkAllocationCallbacks *a) {
+-    InstanceData *id;
++    auto id = instanceData(inst);
++    if (!id) return;
++    std::lock_guard<std::mutex> call(id->calls);
++    if (id->retiring) return;
++    id->retiring = true;
+     {
+-        std::lock_guard<std::mutex> l(g_mapM);
+-        id = g_inst[key(inst)];
++        std::lock_guard<std::mutex> lock(g_mapM);
+         g_inst.erase(key(inst));
+     }
+     id->DestroyInstance(inst, a);
+-    delete id;
+ }
+ 
+ static VKAPI_ATTR VkResult VKAPI_CALL CreateDevice(VkPhysicalDevice phys, const VkDeviceCreateInfo *ci,
+@@ -429,7 +459,8 @@ static VKAPI_ATTR VkResult VKAPI_CALL CreateDevice(VkPhysicalDevice phys, const
+     auto create = (PFN_vkCreateDevice)gipa(VK_NULL_HANDLE, "vkCreateDevice");
+     VkResult r = create(phys, ci, a, out);
+     if (r != VK_SUCCESS) return r;
+-    auto *d = new DeviceData{};
++    try {
++    auto d = std::make_shared<DeviceData>();
+     d->device = *out;
+     d->gdpa = gdpa;
+ #define DF(n) d->n = (PFN_vk##n)gdpa(*out, "vk" #n);
+@@ -437,21 +468,40 @@ static VKAPI_ATTR VkResult VKAPI_CALL CreateDevice(VkPhysicalDevice phys, const
+     DF(BindImageMemory2)
+ #undef DF
+     if (!d->BindImageMemory2) d->BindImageMemory2 = (PFN_vkBindImageMemory2)gdpa(*out, "vkBindImageMemory2KHR");
+-    std::lock_guard<std::mutex> l(g_mapM);
+-    g_dev[key(*out)] = d;
++    std::lock_guard<std::mutex> lock(g_mapM);
++    g_dev.emplace(key(*out), std::move(d));
++    } catch (...) {
++        auto destroy = (PFN_vkDestroyDevice)gdpa(*out, "vkDestroyDevice");
++        if (destroy) destroy(*out, a);
++        return VK_ERROR_OUT_OF_HOST_MEMORY;
++    }
+     LOG("CreateDevice");
+     return r;
+ }
+ 
+ static VKAPI_ATTR void VKAPI_CALL DestroyDevice(VkDevice dev, const VkAllocationCallbacks *a) {
+-    DeviceData *d;
++    auto d = deviceData(dev);
++    if (!d) return;
++    std::lock_guard<std::mutex> call(d->calls);
++    if (d->retiring) return;
++    d->retiring = true;
+     {
+-        std::lock_guard<std::mutex> l(g_mapM);
+-        d = g_dev[key(dev)];
++        std::lock_guard<std::mutex> lock(g_mapM);
+         g_dev.erase(key(dev));
+     }
++    {
++        std::lock_guard<std::mutex> lock(g_regM);
++        for (auto it = g_mems.begin(); it != g_mems.end();) {
++            if (it->second.device != dev) { ++it; continue; }
++            if (it->second.fd >= 0) close(it->second.fd);
++            it = g_mems.erase(it);
++        }
++        for (auto it = g_images.begin(); it != g_images.end();)
++            if (it->first.first == reinterpret_cast<uintptr_t>(dev)) it = g_images.erase(it);
++            else ++it;
++        g_generation++;
++    }
+     d->DestroyDevice(dev, a);
+-    delete d;
+ }
+ 
+ static PFN_vkVoidFunction deviceHook(const char *n) {
+@@ -465,8 +515,10 @@ static PFN_vkVoidFunction deviceHook(const char *n) {
+ 
+ EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL mrhand_GetDeviceProcAddr(VkDevice dev, const char *name) {
+     if (!strcmp(name, "vkGetDeviceProcAddr")) return (PFN_vkVoidFunction)mrhand_GetDeviceProcAddr;
+-    DeviceData *d;
+-    { std::lock_guard<std::mutex> l(g_mapM); d = g_dev[key(dev)]; }
++    auto d = deviceData(dev);
++    if (!d) return nullptr;
++    std::lock_guard<std::mutex> call(d->calls);
++    if (d->retiring) return nullptr;
+     PFN_vkVoidFunction next = d->gdpa(dev, name);
+     if (!next) return nullptr;
+     if (auto h = deviceHook(name)) return h;
+@@ -480,8 +532,10 @@ EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL mrhand_GetInstanceProcAddr(VkIns
+     if (!strcmp(name, "vkCreateDevice")) return (PFN_vkVoidFunction)CreateDevice;
+     if (!strcmp(name, "vkGetDeviceProcAddr")) return (PFN_vkVoidFunction)mrhand_GetDeviceProcAddr;
+     if (!inst) return nullptr;
+-    InstanceData *id;
+-    { std::lock_guard<std::mutex> l(g_mapM); id = g_inst[key(inst)]; }
++    auto id = instanceData(inst);
++    if (!id) return nullptr;
++    std::lock_guard<std::mutex> call(id->calls);
++    if (id->retiring) return nullptr;
+     if (auto h = deviceHook(name)) {   // device functions queried through the instance
+         if (id->gipa(inst, name)) return h;
+         return nullptr;

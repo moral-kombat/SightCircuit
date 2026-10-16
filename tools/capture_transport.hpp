@@ -188,7 +188,7 @@ inline Record receive_record(int socket, Deadline deadline) {
     return record;
 }
 
-inline std::vector<Record> receive_registry(int socket, Deadline deadline) {
+inline std::vector<Record> receive_registry(int socket, Deadline deadline, uint32_t *snapshot_generation = nullptr) {
     require_same_user(socket);
     std::vector<Record> records;
     std::set<uint32_t> identifiers;
@@ -197,7 +197,10 @@ inline std::vector<Record> receive_registry(int socket, Deadline deadline) {
         auto record = receive_record(socket, deadline);
         if (generation && generation != record.info.generation) throw Error("registry_generation_changed");
         generation = record.info.generation;
-        if (record.info.id == 0) return records;
+        if (record.info.id == 0) {
+            if (snapshot_generation) *snapshot_generation = generation;
+            return records;
+        }
         if (records.size() == maximum_records) throw Error("registry_record_limit");
         if (!identifiers.insert(record.info.id).second) throw Error("duplicate_buffer_id");
         records.push_back(std::move(record));

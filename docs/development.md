@@ -619,9 +619,9 @@ actual GPU failures. A task stuck in uninterruptible kernel sleep can outlive
 SIGKILL; `worker_not_reaped` reports that uncertainty. Process-group containment
 does not constrain a worker that deliberately creates a new session.
 
-The real capture CLI is intentionally not wired to this watchdog yet. Remaining
-GPU ownership, registry/provider lifetime, source synchronization and exact layer
-restoration must be reviewed before a capture entry point is enabled.
+The watchdog now also checks the guarded native worker; see the lifecycle
+validation below. Source synchronization and exact layer restoration remain
+prerequisites for enabling capture.
 
 ### Host-buffer ownership in the import inspection build
 
@@ -646,5 +646,59 @@ gate. This avoids freeing host storage potentially still used by the GPU.
 Six fake-dispatch tests cover success/moves, every fallible acquisition, invalid
 bounds/context, incompatible memory/heap selection and in-flight retirement.
 They do not load Vulkan. Device/instance bootstrap, command/fence and downscaler
-image ownership remain separate work; host-buffer ownership does not validate
+image ownership are covered by the subsequent lifecycle adaptation below; host-buffer ownership does not validate
 real mapping, device capabilities or original producer synchronization.
+
+## Validate GPU and provider lifetime offline
+
+```bash
+bash scripts/build_capture_reference.sh --import-fixes
+python3 -m unittest discover -s tests -p test_capture_resource.py -v
+python3 -m unittest discover -s tests -p test_capture_lifecycle.py -v
+python3 scripts/capture_watchdog.py --check-worker
+```
+
+The final command intentionally exits **3**, status `blocked`, reason
+`exporter_synchronization_unavailable`. `framejacker-guarded-worker` is an
+executable preflight build of the same adapted worker source with a hard gate
+before registry/GPU access. It is built without a Vulkan loader dependency.
+There is no flag or environment variable to enable capture. The separate
+`reference-ptgrab` and layer inspection files remain non-executable. The build
+report includes the guarded-worker hash and all eight applied patch hashes.
+
+The resource fixture compiles the actual adapted worker against fake Vulkan
+entry points. Six test groups cover 18 acquisition/binding failure sites,
+bootstrap inventory errors, successful teardown order, pending-work abandonment,
+move semantics, probe-command reuse and both probe acquisition failures. Host,
+image, command/fence, pool, device and instance ownership is scoped; there is no
+unbounded device-idle call. A timeout after submission prevents all API destruction,
+including device/instance destruction, and leaves process teardown to the watchdog.
+Real driver destruction can itself stall; synthetic calls do not establish real
+GPU cleanup behavior or prove that SIGKILL can interrupt a kernel wait.
+
+Nine lifecycle tests exercise actual adapted layer callbacks with fake downstream
+dispatch, real private Unix sockets and ordinary generated-file FDs. They cover
+per-device handle namespaces, image/device retirement, FD closure without seeking
+the exporter's shared file offset, a callback racing device retirement, instance
+dispatch lifetime, refused/replaced endpoint names, generation/metadata/FD changes,
+stalls/disconnects, restarts and the guarded native worker. The server joins before
+registry static destruction; its client callback has a bounded transport deadline.
+Application handle lifetime must still obey Vulkan's external synchronization
+rules. Same-user hostile pathname replacement is not an adversarial security
+boundary; private-directory/inode checks protect ordinary accidental replacement.
+
+Snapshot continuity checks detect observed changes, not a read lease. A provider
+can mutate after a snapshot, and a restarted endpoint can theoretically reuse
+identifiers. The stream checks before each copy and again before publication and
+fails closed on detected changes; it never automatically recovers/reimports or
+removes a stale publication. The probe polling interval is conservatively 100 ms
+to bound registry-refresh pressure; actual performance remains unmeasured.
+
+Most importantly, the wire protocol contains no exporter fence or permission to
+read while XRService may write. A stable probe strip does not prove completion,
+and our queue's fence only covers our submissions. The native capture gate remains
+unconditional until a supported frame-sharing contract or explicit exporter
+cooperation supplies the necessary synchronization and ownership evidence. Frame
+capability results and native ARM64 tests are the next validation inputs, not
+permission to remove this gate. No layer manifest/activation or restoration script
+is supplied by these offline changes.

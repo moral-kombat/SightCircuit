@@ -127,6 +127,32 @@ if [ "$framejacker_mode" != reference ]; then
             "$framejacker_root/patches/mrhand/0004-owned-host-buffers.patch"
         git -C "$framejacker_sources" apply \
             "$framejacker_root/patches/mrhand/0004-owned-host-buffers.patch"
+        cp -- "$framejacker_root/tools/capture_resource.hpp" "$framejacker_sources/capture/"
+        git -C "$framejacker_sources" apply --check \
+            "$framejacker_root/patches/mrhand/0005-owned-gpu-resources.patch"
+        git -C "$framejacker_sources" apply \
+            "$framejacker_root/patches/mrhand/0005-owned-gpu-resources.patch"
+        for framejacker_header in capture_registry.hpp capture_endpoint.hpp; do
+            cp -- "$framejacker_root/tools/$framejacker_header" "$framejacker_sources/capture/"
+        done
+        for framejacker_patch in 0006-registry-continuity.patch 0007-provider-lifetime.patch 0008-source-synchronization-gate.patch; do
+            git -C "$framejacker_sources" apply --check "$framejacker_root/patches/mrhand/$framejacker_patch"
+            git -C "$framejacker_sources" apply "$framejacker_root/patches/mrhand/$framejacker_patch"
+        done
+        "$framejacker_compiler" -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -pthread \
+            -I"$framejacker_root/tools" -I"$framejacker_root/third_party/mrhand" \
+            "$framejacker_root/tools/capture_registry_fixture.cpp" \
+            -o "$framejacker_stage/framejacker-registry-fixture"
+        "$framejacker_compiler" -std=c++17 -O2 -Wall -Wextra -Werror -pthread \
+            -Wno-missing-field-initializers "${framejacker_includes[@]}" \
+            -I"$framejacker_sources/capture" "$framejacker_root/tools/capture_layer_fixture.cpp" \
+            -o "$framejacker_stage/framejacker-layer-fixture"
+        "$framejacker_compiler" -std=c++17 -O2 -Wall -Wextra -Werror \
+            -Wno-missing-field-initializers -ffunction-sections -fdata-sections -Wl,--gc-sections \
+            "${framejacker_includes[@]}" -I"$framejacker_sources/capture" \
+            -I"$framejacker_root/third_party/mrhand" \
+            "$framejacker_root/tools/capture_resource_fixture.cpp" \
+            -o "$framejacker_stage/framejacker-resource-fixture"
         "$framejacker_compiler" -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror \
             -Wno-missing-field-initializers "${framejacker_includes[@]}" \
             -I"$framejacker_root/tools" -I"$framejacker_root/third_party/mrhand" \
@@ -150,6 +176,14 @@ fi
 "$framejacker_compiler" -std=c++17 -O2 -Wall -Wno-missing-field-initializers -pthread \
     "${framejacker_includes[@]}" "$framejacker_sources/capture/ptgrab.cpp" \
     -l:libvulkan.so.1 -o "$framejacker_stage/reference-ptgrab"
+# The guarded worker is the same adapted source with an unconditional source-sync
+# gate before registry/GPU access. It can report preflight status, never capture.
+if [ "$framejacker_mode" = import ]; then
+    "$framejacker_compiler" -std=c++17 -O2 -Wall -Wno-missing-field-initializers \
+        -ffunction-sections -fdata-sections -Wl,--gc-sections -pthread \
+        "${framejacker_includes[@]}" "$framejacker_sources/capture/ptgrab.cpp" \
+        -o "$framejacker_stage/framejacker-guarded-worker"
+fi
 # These are inspection artifacts. Do not offer an executable capture tool yet.
 chmod 0644 "$framejacker_stage/reference-libVkLayer_mrhand.so" "$framejacker_stage/reference-ptgrab"
 python3 - "$framejacker_stage" "$framejacker_sources" "$framejacker_capture_revision" \
@@ -194,10 +228,15 @@ if mode in ("publication", "import"):
     report["publication_patch"] = digest(Path(sys.argv[7]) / "patches/mrhand/0002-owned-bounded-publication.patch")
     report["notes"][2] = "Publication and loop controls added; GPU import/resource cleanup, registry refresh and layer lifetime/restoration remain pending."
 if mode == "import":
-    report["sources"].extend(digest(reference / "capture" / name) for name in ("capture_import.hpp", "capture_host.hpp"))
+    report["sources"].extend(digest(reference / "capture" / name) for name in ("capture_import.hpp", "capture_host.hpp", "capture_resource.hpp", "capture_registry.hpp", "capture_endpoint.hpp"))
+    report["guarded_worker"] = digest(stage / "framejacker-guarded-worker")
+    report["source_sync_patch"] = digest(Path(sys.argv[7]) / "patches/mrhand/0008-source-synchronization-gate.patch")
+    report["registry_patch"] = digest(Path(sys.argv[7]) / "patches/mrhand/0006-registry-continuity.patch")
+    report["provider_patch"] = digest(Path(sys.argv[7]) / "patches/mrhand/0007-provider-lifetime.patch")
+    report["resource_patch"] = digest(Path(sys.argv[7]) / "patches/mrhand/0005-owned-gpu-resources.patch")
     report["host_patch"] = digest(Path(sys.argv[7]) / "patches/mrhand/0004-owned-host-buffers.patch")
     report["import_patch"] = digest(Path(sys.argv[7]) / "patches/mrhand/0003-validated-image-import.patch")
-    report["notes"][2] = "Image import and host-buffer ownership added; real GPU support, remaining GPU resource cleanup, watchdog integration, registry and layer lifetime/restoration remain pending."
+    report["notes"][2] = "GPU ownership and provider continuity implemented offline; guarded worker blocks capture pending exporter synchronization. Hardware capabilities, source identity and deployment restoration remain unvalidated."
 (stage / "build-report.json").write_text(json.dumps(report, indent=2) + "\n")
 PY
 if [ "$framejacker_mode" != reference ]; then
@@ -209,6 +248,10 @@ fi
 if [ "$framejacker_mode" = import ]; then
     mv -- "$framejacker_stage/framejacker-import-fixture" "$framejacker_build/"
     mv -- "$framejacker_stage/framejacker-host-fixture" "$framejacker_build/"
+    mv -- "$framejacker_stage/framejacker-resource-fixture" "$framejacker_build/"
+    mv -- "$framejacker_stage/framejacker-registry-fixture" "$framejacker_build/"
+    mv -- "$framejacker_stage/framejacker-layer-fixture" "$framejacker_build/"
+    mv -- "$framejacker_stage/framejacker-guarded-worker" "$framejacker_build/"
 fi
 for framejacker_file in reference-libVkLayer_mrhand.so reference-ptgrab build-report.json; do
     mv -- "$framejacker_stage/$framejacker_file" "$framejacker_build/$framejacker_file"

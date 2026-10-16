@@ -27,6 +27,7 @@ unknown unless explicitly recorded below.
 | Provider publication and loop controls | Controlled cloud and Frame tests passed | Exclusive private runtime file, ordered writer and bounded loop controls; all eight generated-data process tests passed on Frame; full GPU/provider lifecycle pending; [E27](#e27-publication-and-loop-controls-on-frame) |
 | Bounded Vulkan capability query | Implemented; controlled cloud tests passed; Frame result pending | Eleven fake-loader/process tests; no usable cloud driver; no camera or actual external-memory import; [E28](#e28-vulkan-capability-query-cloud-checks) |
 | Image import validation and ownership | Inspection adaptation built; ten synthetic cloud tests passed | Strict profile/capability/requirement checks, FD transfer, rollback and completion-gated retirement; no real GPU import or ARM64 result; [E29](#e29-validated-import-and-ownership-cloud-checks) |
+| GPU/provider lifecycle and guarded worker | Offline fault-injection tests passed; capture blocked | Device/downscaler/command ownership, provider continuity and joined endpoint tests; exporter synchronization remains absent; [E31](#e31-gpu-and-provider-lifecycle-and-source-synchronization-gate) |
 | Capture watchdog and host-buffer ownership | Offline implementation and synthetic tests passed | 11 watchdog tests and six host ownership tests; capture entry point still disabled; [E30](#e30-capture-watchdog-and-host-buffer-offline-checks) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
 | Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; no source-identified built-in-camera frames have been received |
@@ -885,6 +886,48 @@ changes/provider loss, layer lifetime and exact restoration remain pending.
 Actual DMA-BUF import, source-buffer completion, physical source identity and
 ARM64 execution of these new changes still need separate evidence. No headset,
 personal computer, live capture or layer settings were accessed.
+
+### E31: GPU and provider lifecycle and source-synchronization gate
+
+Execution date: 2026-10-16, Linux x86_64 saved coding environment. This portion
+continues local commit `3bcf804ac64c91e9040c7776d8f328cfdeeb5677`; the last verified
+upstream base remains `b896d6e88be6dcdee772661c917c5c112437d8f4`. GitHub authentication
+was unavailable on the prior final refresh; no credentials/settings were changed
+and this portion did not retry that operation. This is local evidence, not a
+GitHub Actions run or Frame/device validation.
+
+The import inspection build compiled and linked patches 1–8. Its actual adapted
+worker resource code and layer callback code compile against fake Vulkan entry
+points for tests; no Vulkan runtime is initialized by these fixtures. Results:
+
+- All **61** capture-focused Python tests passed without skips, including six
+  new resource groups and nine provider/guarded-worker groups, plus the existing
+  query, import, host, publication and watchdog regressions. An initial run skipped
+  the unbuilt GPU fixture; it was then built and the complete run passed.
+- Resource fault injection covers all 18 initialization/acquisition/binding sites,
+  dependency-ordered cleanup, invalid bootstrap inventories, pending-work deferral,
+  probe command reuse and both probe acquisition failures.
+- Provider tests cover per-device object identities, image/device/instance
+  retirement, in-flight callback serialization, descriptor closure, preserved
+  shared FD offsets, endpoint ownership/replacement, changed snapshots, stalls,
+  disconnects and guarded-worker defaults/explicit opt-in.
+- Six resource, three actual-layer callback and four registry/endpoint scenario
+  groups also passed AddressSanitizer and UndefinedBehaviorSanitizer builds.
+- The freshly built transport fixture passed all seven synthetic socket groups
+  with no descriptor leak detected.
+- The watchdog's actual guarded-worker check returned exit **3**, status `blocked`,
+  reason `exporter_synchronization_unavailable`; the worker was reaped and reported
+  runtime/capture initialization false. ELF inspection confirmed the guarded
+  worker has no Vulkan loader dependency. Reference capture/layer artifacts remain
+  non-executable; no layer manifest or activation was performed.
+
+The capability query fixture uses a fake Vulkan loader; passing those tests says
+nothing about the Frame's actual GPU. Registry checks cannot close a check/use
+race or authorize foreign-image reads. The source gate remains unconditional
+because the current wire record contains no exporter completion fence/read lease.
+Actual synchronization, device capabilities, source identity, ARM64 behavior,
+real driver teardown and exact deployment/restoration require separate evidence.
+No headset or personal computer was accessed, and nothing was pushed or deployed.
 
 ## Maintaining the evidence
 

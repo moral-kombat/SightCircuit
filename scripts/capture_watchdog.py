@@ -14,6 +14,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / 'artifacts/capture-publication-reference/framejacker-publication-fixture'
+GUARDED_WORKER = ROOT / 'artifacts/capture-import-reference/framejacker-guarded-worker'
 MAX_OUTPUT = 64 * 1024  # per stream; drain concurrently, never communicate unbounded data
 TERM_GRACE = 0.3
 KILL_GRACE = 1.0
@@ -163,17 +164,41 @@ def synthetic_check(requested):
         return report
 
 
+def check_guarded_worker(requested):
+    """Exercise the real native argument/source-sync gate through the watchdog."""
+    report = supervise([str(GUARDED_WORKER), '--allow-experimental-capture', '--seconds', '1'],
+                       timeout=3, requested=requested)
+    report.update(capture_started=None if report['worker_started'] else False)
+    if report['reason'] == 'worker_exit' and report.get('worker_exit_code') == 3:
+        try:
+            native = json.loads(report['stdout'])
+            if (not isinstance(native, dict) or native.get('report_kind') != 'capture_worker' or
+                    native.get('schema_version') != 1 or native.get('status') != 'blocked' or
+                    native.get('reason') != 'exporter_synchronization_unavailable' or
+                    native.get('runtime_initialized') is not False or
+                    native.get('capture_started') is not False or native.get('cleanup_ok') is not True or
+                    type(native.get('exit_code')) is not int or native['exit_code'] != 3):
+                raise ValueError('invalid worker report')
+            report.update(status='blocked', reason=native['reason'], exit_code=3, native=native, capture_started=False)
+        except (TypeError, ValueError):
+            report.update(status='failed', reason='invalid_worker_report', exit_code=1)
+    return report
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--synthetic-check', action='store_true',
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--check-worker', action='store_true',
+                      help='verify the native worker rejects capture before registry/GPU access')
+    mode.add_argument('--synthetic-check', action='store_true',
                         help='supervise generated luma publication only; no Vulkan or camera')
     args = parser.parse_args(argv)
-    if not args.synthetic_check:
+    if not args.synthetic_check and not args.check_worker:
         report = dict(status='not_run', exit_code=3, capture_started=False,
                       deployment_ready=False, required_argument='--synthetic-check')
     else:
         with cancellation() as requested:
-            report = synthetic_check(requested)
+            report = check_guarded_worker(requested) if args.check_worker else synthetic_check(requested)
     print(json.dumps(report, indent=2))
     return report['exit_code']
 

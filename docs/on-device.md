@@ -966,26 +966,30 @@ Record new results in docs/status.md, including unknown dates/versions explicitl
 
 ## Next controlled session after watchdog work
 
-Start with the existing [bounded GPU query](#query-vulkan-capture-capabilities)
-and record checkout revision, SteamOS/SteamVR versions and the selected physical
-camera. No layer installation or capture is needed for this step. Rebuild the
-publication fixture on ARM64 and run the watchdog tests described in
-[development](development.md#validate-the-capture-watchdog-offline). The synthetic
-CLI publishes generated luma only. Stop on a failed test, unreaped worker or
-unexpected changes in passthrough/tracking; retain the JSON and stderr.
+1. Record the exact checkout revision, SteamOS/SteamVR versions and the selected
+   physical camera. Confirm normal vendor preview, passthrough and tracking.
+2. Run the existing [bounded GPU query](#query-vulkan-capture-capabilities).
+   Record device/API/extensions, modifier memory planes, R8 support and host-memory
+   capabilities. This does not install a layer or open camera buffers.
+3. On ARM64, rebuild the inspection adaptation and run the resource/lifecycle
+   suites in [development](development.md#validate-gpu-and-provider-lifetime-offline).
+   Run `python3 scripts/capture_watchdog.py --check-worker`; expect exit **3** and
+   `exporter_synchronization_unavailable`, with no runtime/capture initialization.
+   Stop if it reports anything else. Never chmod/run the inspection capture files.
+4. Identify a supported frame-sharing interface or obtain exporter completion/
+   ownership details. The current protocol has no producer fence or read lease.
+   Do not try live import merely because the GPU capability query passes.
+5. Only after that contract is implemented and reviewed, prepare exact backups of
+   the affected layer configuration and an activation/restoration procedure for
+   the identified runtime. No capture activation is authorized by these checks.
 
-These checks do not authorize a dedicated capture trial. Before that trial,
-finish GPU resource and provider lifecycle work, review source synchronization,
-and prepare an exact inventory and backup of the affected layer configuration.
-The rollback procedure must restore that recorded configuration, remove only
-files created for the trial and restart the compositor through the normal user
-workflow when needed to unload the layer. Do not delete or replace an unexplained
-existing socket/publication or rerun capture after a forced termination.
-
-Once those gates are met and the user starts a controlled session, use a single
-identified source for at most ten seconds with inference and the VR panel off.
-Stop immediately for degraded passthrough/tracking, unexpected source identity,
-stale frames, registry/provider change, timeout or unconfirmed cleanup. Restore
-the recorded configuration and verify normal vendor preview/passthrough before
-any further attempt. No exact activation command is provided until the remaining
-provider and restoration implementation is reviewable.
+For a later approved capture-only trial, cap acquisition at ten seconds on one
+identified source, with inference and the VR panel off. Stop for degraded
+passthrough/tracking, unexpected source identity, stale frames, registry/provider
+change, timeout, unreaped worker or uncertain cleanup. Retain JSON/stderr. Do not
+retry or delete unexplained existing sockets/publications after forced termination.
+Rollback must restore the recorded configuration, remove only trial-owned files,
+and restart the compositor through the normal user workflow if needed to unload
+the layer. Verify normal vendor preview/passthrough before any further attempt.
+The current preflight/synthetic checks change no layer configuration, so their
+rollback consists of stopping the test and retaining its report.

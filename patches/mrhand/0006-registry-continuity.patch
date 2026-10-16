@@ -1,0 +1,102 @@
+diff --git a/capture/ptgrab.cpp b/capture/ptgrab.cpp
+index 691f033..7cf2de7 100644
+--- a/capture/ptgrab.cpp
++++ b/capture/ptgrab.cpp
+@@ -31,20 +31,24 @@
+ #include "capture_import.hpp"
+ #include "capture_host.hpp"
+ #include "capture_resource.hpp"
++#include "capture_registry.hpp"
+ #include <sys/resource.h>
+ 
+ #define CHECK(x) do { VkResult r_ = (x); if (r_ != VK_SUCCESS) { fprintf(stderr, "%s:%d %s -> %d\n", __FILE__, __LINE__, #x, r_); throw std::runtime_error("Vulkan_operation_failed"); } } while (0)
+ 
+ using Buf = framejacker::transport::Record;
+ 
+-static std::vector<Buf> fetchBuffers() {
+-    using namespace framejacker::transport;
++static std::string registryPath() {
+     const char *runtime = getenv("XDG_RUNTIME_DIR");
+-    if (!runtime || runtime[0] != '/') throw Error("XDG_RUNTIME_DIR_missing_or_relative");
+-    std::string path = std::string(runtime) + "/mrhand/cam.sock";
+-    const auto deadline = Clock::now() + std::chrono::milliseconds(500);
+-    auto connection = connect_registry(path.c_str(), deadline);
+-    return receive_registry(connection.get(), deadline);
++    if (!runtime || runtime[0] != '/') throw framejacker::transport::Error("XDG_RUNTIME_DIR_missing_or_relative");
++    return std::string(runtime) + "/mrhand/cam.sock";
++}
++static framejacker::capture_registry::Snapshot fetchBuffers() {
++    return framejacker::capture_registry::fetch(registryPath(),
++        framejacker::transport::Clock::now() + std::chrono::milliseconds(500));
++}
++static void verifyProvider(const framejacker::capture_registry::Snapshot &original) {
++    framejacker::capture_registry::unchanged(original, fetchBuffers());
+ }
+ 
+ template <typename T> using Owned = framejacker::capture_resource::Unique<T>;
+@@ -374,7 +378,8 @@ static uint64_t monoNs() {
+ // that frame's luma into the shm slot of its camera.  Cameras = the two halves
+ // of the id-sorted buffer list (XRService allocates each camera's ring together).
+ static int stream(Gpu &g, std::vector<CamImage> &ims, int maxFps, uint32_t outSize,
+-                  framejacker::publication::RunLimit &limit) {
++                  framejacker::publication::RunLimit &limit,
++                  const framejacker::capture_registry::Snapshot &registry) {
+     std::sort(ims.begin(), ims.end(), [](const CamImage &a, const CamImage &b) { return a.info.id < b.info.id; });
+     const uint32_t W = ims[0].info.width, H = ims[0].info.height;
+     const uint32_t S0 = H / 2 - 8, SR = 16;   // probe strip
+@@ -405,7 +410,10 @@ static int stream(Gpu &g, std::vector<CamImage> &ims, int maxFps, uint32_t outSi
+     // (XRService writes take a few ms; copying mid-write would tear).
+     std::vector<uint64_t> pendingSince(ims.size(), 0);
+     while (limit.running()) {
++        verifyProvider(registry);
++        if (!limit.running()) break;
+         copyRegions(g, ims, probeRegs, probe);
++        verifyProvider(registry);
+         uint64_t tNow = monoNs();
+         for (size_t i = 0; i < ims.size() && limit.running(); i++) {
+             const uint8_t *p = (const uint8_t *)probe.ptr + i * strip;
+@@ -430,6 +438,8 @@ static int stream(Gpu &g, std::vector<CamImage> &ims, int maxFps, uint32_t outSi
+             if (tDetect <= lastPub[cam] || tDetect - lastPub[cam] < minGap) continue;
+             uint64_t t0 = monoNs();
+             const uint8_t *px;
++            verifyProvider(registry);
++            if (!limit.running()) break;
+             if (outSize) {
+                 px = ds.run(g, ims[i]);
+             } else {
+@@ -438,6 +448,7 @@ static int stream(Gpu &g, std::vector<CamImage> &ims, int maxFps, uint32_t outSi
+             }
+             copyNsSum += monoNs() - t0;
+             copies++;
++            verifyProvider(registry);
+             if (!limit.running()) break;
+             if (publisher.publish(cam, px, frame, tDetect, ims[i].info.id, frames[cam])) {
+                 lastPub[cam] = tDetect;
+@@ -453,7 +464,7 @@ static int stream(Gpu &g, std::vector<CamImage> &ims, int maxFps, uint32_t outSi
+             fflush(stdout);
+             statT = 0;
+         }
+-        std::this_thread::sleep_for(std::chrono::milliseconds(4));
++        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+     }
+     const bool clean = publisher.close();
+     const int code = !clean ? 1 : limit.signal() ? 128 + limit.signal() : publications ? 0 : 1;
+@@ -480,7 +491,8 @@ int main(int argc, char **argv) {
+         rlimit core{0, 0};
+         if (setrlimit(RLIMIT_CORE, &core) != 0) throw Error("core_limit_failed");
+         RunLimit limit(options.seconds);
+-        auto bufs = fetchBuffers();
++        auto registry = fetchBuffers();
++        auto &bufs = registry.records;
+         if (!limit.running()) throw Error("capture_cancelled");
+         if (std::none_of(bufs.begin(), bufs.end(), [](const Buf &buffer) {
+                 return buffer.info.hasImage && buffer.info.width == 2464 && buffer.info.height == 2464;
+@@ -499,7 +511,7 @@ int main(int argc, char **argv) {
+             }
+         if (!limit.running()) throw Error("capture_cancelled");
+         try {
+-            const int code = stream(g, ims, options.fps, 640, limit);
++            const int code = stream(g, ims, options.fps, 640, limit, registry);
+             ims.clear();
+             if (!g.close()) throw Error("GPU_cleanup_deferred");
+             printf("{\"event\":\"gpu_closed\",\"gpu_cleanup_ok\":true}\n");

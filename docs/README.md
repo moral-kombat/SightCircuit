@@ -24,6 +24,7 @@ owns the current capture work plan.
 | Test descriptor transport changes without camera access | [Transport adaptation and synthetic sockets](on-device.md#test-the-transport-adaptation-without-capture) |
 | Test the provider's writer and loop controls without camera access | [Owned publication and generated-data tests](on-device.md#test-owned-publication-without-capture) |
 | Query GPU import prerequisites without opening the camera | [Bounded Vulkan capability query](on-device.md#query-vulkan-capture-capabilities) |
+| Validate GPU/provider ownership and the guarded native worker | [GPU and provider lifetime checks](development.md#validate-gpu-and-provider-lifetime-offline) |
 | Validate worker deadlines and forced shutdown without hardware | [Synthetic capture watchdog](development.md#validate-the-capture-watchdog-offline) |
 | Develop and test buffer imports without the headset | [Import validation and synthetic Vulkan ownership tests](development.md#build-and-test-image-import-ownership) |
 | Inspect existing luma input or test the isolated reader | [Shared-memory procedure](on-device.md#check-existing-luma-shared-memory) and [controlled fixture](development.md#isolated-luma-reader-and-synthetic-producer) |

@@ -45,6 +45,8 @@ jobs:
           bash scripts/build_capture_reference.sh --import-fixes
           python3 -m unittest discover -s tests -p test_capture_import.py -v
           python3 -m unittest discover -s tests -p test_capture_host.py -v
+          python3 -m unittest discover -s tests -p test_capture_resource.py -v
+          python3 -m unittest discover -s tests -p test_capture_lifecycle.py -v
       - name: Check inspection artifacts without executing them
         run: |
           python3 - <<'PY'
