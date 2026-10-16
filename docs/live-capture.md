@@ -10,7 +10,7 @@ layer has been deployed by Framejacker.
 
 | Order | Deliverable | State | Acceptance |
 | --- | --- | --- | --- |
-| 1 | Bounded diagnostic for an existing SteamVR mirror | Implemented and cloud-tested; next is Frame validation | Discover existing virtual feed metadata, exit within a deadline and obtain device evidence of actual mirror/passthrough content; [procedure](on-device.md#check-an-existing-steamvr-mirror) |
+| 1 | Bounded diagnostic for an existing SteamVR mirror | Implemented; Frame discovery confirmed; next is bounded acquisition | One virtual SteamVR candidate found; verify format, frames and actual passthrough content; [procedure](on-device.md#check-an-existing-steamvr-mirror), [evidence](status.md#e10-mirror-discovery-on-frame) |
 | 2 | Isolated shared-memory reader and controlled producer | Implemented and cloud-tested; ARM64 and real-provider validation pending | Validate the pinned layout, consistent frame copies, stale/malformed/restarted input and shutdown; [cloud evidence](status.md#e9-shared-memory-reader-cloud-checks) |
 | 3 | Dedicated Arcturus capture provider | Planned; not deployed | Pin only the capture components, address lifecycle findings, build natively and prepare exact configuration restoration for a controlled trial |
 | 4 | Capture-only device trial | Planned | Ten seconds of fresh images from one identified source, correct orientation, clean exit and working normal passthrough |
@@ -32,7 +32,10 @@ prerequisite for offline reader development.
 
 The standalone diagnostic is implemented in `scripts/mirror_check.py` with
 read-only V4L2 handling in `scripts/mirror_capture.py`. It has passed controlled
-cloud checks; actual Frame acquisition and ARM64 execution remain pending.
+cloud checks. The user's Frame discovery report now identifies one virtual
+SteamVR candidate at `/dev/video99`; no device was opened and no frames were
+read. Actual Frame acquisition and its V4L2 path remain unverified; see
+[the device evidence](status.md#e10-mirror-discovery-on-frame).
 Use the [device procedure](on-device.md#check-an-existing-steamvr-mirror) for
 metadata-only discovery before opt-in capture. The requirements below define
 the implemented scope and remaining device acceptance checks.

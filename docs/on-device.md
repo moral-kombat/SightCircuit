@@ -320,8 +320,10 @@ read-based diagnostic. Physical source identity stays explicitly unverified.
 Retain the JSON for unavailable/unsupported results. An unsupported format is a
 limit of the current reader, not proof that the mirror is unusable or the camera
 is faulty. Do not activate a new mirror service or force a physical camera path
-to make this check pass. Device capture and ARM64 execution remain pending;
-see [cloud evidence](status.md#e8-mirror-diagnostic-cloud-checks) and the
+to make this check pass. Frame discovery has found one matching virtual node;
+actual device capture and its ARM64 V4L2 path remain unverified. See
+[device discovery](status.md#e10-mirror-discovery-on-frame),
+[cloud evidence](status.md#e8-mirror-diagnostic-cloud-checks) and the
 [active plan](live-capture.md#current-work-order).
 
 ### Check existing luma shared memory

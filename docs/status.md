@@ -17,7 +17,7 @@ unknown unless explicitly recorded below.
 | Native head-relative VR replay panel | Device-confirmed | Timed test panel, replay, controls and following head movement reported working; detailed performance unmeasured; [E6](#e6-window-and-vr-panel) |
 | Public OpenVR tracked-camera probe | Device-confirmed failure | No frames and observed passthrough interruption; do not repeat the unchanged test; [E3](#e3-public-camera-probe) |
 | Live input in the detector/VR application | Planned; unimplemented | No integrated live capture backend; [active work plan](live-capture.md) |
-| Existing-mirror diagnostic | Implemented; cloud-tested | Metadata-only discovery, guarded read-only capture, bounded worker and explicit preview; Frame capture/ARM64 execution pending; [E8](#e8-mirror-diagnostic-cloud-checks) |
+| Existing-mirror diagnostic | Implemented; Frame discovery confirmed | One matching virtual SteamVR node found; actual frame acquisition remains unverified; [E8 cloud checks](#e8-mirror-diagnostic-cloud-checks), [E10 device discovery](#e10-mirror-discovery-on-frame) |
 | Dedicated-camera shared-memory reader | Implemented; cloud-tested | Read-only native consumer, bounded supervisor and synthetic producer; actual provider and ARM64 validation pending; [E9](#e9-shared-memory-reader-cloud-checks) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
 | Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; our project has received no live frames |
@@ -226,6 +226,31 @@ physical source identity and actual camera freshness remain unverified. The
 [operating procedure](on-device.md#check-existing-luma-shared-memory) and
 [controlled fixture](development.md#isolated-luma-reader-and-synthetic-producer)
 describe the distinct next checks.
+
+### E10: Mirror discovery on Frame
+
+Source: user-supplied `steamvr_mirror_check` schema-1 output received
+2026-10-16 following the requested Frame check. Exact execution time, installed
+checkout revision and current SteamOS/SteamVR versions were not included.
+The metadata-only command reports `discovery_only`, exit `0`, with
+`candidates_found` / `metadata_match` and exactly one candidate:
+
+| Field | Reported value |
+| --- | --- |
+| Device node | `/dev/video99` |
+| Sysfs name | `SteamVR` |
+| Resolved sysfs path | `/sys/devices/virtual/video4linux/video99` |
+| Device identity | Major `81`, minor `58` |
+| Classification | `steamvr_virtual_mirror_candidate` |
+| Unverified named nodes | None |
+
+The report explicitly has `device_open_attempted: false`,
+`acquisition_started: false`, zero frames and no saved images. This establishes
+a candidate virtual mirror from current sysfs metadata. Driver/capability and
+format checks, actual frame delivery, passthrough content, physical source
+identity and output-feedback behavior remain untested. The next step is the
+[bounded opt-in acquisition](on-device.md#check-an-existing-steamvr-mirror),
+with the replay window and VR panel closed.
 
 ## Maintaining the evidence
 
