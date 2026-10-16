@@ -107,3 +107,9 @@ Original project code and documentation are covered by the [MIT license](LICENSE
 External packages and downloaded fixtures retain their upstream terms; see
 [third-party sources](THIRD_PARTY.md). Framejacker is an independent project and
 is not affiliated with Valve or Arcturus Vision.
+
+Offline provider development now includes a [synthetic capture watchdog](docs/development.md#validate-the-capture-watchdog-offline)
+with bounded process shutdown and generated-publication hang tests. The import
+inspection build also owns host-buffer allocations and mappings through failure
+and normal cleanup. Neither change enables live capture or establishes deployment
+readiness.

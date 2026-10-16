@@ -221,11 +221,16 @@ Continue these independent tasks without waiting for the headset:
 
 1. Extend the buffer contract where needed for exporter flags/sharing and device
    provenance. The initial importer rejects arrayed images because array-stride
-   metadata is absent. Finish device/bootstrap, host-buffer, downscaler, command/fence and mapped
-   memory ownership, including rollback after every partial initialization.
-   The import owner does not complete cleanup for these other resources.
-2. Add a supervised capture worker with a deadline around all driver calls and
-   explicit reporting when API cleanup or file recovery is unconfirmed.
+   metadata is absent. Host-buffer allocation/mapping ownership and rollback are
+   now implemented in the fourth inspection patch with six fake-dispatch tests.
+   Finish device/bootstrap, downscaler image and command/fence ownership,
+   including rollback after every partial initialization. The import/host owners
+   do not complete cleanup for those other resources.
+2. The external watchdog primitive and generated-publication fault tests are
+   implemented; [offline validation](development.md#validate-the-capture-watchdog-offline)
+   covers startup/runtime/shutdown hangs and cancellation. Wire the real capture
+   worker only after the other lifecycle gates; API cleanup and stale-file
+   recovery remain explicitly unconfirmed after forced termination.
 3. Handle registry changes/provider loss by stopping before using old image
    bindings; test generation changes and shutdown with synthetic peers.
 4. Repair layer endpoint ownership, callback/device registry lifetime and server

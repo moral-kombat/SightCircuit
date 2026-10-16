@@ -100,13 +100,27 @@ int main(int argc, char **argv) {
         return std::string(argv[1]) == "--check-options" ? 64 : 1;
     }
     unsigned seconds = 3;
-    std::string path;
+    std::string path, hang;
+    // Synthetic stuck-driver points. No Vulkan, camera or real provider is used.
+    auto hang_here = [&hang](const char *phase) {
+        if (hang != phase) return;
+        signal(SIGTERM, SIG_IGN);
+        signal(SIGINT, SIG_IGN);
+        std::cout << "{\"event\":\"synthetic_hang\",\"phase\":\"" << phase << "\"}\n" << std::flush;
+        for (;;) pause();
+    };
     try {
-        if (argc != 5 || std::string(argv[1]) != "--create" || std::string(argv[3]) != "--seconds")
+        if (argc == 7 && std::string(argv[5]) == "--watchdog-hang") {
+            hang = argv[6];
+            if (hang != "startup" && hang != "publication" && hang != "shutdown")
+                throw Error("invalid_arguments");
+        } else if (argc != 5) throw Error("invalid_arguments");
+        if (std::string(argv[1]) != "--create" || std::string(argv[3]) != "--seconds")
             throw Error("invalid_arguments");
         path = argv[2];
         seconds = unsigned(framejacker_shm::number(argv[4], 1, 10));
     } catch (...) { return 64; }
+    std::unique_ptr<RunLimit> limit;
     std::unique_ptr<Publisher> publisher;
     int code = 0;
     std::string reason = "deadline";
@@ -114,20 +128,23 @@ int main(int argc, char **argv) {
     try {
         rlimit core{0, 0};
         if (setrlimit(RLIMIT_CORE, &core) != 0) throw Error("core_limit_failed");
-        RunLimit limit(seconds);
+        limit = std::make_unique<RunLimit>(seconds);
+        hang_here("startup");
         publisher = std::make_unique<Publisher>(path, 1024, 1024, 2);
         std::vector<uint8_t> pixels(1024 * 1024);
         std::cout << "{\"event\":\"publication_ready\",\"synthetic\":true}\n" << std::flush;
-        while (limit.running()) {
+        while (limit->running()) {
             ++count;
             for (unsigned camera = 0; camera != 2; ++camera) {
                 std::fill(pixels.begin(), pixels.end(), uint8_t((count + camera * 17) % 256));
                 publisher->publish(camera, pixels.data(), pixels.size(), framejacker_shm::nowNs(), 100 + camera, count);
+                hang_here("publication");
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(16));
         }
-        if (limit.signal()) { reason = "signal"; code = 128 + limit.signal(); }
+        if (limit->signal()) { reason = "signal"; code = 128 + limit->signal(); }
     } catch (const std::exception &error) { reason = error.what(); code = 1; }
+    hang_here("shutdown");
     const bool clean = !publisher || publisher->close();
     if (!clean) code = 1;
     if (reason.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != std::string::npos)

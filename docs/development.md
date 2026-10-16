@@ -577,3 +577,74 @@ window job also builds the bridge so its validation-only mode can check actual
 RGBA forwarding and Qt control creation. This mode reports no OpenVR
 initialization and zero submitted frames. For the real hardware procedure,
 read [VR replay panel](vr-overlay.md).
+
+## Validate the capture watchdog offline
+
+```bash
+bash scripts/build_capture_reference.sh --publication-fixes
+bash scripts/build_shm_reader.sh
+python3 -m unittest discover -s tests -p test_capture_watchdog.py -v
+python3 scripts/capture_watchdog.py --synthetic-check
+```
+
+The CLI runs only the generated-luma publication fixture. Its default exits 3
+without starting a worker; it accepts neither a capture opt-in nor an arbitrary
+worker path. The internal `supervise` primitive is available for later provider
+integration after the remaining lifecycle gates are resolved. It does not make
+the inspection capture artifacts executable or load Vulkan.
+
+A monotonic deadline covers worker startup, runtime and shutdown. The internal
+budget must be finite, positive and at most 15 seconds. Both output streams are
+drained concurrently with a 64 KiB limit each. Timeout, output overflow or
+cancellation sends SIGTERM to the worker's dedicated process group, allows
+300 ms for cooperative exit, then sends SIGKILL and waits at most one second
+for the leader. Signals are latched so a repeated Ctrl+C cannot interrupt cleanup.
+An exited leader does not bypass the deadline when a descendant retains pipes;
+a surviving process group also prevents a successful result.
+
+`worker_reaped` confirms only process collection. `resource_cleanup_confirmed`
+stays false: the watchdog cannot infer Vulkan cleanup from exit status. The
+synthetic command separately validates the native publication events, positive
+frame count and removal of its generated file. The general supervisor never
+retries capture or deletes publication files. A forced exit can leave a stale
+file; the next publisher must reject it until recovery is reviewed. Its own
+temporary synthetic data directory is discarded after the offline CLI check.
+
+Native workers must install their parent-death guard before runtime access and
+retain it through cleanup. The generated fixture now keeps `RunLimit` alive
+through publication shutdown and supplies startup/publication/shutdown hang
+points that ignore cooperative stop signals. Tests verify bounded kill/reap and
+preservation of stale generated publications. These are simulated hangs, not
+actual GPU failures. A task stuck in uninterruptible kernel sleep can outlive
+SIGKILL; `worker_not_reaped` reports that uncertainty. Process-group containment
+does not constrain a worker that deliberately creates a new session.
+
+The real capture CLI is intentionally not wired to this watchdog yet. Remaining
+GPU ownership, registry/provider lifetime, source synchronization and exact layer
+restoration must be reviewed before a capture entry point is enabled.
+
+### Host-buffer ownership in the import inspection build
+
+`--import-fixes` now also applies `0004-owned-host-buffers.patch` and builds the
+fake-dispatch `framejacker-host-fixture`. Run:
+
+```bash
+bash scripts/build_capture_reference.sh --import-fixes
+python3 -m unittest discover -s tests -p test_capture_host.py -v
+```
+
+The probe and downscaler host transfer buffers share `capture_host.hpp`. The
+move-only owner retains only successfully created buffer, allocation and mapping
+handles. Failed create/allocate/map outputs are never adopted. Size, requirements,
+memory-type count/flags and heap capacity are bounded before mapping. Normal
+retirement unmaps, destroys the buffer and frees its allocation; exceptions
+perform the same rollback for the resources already acquired. Memory bit 31 and
+move assignment are covered by the fixture. If our queue completion is uncertain,
+all API cleanup is deferred to process teardown, sharing the import completion
+gate. This avoids freeing host storage potentially still used by the GPU.
+
+Six fake-dispatch tests cover success/moves, every fallible acquisition, invalid
+bounds/context, incompatible memory/heap selection and in-flight retirement.
+They do not load Vulkan. Device/instance bootstrap, command/fence and downscaler
+image ownership remain separate work; host-buffer ownership does not validate
+real mapping, device capabilities or original producer synchronization.

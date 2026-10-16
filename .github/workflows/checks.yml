@@ -39,10 +39,12 @@ jobs:
           bash scripts/build_capture_reference.sh --publication-fixes
           bash scripts/build_shm_reader.sh
           python3 -m unittest discover -s tests -p test_capture_publication.py -v
+          python3 -m unittest discover -s tests -p test_capture_watchdog.py -v
       - name: Build validated-import adaptation and test fake Vulkan ownership
         run: |
           bash scripts/build_capture_reference.sh --import-fixes
           python3 -m unittest discover -s tests -p test_capture_import.py -v
+          python3 -m unittest discover -s tests -p test_capture_host.py -v
       - name: Check inspection artifacts without executing them
         run: |
           python3 - <<'PY'

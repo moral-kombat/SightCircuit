@@ -1,0 +1,53 @@
+diff --git a/capture/ptgrab.cpp b/capture/ptgrab.cpp
+index 490c1d6..6477880 100644
+--- a/capture/ptgrab.cpp
++++ b/capture/ptgrab.cpp
+@@ -29,6 +29,7 @@
+ #include "capture_transport.hpp"
+ #include "capture_publication.hpp"
+ #include "capture_import.hpp"
++#include "capture_host.hpp"
+ #include <sys/resource.h>
+ 
+ #define CHECK(x) do { VkResult r_ = (x); if (r_ != VK_SUCCESS) { fprintf(stderr, "%s:%d %s -> %d\n", __FILE__, __LINE__, #x, r_); throw std::runtime_error("Vulkan_operation_failed"); } } while (0)
+@@ -121,23 +122,24 @@ static CamImage importImage(Gpu &g, const Buf &b) {
+     return {b.info, image, std::move(owned)};
+ }
+ 
+-struct HostBuf { VkBuffer buf; VkDeviceMemory mem; void *ptr; VkDeviceSize size; };
++struct HostBuf {
++    framejacker::capture_host::Buffer owner;
++    VkBuffer buf = VK_NULL_HANDLE;
++    VkDeviceMemory mem = VK_NULL_HANDLE;
++    void *ptr = nullptr;
++    VkDeviceSize size = 0;
++};
+ static HostBuf hostBuffer(Gpu &g, VkDeviceSize size) {
+-    HostBuf h{};
+-    h.size = size;
+-    VkBufferCreateInfo bc{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+-    bc.size = size;
+-    bc.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+-    CHECK(vkCreateBuffer(g.dev, &bc, nullptr, &h.buf));
+-    VkMemoryRequirements req;
+-    vkGetBufferMemoryRequirements(g.dev, h.buf, &req);
+-    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, nullptr, req.size,
+-                            g.memType(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+-                                                              VK_MEMORY_PROPERTY_HOST_CACHED_BIT)};
+-    CHECK(vkAllocateMemory(g.dev, &ai, nullptr, &h.mem));
+-    CHECK(vkBindBufferMemory(g.dev, h.buf, h.mem, 0));
+-    CHECK(vkMapMemory(g.dev, h.mem, 0, VK_WHOLE_SIZE, 0, &h.ptr));
+-    return h;
++    framejacker::capture_host::Context context;
++    context.device = g.dev; context.memory = g.mp;
++    context.completion = &g.importCompletion;
++    context.api = {vkCreateBuffer, vkDestroyBuffer, vkGetBufferMemoryRequirements,
++                   vkAllocateMemory, vkFreeMemory, vkBindBufferMemory, vkMapMemory, vkUnmapMemory};
++    HostBuf host;
++    host.owner = framejacker::capture_host::create(context, size);
++    host.buf = host.owner.buffer(); host.mem = host.owner.memory();
++    host.ptr = host.owner.data(); host.size = size;
++    return host;
+ }
+ 
+ // PTGRAB_QFOT=0: no queue-family ownership transfer from FOREIGN (plain read barrier) — banding A/B test

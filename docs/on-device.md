@@ -963,3 +963,29 @@ Record new results in docs/status.md, including unknown dates/versions explicitl
 [arcturus-camera]: https://store.steampowered.com/app/4103250
 [arcturus-howto]: https://arcturus.vision/howto
 [recording-folder]: https://github.com/thunderheronight/splat-workshop/blob/a4ef32f28aab0b8372c09a8c221ef0f59bfeff4a/scripts/splat.sh#L35
+
+## Next controlled session after watchdog work
+
+Start with the existing [bounded GPU query](#query-vulkan-capture-capabilities)
+and record checkout revision, SteamOS/SteamVR versions and the selected physical
+camera. No layer installation or capture is needed for this step. Rebuild the
+publication fixture on ARM64 and run the watchdog tests described in
+[development](development.md#validate-the-capture-watchdog-offline). The synthetic
+CLI publishes generated luma only. Stop on a failed test, unreaped worker or
+unexpected changes in passthrough/tracking; retain the JSON and stderr.
+
+These checks do not authorize a dedicated capture trial. Before that trial,
+finish GPU resource and provider lifecycle work, review source synchronization,
+and prepare an exact inventory and backup of the affected layer configuration.
+The rollback procedure must restore that recorded configuration, remove only
+files created for the trial and restart the compositor through the normal user
+workflow when needed to unload the layer. Do not delete or replace an unexplained
+existing socket/publication or rerun capture after a forced termination.
+
+Once those gates are met and the user starts a controlled session, use a single
+identified source for at most ten seconds with inference and the VR panel off.
+Stop immediately for degraded passthrough/tracking, unexpected source identity,
+stale frames, registry/provider change, timeout or unconfirmed cleanup. Restore
+the recorded configuration and verify normal vendor preview/passthrough before
+any further attempt. No exact activation command is provided until the remaining
+provider and restoration implementation is reviewable.

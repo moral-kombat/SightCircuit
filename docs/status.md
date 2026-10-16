@@ -27,6 +27,7 @@ unknown unless explicitly recorded below.
 | Provider publication and loop controls | Controlled cloud and Frame tests passed | Exclusive private runtime file, ordered writer and bounded loop controls; all eight generated-data process tests passed on Frame; full GPU/provider lifecycle pending; [E27](#e27-publication-and-loop-controls-on-frame) |
 | Bounded Vulkan capability query | Implemented; controlled cloud tests passed; Frame result pending | Eleven fake-loader/process tests; no usable cloud driver; no camera or actual external-memory import; [E28](#e28-vulkan-capability-query-cloud-checks) |
 | Image import validation and ownership | Inspection adaptation built; ten synthetic cloud tests passed | Strict profile/capability/requirement checks, FD transfer, rollback and completion-gated retirement; no real GPU import or ARM64 result; [E29](#e29-validated-import-and-ownership-cloud-checks) |
+| Capture watchdog and host-buffer ownership | Offline implementation and synthetic tests passed | 11 watchdog tests and six host ownership tests; capture entry point still disabled; [E30](#e30-capture-watchdog-and-host-buffer-offline-checks) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
 | Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; no source-identified built-in-camera frames have been received |
 | Stereo depth and world-space labels | Planned | Calibration, depth and pose/timebase alignment remain unresolved |
@@ -847,6 +848,43 @@ No layer installation, camera access or actual external-memory import occurred.
 Continue the [offline work](live-capture.md#offline-provider-work-while-the-frame-is-unavailable);
 the [GPU query](on-device.md#query-vulkan-capture-capabilities) remains the next
 hardware-information check.
+
+### E30: Capture watchdog and host-buffer offline checks
+
+Execution date: 2026-10-16, Linux x86_64 saved coding environment. Changes based
+on upstream `b896d6e88be6dcdee772661c917c5c112437d8f4`, developed in an isolated
+worktree. This evidence covers the watchdog/host-buffer change; it is not a
+Frame result or a CI execution.
+
+The publication and import inspection adaptations compiled and linked. Their
+capture binaries remain non-executable and were not loaded or run. Local tests:
+
+- 11 watchdog tests passed, including generated native startup/publication/
+  shutdown hangs, output bounds, crashes, descendants holding pipes, repeated
+  cancellation and retained stale publication files.
+- Six host-buffer fake-dispatch tests passed: normal/moved ownership, each
+  acquisition failure, invalid bounds/context, heap and memory-type selection,
+  and completion-gated cleanup. No Vulkan runtime was loaded by these tests.
+- All six host-buffer scenarios also passed a separate AddressSanitizer and
+  UndefinedBehaviorSanitizer build.
+- All eight existing publication, 14 shared-memory reader/supervisor and ten
+  image-import regression tests passed. No skips in these five test suites.
+- The synthetic watchdog CLI completed one second of generated publication,
+  reaped its worker and confirmed removal of that generated publication. It
+  reported `capture_started: false`, `deployment_ready: false` and kept GPU
+  resource cleanup unconfirmed.
+
+The native publication fixture now retains its parent-death guard through
+cleanup. Host-buffer ownership is applied as the fourth versioned inspection
+patch and its source/hash are included in the build report. CI is configured
+for both new suites but has not been run for this local branch.
+
+The watchdog CLI exposes synthetic validation only. Real-worker integration,
+remaining device/instance, downscaler image and command/fence ownership, registry
+changes/provider loss, layer lifetime and exact restoration remain pending.
+Actual DMA-BUF import, source-buffer completion, physical source identity and
+ARM64 execution of these new changes still need separate evidence. No headset,
+personal computer, live capture or layer settings were accessed.
 
 ## Maintaining the evidence
 

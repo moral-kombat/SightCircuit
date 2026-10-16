@@ -122,6 +122,16 @@ if [ "$framejacker_mode" != reference ]; then
             "$framejacker_root/patches/mrhand/0003-validated-image-import.patch"
         git -C "$framejacker_sources" apply \
             "$framejacker_root/patches/mrhand/0003-validated-image-import.patch"
+        cp -- "$framejacker_root/tools/capture_host.hpp" "$framejacker_sources/capture/"
+        git -C "$framejacker_sources" apply --check \
+            "$framejacker_root/patches/mrhand/0004-owned-host-buffers.patch"
+        git -C "$framejacker_sources" apply \
+            "$framejacker_root/patches/mrhand/0004-owned-host-buffers.patch"
+        "$framejacker_compiler" -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror \
+            -Wno-missing-field-initializers "${framejacker_includes[@]}" \
+            -I"$framejacker_root/tools" -I"$framejacker_root/third_party/mrhand" \
+            "$framejacker_root/tools/capture_host_fixture.cpp" \
+            -o "$framejacker_stage/framejacker-host-fixture"
         "$framejacker_compiler" -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror \
             -Wno-missing-field-initializers "${framejacker_includes[@]}" \
             -I"$framejacker_root/tools" -I"$framejacker_root/third_party/mrhand" \
@@ -184,9 +194,10 @@ if mode in ("publication", "import"):
     report["publication_patch"] = digest(Path(sys.argv[7]) / "patches/mrhand/0002-owned-bounded-publication.patch")
     report["notes"][2] = "Publication and loop controls added; GPU import/resource cleanup, registry refresh and layer lifetime/restoration remain pending."
 if mode == "import":
-    report["sources"].append(digest(reference / "capture/capture_import.hpp"))
+    report["sources"].extend(digest(reference / "capture" / name) for name in ("capture_import.hpp", "capture_host.hpp"))
+    report["host_patch"] = digest(Path(sys.argv[7]) / "patches/mrhand/0004-owned-host-buffers.patch")
     report["import_patch"] = digest(Path(sys.argv[7]) / "patches/mrhand/0003-validated-image-import.patch")
-    report["notes"][2] = "Image import validation/ownership added; real GPU support, other GPU resource cleanup/watchdog, registry and layer lifetime/restoration remain pending."
+    report["notes"][2] = "Image import and host-buffer ownership added; real GPU support, remaining GPU resource cleanup, watchdog integration, registry and layer lifetime/restoration remain pending."
 (stage / "build-report.json").write_text(json.dumps(report, indent=2) + "\n")
 PY
 if [ "$framejacker_mode" != reference ]; then
@@ -197,6 +208,7 @@ if [ "$framejacker_mode" = publication ] || [ "$framejacker_mode" = import ]; th
 fi
 if [ "$framejacker_mode" = import ]; then
     mv -- "$framejacker_stage/framejacker-import-fixture" "$framejacker_build/"
+    mv -- "$framejacker_stage/framejacker-host-fixture" "$framejacker_build/"
 fi
 for framejacker_file in reference-libVkLayer_mrhand.so reference-ptgrab build-report.json; do
     mv -- "$framejacker_stage/$framejacker_file" "$framejacker_build/$framejacker_file"
