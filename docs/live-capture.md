@@ -10,7 +10,8 @@ layer has been deployed by Framejacker.
 
 | Order | Deliverable | State | Acceptance |
 | --- | --- | --- | --- |
-| 1 | Bounded diagnostic for an existing SteamVR mirror | Frame delivery and 640 × 360 preview publication confirmed; inspect the saved image next | Identify actual passthrough content, source/orientation and potential output feedback before app integration; [procedure](on-device.md#check-an-existing-steamvr-mirror), [evidence](status.md#e13-mirror-preview-publication-on-frame) |
+| 1 | Bounded diagnostic for an existing SteamVR mirror | Frame delivery and recognizable room content confirmed | Physical source identity, continuous scene freshness and output feedback remain unresolved; [evidence](status.md#e14-physical-room-visible-in-the-mirror-preview) |
+| 1a | Recognition on the saved mirror still | Existing file tool cloud-checked with grayscale PNG; room-image test on Frame next | Process one saved scene after capture closes, inspect labels/boxes and record the result; [procedure](on-device.md#run-recognition-on-the-saved-mirror-image) |
 | 2 | Isolated shared-memory reader and controlled producer | Implemented and cloud-tested; ARM64 and real-provider validation pending | Validate the pinned layout, consistent frame copies, stale/malformed/restarted input and shutdown; [cloud evidence](status.md#e9-shared-memory-reader-cloud-checks) |
 | 3 | Dedicated Arcturus capture provider | Planned; not deployed | Pin only the capture components, address lifecycle findings, build natively and prepare exact configuration restoration for a controlled trial |
 | 4 | Capture-only device trial | Planned | Ten seconds of fresh images from one identified source, correct orientation, clean exit and working normal passthrough |
@@ -37,12 +38,14 @@ received 100 complete 1920 × 1080 RGB3 frames from `/dev/video99` in ten second
 with 99 changed grayscale samples, zero would-block/short reads and clean
 shutdown. See [the device evidence](status.md#e12-successful-mirror-frame-delivery).
 This confirms a working composited input path at the diagnostic's capped rate;
-no image has been visually identified yet. A subsequent explicit preview trial
-saved `artifacts/mirror-check/scene-check.png` at 640 × 360 with clean shutdown;
-Chrome opened but treated the relative path as a web address instead of showing
-the PNG. The next viewer check uses an explicit absolute local-file URL.
-Inspect that existing still, identify the actual scene/source/orientation and confirm
-normal passthrough during and after the successful trial. Evaluate output
+the user has now recognized the room in the saved 640 × 360 grayscale preview.
+The absolute local-file URL resolved the relative-path browser opening issue;
+see [the observation](status.md#e14-physical-room-visible-in-the-mirror-preview).
+Next use the existing detector on that saved still with capture stopped. This
+provides a bounded recognition check before live-input integration and creates
+no display feedback during acquisition. Identify the physical source and
+orientation, verify scene freshness and confirm normal passthrough during and
+after a successful capture trial. Evaluate output
 feedback before feeding live results into a visible window or VR panel.
 This does not activate a new mirror service or change capture source.
 Use the [device procedure](on-device.md#check-an-existing-steamvr-mirror) for

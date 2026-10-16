@@ -17,7 +17,7 @@ unknown unless explicitly recorded below.
 | Native head-relative VR replay panel | Device-confirmed | Timed test panel, replay, controls and following head movement reported working; detailed performance unmeasured; [E6](#e6-window-and-vr-panel) |
 | Public OpenVR tracked-camera probe | Device-confirmed failure | No frames and observed passthrough interruption; do not repeat the unchanged test; [E3](#e3-public-camera-probe) |
 | Live input in the detector/VR application | Planned; unimplemented | No integrated live capture backend; [active work plan](live-capture.md) |
-| Existing-mirror diagnostic | Frame capture and preview publication confirmed | 100 complete 1920 × 1080 RGB3 frames in ten seconds; explicit 640 × 360 grayscale PNG saved with clean shutdown; scene/source identity and output feedback remain unverified; [E12](#e12-successful-mirror-frame-delivery), [E13](#e13-mirror-preview-publication-on-frame) |
+| Existing-mirror diagnostic | Frame capture and physical-room preview confirmed | 100 complete RGB3 frames in ten seconds; user recognizes the room in the 640 × 360 grayscale still; physical camera identity, timing and output feedback remain unverified; [E12](#e12-successful-mirror-frame-delivery), [E14](#e14-physical-room-visible-in-the-mirror-preview) |
 | Dedicated-camera shared-memory reader | Implemented; cloud-tested | Read-only native consumer, bounded supervisor and synthetic producer; actual provider and ARM64 validation pending; [E9](#e9-shared-memory-reader-cloud-checks) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
 | Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; no source-identified built-in-camera frames have been received |
@@ -358,10 +358,39 @@ session” and a zygote `write: Broken pipe (32)` error. This message belongs to
 the separate viewer launch and does not invalidate the successful capture/file
 report. The user subsequently confirmed that a Chrome window opened without
 the image and interpreted `artifacts` as a possibly mistyped web address.
-The next viewer check uses an explicit absolute local-file URL; its outcome
-has not yet been supplied. Inspect the existing file before capturing again.
-Passthrough continuity for
-this trial, source identity, orientation and output feedback remain unverified.
+The next viewer check used an explicit absolute local-file URL; the
+[subsequent user confirmation](#e14-physical-room-visible-in-the-mirror-preview)
+identifies the room in that image. Passthrough continuity for this capture
+trial, source identity, orientation and output feedback remain unverified.
+
+### E14: Physical room visible in the mirror preview
+
+Source: user observation received 2026-10-16 after opening the saved PNG through
+an absolute local-file URL. The user states:
+
+> I see a photo of the room in black and white.
+
+This confirms visible presentation and recognizable physical-room content in
+the mirror-derived still from E13. The grayscale appearance is expected:
+`mirror_check.py --preview` deliberately converts its sampled output to gray8,
+although the acquired V4L2 format is RGB3. This does not identify which physical
+camera supplied the scene or establish that the source itself is monochrome.
+The pixels have not been provided to the cloud environment for inspection.
+
+A single recognized scene does not establish continuous physical-motion
+freshness, detailed orientation/cropping, calibration, producer/exposure timing,
+or exclusion of our window/panel from the composited input. Capture cleanup is
+confirmed by E13; passthrough continuity during/after that particular trial has
+not been explicitly reported. Existing replay/VR confirmations remain separate.
+
+A separate cloud check on 2026-10-16 at checkout `74dc1b8` exercised the existing
+`replay_window.py` with a grayscale PNG made from the checked development
+fixture, `--max-frames 1`, Qt offscreen and an explicit result PNG. It processed
+and presented one frame, returned bicycle/car/dog labels, saved a decodable
+annotation image and requested no overlay. This confirms the existing tool
+can perform a bounded still-image recognition check; it is not a recognition
+result on the user's room image or on Frame. The next device step uses the
+saved room PNG after capture has stopped.
 
 ## Maintaining the evidence
 

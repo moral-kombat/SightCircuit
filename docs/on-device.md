@@ -333,8 +333,11 @@ xdg-open "file://$HOME/framejacker/artifacts/mirror-check/scene-check.png"
 `xdg-open` uses the system's associated viewer. The reported Chrome launcher
 message “Opening in existing browser session” followed by a zygote broken-pipe
 error occurs after capture. The user confirmed Chrome opened but treated the
-relative path as an address and did not show the PNG; the absolute file URL
-above is the next viewer check. It does not change a successful
+relative path as an address and did not show the PNG. Opening the absolute file
+URL then worked: the user recognized a black-and-white photo of the room.
+Grayscale is intentional in this preview; the acquired format was RGB3. See
+[the visual confirmation](status.md#e14-physical-room-visible-in-the-mirror-preview).
+The launcher warning does not change a successful
 `images_saved: true` capture report. If no image opens,
 resolve image presentation without reacquiring the camera. A new capture needs
 a new output path because existing files are deliberately preserved.
@@ -366,6 +369,42 @@ frame delivery succeeded; passthrough content remains unverified. See
 [device capture](status.md#e12-successful-mirror-frame-delivery),
 [cloud evidence](status.md#e8-mirror-diagnostic-cloud-checks) and the
 [active plan](live-capture.md#current-work-order).
+
+### Run recognition on the saved mirror image
+
+The saved room preview can be processed with the existing file detector after
+capture has stopped. This is a bounded still-image test, not a live-source
+window. Use the already configured `.venv-replay` environment and completed
+model fixtures from `setup_window.sh`. It opens no camera, requests no OpenVR
+panel and creates no visible Qt window during processing:
+
+```bash
+(
+  set -e
+  cd "$HOME/framejacker"
+  QT_QPA_PLATFORM=offscreen .venv-replay/bin/python scripts/replay_window.py \
+    artifacts/mirror-check/scene-check.png --max-frames 1 \
+    --preview artifacts/mirror-check/scene-detections.png \
+    --report artifacts/mirror-check/scene-detections.json
+  xdg-open "file://$HOME/framejacker/artifacts/mirror-check/scene-detections.png"
+)
+```
+
+Choose new output names on subsequent runs; the source PNG is preserved. The
+command prints and saves an `annotated_file_replay` report. Expected execution
+fields are `status: finished`, `frames_processed: 1`, `frames_presented: 1`,
+`overlay_requested: false` and `images_saved: true`. Inspect `labels_seen` and
+the annotation image for boxes that match objects. Labels come from the demo's
+20 classes, including person, chair, bottle, diningtable and tvmonitor, at the
+default confidence threshold of 0.5. An empty label list is a recognition result,
+not a capture failure. The output is a screenshot of the annotated application
+including its controls; it is not a raw camera image.
+
+The grayscale input is converted to the detector's three-channel input; this
+does not recover source color. A controlled grayscale fixture passed in cloud,
+but the actual room-image result on Frame remains pending. Keep live input and
+VR output separate until source freshness, camera identity and capture of our
+own output are understood; follow the [active plan](live-capture.md#current-work-order).
 
 ### Check existing luma shared memory
 
@@ -539,8 +578,9 @@ Read docs/live-capture.md#current-work-order for the next engineering task.
 The corrected mirror reader received 100 complete 1920x1080 RGB3 frames from
 /dev/video99 in ten seconds with changing samples and normal cleanup.
 An explicit 640x360 preview was saved at artifacts/mirror-check/scene-check.png.
-Next inspect that existing file; browser presentation has not been confirmed.
-actual passthrough content, camera identity and output feedback are unverified.
+The user recognized a black-and-white photo of the room via its absolute file URL.
+Next run the one-image detector procedure on that saved PNG with capture stopped.
+Physical camera identity, scene freshness and output feedback remain unverified.
 The isolated shared-memory reader and synthetic fixture are implemented and
 cloud-tested; ARM64/provider validation and capture-layer deployment are pending.
 Keep user observations, cloud checks and upstream capture claims distinct.

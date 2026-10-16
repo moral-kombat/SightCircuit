@@ -15,6 +15,7 @@ owns the current capture work plan.
 | Run the annotated replay window | [Window launch procedure](on-device.md#open-the-annotated-replay-window) |
 | Run and position the VR panel | [VR overlay guide](vr-overlay.md) |
 | Discover and test an existing SteamVR mirror | [Bounded mirror diagnostic](on-device.md#check-an-existing-steamvr-mirror) |
+| Recognize objects in a captured room still | [Saved-image detector check](on-device.md#run-recognition-on-the-saved-mirror-image) |
 | Inspect existing luma input or test the isolated reader | [Shared-memory procedure](on-device.md#check-existing-luma-shared-memory) and [controlled fixture](development.md#isolated-luma-reader-and-synthetic-producer) |
 | Set up cloud or desktop development | [Development setup](development.md) |
 | Continue live capture development | [Active capture plan](live-capture.md#current-work-order) |
