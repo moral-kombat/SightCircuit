@@ -5,7 +5,8 @@ can feed the existing detector and display. The implemented replay path selects
 one recorded track with PyAV, runs MobileNet-SSD on CPU and presents an annotated
 image in Qt and, optionally, a native OpenVR panel. A separate bounded mirror
 recognizer now reuses that CPU detector without starting a live display; its
-Frame trial is pending.
+first Frame trial processed about five reads per second with normal passthrough.
+Continuous display and feedback exclusion remain separate acceptance steps.
 
 [Status and evidence](status.md) owns capability and validation results.
 [Live capture](live-capture.md#current-work-order) owns current tasks; this page

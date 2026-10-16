@@ -12,8 +12,9 @@ layer has been deployed by Framejacker.
 | --- | --- | --- | --- |
 | 1 | Bounded diagnostic for an existing SteamVR mirror | Frame delivery and recognizable room content confirmed | Physical source identity, continuous scene freshness and output feedback remain unresolved; [evidence](status.md#e14-physical-room-visible-in-the-mirror-preview) |
 | 1a | Recognition on the saved mirror still | Frame execution confirmed; rug incorrectly labeled sofa | Keep execution success separate from classification quality; [evidence](status.md#e15-saved-room-recognition-and-rug-false-positive) |
-| 1b | Bounded recognition from mirror frames | Implemented and cloud-tested; Frame trial next | Ten-second capture/inference check, one pending input, measured rate/age/cleanup and working normal passthrough; [procedure](on-device.md#run-bounded-recognition-from-the-mirror) |
-| 1c | Detector quality and class coverage | Needs evaluation | Include the rug false positive; select supported target classes and evaluate correct labels, boxes and misses before claiming useful accuracy |
+| 1b | Bounded recognition from mirror frames | Frame execution confirmed: 4.993 processed fps and normal passthrough | 100 reads, 51 processed, clean shutdown; labels seen do not establish correct classification; [evidence](status.md#e17-bounded-mirror-recognition-on-frame) |
+| 1c | Check capture of our own display | Next device check; existing tools | Show the fixed timed test panel while capturing a still, confirm it is visible in the headset, then inspect whether it appears in input; [procedure](on-device.md#check-whether-the-vr-panel-appears-in-mirror-input) |
+| 1d | Detector quality and class coverage | Needs evaluation | Include the rug false positive; select supported target classes and evaluate correct labels, boxes and misses before claiming useful accuracy |
 | 2 | Isolated shared-memory reader and controlled producer | Implemented and cloud-tested; ARM64 and real-provider validation pending | Validate the pinned layout, consistent frame copies, stale/malformed/restarted input and shutdown; [cloud evidence](status.md#e9-shared-memory-reader-cloud-checks) |
 | 3 | Dedicated Arcturus capture provider | Planned; not deployed | Pin only the capture components, address lifecycle findings, build natively and prepare exact configuration restoration for a controlled trial |
 | 4 | Capture-only device trial | Planned | Ten seconds of fresh images from one identified source, correct orientation, clean exit and working normal passthrough |
@@ -45,15 +46,15 @@ The absolute local-file URL resolved the relative-path browser opening issue;
 see [the observation](status.md#e14-physical-room-visible-in-the-mirror-preview).
 The saved-image detector ran on Frame but mislabeled a rug as sofa; the demo
 has no rug class. Record this false positive separately from successful capture
-and annotation. Next run `mirror_recognize.py` as a bounded capture/inference
-check with no live display, targeting five processed frames per second and
-retaining one latest pending input. It uses the same detector as replay and
-can publish a final annotated still after source closure. See
-[cloud checks](status.md#e16-bounded-mirror-recognition-cloud-checks). This
-does not resolve model quality. Identify the physical source and
-orientation, verify scene freshness and confirm normal passthrough during and
-after a successful capture trial. Evaluate output
-feedback before feeding live results into a visible window or VR panel.
+and annotation. The bounded `mirror_recognize.py` trial then processed 51 reads
+at 4.993 fps, with normal passthrough and clean shutdown; see
+[the Frame result](status.md#e17-bounded-mirror-recognition-on-frame).
+It retained one pending input and replaced older reads. The final frame had no
+detections despite chair/tvmonitor labels earlier in the run; model quality is
+not established by execution success. Next evaluate whether the fixed timed
+VR test panel appears in captured input, without feeding the captured scene
+back into the panel. Identify the physical source and orientation and verify
+scene freshness separately before continuous live display.
 This does not activate a new mirror service or change capture source.
 Use the [device procedure](on-device.md#check-an-existing-steamvr-mirror) for
 metadata-only discovery before opt-in capture. The requirements below define
@@ -189,11 +190,15 @@ remain separate milestones.
 ## Connect the working application
 
 The standalone `mirror_recognize.py` now exercises guarded mirror input and the
-shared `DemoDetector` without a visible result window. Frame validation and
-continuous Qt/VR integration remain pending; the bounded tool is not a live
-display backend. First measure capture, inference and normal passthrough
-together, then evaluate whether our output reappears in the input. Keep the
-head-relative panel off during the initial recognition trial.
+shared `DemoDetector` without a visible result window. Its first bounded Frame
+trial passed execution/cleanup and the user reports normal passthrough.
+Continuous Qt/VR integration remains pending; the bounded tool is not a live
+display backend. Next evaluate whether a fixed test panel reappears in input.
+That test uses a constant pattern rather than live captured pixels, so it can
+reveal feedback inclusion without creating a recursive scene. If the panel is
+included, keep this route for bounded/no-display recognition and pursue a
+provider or supported mirror mode that excludes our output. A failed visibility
+check is inconclusive, and absence in one still is not general exclusion proof.
 
 After the capture-only trial passes, extract a common frame-source boundary
 from `ReplayWorker` while preserving the replay tests. Carry image format,

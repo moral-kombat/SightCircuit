@@ -18,7 +18,7 @@ unknown unless explicitly recorded below.
 | Public OpenVR tracked-camera probe | Device-confirmed failure | No frames and observed passthrough interruption; do not repeat the unchanged test; [E3](#e3-public-camera-probe) |
 | Continuous live input in the Qt/VR application | Planned; unimplemented | No continuous live display backend; standalone bounded recognition is separate; [active work plan](live-capture.md) |
 | Recognition on the saved room still | Frame execution confirmed; false positive | One image processed and annotated; user identifies the `sofa`-labeled item as a rug; [E15](#e15-saved-room-recognition-and-rug-false-positive) |
-| Bounded mirror recognition | Implemented; cloud-tested | Guarded capture plus shared CPU detector, latest pending input and optional preview after shutdown; Frame trial pending; [E16](#e16-bounded-mirror-recognition-cloud-checks) |
+| Bounded mirror recognition | Frame-confirmed execution | 100 captured / 51 processed reads, 4.993 processed fps, 42.044 ms mean inference and clean shutdown; user reports normal passthrough; label accuracy and live display remain separate; [E17](#e17-bounded-mirror-recognition-on-frame) |
 | Existing-mirror diagnostic | Frame capture and physical-room preview confirmed | 100 complete RGB3 frames in ten seconds; user recognizes the room in the 640 × 360 grayscale still; physical camera identity, timing and output feedback remain unverified; [E12](#e12-successful-mirror-frame-delivery), [E14](#e14-physical-room-visible-in-the-mirror-preview) |
 | Dedicated-camera shared-memory reader | Implemented; cloud-tested | Read-only native consumer, bounded supervisor and synthetic producer; actual provider and ARM64 validation pending; [E9](#e9-shared-memory-reader-cloud-checks) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
@@ -445,8 +445,58 @@ read sequence and observation time with the final detections; those are not
 producer sequence or exposure timestamps. It opens no live display and saves
 no images by default. Optional final annotations are published after successful
 capture/inference shutdown. The [Frame procedure](on-device.md#run-bounded-recognition-from-the-mirror)
-is the next device test; the rug false positive remains unresolved by this
+describes the device test. The [subsequent Frame result](#e17-bounded-mirror-recognition-on-frame)
+confirms execution; the rug false positive remains unresolved by this
 capture/inference implementation.
+
+### E17: Bounded mirror recognition on Frame
+
+Source: user-supplied `steamvr_mirror_recognition` schema-1 report received
+2026-10-16, followed by “Pass through, stay normal and accurate.” Exact test
+time, checkout revision and current SteamVR/SteamOS versions were not supplied.
+The recognizer ran with no live display or overlay and reported:
+
+| Field | Reported value |
+| --- | --- |
+| Result / exit / cleanup | `recognized` / `0` / `true` |
+| Source | Virtual SteamVR `/dev/video99`, major `81`, minor `58` |
+| Input | 1920 × 1080 RGB3, 5,760-byte row stride, 6,220,800-byte buffer |
+| Captured reads / read-loop duration | `100` / 10,000.239 ms |
+| Capture rate / maximum read gap | 10.0 Hz / 101.893 ms |
+| Would-block / interrupted / short reads | `0` / `0` / `0` |
+| Processed reads / processing duration | `51` / 10,214.019 ms |
+| Actual processing rate / configured target | 4.993 Hz / 5 Hz |
+| Mean / maximum inference time | 42.044 / 82.028 ms |
+| Replaced pending reads / skipped stale selections | `49` / `0` |
+| Maximum age at processing start | 101.427 ms since reader observation |
+| Final result / age after cleanup | Local read `100` / 301.606 ms since observation |
+| Labels seen across the run | `chair`, `tvmonitor` |
+| Final result labels / detections | Empty / empty |
+| Final annotated input dimensions | 960 × 540 |
+| Saved preview | 640 × 360 at `artifacts/mirror-check/live-detections.png` |
+| Worker elapsed / exit / forced termination | 10,427.535 ms / `0` / `false` |
+
+The capture, inference and owned-image annotation path completed together at
+the intended processing rate. Replacing 49 pending reads is expected when
+sampling a 10 Hz input at approximately 5 Hz; the application does not build
+an input queue. Processing includes completion after the capture loop, so the
+51 processed reads cover roughly 10.214 seconds. Read observations and inference
+timing do not establish exposure timing or end-to-end camera latency.
+
+The final result has no boxes above threshold even though earlier processed
+images contributed chair/tvmonitor to `labels_seen`. That aggregate is not a
+list of objects in the saved final frame. The report does not establish that
+those labels were correct; the rug false positive from E15 remains part of the
+quality evidence. The saved pixels have not been supplied to the cloud.
+
+The user confirms normal, accurate-looking passthrough during this trial. This
+is an observation, not measured tracking, thermal, compositor or long-duration
+performance data. Chrome again printed viewer-launch/zygote messages after the
+successful report; no camera/inference failure is indicated by those messages.
+Physical camera identity, continuous scene freshness and output-feedback
+exclusion remain unverified. Next use the existing fixed timed panel to check
+whether a visible VR overlay appears in mirror input before introducing a
+continuous result display.
 
 ## Maintaining the evidence
 

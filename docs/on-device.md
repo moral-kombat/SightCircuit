@@ -414,7 +414,9 @@ own output are understood; follow the [active plan](live-capture.md#current-work
 
 ### Run bounded recognition from the mirror
 
-This is the next Frame trial after capture and saved-image checks. It combines
+This Frame trial passed its first execution/cleanup check at 4.993 processed
+fps, and the user reports normal passthrough; see
+[the device result](status.md#e17-bounded-mirror-recognition-on-frame). It combines
 the existing guarded mirror reader and the same CPU demo detector, with no Qt
 window, OpenVR calls or live result display. Use the already configured
 `.venv-replay`; no new dependencies or native build are needed. Close the saved
@@ -471,10 +473,69 @@ results, `2` for invalid options, and `130`/`143` for cancellation.
 Paste the JSON and report whether normal passthrough/tracking remained working
 during and after capture. Inspect the PNG after the process ends and compare
 labels/boxes with objects; the known rug-as-sofa false positive is unresolved.
+The first trial saw chair/tvmonitor labels at some earlier points, but the last
+processed frame had no detections. `labels_seen` aggregates the entire run;
+the final PNG corresponds only to `last_result`, so it can correctly have no
+boxes even when the aggregate is nonempty.
 This initial check measures capture/inference interaction without introducing
 our result into its own input. A future live window/VR panel still requires a
 display-feedback check. [Cloud evidence](status.md#e16-bounded-mirror-recognition-cloud-checks)
-is distinct from that pending device validation.
+is distinct from the subsequent device execution result.
+
+### Check whether the VR panel appears in mirror input
+
+This is the next device check before live VR output. Use the existing native
+bridge from the confirmed replay-panel setup. If its binary is absent, build
+it first with `bash scripts/build_overlay_bridge.sh`; a build does not run the
+camera probe. This test uses the bridge's **fixed** TOP/grid pattern, not a
+live captured image, and performs no inference.
+
+Close saved-preview tabs and replay/result windows. Keep passthrough visible.
+The command below starts a 15-second head-relative test panel, gives it two
+seconds to start, captures five seconds from the verified mirror, waits for the
+panel to finish, then opens the saved grayscale still:
+
+```bash
+(
+  set -e
+  cd "$HOME/framejacker"
+  test -x artifacts/overlay-bridge/framejacker-overlay-bridge
+  mkdir -p artifacts/mirror-check
+  artifacts/overlay-bridge/framejacker-overlay-bridge --test-panel --seconds 15 &
+  framejacker_panel_pid=$!
+  sleep 2
+  python3 scripts/mirror_check.py --capture --device /dev/video99 --seconds 5 \
+    --preview artifacts/mirror-check/feedback-check.png
+  wait "$framejacker_panel_pid"
+  xdg-open "file://$HOME/framejacker/artifacts/mirror-check/feedback-check.png"
+)
+```
+
+During capture, confirm you actually see the small head-relative grid with
+white **TOP** text and four colored quadrants. Keep it in view. Its appearance
+is described in the [panel guide](vr-overlay.md#first-device-test-a-timed-panel).
+The native log's `test_panel_submitted` and `api_visible` are API observations;
+they do not replace visible confirmation. Retain the mirror JSON and final
+native cleanup report. Use a new output path for another test.
+
+After the panel closes, inspect `feedback-check.png` and report:
+
+- Whether the panel was visible in the headset during the mirror capture.
+- Whether the TOP/grid panel also appears in the saved room image.
+- Whether normal passthrough and tracking stayed working during and after.
+
+If the panel appears in input, this view includes our VR output and is unsuitable
+for feeding that output continuously back into itself. Continue bounded or
+non-visible recognition while preparing a dedicated input/provider or a supported
+mirror mode that excludes our output. Do not assume a crop or a hidden panel
+provides general exclusion.
+
+If it does not appear, the result supports exclusion only for that tested view,
+placement and runtime. Repeat deliberately at other poses/positions before a
+general claim; ordinary Qt windows need their own check. If no panel appeared in
+the headset or it was not visible during capture, this comparison is inconclusive.
+This procedure has not yet been run by the user. It does not install layers,
+switch camera sources or repeat the public tracked-camera probe.
 
 ### Check existing luma shared memory
 
@@ -650,8 +711,9 @@ The corrected mirror reader received 100 complete 1920x1080 RGB3 frames from
 An explicit 640x360 preview was saved at artifacts/mirror-check/scene-check.png.
 The user recognized a black-and-white photo of the room via its absolute file URL.
 The one-image detector ran, but a rug was mislabeled sofa; the demo has no rug class.
-Next use the bounded mirror-recognition procedure without live display.
-Its Frame capture/inference and passthrough-impact check remain pending.
+Bounded mirror recognition then processed 51/100 reads at 4.993 fps with normal
+passthrough and clean shutdown. Earlier labels were chair/tvmonitor; the final
+frame had no detections. Next run the fixed-panel mirror-feedback procedure.
 Physical camera identity, scene freshness and output feedback remain unverified.
 The isolated shared-memory reader and synthetic fixture are implemented and
 cloud-tested; ARM64/provider validation and capture-layer deployment are pending.

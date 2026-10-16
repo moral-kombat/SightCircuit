@@ -17,6 +17,7 @@ owns the current capture work plan.
 | Discover and test an existing SteamVR mirror | [Bounded mirror diagnostic](on-device.md#check-an-existing-steamvr-mirror) |
 | Recognize objects in a captured room still | [Saved-image detector check](on-device.md#run-recognition-on-the-saved-mirror-image) |
 | Test mirror capture and recognition together | [Bounded recognition without live display](on-device.md#run-bounded-recognition-from-the-mirror) |
+| Check whether VR output is included in mirror input | [Fixed-panel comparison](on-device.md#check-whether-the-vr-panel-appears-in-mirror-input) |
 | Test capture and recognition together without live display | [Bounded mirror recognition](on-device.md#run-bounded-recognition-from-the-mirror) |
 | Inspect existing luma input or test the isolated reader | [Shared-memory procedure](on-device.md#check-existing-luma-shared-memory) and [controlled fixture](development.md#isolated-luma-reader-and-synthetic-producer) |
 | Set up cloud or desktop development | [Development setup](development.md) |
