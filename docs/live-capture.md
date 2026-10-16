@@ -10,15 +10,15 @@ layer has been deployed by Framejacker.
 
 | Order | Deliverable | State | Acceptance |
 | --- | --- | --- | --- |
-| 1 | Bounded diagnostic for an existing SteamVR mirror | Frame delivery and recognizable room content confirmed | Physical source identity, continuous scene freshness and output feedback remain unresolved; [evidence](status.md#e14-physical-room-visible-in-the-mirror-preview) |
+| 1 | Bounded diagnostic for an existing SteamVR mirror | Complete for the tested view: room capture works; VR panel is included | Keep for bounded/no-display recognition and post-capture snapshots; physical source/timing unresolved; [evidence](status.md#e18-vr-panel-included-in-mirror-input) |
 | 1a | Recognition on the saved mirror still | Frame execution confirmed; rug incorrectly labeled sofa | Keep execution success separate from classification quality; [evidence](status.md#e15-saved-room-recognition-and-rug-false-positive) |
 | 1b | Bounded recognition from mirror frames | Frame execution confirmed: 4.993 processed fps and normal passthrough | 100 reads, 51 processed, clean shutdown; user confirms chair/TV present, localization and broader accuracy unverified; [evidence](status.md#e17-bounded-mirror-recognition-on-frame) |
-| 1c | Check capture of our own display | Next device check; existing tools | Show the fixed timed test panel while capturing a still, confirm it is visible in the headset, then inspect whether it appears in input; [procedure](on-device.md#check-whether-the-vr-panel-appears-in-mirror-input) |
+| 1c | Check capture of our own display | Confirmed: the VR panel appears in captured output | Current composited mirror does not exclude our output; no continuous live-image panel from this source; [E18](status.md#e18-vr-panel-included-in-mirror-input) |
 | 1d | Detector quality and class coverage | Needs evaluation | Include the rug false positive; select supported target classes and evaluate correct labels, boxes and misses before claiming useful accuracy |
 | 2 | Isolated shared-memory reader and controlled producer | Implemented and cloud-tested; ARM64 and real-provider validation pending | Validate the pinned layout, consistent frame copies, stale/malformed/restarted input and shutdown; [cloud evidence](status.md#e9-shared-memory-reader-cloud-checks) |
-| 3 | Dedicated Arcturus capture provider | Planned; not deployed | Pin only the capture components, address lifecycle findings, build natively and prepare exact configuration restoration for a controlled trial |
+| 3 | Dedicated camera provider | Next engineering path; not deployed | Confirm connected/selected camera, then prepare a supported interface or capture-only adaptation; Arcturus community route is not established for built-in cameras |
 | 4 | Capture-only device trial | Planned | Ten seconds of fresh images from one identified source, correct orientation, clean exit and working normal passthrough |
-| 5 | Continuous live input in the existing display | Planned | Reuse bounded mirror recognition only after device validation and an output-feedback check; dedicated-provider integration remains separate |
+| 5 | Continuous live input in the existing display | Planned; needs input independent of our output | Reuse detector/display after a dedicated provider or supported overlay-excluded mirror mode is validated; current mirror includes the panel |
 | 6 | Color, built-in camera support and later geometry | Planned | Validate each source and color conversion separately; require calibration and stronger timing evidence before stereo depth or spatial labels |
 
 The mirror is a time-boxed opportunity for a first 2D demonstration, not a
@@ -51,10 +51,16 @@ at 4.993 fps, with normal passthrough and clean shutdown; see
 [the Frame result](status.md#e17-bounded-mirror-recognition-on-frame).
 It retained one pending input and replaced older reads. The final frame had no
 detections despite chair/tvmonitor labels earlier in the run; model quality is
-not established by execution success. Next evaluate whether the fixed timed
-VR test panel appears in captured input, without feeding the captured scene
-back into the panel. Identify the physical source and orientation and verify
-scene freshness separately before continuous live display.
+not established by execution success. The fixed timed panel appeared both in
+the headset and in the saved mirror still; see
+[the inclusion result](status.md#e18-vr-panel-included-in-mirror-input). This
+closes the mirror feasibility branch for continuous VR image output in the
+tested mode. Keep bounded/no-display recognition and post-capture snapshots as
+the baseline. Next confirm the connected/selected physical camera and prepare
+input before overlay composition. Prefer a supported interface; the reviewed
+community Arcturus provider remains an experimental alternative, with no
+established built-in-camera support. Verify source identity, orientation and
+freshness before connecting it to the existing display.
 This does not activate a new mirror service or change capture source.
 Use the [device procedure](on-device.md#check-an-existing-steamvr-mirror) for
 metadata-only discovery before opt-in capture. The requirements below define
@@ -97,7 +103,7 @@ Built-in camera capture requires separate validation.
 | --- | --- |
 | Supported Arcturus/Valve interface | Prefer it if available; no public live-frame contract was found in the reviewed pages |
 | Public OpenVR tracked-camera API | Retain the [failed result](status.md#e3-public-camera-probe); do not repeat the unchanged probe |
-| Existing SteamVR composited mirror | Run only the bounded feasibility check above; verify camera content and output feedback |
+| Existing SteamVR composited mirror | Confirmed useful for bounded recognition; includes our VR panel, so not selected for continuous live-image output |
 | Community Vulkan layer and `ptgrab` | Prepare an isolated consumer, then adapt only capture components for a controlled Arcturus trial |
 | Built-in passthrough | Verify live buffers and source identity separately; the reviewed `ptgrab` size filter and empty-buffer reports do not establish support |
 
@@ -193,12 +199,12 @@ The standalone `mirror_recognize.py` now exercises guarded mirror input and the
 shared `DemoDetector` without a visible result window. Its first bounded Frame
 trial passed execution/cleanup and the user reports normal passthrough.
 Continuous Qt/VR integration remains pending; the bounded tool is not a live
-display backend. Next evaluate whether a fixed test panel reappears in input.
-That test uses a constant pattern rather than live captured pixels, so it can
-reveal feedback inclusion without creating a recursive scene. If the panel is
-included, keep this route for bounded/no-display recognition and pursue a
-provider or supported mirror mode that excludes our output. A failed visibility
-check is inconclusive, and absence in one still is not general exclusion proof.
+display backend. The fixed-panel test confirmed that our panel reappears in
+this input. Keep the current mirror for bounded/no-display recognition and
+post-capture snapshots. Prepare a dedicated provider or a supported mirror
+mode that excludes our output before streaming captured images into VR. No
+such alternate mirror mode has been validated. Ordinary Qt windows also need
+their own feedback check.
 
 After the capture-only trial passes, extract a common frame-source boundary
 from `ReplayWorker` while preserving the replay tests. Carry image format,

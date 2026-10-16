@@ -486,7 +486,12 @@ is distinct from the subsequent device execution result.
 
 ### Check whether the VR panel appears in mirror input
 
-This is the next device check before live VR output. Use the existing native
+This check confirmed that the panel appears both in the headset and in mirror
+input; see [the result](status.md#e18-vr-panel-included-in-mirror-input). It was
+a capture-only comparison, with intentional grayscale output and no inference,
+so no object boxes or labels were expected. Keep the procedure for a materially
+changed source/view/runtime; repeating it unchanged is not the next task.
+Use the existing native
 bridge from the confirmed replay-panel setup. If its binary is absent, build
 it first with `bash scripts/build_overlay_bridge.sh`; a build does not run the
 camera probe. This test uses the bridge's **fixed** TOP/grid pattern, not a
@@ -536,8 +541,11 @@ If it does not appear, the result supports exclusion only for that tested view,
 placement and runtime. Repeat deliberately at other poses/positions before a
 general claim; ordinary Qt windows need their own check. If no panel appeared in
 the headset or it was not visible during capture, this comparison is inconclusive.
-This procedure has not yet been run by the user. It does not install layers,
-switch camera sources or repeat the public tracked-camera probe.
+The user observed the included panel with both tools reporting clean shutdown.
+The next task is confirming the connected/selected camera and preparing input
+independent of our output. The mirror can still provide bounded recognition
+and snapshots displayed after capture closes. This procedure does not install
+layers, switch camera sources or repeat the public tracked-camera probe.
 
 ### Check existing luma shared memory
 
@@ -715,8 +723,10 @@ The user recognized a black-and-white photo of the room via its absolute file UR
 The one-image detector ran, but a rug was mislabeled sofa; the demo has no rug class.
 Bounded mirror recognition then processed 51/100 reads at 4.993 fps with normal
 passthrough and clean shutdown. Earlier labels were chair/tvmonitor; the final
-frame had no detections. Next run the fixed-panel mirror-feedback procedure.
-Physical camera identity, scene freshness and output feedback remain unverified.
+frame had no detections. The fixed-panel test then confirmed our panel appears
+in mirror input; its grayscale/no-label output was expected because no detector ran.
+Next confirm the connected/selected camera and prepare input before overlay
+composition. Physical camera identity and scene freshness remain unverified.
 The isolated shared-memory reader and synthetic fixture are implemented and
 cloud-tested; ARM64/provider validation and capture-layer deployment are pending.
 Keep user observations, cloud checks and upstream capture claims distinct.

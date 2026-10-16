@@ -55,8 +55,11 @@ read; newer captured input replaces pending input when processing falls behind.
 Each result retains its own image, local read count and observation time. RGB3
 and BGR3 are converted explicitly, including stride padding, before the shared
 `DemoDetector` runs. This is composited input, with no exposure timestamps or
-verified physical-camera identity. Continuous Qt/VR input integration and
-output-feedback exclusion remain separate acceptance steps.
+verified physical-camera identity. The fixed-panel device test confirmed that
+this mirror includes our VR output. Keep it for bounded/no-display recognition
+and post-capture snapshots; continuous VR image output should use input before
+overlay composition or a supported exclusion mode verified on the device.
+No such alternate mirror mode is implemented or validated.
 
 The [public-probe result](status.md#e3-public-camera-probe) prevents treating
 OpenVR interface availability as evidence of frame access on the tested runtime.

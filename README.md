@@ -13,7 +13,7 @@ Start with the [documentation index](docs/README.md) for task-based navigation.
 | Area | Current summary |
 | --- | --- |
 | Recorded-video decoding, replay and VR panel | Confirmed working by the user on Frame, including controls and head-relative placement |
-| Live input in the recognition application | Bounded mirror recognition confirmed on Frame at 4.993 processed fps with normal passthrough; continuous Qt/VR integration and display-feedback checks pending |
+| Live input in the recognition application | Bounded mirror recognition confirmed at 4.993 processed fps with normal passthrough; the mirror also captures our VR panel, so continuous VR image output needs an independent input |
 | Detection quality, color and performance | The saved room image ran on Frame, but a rug was mislabeled sofa; the 20-class demo has no rug class; systematic quality/performance evaluation pending |
 | Stereo depth, world-space labels and Gaussian splats | Future work; splat reconstruction is a separate recorded-data experiment |
 
@@ -80,9 +80,11 @@ implemented and has delivered 1920 × 1080 RGB3 frames on Frame at the diagnosti
 room. Recognition on that still completed but mislabeled a rug as sofa. The
 [bounded mirror recognizer](docs/on-device.md#run-bounded-recognition-from-the-mirror)
 then processed 51 reads at 4.993 fps, with clean shutdown and normal passthrough.
-Next [check whether the VR panel appears in mirror input](docs/on-device.md#check-whether-the-vr-panel-appears-in-mirror-input)
-before continuous Qt/VR integration. The model's class coverage and false
-positives need separate work.
+The [fixed-panel check](docs/on-device.md#check-whether-the-vr-panel-appears-in-mirror-input)
+confirmed that this mirror captures our VR output. Next confirm the active
+physical camera and prepare an input independent of our output before continuous
+VR image display. Bounded recognition and snapshots shown after capture remain
+useful. The model's class coverage and false positives need separate work.
 The [isolated shared-memory reader](docs/on-device.md#check-existing-luma-shared-memory)
 also passes controlled cloud tests; no dedicated capture provider has been
 deployed. Built-in camera capture needs separate validation. The

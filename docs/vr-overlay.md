@@ -6,11 +6,13 @@ confirmations and unmeasured detection, readability, color and performance limit
 The panel presents a selected recording; live input follows the separate
 [capture plan](live-capture.md).
 
-Bounded mirror recognition now runs on Frame with no live display. Before using
-that mirror as input for continuous VR output, run the
+Bounded mirror recognition now runs on Frame with no live display. The
 [fixed-panel comparison](on-device.md#check-whether-the-vr-panel-appears-in-mirror-input)
-to check whether our panel appears in captured input. Working replay presentation
-does not establish exclusion from a live camera/composited source.
+confirmed that the current mirror includes our VR panel. Recorded replay and
+snapshots displayed after capture closes remain useful; continuous VR image
+output needs input independent of that output, or a supported and validated
+exclusion mode. No such mirror mode has been validated. See
+[the inclusion evidence](status.md#e18-vr-panel-included-in-mirror-input).
 
 ## First device test: a timed panel
 
