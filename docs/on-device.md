@@ -322,16 +322,20 @@ not by itself validate continuous scene freshness or camera identity.
 The Frame preview trial has already saved a 640 × 360 grayscale image at
 `artifacts/mirror-check/scene-check.png`; see
 [the preview evidence](status.md#e13-mirror-preview-publication-on-frame).
-Reopen that existing file before running another capture:
+Reopen that existing file before running another capture. Use an explicit
+absolute local-file URL so a browser does not interpret `artifacts/...` as a
+web address:
 
 ```bash
-xdg-open artifacts/mirror-check/scene-check.png
+xdg-open "file://$HOME/framejacker/artifacts/mirror-check/scene-check.png"
 ```
 
 `xdg-open` uses the system's associated viewer. The reported Chrome launcher
 message “Opening in existing browser session” followed by a zygote broken-pipe
-error occurs after capture; check whether the image actually appeared. It does
-not change a successful `images_saved: true` capture report. If no image opens,
+error occurs after capture. The user confirmed Chrome opened but treated the
+relative path as an address and did not show the PNG; the absolute file URL
+above is the next viewer check. It does not change a successful
+`images_saved: true` capture report. If no image opens,
 resolve image presentation without reacquiring the camera. A new capture needs
 a new output path because existing files are deliberately preserved.
 

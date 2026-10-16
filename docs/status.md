@@ -351,14 +351,16 @@ Worker elapsed time was 10,123.424 ms, with exit `0`, no forced termination and
 640 × 360, at
 `/home/steamos/framejacker/artifacts/mirror-check/scene-check.png`.
 The pixels have not been supplied to this development environment. File
-publication is confirmed by the report; visible presentation and physical scene
-content have not yet been reported.
+publication is confirmed by the report; physical scene content remains unknown.
 
 After capture completed, Chrome's launcher printed “Opening in existing browser
 session” and a zygote `write: Broken pipe (32)` error. This message belongs to
 the separate viewer launch and does not invalidate the successful capture/file
-report. It also does not establish whether the browser displayed the image.
-Inspect the existing file before capturing again. Passthrough continuity for
+report. The user subsequently confirmed that a Chrome window opened without
+the image and interpreted `artifacts` as a possibly mistyped web address.
+The next viewer check uses an explicit absolute local-file URL; its outcome
+has not yet been supplied. Inspect the existing file before capturing again.
+Passthrough continuity for
 this trial, source identity, orientation and output feedback remain unverified.
 
 ## Maintaining the evidence

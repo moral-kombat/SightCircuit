@@ -39,7 +39,8 @@ shutdown. See [the device evidence](status.md#e12-successful-mirror-frame-delive
 This confirms a working composited input path at the diagnostic's capped rate;
 no image has been visually identified yet. A subsequent explicit preview trial
 saved `artifacts/mirror-check/scene-check.png` at 640 × 360 with clean shutdown;
-the browser launch printed an error, but visible presentation remains unknown.
+Chrome opened but treated the relative path as a web address instead of showing
+the PNG. The next viewer check uses an explicit absolute local-file URL.
 Inspect that existing still, identify the actual scene/source/orientation and confirm
 normal passthrough during and after the successful trial. Evaluate output
 feedback before feeding live results into a visible window or VR panel.
