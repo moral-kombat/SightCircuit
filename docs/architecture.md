@@ -5,8 +5,9 @@ objects detected in camera frames. The eventual target is a Steam Frame VR
 overlay using the Arcturus Vision Camera. A file-replay prototype now decodes one
 selected track with PyAV, runs the demo MobileNet-SSD detector and presents
 annotated images in a Qt window. Its offscreen cloud tests pass; the user has
-verified three-frame decoding on Frame. Visible window behavior and detection
-on Frame still need testing. Live capture and the VR stack remain proposed.
+verified three-frame decoding and reports that the replay window works on
+Frame. Detailed detection accuracy and performance remain unmeasured. Live
+capture and the VR stack remain proposed.
 
 See [Steam Frame camera integration](steam-frame-camera.md) for pinned sources,
 known interface limits, calibration requirements, and the device checks still
@@ -102,6 +103,10 @@ detector. Splat training, headset rendering, and semantic splat integration have
 not been validated here.
 
 ## Milestones and acceptance checks
+
+The user has confirmed the replay window works on Frame. The next display
+milestone can use the same recording in a VR panel while live capture remains
+unresolved; a live camera backend is not required to prototype that panel.
 
 1. **Replay and window:** process a known recording, verify detection coordinates
    and frame association, open the window on a real display, and check clean

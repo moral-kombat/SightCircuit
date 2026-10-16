@@ -60,15 +60,16 @@ Do not repeat the unchanged probe on this tested runtime. The binary now does
 no OpenVR work by default and requires `--allow-passthrough-interruption` for a
 deliberate future test after a material change. See the
 [device guide](on-device.md#then-verify-camera-access) for the guard and advanced
-procedure. The next development step is recording replay for the detector and
-window validation on Frame, while a supported live-capture interface remains unresolved.
+procedure. The user has confirmed the file-replay window works on Frame;
+a supported live-capture interface remains unresolved.
 
 The user's separate file-decode check now succeeds on Frame: PyAV 16.1.0 decoded
 three 2464 × 2464 HEVC frames from video-stream ordinal 0 and converted
 `yuvj420p` to RGB. The recording has two `hvc1` video tracks, `gpmd` metadata,
 audio and fragmented MP4 structure. This establishes selected-file decoding,
 not stereo camera identity, calibration or live capture. An annotated Qt replay
-window is implemented and tested offscreen in the cloud; see the
+window is tested offscreen in the cloud and confirmed working on Frame by the
+user; see the
 [window launch guide](on-device.md#open-the-annotated-replay-window).
 
 ## Valve's documented application interface
@@ -204,9 +205,9 @@ or headset splat rendering.
 
 ## Implementation sequence and remaining checks
 
-1. Validate the implemented Qt replay window on Frame using the recording whose
-   three-frame decode succeeded. Check visibility, object labels, orientation,
-   color, pause/replay/loop controls and clean shutdown. Preserve original video
+1. Retain the confirmed working Qt replay window as the device baseline.
+   Measure object labels, orientation, color, pause/replay/loop controls and
+   clean shutdown systematically. Preserve original video
    tracks and metadata; track ordinal does not establish stereo-side identity.
    The generated cloud fixtures cover detector/presentation integration, not
    vendor color, calibration or stereo alignment.
@@ -224,7 +225,7 @@ or headset splat rendering.
    timestamp and timebase provenance, optional producer sequence, calibration
    reference and pose validity. Use a bounded latest-frame queue and measure
    dropped frames, latency and contention with XRService/compositor work.
-5. Start with a 2D annotated window or VR panel. Use Valve's
+5. Prototype a VR panel with the working recorded input. Use Valve's
    [overlay sample][openvr-overlay] as a public API reference, then validate it
    on Frame. Add world-space labels only after calibration and depth checks.
 

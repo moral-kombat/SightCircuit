@@ -2,11 +2,11 @@
 
 The Arcturus Camera app has been confirmed by the user to show live passthrough
 and record video on the headset. Our public OpenVR probe returns no frames and
-blacks out passthrough while it runs. File decoding now works on Frame; the next
-device step is to launch the annotated replay window. The repository is published at
+blacks out passthrough while it runs. File decoding and the annotated replay
+window now work on Frame, as confirmed by the user. The repository is published at
 [moral-kombat/framejacker](https://github.com/moral-kombat/framejacker).
-An annotated file-replay window is implemented and tested offscreen in the
-cloud. The live capture backend and VR overlay are still unimplemented.
+The file-replay window also passes offscreen cloud tests. The live capture
+backend and VR overlay are still unimplemented.
 
 ## Confirm where commands run
 
@@ -174,8 +174,9 @@ from video-stream ordinal 0, container stream index 0, track ID 1. All were
 2464 × 2464, converted from full-range `yuvj420p` to `rgb24` with a 7,392-byte
 stride. Reported media timestamps were 0, 0.016787 and 0.033532 seconds. This
 confirms that selected-track file decoding and RGB conversion work on Frame.
-Detector/window behavior on Frame still needs validation. Avoid assuming the
-desktop development environment is installed there.
+The user then ran window setup and confirmed that the annotated replay window
+works on Frame. Detailed accuracy, color and performance measurements remain
+open. Avoid assuming the separate desktop development environment is installed.
 
 For the next session, one command runs the read-only inventory and selects the
 newest completed stereo recording automatically:
@@ -269,10 +270,11 @@ threshold is a valid result for a scene outside the demo model's classes.
 The prototype does not open camera nodes, call OpenVR, change SteamVR or save
 images by default. It is an ordinary Qt window, not a VR overlay. Offscreen
 cloud tests verify decoding, object labels, stream selection and a nonblank
-rendered window. Its visibility, controls, orientation, color appearance and
-performance still need observation on Frame. If the process runs but no window
-is visible in the headset, that display-session result needs investigation;
-do not treat the cloud screenshot as proof of headset presentation.
+rendered window. The user confirms the window works on Frame. Individual
+control behavior, orientation, color appearance, detection accuracy and
+performance have not been systematically measured. The next display milestone
+is a VR panel using this same replay input, while live capture is investigated
+separately.
 
 ### Advanced probe, only for a deliberate future retest
 
@@ -370,8 +372,9 @@ The official Arcturus Camera app's live view and recording work. Our public
 OpenVR probe gets no frames and blacks out passthrough while running. Do not
 repeat it on the unchanged runtime; it now requires an explicit interruption
 flag. File decoding of three HEVC frames works on Frame. The annotated Qt replay
-window is implemented and tested offscreen in the cloud. Run setup_window.sh
-and replay_window.py to check actual Frame visibility and detection next.
+window works on Frame according to the user and is tested offscreen in the
+cloud. Next display milestone: reuse recorded input in a VR panel. Live capture
+is unresolved; accuracy, color and performance still need measurements.
 Treat device presence as inventory and keep vendor capture separate from public API results.
 ```
 

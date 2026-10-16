@@ -20,7 +20,7 @@ capture and the VR overlay remain unimplemented.
 | Frame replay handoff check | Read-only inventory plus newest-recording metadata command |
 | Native public OpenVR camera probe | No frames on the tested headset; interrupts passthrough; explicit opt-in required |
 | Live camera access from Framejacker | Unimplemented; a usable capture interface is still needed |
-| Annotated file-replay window | Implemented with pause/replay/loop controls; offscreen integration tests pass; visible Frame test pending |
+| Annotated file-replay window | Confirmed working by the user on Frame; pause/replay/loop controls implemented; offscreen integration tests pass |
 | VR overlay | Planned |
 | Stereo depth and labels anchored in the room | Planned; requires calibration, depth and pose alignment |
 | Gaussian splat reconstruction | Optional future experiment using recorded data and a GPU computer |
@@ -111,8 +111,8 @@ The window loops the clip, draws labels for common objects and offers
 pause/resume, replay and loop controls. The demo MobileNet-SSD model recognizes
 20 object classes. Frames are scaled to a maximum of 960 pixels per side, and
 processed replay is capped at 10 fps by default. It may play more slowly than
-the original recording. The native Qt window needs a working graphical session;
-it has not yet been visually verified on Frame. See the
+the original recording. The user confirms the replay window works on Frame.
+Detection accuracy, color and performance have not been benchmarked. See the
 [window launch guide](docs/on-device.md#open-the-annotated-replay-window).
 
 Gaussian splats could provide a persistent visual map of a mostly static room.
