@@ -10,7 +10,7 @@ layer has been deployed by Framejacker.
 
 | Order | Deliverable | State | Acceptance |
 | --- | --- | --- | --- |
-| 1 | Bounded diagnostic for an existing SteamVR mirror | Frame delivery confirmed: 100 complete frames in ten seconds; visual content check next | Identify actual passthrough content, source/orientation and potential output feedback before app integration; [procedure](on-device.md#check-an-existing-steamvr-mirror), [evidence](status.md#e12-successful-mirror-frame-delivery) |
+| 1 | Bounded diagnostic for an existing SteamVR mirror | Frame delivery and 640 × 360 preview publication confirmed; inspect the saved image next | Identify actual passthrough content, source/orientation and potential output feedback before app integration; [procedure](on-device.md#check-an-existing-steamvr-mirror), [evidence](status.md#e13-mirror-preview-publication-on-frame) |
 | 2 | Isolated shared-memory reader and controlled producer | Implemented and cloud-tested; ARM64 and real-provider validation pending | Validate the pinned layout, consistent frame copies, stale/malformed/restarted input and shutdown; [cloud evidence](status.md#e9-shared-memory-reader-cloud-checks) |
 | 3 | Dedicated Arcturus capture provider | Planned; not deployed | Pin only the capture components, address lifecycle findings, build natively and prepare exact configuration restoration for a controlled trial |
 | 4 | Capture-only device trial | Planned | Ten seconds of fresh images from one identified source, correct orientation, clean exit and working normal passthrough |
@@ -37,8 +37,10 @@ received 100 complete 1920 × 1080 RGB3 frames from `/dev/video99` in ten second
 with 99 changed grayscale samples, zero would-block/short reads and clean
 shutdown. See [the device evidence](status.md#e12-successful-mirror-frame-delivery).
 This confirms a working composited input path at the diagnostic's capped rate;
-no image has been visually identified yet. Next request a still, inspect it
-after capture stops, identify the actual scene/source/orientation and confirm
+no image has been visually identified yet. A subsequent explicit preview trial
+saved `artifacts/mirror-check/scene-check.png` at 640 × 360 with clean shutdown;
+the browser launch printed an error, but visible presentation remains unknown.
+Inspect that existing still, identify the actual scene/source/orientation and confirm
 normal passthrough during and after the successful trial. Evaluate output
 feedback before feeding live results into a visible window or VR panel.
 This does not activate a new mirror service or change capture source.

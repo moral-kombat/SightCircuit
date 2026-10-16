@@ -17,7 +17,7 @@ unknown unless explicitly recorded below.
 | Native head-relative VR replay panel | Device-confirmed | Timed test panel, replay, controls and following head movement reported working; detailed performance unmeasured; [E6](#e6-window-and-vr-panel) |
 | Public OpenVR tracked-camera probe | Device-confirmed failure | No frames and observed passthrough interruption; do not repeat the unchanged test; [E3](#e3-public-camera-probe) |
 | Live input in the detector/VR application | Planned; unimplemented | No integrated live capture backend; [active work plan](live-capture.md) |
-| Existing-mirror diagnostic | Frame capture confirmed | Corrected reader received 100 complete 1920 × 1080 RGB3 frames in ten seconds with clean shutdown; scene/source identity and output feedback remain unverified; [E12](#e12-successful-mirror-frame-delivery) |
+| Existing-mirror diagnostic | Frame capture and preview publication confirmed | 100 complete 1920 × 1080 RGB3 frames in ten seconds; explicit 640 × 360 grayscale PNG saved with clean shutdown; scene/source identity and output feedback remain unverified; [E12](#e12-successful-mirror-frame-delivery), [E13](#e13-mirror-preview-publication-on-frame) |
 | Dedicated-camera shared-memory reader | Implemented; cloud-tested | Read-only native consumer, bounded supervisor and synthetic producer; actual provider and ARM64 validation pending; [E9](#e9-shared-memory-reader-cloud-checks) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
 | Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; no source-identified built-in-camera frames have been received |
@@ -330,7 +330,36 @@ display remain unverified. Passthrough continuity was confirmed for the
 explicitly reported for this successful read trial. Next inspect an explicitly
 requested grayscale preview after acquisition closes, with our replay window
 and VR panel closed. Keep detector/VR integration separate until input content
-and output feedback are understood.
+and output feedback are understood. The [next preview trial](#e13-mirror-preview-publication-on-frame)
+confirms file publication without yet identifying image content.
+
+### E13: Mirror preview publication on Frame
+
+Source: user-supplied terminal output received 2026-10-16. Exact test time,
+checkout revision and SteamVR version were not supplied. The user ran the
+corrected mirror reader with explicit `--preview`, followed by `xdg-open` only
+after the capture command succeeded.
+
+The report again records `captured`, exit `0`, 100 complete RGB3 frames in ten
+seconds, 99 changed samples, 100 read attempts and zero would-block, interrupted
+or short reads. The source/format matches E12. Read-loop elapsed time was
+10,000.163 ms, first frame 2.83 ms and maximum observed read gap 102.242 ms.
+Worker elapsed time was 10,123.424 ms, with exit `0`, no forced termination and
+`cleanup_ok: true`.
+
+`preview_ready` and `images_saved` are both true. The explicit output is gray8,
+640 × 360, at
+`/home/steamos/framejacker/artifacts/mirror-check/scene-check.png`.
+The pixels have not been supplied to this development environment. File
+publication is confirmed by the report; visible presentation and physical scene
+content have not yet been reported.
+
+After capture completed, Chrome's launcher printed “Opening in existing browser
+session” and a zygote `write: Broken pipe (32)` error. This message belongs to
+the separate viewer launch and does not invalidate the successful capture/file
+report. It also does not establish whether the browser displayed the image.
+Inspect the existing file before capturing again. Passthrough continuity for
+this trial, source identity, orientation and output feedback remain unverified.
 
 ## Maintaining the evidence
 

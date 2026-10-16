@@ -319,6 +319,22 @@ pixels, and describe orientation/cropping. Confirm passthrough works during and
 after this trial. A single still can establish recognizable content but does
 not by itself validate continuous scene freshness or camera identity.
 
+The Frame preview trial has already saved a 640 × 360 grayscale image at
+`artifacts/mirror-check/scene-check.png`; see
+[the preview evidence](status.md#e13-mirror-preview-publication-on-frame).
+Reopen that existing file before running another capture:
+
+```bash
+xdg-open artifacts/mirror-check/scene-check.png
+```
+
+`xdg-open` uses the system's associated viewer. The reported Chrome launcher
+message “Opening in existing browser session” followed by a zygote broken-pipe
+error occurs after capture; check whether the image actually appeared. It does
+not change a successful `images_saved: true` capture report. If no image opens,
+resolve image presentation without reacquiring the camera. A new capture needs
+a new output path because existing files are deliberately preserved.
+
 The report includes driver/capabilities, current format, `frames_read`, observed
 read rate, maximum read gap, changed/unchanged grayscale samples, short reads
 and worker cleanup. The sampled grid is at most 32 × 32. Identical samples can
@@ -518,7 +534,8 @@ future retest after a material change.
 Read docs/live-capture.md#current-work-order for the next engineering task.
 The corrected mirror reader received 100 complete 1920x1080 RGB3 frames from
 /dev/video99 in ten seconds with changing samples and normal cleanup.
-Next inspect an explicit preview with our replay window and VR panel closed;
+An explicit 640x360 preview was saved at artifacts/mirror-check/scene-check.png.
+Next inspect that existing file; browser presentation has not been confirmed.
 actual passthrough content, camera identity and output feedback are unverified.
 The isolated shared-memory reader and synthetic fixture are implemented and
 cloud-tested; ARM64/provider validation and capture-layer deployment are pending.
