@@ -6,7 +6,8 @@ blacks out passthrough while it runs. File decoding and the annotated replay
 window now work on Frame, as confirmed by the user. The repository is published at
 [moral-kombat/framejacker](https://github.com/moral-kombat/framejacker).
 The file-replay window also passes offscreen cloud tests. The live capture
-backend and VR overlay are still unimplemented.
+backend is unimplemented. A native VR panel prototype and replay integration
+are implemented; the next device task is the [timed overlay test](vr-overlay.md).
 
 ## Confirm where commands run
 
@@ -273,8 +274,10 @@ cloud tests verify decoding, object labels, stream selection and a nonblank
 rendered window. The user confirms the window works on Frame. Individual
 control behavior, orientation, color appearance, detection accuracy and
 performance have not been systematically measured. The next display milestone
-is a VR panel using this same replay input, while live capture is investigated
-separately.
+is the [timed VR panel test](vr-overlay.md#first-device-test-a-timed-panel), then
+replay with `--overlay`. That optional mode initializes OpenVR in a separate
+process; the default Qt-only mode still does not. Live capture is investigated
+separately. The panel test has not yet run on Frame.
 
 ### Advanced probe, only for a deliberate future retest
 
@@ -358,8 +361,10 @@ The device inventory requires no such installation. Leave compositor-layer
 deployment and camera-source changes out of this initial check.
 
 Continue with the [replay/window milestone](architecture.md#milestones-and-acceptance-checks)
-using an Arcturus recording, then add a verified live adapter and validate a VR
-panel. The existing cloud smoke fixture does not test vendor-recording decoding.
+using an Arcturus recording. The window is confirmed working; next run the
+timed VR panel test using the [overlay guide](vr-overlay.md), then mirror the
+same replay into VR. A verified live adapter remains separate. The existing
+cloud smoke fixture does not test vendor-recording decoding.
 Offline splat reconstruction can proceed separately on a suitable GPU computer.
 
 ## Context for a new development session
@@ -373,8 +378,10 @@ OpenVR probe gets no frames and blacks out passthrough while running. Do not
 repeat it on the unchanged runtime; it now requires an explicit interruption
 flag. File decoding of three HEVC frames works on Frame. The annotated Qt replay
 window works on Frame according to the user and is tested offscreen in the
-cloud. Next display milestone: reuse recorded input in a VR panel. Live capture
-is unresolved; accuracy, color and performance still need measurements.
+cloud. A native VR overlay bridge and optional replay_window.py --overlay mode
+are implemented, but headset rendering is unverified. Read docs/vr-overlay.md
+and run the ten-second native panel test before enabling replay in VR. Live
+capture is unresolved; accuracy, color and performance still need measurements.
 Treat device presence as inventory and keep vendor capture separate from public API results.
 ```
 

@@ -150,6 +150,42 @@ class ReplayWindowTests(unittest.TestCase):
         self.assertEqual(report["status"], "error")
         self.assertEqual(hashlib.sha256(self.clip.read_bytes()).hexdigest(), before)
 
+    @unittest.skipUnless((ROOT / "artifacts/overlay-bridge/framejacker-overlay-bridge").is_file(), "Build overlay bridge first")
+    def test_overlay_controls_and_real_transport_in_validation_mode(self):
+        # Inject only the bridge's explicit non-VR mode. The report must retain
+        # validation_only=true and runtime_initialized=false; this is not a
+        # headset rendering test.
+        code = (
+            "import sys\nfrom scripts import overlay_client, replay_window\n"
+            "class ValidationClient(overlay_client.OverlayClient):\n"
+            "    def __init__(self): super().__init__(validation_only=True)\n"
+            "overlay_client.OverlayClient = ValidationClient\n"
+            "sys.exit(replay_window.main(sys.argv[1:]))\n")
+        result = subprocess.run([sys.executable, "-c", code, str(self.clip), "--overlay",
+                                 "--max-frames", "4", "--max-fps", "10"], cwd=ROOT,
+                                env=dict(os.environ, QT_QPA_PLATFORM="offscreen"),
+                                capture_output=True, text=True, timeout=30)
+        report = json.loads(result.stdout)
+        self.assertEqual(result.returncode, 0, (report, result.stderr))
+        self.assertTrue(report["overlay"]["validation_only"])
+        native = report["overlay"]["native_report"]
+        self.assertGreater(native["frames_received"], 0)
+        self.assertEqual(native["frames_submitted"], 0)
+        self.assertFalse(native["runtime_initialized"])
+        self.assertTrue(native["cleanup_ok"])
+
+    def test_overlay_rgba_conversion_and_size_limit(self):
+        import numpy as np
+        from scripts.overlay_client import rgba_from_bgr
+
+        image = np.array([[[0, 0, 255], [255, 0, 0]]], dtype=np.uint8)
+        width, height, pixels = rgba_from_bgr(image)
+        self.assertEqual((width, height), (2, 1))
+        self.assertEqual(pixels, bytes([255, 0, 0, 255, 0, 0, 255, 255]))
+        width, height, pixels = rgba_from_bgr(np.zeros((600, 1200, 3), dtype=np.uint8))
+        self.assertEqual((width, height), (512, 256))
+        self.assertEqual(len(pixels), width * height * 4)
+
 
 if __name__ == "__main__":
     unittest.main()

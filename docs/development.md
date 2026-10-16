@@ -167,3 +167,17 @@ of these commands is separate from a successful GitHub Actions run after push.
 
 The replay-window job installs the window requirements and exercises decoding,
 inference, Qt offscreen presentation and file-protection behavior end to end.
+
+## Native VR panel build and validation
+
+`bash scripts/build_overlay_bridge.sh` builds the native tool into ignored
+`artifacts/overlay-bridge/`, using the pinned SDK in `.cache/openvr`. The camera
+and overlay builders share `scripts/build_openvr_tool.sh`; neither builder runs
+a runtime test. The camera binary's explicit opt-in guard remains in place.
+
+The overlay job checks strict C++ syntax, packet bounds, malformed input, idle
+payload timeouts, signals and named missing-runtime diagnostics. The replay
+window job also builds the bridge so its validation-only mode can check actual
+RGBA forwarding and Qt control creation. This mode reports no OpenVR
+initialization and zero submitted frames. For the real hardware procedure,
+read [VR replay panel](vr-overlay.md).

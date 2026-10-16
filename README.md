@@ -6,7 +6,8 @@ results in a window, with a VR overlay as the eventual target.
 
 This repository contains an annotated file-replay prototype, camera-interface
 research, an architecture and reproducible development checks. Live camera
-capture and the VR overlay remain unimplemented.
+capture remains unimplemented. A public OpenVR panel prototype is ready for
+its first on-headset test.
 
 ## Project status
 
@@ -21,7 +22,7 @@ capture and the VR overlay remain unimplemented.
 | Native public OpenVR camera probe | No frames on the tested headset; interrupts passthrough; explicit opt-in required |
 | Live camera access from Framejacker | Unimplemented; a usable capture interface is still needed |
 | Annotated file-replay window | Confirmed working by the user on Frame; pause/replay/loop controls implemented; offscreen integration tests pass |
-| VR overlay | Planned |
+| VR overlay | Native test panel and annotated replay integration implemented; headset validation pending |
 | Stereo depth and labels anchored in the room | Planned; requires calibration, depth and pose alignment |
 | Gaussian splat reconstruction | Optional future experiment using recorded data and a GPU computer |
 
@@ -115,12 +116,19 @@ the original recording. The user confirms the replay window works on Frame.
 Detection accuracy, color and performance have not been benchmarked. See the
 [window launch guide](docs/on-device.md#open-the-annotated-replay-window).
 
+The next device milestone is the [timed VR panel test](docs/vr-overlay.md).
+After that passes, `scripts/replay_window.py --overlay` also presents the
+annotated recording in a head-relative panel, with placement, size, opacity and
+visibility controls in the Qt window. It uses public overlay APIs and does not
+run the camera probe. Actual headset rendering remains unverified.
+
 Gaussian splats could provide a persistent visual map of a mostly static room.
 Reconstruction remains a separate recorded-data workflow; object recognition
 still comes from the live detector.
 
 - [Architecture and implementation milestones](docs/architecture.md)
 - [Steam Frame and Arcturus camera interfaces and sources](docs/steam-frame-camera.md)
+- [VR replay panel test and controls](docs/vr-overlay.md)
 - [Development commands and validation limits](docs/development.md)
 - [Contributing](CONTRIBUTING.md)
 

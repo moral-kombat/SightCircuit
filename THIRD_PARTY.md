@@ -41,13 +41,17 @@ with NumPy, OpenCV headless, PySide6 Essentials and Shiboken. The annotated
 replay prototype reuses the checksum-verified MobileNet-SSD files listed above
 as a demo detector; their upstream notices continue to apply.
 
-## Native OpenVR probe
+## Native OpenVR tools
 
-The native camera probe fetches Valve's OpenVR SDK at commit
+The native camera probe and overlay bridge fetch Valve's OpenVR SDK at commit
 `0924064316de3effbcd1acf1e309182a2deb1c05` into ignored `.cache/openvr` and builds
 its portable loader from source. The SDK's [BSD 3-Clause license](https://github.com/ValveSoftware/openvr/blob/0924064316de3effbcd1acf1e309182a2deb1c05/LICENSE)
 and included notices apply to that loader. SDK sources and the compiled probe
-binary remain outside the committed files.
+binaries remain outside the committed files.
+
+The overlay bridge also uses the SDK's bundled JsonCpp implementation; its
+public-domain/MIT notices remain in the cached `src/jsoncpp.cpp` source. No SDK
+or JsonCpp sources are copied into the project tree outside that ignored cache.
 
 ## Research references
 

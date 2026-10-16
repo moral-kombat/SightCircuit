@@ -6,8 +6,9 @@ overlay using the Arcturus Vision Camera. A file-replay prototype now decodes on
 selected track with PyAV, runs the demo MobileNet-SSD detector and presents
 annotated images in a Qt window. Its offscreen cloud tests pass; the user has
 verified three-frame decoding and reports that the replay window works on
-Frame. Detailed detection accuracy and performance remain unmeasured. Live
-capture and the VR stack remain proposed.
+Frame. Detailed detection accuracy and performance remain unmeasured. A native
+public OpenVR overlay bridge and optional replay-panel controls are implemented
+but not yet tested on a headset. Live capture remains proposed.
 
 See [Steam Frame camera integration](steam-frame-camera.md) for pinned sources,
 known interface limits, calibration requirements, and the device checks still
@@ -74,6 +75,15 @@ belongs to the image it was inferred from; queued results do not accumulate.
 The worker checks pause/replay/stop events and closes the file between loops.
 Playback processes each frame at up to 10 fps by default, rather than promising
 the recording's original timing. The UI offers pause/resume, replay and looping.
+
+Optional `--overlay` sends the same completed annotated image to a separate
+native process owning a public OpenVR overlay. A sender thread retains one
+pending RGBA image and sends settings independently of replay frames, keeping
+the GUI responsive while paused or while native writes are blocked. The panel
+follows the HMD; no calibrated world-space transform is implied. See the
+[overlay guide](vr-overlay.md) for transport, cleanup and the required first
+device test. Cloud validation exercises the same parser without OpenVR and
+does not establish headset rendering.
 
 A regular window or a VR panel can display the camera image with 2D detections.
 This is the initial proof of concept. Overlay creation and rendering still need

@@ -51,8 +51,24 @@ jobs:
           python-version: '3.12'
       - name: Set up annotated file replay
         run: bash scripts/setup_window.sh
+      - name: Build native overlay transport for validation tests
+        run: bash scripts/build_overlay_bridge.sh
       - name: Verify decoding, detection and offscreen window presentation
         run: .venv-replay/bin/python -m unittest discover -s tests -v
+
+  overlay-bridge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the native overlay bridge
+        run: bash scripts/build_overlay_bridge.sh
+      - name: Check native source and shell syntax
+        run: |
+          bash -n scripts/build_openvr_tool.sh scripts/build_overlay_bridge.sh
+          g++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -I.cache/openvr/headers -I.cache/openvr/src -fsyntax-only tools/overlay_bridge.cpp
+      - name: Verify protocol and runtime failure handling without a headset
+        run: python3 -m unittest discover -s tests -p test_overlay_bridge.py -v
 
   camera-probe:
     runs-on: ubuntu-24.04

@@ -1,4 +1,4 @@
-"""Show annotated file replay in a Qt window; no live camera or OpenVR access."""
+"""Show annotated file replay in Qt, optionally mirrored into a public OpenVR panel."""
 import argparse
 import hashlib
 import json
@@ -6,6 +6,7 @@ import math
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -183,6 +184,7 @@ def main(argv=None):
     parser.add_argument("--max-frames", type=int, default=0, help="Exit after this many processed frames; default unlimited")
     parser.add_argument("--preview", type=Path, help="Explicitly save the last displayed window as PNG")
     parser.add_argument("--report", type=Path, help="Explicitly save the final JSON summary")
+    parser.add_argument("--overlay", action="store_true", help="Also show a head-relative OpenVR panel; test the native panel first")
     args = parser.parse_args(argv)
     if args.video_stream < 0 or args.max_frames < 0:
         parser.error("Stream ordinal and frame limit must be nonnegative")
@@ -193,8 +195,10 @@ def main(argv=None):
     report = {"report_kind": "annotated_file_replay", "status": "error",
               "video_stream_ordinal": args.video_stream, "frames_presented": 0,
               "labels_seen": [], "images_saved": False,
+              "overlay_requested": args.overlay,
               "scope": "File replay; live camera, HDR appearance, stereo alignment and VR overlay unvalidated"}
     worker = None
+    overlay = None
     try:
         path = (Path(args.path).expanduser() if args.path else latest_recording(
             Path.home() / "Videos/ArcturusVisionCamera")).resolve()
@@ -216,6 +220,13 @@ def main(argv=None):
         except ImportError as error:
             raise RuntimeError(f"Window dependencies unavailable: {error}. Run bash scripts/setup_window.sh") from error
         check_display_libraries(QtCore)
+        if args.overlay:
+            if __package__:
+                from .overlay_client import OverlayClient, PanelSettings
+            else:
+                from overlay_client import OverlayClient, PanelSettings
+            overlay = OverlayClient()
+            overlay.start()
 
         class Canvas(QtWidgets.QWidget):
             def __init__(self):
@@ -252,6 +263,37 @@ def main(argv=None):
         for control in (pause, replay, loop):
             controls.addWidget(control)
         layout.addLayout(controls)
+        if overlay:
+            panel = QtWidgets.QGroupBox("VR panel — follows your head")
+            grid = QtWidgets.QGridLayout(panel)
+            visible = QtWidgets.QCheckBox("Show VR panel")
+            visible.setChecked(True)
+            grid.addWidget(visible, 0, 0, 1, 2)
+            fields = {}
+            for index, (name, label, low, high, value) in enumerate((
+                    ("width", "Width (m)", .25, 1.5, .8),
+                    ("distance", "Distance (m)", .5, 3, 1.5),
+                    ("x", "Horizontal (m)", -1, 1, 0),
+                    ("y", "Vertical (m)", -1, 1, -.2),
+                    ("opacity", "Opacity", .2, 1, .95))):
+                spin = QtWidgets.QDoubleSpinBox()
+                spin.setRange(low, high)
+                spin.setSingleStep(.05)
+                spin.setValue(value)
+                row, column = 1 + index // 3, (index % 3) * 2
+                grid.addWidget(QtWidgets.QLabel(label), row, column)
+                grid.addWidget(spin, row, column + 1)
+                fields[name] = spin
+
+            def configure_panel():
+                overlay.set_settings(PanelSettings(
+                    **{name: field.value() for name, field in fields.items()},
+                    visible=visible.isChecked()))
+
+            for field in fields.values():
+                field.valueChanged.connect(configure_panel)
+            visible.toggled.connect(configure_panel)
+            layout.addWidget(panel)
         worker = ReplayWorker(path, args.video_stream, args.threshold, args.max_fps, args.max_frames)
 
         def toggle_pause():
@@ -276,12 +318,19 @@ def main(argv=None):
 
         def poll():
             try:
+                if overlay and overlay.error:
+                    raise RuntimeError("VR panel: " + overlay.error)
+                if overlay and overlay.done.is_set():
+                    app.quit()
+                    return
                 result = worker.take_latest()
                 if result:
                     image = result["image"]
                     canvas.image = QtGui.QImage(image.data, image.shape[1], image.shape[0], image.strides[0],
                                                QtGui.QImage.Format.Format_BGR888).copy()
                     canvas.update()
+                    if overlay:
+                        overlay.submit_bgr(image)
                     report["frames_presented"] += 1
                     labels_seen.update(result["labels"])
                     media = f"{result['media_time']:.3f}s" if result["media_time"] is not None else "unknown time"
@@ -299,6 +348,7 @@ def main(argv=None):
         timer.start(16)
         window.show()
         worker.start()
+        previous_sigint = signal.signal(signal.SIGINT, lambda *_: app.quit())
         try:
             exit_code = app.exec()
             if args.preview and report["frames_presented"] and not failures:
@@ -306,6 +356,7 @@ def main(argv=None):
                     raise RuntimeError("Preview PNG could not be saved")
                 report["images_saved"] = True
         finally:
+            signal.signal(signal.SIGINT, previous_sigint)
             timer.stop()
             worker.stop()
             worker.join(timeout=5)
@@ -319,6 +370,12 @@ def main(argv=None):
                       container_stream_index=worker.stream_index, qt_platform=app.platformName())
     except Exception as error:
         report["error"] = str(error)
+    finally:
+        if overlay:
+            report["overlay"] = overlay.close()
+            if report["overlay"]["error"]:
+                report["status"] = "error"
+                report.setdefault("error", "VR panel: " + report["overlay"]["error"])
     print(json.dumps(report, indent=2))
     if args.report:
         # Exclusive creation prevents overwriting a prior report or input file.
