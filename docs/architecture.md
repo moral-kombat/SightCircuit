@@ -1,23 +1,15 @@
 # Architecture and roadmap
 
-Framejacker targets an annotated Linux window and a Steam Frame VR panel showing
-objects detected in Arcturus Vision Camera frames. A file-replay prototype
-decodes one selected track with PyAV, runs the demo MobileNet-SSD detector and presents
-annotated images in a Qt window. Its offscreen cloud tests pass; the user has
-verified three-frame decoding and reports that the replay window works on
-Frame. The user has also confirmed video playback, controls and a native public
-OpenVR panel following their head. Detailed detection accuracy and performance
-remain unmeasured. Live capture remains proposed.
+Framejacker separates input, inference and presentation so a new camera backend
+can feed the existing detector and display. The implemented replay path selects
+one recorded track with PyAV, runs MobileNet-SSD on CPU and presents an annotated
+image in Qt and, optionally, a native OpenVR panel.
 
-See [Steam Frame camera integration](steam-frame-camera.md) for pinned sources,
-known interface limits, calibration requirements, and the device checks still
-needed.
-
-The [source review](capture-reference-review.md) recommends a bounded feasibility
-test of an existing mirror before a compositor-layer trial. The
-[live capture plan](live-capture.md) specifies the dedicated camera reader and
-its device acceptance checks. A mirror may include UI and our own output;
-dedicated camera frames avoid that feedback path.
+[Status and evidence](status.md) owns capability and validation results.
+[Live capture](live-capture.md#current-work-order) owns current tasks; this page
+describes design and long-term acceptance criteria. The
+[camera reference](steam-frame-camera.md) documents interface constraints and
+the [dated source review](capture-reference-review.md) explains capture choices.
 
 ## Frame processing
 
@@ -54,13 +46,11 @@ and license must be recorded together for reproducible results.
 
 ## Camera backend boundary
 
-User-supplied headset reports show no frames through Valve's public OpenVR
-tracked-camera interface. The user also reports visible passthrough going black
-while our probe runs, although the official Arcturus app's live preview and
-recording work. Do not repeat the unchanged test; a usable live capture interface
-is still needed. Community reports describe failed public camera probes and an
-experimental Vulkan path that shares compositor camera buffers. Those reports
-are implementation references, not a vendor-supported live capture contract.
+The [public-probe result](status.md#e3-public-camera-probe) prevents treating
+OpenVR interface availability as evidence of frame access on the tested runtime.
+Community code provides an experimental Vulkan buffer-sharing reference rather
+than a vendor-supported live capture contract. Keep provider selection behind
+the capture boundary so those constraints do not change inference or display.
 
 The cited community capture tool outputs downscaled luma, not a ready-made color
 RGB stream. Its observation-time estimates are not exposure timestamps and do
@@ -90,10 +80,10 @@ follows the HMD; no calibrated world-space transform is implied. See the
 new device or runtime. Cloud validation exercises the same parser without
 OpenVR and does not establish headset rendering.
 
-A regular window or a VR panel can display the camera image with 2D detections.
-This is the initial proof of concept. The user has confirmed visible replay,
-controls and head-relative panel movement on Steam Frame. Detection quality,
-readability and compositor impact still need systematic measurements.
+A regular window or VR panel can display an image with 2D detections without
+establishing its position in the room. The
+[presentation evidence](status.md#e6-window-and-vr-panel) records device results
+and remaining measurement limits.
 
 Labels anchored to objects in the world require additional geometry: calibrated
 intrinsics/distortion, camera-to-head transforms, object depth, and a headset pose
@@ -119,10 +109,9 @@ not been validated here.
 
 ## Milestones and acceptance checks
 
-The user has confirmed the replay window and VR panel work on Frame, including
-playback, controls and the image following head movement. The next device checks
-are detection quality, label readability and playback performance with the same
-recording. A usable live camera backend remains unresolved.
+These are acceptance criteria, not a second status matrix or current task list.
+See [status](status.md) for completed evidence and
+[live capture](live-capture.md#current-work-order) for the active sequence.
 
 1. **Replay and window:** process a known recording, verify detection coordinates
    and frame association, open the window on a real display, and check clean
@@ -132,10 +121,10 @@ recording. A usable live camera backend remains unresolved.
    findings, and verify real frames, pixel conversion, camera
    identity/orientation, disconnect/reconnect, and wake/idle behavior. Record
    SteamOS/SteamVR versions and timing provenance.
-3. **VR panel:** basic playback, controls and head-relative placement are confirmed
-   by the user. Measure label readability, processing rate, resource use and
-   tracking/compositor behavior during the intended VR workload. Measure
-   end-to-end latency and frame drops when a live backend is available.
+3. **VR panel:** verify visible playback, controls and head-relative placement.
+   Measure label readability, processing rate, resource use and tracking/compositor
+   behavior during the intended VR workload. Measure end-to-end latency and
+   frame drops when a live backend is available.
 4. **World-space labels:** validate calibration, depth, pose timing, and label
    placement against known geometry while the headset and objects move.
 5. **Optional splat experiment:** reconstruct a recorded static scene, inspect its

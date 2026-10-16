@@ -1,20 +1,10 @@
 # Continue development on Steam Frame
 
-The Arcturus Camera app has been confirmed by the user to show live passthrough
-and record video on the headset. Our public OpenVR probe returns no frames and
-blacks out passthrough while it runs. File decoding and the annotated replay
-window now work on Frame, as confirmed by the user. The repository is published at
-[moral-kombat/framejacker](https://github.com/moral-kombat/framejacker).
-The file-replay window also passes offscreen cloud tests. The live capture
-backend is unimplemented. The user has also confirmed the native VR panel's
-playback, controls and image following their head. See the
-[overlay guide](vr-overlay.md) to launch the confirmed replay path or test a new
-runtime. Next, check detection quality, readability and playback performance.
-For live input, follow the [source review](capture-reference-review.md) and
-[capture plan](live-capture.md): check an existing mirror as a conditional 2D
-shortcut, then prepare the dedicated camera reader and trial. No live reader,
-mirror diagnostic or compositor-layer installation is included in the current
-setup.
+Use this guide for device access, inventory and recorded-video replay. Start
+with [status and evidence](status.md) for compatibility and verified results,
+then the [overlay guide](vr-overlay.md) to run the VR panel. The
+[active capture plan](live-capture.md#current-work-order) owns upcoming live-input
+work; its planned diagnostics are not installed by these procedures.
 
 ## Confirm where commands run
 
@@ -101,39 +91,28 @@ do not prove working capture or GPU access.
 
 ## Then verify camera access
 
-The first user-supplied inventory confirms an `aarch64` SteamOS 0.4.5 session
-(build `20261007.6125817`), Python 3.12.3, an active `steamvr.service`, native
-`g++`/CMake/Ninja tools, a render node and `arcimx616` sensor-driver nodes. This
-establishes the target context; device-node presence alone does not demonstrate
-working capture.
-
 Establish the baseline using the [official Arcturus Camera app][arcturus-camera]
-and [vendor setup instructions][arcturus-howto]. The user has confirmed that this
-app displays live passthrough and records video. This demonstrates a working
-vendor camera path, even though our public API probe fails. A file/replay backend
-can use a short recording to develop detection and the output window while live
-capture remains unresolved. Preserve the original recording and its metadata;
-inspect its video tracks before choosing a decoder or assuming a single stream.
+and [vendor setup instructions][arcturus-howto]. Confirm that its live view and
+recording work before investigating a new capture route. Preserve completed
+recordings and their metadata for the replay checks below.
+
+See [inventory evidence](status.md#e1-frame-inventory) and
+[vendor-app evidence](status.md#e2-vendor-app) for the reported baseline.
+Device-node presence does not demonstrate frame access. Keep Framejacker's
+live-input work separate from the vendor app and use the active plan for a
+new capture trial.
 
 ### Confirmed public-probe result
 
-The user's reports before and after toggling passthrough are unchanged:
+**The public camera probe returned no frames and blacked out passthrough while
+running on the tested runtime. Do not repeat that unchanged headset test.**
+A future retest needs a material change, such as a runtime update or revised
+capture implementation. The detailed API failures and their limits are in
+[the evidence record](status.md#e3-public-camera-probe).
 
-- Background OpenVR initialization and `IVRTrackedCamera_006` access succeed.
-- `HasCamera` returns true, but camera count is zero. All three frame-size
-  queries return `OperationFailed` (`100`), including after stream acquisition.
-- Acquisition reports success with a nonzero handle. Header-only retrieval and
-  stream release return `InvalidHandle` (`101`); no image frames are copied.
-- **Passthrough goes black while the probe runs.** The official camera app's
-  live view and recording work outside that test.
-
-These observations establish that this public probe is unusable on the tested
-runtime and can interrupt the displayed camera view. They do not identify the
-particular runtime call responsible or prove a camera hardware fault. The
-schema-1 `handle_valid` field means only that the returned handle was nonzero;
-it is not evidence that the runtime accepts it. Do not repeat the unchanged
-probe on this runtime. A future retest needs a material change, such as a runtime
-update or a revised capture implementation.
+The binary makes no OpenVR calls by default. Its explicit interruption flag
+and advanced procedure appear below; a nonzero streaming handle alone does
+not establish usable capture.
 
 ### Prepare a recording for replay
 
@@ -159,34 +138,10 @@ prove that the headset has a compatible decoder. Keep that metadata report as
 a description of the replay input. A recording is replay input, not a live
 capture backend.
 
-The user has listed two completed recordings on Frame:
-`2026-10-15_21-20-34_stereo.mp4` (15,923,629 bytes) and
-`2026-10-15_21-17-18_stereo.mp4` (149,778,747 bytes). No `ffprobe` executable was
-reported on PATH. The metadata command is:
-
-```bash
-python3 scripts/recording_check.py \
-  "$HOME/Videos/ArcturusVisionCamera/2026-10-15_21-20-34_stereo.mp4"
-```
-
-The user ran the inspector on the smaller recording. It reported two `hvc1`
-(HEVC) video tracks at 2464 × 2464, one `gpmd` metadata track, one `mp4a` audio
-track, fragmented MP4 structure and no encrypted sample entries. Its
-`unsupported: fragmented_mp4` result describes the metadata inspector's limited
-sample/timeline handling. Fragmentation alone does not establish a corrupt or
-undecodable file. The video `mdhd` headers report 0.515174 seconds; the full
-fragmented timeline has not been validated.
-
-The user subsequently installed PyAV 16.1.0 on Frame and decoded three frames
-from video-stream ordinal 0, container stream index 0, track ID 1. All were
-2464 × 2464, converted from full-range `yuvj420p` to `rgb24` with a 7,392-byte
-stride. Reported media timestamps were 0, 0.016787 and 0.033532 seconds. This
-confirms that selected-track file decoding and RGB conversion work on Frame.
-The user then ran window setup and confirmed that the annotated replay window
-works on Frame. The native VR replay panel is also confirmed working, including
-playback, controls and the image following head movement. Detailed accuracy,
-color and performance measurements remain open. Avoid assuming the separate
-desktop development environment is installed.
+Known recording sizes, track metadata and decode results are recorded in
+[status](status.md#e4-recordings-and-container-metadata). The fragmented-MP4
+inspector result describes its limited timeline handling; it is not by itself
+a corrupt-file diagnosis.
 
 To inspect a new recording, one command runs the read-only inventory and selects the
 newest completed stereo recording automatically:
@@ -238,9 +193,10 @@ of stereo codec views, or synchronized decoding.
 This does not access cameras or OpenVR, save images, display a window, verify
 HDR appearance, validate the complete file, or measure real-time performance.
 Exit `0` means frames were decoded and converted; exit `1` means a missing
-dependency, input error, timeout or decode failure. The generated fragmented
-HEVC cloud tests pass, and the user's three-frame ARM64 check also passed.
-Continue with the annotated replay window below.
+dependency, input error, timeout or decode failure. See
+[selected-track evidence](status.md#e5-selected-track-decode) and
+[cloud validation](status.md#e7-cloud-validation) for prior results. Continue
+with the annotated replay window below.
 
 ### Open the annotated replay window
 
@@ -278,15 +234,11 @@ may be slower than the source recording. `--max-fps` changes that cap;
 threshold is a valid result for a scene outside the demo model's classes.
 
 By default the prototype displays an ordinary Qt window without opening camera
-nodes, calling OpenVR, changing SteamVR or saving images. Offscreen
-cloud tests verify decoding, object labels, stream selection and a nonblank
-rendered window. The user confirms the window works on Frame and has also
-confirmed replay with `--overlay`: video playback, controls and the image
-following their head work. That optional mode initializes OpenVR in a separate
-process; see the [VR panel guide](vr-overlay.md) for launch commands. The timed
-panel test has also passed on Frame. Orientation, color appearance, detection
-accuracy, readability and performance have not been systematically measured.
-Live capture is investigated separately.
+nodes, calling OpenVR, changing SteamVR or saving images. Optional `--overlay`
+initializes OpenVR in a separate native process; see the
+[VR panel guide](vr-overlay.md) for launch commands, controls and shutdown.
+[Status](status.md#e6-window-and-vr-panel) records device confirmations and
+unmeasured accuracy, color, readability and performance.
 
 ### Advanced probe, only for a deliberate future retest
 
@@ -369,35 +321,26 @@ native interpreter, wheel and library availability before installing them there.
 The device inventory requires no such installation. Leave compositor-layer
 deployment and camera-source changes out of this initial check.
 
-Continue with the [replay/window milestone](architecture.md#milestones-and-acceptance-checks)
-using an Arcturus recording. The window and VR replay panel are confirmed
-working. Use the [overlay guide](vr-overlay.md) to resume playback and check
-object labels, readability and processing performance. A verified live adapter
-remains separate. The existing cloud smoke fixture does not test vendor-recording
-decoding.
-Offline splat reconstruction can proceed separately on a suitable GPU computer.
+Use the [overlay guide](vr-overlay.md) to resume recorded playback and the
+[status record](status.md) to retain new measurements. For development tasks,
+follow the [active capture work order](live-capture.md#current-work-order).
+The [architecture milestones](architecture.md#milestones-and-acceptance-checks)
+describe later acceptance criteria, including spatial labels and offline splats.
 
 ## Context for a new development session
 
 ```text
 Continue moral-kombat/framejacker on this Steam Frame.
-Read README.md, docs/on-device.md and docs/steam-frame-camera.md.
-First confirm where this terminal executes and run python3 scripts/device_check.py.
-The official Arcturus Camera app's live view and recording work. Our public
-OpenVR probe gets no frames and blacks out passthrough while running. Do not
-repeat it on the unchanged runtime; it now requires an explicit interruption
-flag. File decoding of three HEVC frames works on Frame. The annotated Qt replay
-window works on Frame according to the user and is tested offscreen in the
-cloud. The ten-second native panel test passed. The user also confirmed controls,
-video playback and the image following their head with replay_window.py --overlay.
-Read docs/vr-overlay.md to resume replay. Next check object labels, readability
-and playback performance using the recording. Live capture is unresolved;
-accuracy, color and performance still need measurements.
-Read docs/capture-reference-review.md for the stream strategy: a bounded check
-of an existing mirror first, then the isolated Arcturus shared-memory reader.
-The upstream dedicated capture tool filters for Arcturus-sized images; built-in
-camera capture is not established. Neither planned diagnostic is implemented.
-Treat device presence as inventory and keep vendor capture separate from public API results.
+Read docs/README.md and docs/status.md first, then docs/on-device.md.
+Confirm where this terminal executes before running device commands.
+Use docs/vr-overlay.md to resume recorded replay and the head-relative panel.
+The public camera probe returned no frames and interrupted passthrough.
+Do not repeat it on the unchanged runtime; its explicit flag is for a deliberate
+future retest after a material change.
+Read docs/live-capture.md#current-work-order for the next engineering task.
+The mirror diagnostic and shared-memory reader are planned, not implemented.
+Keep user observations, cloud checks and upstream capture claims distinct.
+Record new results in docs/status.md, including unknown dates/versions explicitly.
 ```
 
 [valve-setup]: https://partner.steamgames.com/doc/steamhardware/steamframe/setup

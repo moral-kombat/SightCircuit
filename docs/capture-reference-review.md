@@ -1,12 +1,13 @@
 # Video stream reference review and strategy
 
-Reviewed on 2026-10-16. This is a source-code review, not a live capture result
-from the user's Frame. The replay window and VR panel are confirmed working;
-no live capture backend or compositor layer has been deployed by Framejacker.
+Reviewed on 2026-10-16. This page preserves the source analysis and strategy
+recorded on that date; it is not a live capture result or the active backlog.
+Use [live capture](live-capture.md#current-work-order) for current tasks and
+[status](status.md) for project compatibility and device evidence.
 
 ## Recommendation
 
-Use two paths: a short feasibility test of the **existing composited mirror**
+The recommendation at the review date was to use two paths: a short feasibility test of the **existing composited mirror**
 for a first 2D recognition demonstration, followed by an isolated adaptation of
 the **Arcturus Vulkan capture components** for camera frames independent of our
 display. Prefer a supported vendor interface if one becomes available. Do not
@@ -108,6 +109,9 @@ the Vulkan path for UBWC; do not copy that CPU mapping shortcut for these images
 
 ## Implementation order and acceptance checks
 
+The sequence below records the recommendation at the review date. Current task
+state and acceptance criteria are maintained in [the active plan](live-capture.md#current-work-order).
+
 1. **Time-box mirror feasibility before a layer deployment.** Use inventory to
    identify an existing SteamVR virtual mirror; do not guess a physical camera
    device number, install a loopback driver or activate a new service in this
@@ -148,11 +152,10 @@ the Vulkan path for UBWC; do not copy that CPU mapping shortcut for these images
    requires finding buffers that actually update. Stereo depth needs stronger
    timing and calibration evidence than the current heuristic timestamps.
 
-The next development deliverable is the bounded mirror feasibility diagnostic;
-the isolated shared-memory reader remains the next dedicated-camera deliverable.
-Neither tool has been added by this documentation review. Continue seeking a
-supported vendor frame-sharing API alongside these experiments; no support
-message was sent and no capture software was activated.
+At the review date, the proposed first deliverable was the bounded mirror
+diagnostic, followed by the dedicated-camera reader. The review did not add
+either tool, send a support message or activate capture software. Later progress
+belongs in [status](status.md) and the [active plan](live-capture.md).
 
 [report]: https://github.com/spyjacob/steam-frame-hand-tracking/blob/ff6a2b29bc50c9497d66fd7ff07e00b61f9eb082/REPORT.md#L26-L49
 [findings]: https://github.com/spyjacob/steam-frame-hand-tracking/blob/ff6a2b29bc50c9497d66fd7ff07e00b61f9eb082/FINDINGS.md#L8-L15

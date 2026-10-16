@@ -1,11 +1,9 @@
 # Contributing
 
-Framejacker is in early development. The recorded-video application and native
-VR panel work on Steam Frame according to the user, including playback,
-controls and the panel following head movement. Live camera capture remains
-unimplemented. Start with the
-[README](README.md), [architecture](docs/architecture.md) and
-[camera interface research](docs/steam-frame-camera.md).
+Start with the [documentation index](docs/README.md),
+[current status](docs/status.md) and [architecture](docs/architecture.md).
+The [development guide](docs/development.md) owns full setup/build instructions;
+[on-device procedures](docs/on-device.md) apply to the headset.
 
 ## Development checks
 
@@ -57,6 +55,21 @@ Describe the resulting behavior and relevant checks in a pull request. Separate
 cloud smoke results from actual camera/headset results. Include source changes
 and small reproducible fixtures where appropriate; link large external assets
 with checksums instead of committing generated environments or model binaries.
+
+## Documentation maintenance
+
+Update the owning document with the component change; the
+[documentation plan](docs/documentation-plan.md) assigns each topic a home.
+Put full validation evidence in [status](docs/status.md), including procedure,
+date, revision, runtime, result and limits; explicitly mark unknown fields.
+Keep cloud checks, CI runs, user device reports and upstream claims distinct.
+
+Maintain the current capture backlog in [live capture](docs/live-capture.md);
+dated reviews retain their source pins and decision context. Do not advertise
+planned diagnostics as available commands. Preserve existing paths and linked
+headings, and check local links, heading anchors, command paths/options and
+`git diff --check` before publishing. Keep operating warnings beside affected
+commands even when the detailed evidence moves.
 
 ## License
 

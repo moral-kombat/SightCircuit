@@ -1,0 +1,37 @@
+# Documentation
+
+Choose a guide by the task you want to complete. [Project status](status.md)
+records what has been verified and its limits; [live capture](live-capture.md)
+owns the current capture work plan.
+
+## Start by task
+
+| Task | Start here |
+| --- | --- |
+| Understand the project | [Project overview](../README.md) |
+| Check what works on Frame | [Status and evidence](status.md) |
+| Connect to Frame and inspect a recording | [On-device guide](on-device.md) |
+| Decode a completed recording | [File decode procedure](on-device.md#decode-one-recorded-video-track) |
+| Run the annotated replay window | [Window launch procedure](on-device.md#open-the-annotated-replay-window) |
+| Run and position the VR panel | [VR overlay guide](vr-overlay.md) |
+| Set up cloud or desktop development | [Development setup](development.md) |
+| Continue live capture development | [Active capture plan](live-capture.md#current-work-order) |
+| Investigate camera access and upstream projects | [Camera interface reference](steam-frame-camera.md) and [dated code review](capture-reference-review.md) |
+| Understand components and frame flow | [Architecture](architecture.md) |
+| Contribute a change | [Contributing](../CONTRIBUTING.md) |
+| Check dependency attribution | [Third-party sources](../THIRD_PARTY.md) |
+| Maintain these documents | [Documentation plan and ownership](documentation-plan.md) |
+
+A browser on Frame can display a cloud terminal. Confirm where commands execute
+before using device instructions; see [execution context](on-device.md#confirm-where-commands-run).
+
+## Reading order for a new session
+
+Read [status](status.md), then the guide for the task. For capture development,
+read the [current work order](live-capture.md#current-work-order) before the
+reference research. The [on-device handoff](on-device.md#context-for-a-new-development-session)
+provides a short prompt for continuing on the headset.
+
+Procedures describe implemented tools. Capture experiments marked planned have
+no runnable Framejacker command yet. Research reports describe the cited runtime
+or source revision, not compatibility with every headset update.

@@ -1,8 +1,10 @@
 # Development setup
 
-The supported development check currently targets Linux x86_64 with Python 3.12.
-It exercises the video, inference and window dependencies; it does not launch a
-Framejacker application or connect to a camera.
+This guide owns cloud/desktop setup, dependency environments, build commands
+and automated checks. The development smoke check targets Linux x86_64 with
+Python 3.12; it does not launch the interactive application or connect to a camera.
+Use the [on-device guide](on-device.md) for Frame and [status](status.md) for
+validation evidence and compatibility limits.
 
 ## Install and run
 
@@ -73,12 +75,10 @@ smoke script does not invoke a separately installed `ffmpeg` executable.
 
 Do not copy an x86_64 virtual environment onto the headset. Device dependencies
 and camera/runtime capabilities must be installed and verified for the target
-architecture. Live capture, stereo synchronization, depth, tracking-space
-alignment, performance and acceleration remain untested here. The user has
-confirmed replay video, controls and a VR panel following their head on Frame;
-the cloud tests do not exercise a headset runtime.
+architecture. [Status](status.md) distinguishes device confirmations from cloud
+tests and lists unverified capture, geometry and performance capabilities.
 See the [camera guide](steam-frame-camera.md) and
-[implementation milestones](architecture.md).
+[implementation milestones](architecture.md) for their technical constraints.
 
 ## Recorded MP4 inspection
 
@@ -145,8 +145,9 @@ flags the app saves no images or reports; it prints a JSON summary on exit.
 Use a new output path for subsequent checks. `--video-stream` selects a video
 track; no stereo-side identity is inferred. `--threshold` selects detection
 confidence. The demo has 20 classes and is not a selected production detector.
-Visible device presentation, orientation, color/HDR, accuracy and performance
-are still on-device acceptance work. Linux ARM64 Qt wheels require glibc 2.39+
+Device presentation results and remaining orientation, color/HDR, accuracy and
+performance limits are recorded in [status](status.md#e6-window-and-vr-panel).
+Linux ARM64 Qt wheels require glibc 2.39+
 and graphical-system dependencies; the native X11 path checks `ldd` output for
 missing plugin libraries before creating a QApplication.
 

@@ -1,21 +1,16 @@
 # VR replay panel prototype
 
-The user has confirmed both the Qt replay window and the native OpenVR replay
-panel working on Steam Frame. After the timed panel test succeeded, the user
-reported: "The controls and video playback all worked, as well as the image
-that followed my head."
-
-This establishes basic visible playback, working controls and head-relative
-placement on the tested device. Detection accuracy, label readability, color
-appearance and performance have not been measured. Cloud tests separately
-verify the build, byte transport, RGB conversion, controls and failure paths;
-they do not replace the user's headset observations. Live camera capture
-remains unimplemented.
+Use this guide to build, launch, position and stop the optional replay panel.
+[Status and evidence](status.md#e6-window-and-vr-panel) records the user's device
+confirmations and unmeasured detection, readability, color and performance limits.
+The panel presents a selected recording; live input follows the separate
+[capture plan](live-capture.md).
 
 ## First device test: a timed panel
 
-This test has passed on the user's Frame. Use it to establish a baseline when
-testing a new device or runtime before launching the replay panel.
+Use this test to establish a baseline on a new device or runtime before
+launching replay. Prior device observations are recorded in
+[status](status.md#e6-window-and-vr-panel).
 
 Close the running replay window so its terminal is available. Keep SteamVR
 running and use the normal `steamos` graphical session. On Frame:

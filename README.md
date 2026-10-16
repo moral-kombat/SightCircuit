@@ -1,146 +1,82 @@
 # Framejacker
 
-Framejacker is an early development project for a Linux app that recognizes
-objects from the **Arcturus Vision Camera** on **Steam Frame** and displays the
-results in a window or a VR panel that follows the user's head.
+Framejacker is an early Linux app for recognizing objects in Arcturus Vision
+Camera recordings on Steam Frame. It displays annotated video in a Qt window
+and an optional VR panel that follows the user's head. Live camera input is
+under investigation.
 
-This repository contains an annotated file-replay prototype, camera-interface
-research, an architecture and reproducible development checks. Live camera
-capture remains unimplemented. The user has confirmed recorded-video playback,
-controls and the public OpenVR panel working on Steam Frame.
+Start with the [documentation index](docs/README.md) for task-based navigation.
 
 ## Project status
 
-| Capability | Status |
+| Area | Current summary |
 | --- | --- |
-| Linux development setup | Tested on x86_64 with Python 3.12 |
-| Video decoding, CPU detection and offscreen window rendering | Verified with the included smoke check |
-| Arcturus app live preview and recording | Confirmed working by the user on Steam Frame |
-| Recorded MP4 metadata inspection | Two HEVC tracks, metadata and audio confirmed on the user's recording |
-| Selected-track file decoding and RGB conversion | Three 2464 × 2464 frames decoded successfully on Frame using PyAV |
-| Frame replay handoff check | Read-only inventory plus newest-recording metadata command |
-| Native public OpenVR camera probe | No frames on the tested headset; interrupts passthrough; explicit opt-in required |
-| Live camera access from Framejacker | Unimplemented; a usable capture interface is still needed |
-| Annotated file-replay window | Confirmed working by the user on Frame; pause/replay/loop controls implemented; offscreen integration tests pass |
-| VR overlay | Timed test panel and replay panel confirmed working by the user on Frame, including controls and following head movement |
-| Stereo depth and labels anchored in the room | Planned; requires calibration, depth and pose alignment |
-| Gaussian splat reconstruction | Optional future experiment using recorded data and a GPU computer |
+| Recorded-video decoding, replay and VR panel | Confirmed working by the user on Frame, including controls and head-relative placement |
+| Live capture from Arcturus or built-in cameras | Unimplemented; capture interfaces remain under investigation |
+| Detection quality, color and performance | Not systematically measured on Frame |
+| Stereo depth, world-space labels and Gaussian splats | Future work; splat reconstruction is a separate recorded-data experiment |
 
-Valve documents a general OpenVR camera API. Our user-supplied headset reports
-show no frames through that API, and the user reports passthrough going black
-while the probe runs. The vendor app's preview and recording work. Do not repeat
-the probe on the unchanged tested runtime. Community Steam Frame testing also
-reports failed public camera capture. A
-community implementation instead captures passthrough buffers through an
-experimental Vulkan layer. Read the [camera integration guide](docs/steam-frame-camera.md)
-before choosing a capture backend; standard USB webcam access is not established.
+See [status and evidence](docs/status.md) for the complete matrix, device
+reports, cloud validation and remaining unknowns. The public tracked-camera
+probe returned no frames and interrupted passthrough; do not repeat that
+unchanged headset test. Its [operating warning](docs/on-device.md#confirmed-public-probe-result)
+and [recorded result](docs/status.md#e3-public-camera-probe) explain the limit.
 
 ## Quick start
 
-Use a Linux x86_64 development machine with Bash and
-[uv](https://docs.astral.sh/uv/getting-started/installation/) installed. The
-setup script creates a dedicated Python 3.12 environment; uv can obtain Python
-if it is missing. Internet access to PyPI and GitHub is needed on first setup.
+### On Steam Frame: recorded-video replay
+
+Use an existing checkout in the normal graphical session, with Python 3.12 and
+a completed Arcturus recording. For initial access or another checkout location,
+follow the [on-device guide](docs/on-device.md).
 
 ```bash
-git clone https://github.com/moral-kombat/framejacker.git
-cd framejacker
-bash scripts/setup.sh
-.venv/bin/python scripts/smoke_check.py
-```
-
-Use the existing checkout if you already have one. The smoke check uses
-offscreen Qt rendering by default, so it needs no camera, GPU, SteamVR or display
-server. It exits when validation finishes; it is not an interactive application.
-
-The check:
-
-1. Encodes and decodes 12 repeated sample-image frames as MJPEG.
-2. Runs MobileNet-SSD through OpenCV DNN on CPU and requires bicycle, car and dog
-   detections on every frame.
-3. Renders the annotated frames in a Qt window and saves a screenshot.
-4. Separately executes a bundled ONNX arithmetic model and verifies its output.
-
-Results appear in `artifacts/smoke/readiness.json` and
-`artifacts/smoke/detection-window.png`. The sample is not an Arcturus recording;
-these checks do not establish live capture, real-time performance or headset
-compatibility.
-
-Dependencies are pinned in [requirements-dev.txt](requirements-dev.txt).
-Downloaded model/image fixtures have immutable source URLs and SHA-256 checksums
-in [scripts/smoke-assets.json](scripts/smoke-assets.json). Environments, downloads
-and generated results are excluded from Git. See [development setup](docs/development.md)
-for details and troubleshooting.
-
-## Design and next steps
-
-Continuing from a web terminal or development session on the headset? Start with
-the [on-device handoff and inventory](docs/on-device.md) before installing the
-desktop development dependencies there.
-
-The intended live path is:
-
-```text
-camera or replay input → preprocessing → detector → annotated window → VR overlay
-```
-
-Capture, inference and presentation will be separate components. The replay
-application and VR panel now work on Frame using an Arcturus app recording.
-Next, check detection quality and measure playback performance before connecting
-a verified live capture backend. World-space labels come after depth and pose
-validation.
-
-The [capture reference review](docs/capture-reference-review.md) recommends a
-short feasibility test of an existing headset mirror for 2D input, followed by
-an isolated Arcturus camera reader. The [live capture plan](docs/live-capture.md)
-covers that dedicated path and separate validation of built-in passthrough.
-
-On Frame, run `bash scripts/frame_replay_check.sh` after recording a short clip.
-It gathers the device inventory and recording metadata without starting the
-unsafe public camera probe.
-
-The user's recording contains two `hvc1` HEVC video tracks at 2464 × 2464,
-`gpmd` metadata and audio in fragmented MP4. To check actual file decoding,
-run `bash scripts/setup_replay.sh`, then
-`.venv-replay/bin/python scripts/replay_decode_check.py`. This uses a separate
-Python 3.12 environment with PyAV and selects the first video track explicitly.
-See the [device instructions](docs/on-device.md#decode-one-recorded-video-track)
-for limits and expected output.
-
-To open the annotated replay window using the newest recording:
-
-```bash
+cd "$HOME/framejacker"
 bash scripts/setup_window.sh
 .venv-replay/bin/python scripts/replay_window.py
 ```
 
-The window loops the clip, draws labels for common objects and offers
-pause/resume, replay and loop controls. The demo MobileNet-SSD model recognizes
-20 object classes. Frames are scaled to a maximum of 960 pixels per side, and
-processed replay is capped at 10 fps by default. It may play more slowly than
-the original recording. The user confirms the replay window works on Frame.
-Detection accuracy, color and performance have not been benchmarked. See the
-[window launch guide](docs/on-device.md#open-the-annotated-replay-window).
+With no path argument, the app selects the newest completed `*_stereo.mp4` in
+`~/Videos/ArcturusVisionCamera`. It loops the clip and provides pause, replay
+and loop controls. Close the window to stop. See the
+[window procedure](docs/on-device.md#open-the-annotated-replay-window) for explicit
+file selection, dependencies and limits. To add the VR panel, follow the
+[overlay guide](docs/vr-overlay.md), including its native bridge build.
 
-Add `--overlay` to present the annotated recording in a head-relative panel,
-with placement, size, opacity and
-visibility controls in the Qt window. It uses public overlay APIs and does not
-run the camera probe. The user confirms video playback, controls and the image
-following their head all work. See the [VR panel guide](docs/vr-overlay.md) for
-launch commands and the timed test for a new runtime. This confirms basic
-presentation; detection quality and performance still need measurement.
+### In the cloud or on Linux x86_64: development smoke check
 
-Gaussian splats could provide a persistent visual map of a mostly static room.
-Reconstruction remains a separate recorded-data workflow; object recognition
-still comes from the live detector.
+Use Bash and [uv](https://docs.astral.sh/uv/getting-started/installation/). In an
+existing checkout:
 
-- [Architecture and implementation milestones](docs/architecture.md)
-- [Steam Frame and Arcturus camera interfaces and sources](docs/steam-frame-camera.md)
-- [Live capture plan and first device trial](docs/live-capture.md)
-- [Video stream reference review and capture strategy](docs/capture-reference-review.md)
-- [VR replay panel test and controls](docs/vr-overlay.md)
-- [Development commands and validation limits](docs/development.md)
-- [Contributing](CONTRIBUTING.md)
+```bash
+bash scripts/setup.sh
+.venv/bin/python scripts/smoke_check.py
+```
+
+This creates a dedicated Python 3.12 `.venv` and checks generated sample-video
+decoding, CPU detection, offscreen Qt rendering and a separate ONNX arithmetic
+example. It exits after validation; it does not open the interactive replay app
+or prove live camera access. Outputs go to ignored `artifacts/smoke/`.
+
+The Frame replay environment is `.venv-replay`; do not copy the cloud's x86_64
+environment onto Frame. [Development setup](docs/development.md) owns full
+installation, fixture verification, build and test instructions.
+
+## Design and next steps
+
+The intended application flow is:
+
+```text
+camera or replay input → preprocessing → detector → annotated window / VR panel
+```
+
+The [active live-capture plan](docs/live-capture.md#current-work-order) owns the
+next tasks: a bounded diagnostic for an existing headset mirror, followed by an
+isolated Arcturus shared-memory reader and capture-only device trial. Both
+diagnostics are planned, not implemented. Built-in camera capture needs separate
+validation. The [dated reference review](docs/capture-reference-review.md)
+explains the strategy; [architecture](docs/architecture.md) describes components,
+frame ownership and longer-term acceptance criteria.
 
 ## License
 

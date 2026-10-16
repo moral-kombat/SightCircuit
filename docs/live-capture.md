@@ -1,36 +1,84 @@
 # Live capture plan
 
-The replay window and head-relative VR panel work on the user's Frame, including
-playback and controls. Live capture is not implemented. The
-[source review and strategy](capture-reference-review.md) adds a short
-feasibility check of an existing composited mirror before a compositor-layer
-trial. The next dedicated-camera task remains a standalone capture-only reader,
-tested with a controlled producer before attempting that device trial.
+This is the authoritative current capture work plan. [Status](status.md) owns
+capability and validation evidence; the [dated source review](capture-reference-review.md)
+explains the code findings behind this sequence. Every deliverable below is
+planned and unimplemented unless a task explicitly says otherwise. No capture
+layer has been deployed by Framejacker.
+
+## Current work order
+
+| Order | Deliverable | State | Acceptance |
+| --- | --- | --- | --- |
+| 1 | Bounded diagnostic for an existing SteamVR mirror | Next; unimplemented | Identify an existing virtual feed, report fresh frames or explicit unavailability, exit within a deadline, and verify whether physical passthrough is present |
+| 2 | Isolated shared-memory reader and controlled producer | Planned; unimplemented | Validate the pinned layout, consistent frame copies, stale/malformed/restarted input and shutdown; test synchronization on ARM64 before a Frame claim |
+| 3 | Dedicated Arcturus capture provider | Planned; not deployed | Pin only the capture components, address lifecycle findings, build natively and prepare exact configuration restoration for a controlled trial |
+| 4 | Capture-only device trial | Planned | Ten seconds of fresh images from one identified source, correct orientation, clean exit and working normal passthrough |
+| 5 | Live input in the detector and existing display | Planned | Preserve source-frame association and one latest input; begin at a target of 5 processed fps and measure device/compositor impact |
+| 6 | Color, built-in camera support and later geometry | Planned | Validate each source and color conversion separately; require calibration and stronger timing evidence before stereo depth or spatial labels |
+
+The mirror is a time-boxed opportunity for a first 2D demonstration, not a
+dependency on mirror availability. If it is absent, unsuitable or includes our
+output, record the limit and continue the dedicated-camera work. Existing
+replay remains the application baseline. Record any new detection/readability
+measurements in status alongside capture results.
+
+Seek a supported Arcturus/Valve frame-sharing API alongside these experiments
+and prefer it if available. The [vendor questions](#vendor-interface-questions)
+define the useful interface information without making a vendor reply a
+prerequisite for offline reader development.
+
+## Next deliverable: mirror diagnostic
+
+Prepare a standalone diagnostic with a bounded worker lifetime; a blocking
+device read must not prevent its launcher from ending the check. There is no
+Framejacker command for this diagnostic yet.
+
+- Identify the existing SteamVR virtual mirror using inventory and device
+  metadata before selecting an input. Upstream mentions `/dev/video99`; do not
+  hardcode that number, scan physical camera nodes, install a loopback driver
+  or start a new service as part of this check.
+- Report input identity and available format/dimensions. Reject unsupported or
+  unverified device selection explicitly, rather than trying another camera.
+- Read for ten seconds with our VR panel hidden. Report frame count, observed
+  delivery rate, format, stale input and bounded shutdown. No file or network
+  image outputs by default.
+- Verify that physical scene motion is visible, not merely changing game/UI
+  pixels. If normal system controls permit source selection, test Arcturus
+  and built-in passthrough separately. Do not install source-switching tools
+  or use private camera calls in this diagnostic.
+- For visual inspection, make a still an explicit output choice and inspect
+  it after acquisition stops. A composited feed may include UI, reprojection
+  and our own result panel; live VR output needs demonstrated exclusion from
+  its own input. Otherwise keep this route a capture/recognition proof only.
+- Treat missing input or lack of passthrough as a conclusive limitation of this
+  route, not proof that the physical camera is broken. A successful mirror test
+  does not establish dedicated camera calibration, exposure time or stereo.
+
+Use the [on-device inventory procedure](on-device.md#run-the-device-inventory-first)
+for execution context. Once the diagnostic exists, add its actual command,
+dependencies, output fields, exit behavior and shutdown instructions to the
+operating guide in the same implementation change.
 
 ## Choose a frame provider
 
-Start with Arcturus: the user's vendor app already provides live images, and
-the pinned community implementation describes a working experimental path for
-its passthrough pair. Validate built-in passthrough separately; neither the
-working overlay nor a camera slot number establishes which sensor supplied an
-image.
+For dedicated input, start with Arcturus: the vendor app provides live images
+according to [device evidence](status.md#e2-vendor-app), and the reviewed
+community code implements an experimental path for its passthrough pair.
+Built-in camera capture requires separate validation.
 
-| Route | Current evidence | Action |
-| --- | --- | --- |
-| Supported Arcturus/Valve interface | No public live-frame contract found in the reviewed sources | Seek SDK or frame-sharing documentation; prefer it if available |
-| Public OpenVR tracked-camera API | Our probe returned no frames and interrupted passthrough | Retain the result; do not repeat the unchanged probe |
-| Existing SteamVR composited mirror | Upstream identifies `/dev/video99` as a mirror, not raw camera input | Time-box a 2D feasibility check if already present; verify passthrough content and prevent output feedback |
-| Community Vulkan layer and `ptgrab` | Upstream reports live Arcturus buffers and publishes downscaled luma in shared memory | Audit the pinned producer and implement an isolated consumer first |
-| Built-in passthrough | Live access and compatibility with that producer are unverified | Identify and test the source separately after establishing a usable provider |
+| Route | Decision |
+| --- | --- |
+| Supported Arcturus/Valve interface | Prefer it if available; no public live-frame contract was found in the reviewed pages |
+| Public OpenVR tracked-camera API | Retain the [failed result](status.md#e3-public-camera-probe); do not repeat the unchanged probe |
+| Existing SteamVR composited mirror | Run only the bounded feasibility check above; verify camera content and output feedback |
+| Community Vulkan layer and `ptgrab` | Prepare an isolated consumer, then adapt only capture components for a controlled Arcturus trial |
+| Built-in passthrough | Verify live buffers and source identity separately; the reviewed `ptgrab` size filter and empty-buffer reports do not establish support |
 
-The [official apps page](https://arcturus.vision/apps), rechecked on 2026-10-16,
-documents viewing/recording and transfer/conversion. Those features do not
-establish a live-frame API. The community source remains pinned to
-`ff6a2b29bc50c9497d66fd7ff07e00b61f9eb082`, which matched the default-branch head
-when rechecked for the source review. Its capture tool filters for Arcturus-sized
-images; the author reports built-in-camera-sized buffers stayed empty. See the
-[camera research](steam-frame-camera.md) for public API findings and the
-[review](capture-reference-review.md) for code-level limits and source pins.
+The [camera reference](steam-frame-camera.md) owns interface research. The
+[dated source review](capture-reference-review.md#findings-that-affect-our-implementation)
+records exact upstream pins, FD/lifecycle issues, inferred camera grouping,
+pixel-strip readiness and limitations of the existing importer.
 
 ## Next dedicated-camera deliverable: capture-only reader
 
@@ -45,70 +93,75 @@ The implementation and tests need to cover:
 - Exact native layout, magic, file size, dimensions and camera-slot bounds.
   Keep the consumer read-only and bound all allocations and copies.
 - Consistent frame copies using the producer's per-slot sequence lock, with
-  appropriate memory ordering on ARM64. Reject incomplete or changing copies;
-  a Python read of a sequence number alone is not a synchronization guarantee.
+  appropriate memory ordering on ARM64. Review both writer and reader; reject
+  incomplete or changing copies. A Python sequence read alone is not a
+  synchronization guarantee, and a stable published copy cannot prove the
+  original camera buffer had finished being written.
 - Missing, stale, malformed or replaced shared memory, including producer
-  restarts. Exit on a bounded deadline and handle Ctrl+C cleanly.
+  restarts and truncation. Exit on a bounded deadline and handle Ctrl+C cleanly.
 - A controlled producer with changing images, counters and timestamps, plus
   malformed, partial and stalled input. Test on ARM64 as well as x86_64 before
   claiming cross-process synchronization is validated on Frame.
-- A short JSON report: selected slot, dimensions, pixel format, number of fresh
+- A short report: selected slot, dimensions, pixel format, number of fresh
   frames, observed delivery rate, stale/copy-rejection counts and shutdown
   result. Do not save images or send frames over a network by default.
 
-The upstream output is **grayscale luma**, not a color RGB stream. Its timestamps
-estimate when `ptgrab` observed a stable buffer, rather than camera
-exposure time. Preserve those limitations; source identity, exact exposure
-timing and stereo synchronization remain unverified until measured separately.
+The upstream output is grayscale luma. Its timestamps estimate when `ptgrab`
+observed a buffer change; they are not exposure timestamps. Preserve source
+identity and timing validity explicitly. Apply the source review's lifecycle,
+descriptor and import validation findings to the provider before a trial;
+building a read-only consumer does not deploy or repair the provider itself.
 
 ## First live device trial
 
-Before a trial, prepare a pinned native build, inspect the actual layer startup
-behavior, record existing configuration and prepare a restoration procedure.
-The upstream [installer][install] adds a user-level implicit Vulkan layer and
-requires a subsequent compositor start to take effect. Its
-[uninstaller][uninstall] also requires a restart to unload the running layer.
-These are operational changes, not consequences of building the reader. Do
-not run those installers as a routine inventory check or rerun the old public
-camera probe.
+Before the dedicated trial, prepare a pinned native build, inspect layer startup,
+record existing configuration and prepare exact restoration. The upstream
+[installer][install] adds a user-level implicit Vulkan layer and requires a
+subsequent compositor start to take effect. Its [uninstaller][uninstall] also
+requires a restart to unload the running layer. Do not run these installers as
+a routine inventory check or rerun the old public camera probe.
 
-An existing virtual mirror can be checked first under the separate procedure
-in the source review. It must not be assumed to contain passthrough or exclude
-our output panel. For the dedicated camera trial:
+The mirror check has a separate scope above. For the dedicated camera trial:
 
 1. Run `python3 scripts/device_check.py`, note the current SteamVR version and
-   confirm the vendor app and normal passthrough still work before any change.
+   confirm vendor preview and normal passthrough work before any change.
 2. Once a provider is prepared for that runtime, run only the capture reader
    for ten seconds on one selected slot. Leave detection and the VR panel off.
-3. Verify fresh frames using visible scene motion and an explicitly enabled
-   local preview. Identify the physical source and orientation rather than
-   assigning left/right or Arcturus/built-in from a slot number.
-4. Check normal passthrough during and after the trial, then verify normal
-   shutdown and the restoration procedure. Stop the trial if passthrough or
-   tracking regresses; retain the report before changing the implementation.
+3. Verify scene motion with an explicitly enabled preview. Identify the physical
+   source and orientation instead of inferring left/right or camera type from
+   a slot number.
+4. Check normal passthrough during and after the trial, then verify shutdown and
+   restoration. If passthrough or tracking regresses, stop and retain the report
+   before changing the implementation.
+5. Add the result to [status](status.md), including date, revision, runtime,
+   source identity and remaining unknowns. Advance the task state only when
+   its acceptance evidence exists.
 
-The first acceptance target is sustained fresh images from one identified
-source, with a bounded exit and working passthrough. An API success, an existing
-shared-memory file or repeated delivery of the same stale image does not pass.
-Color, stereo depth and world-space labels are later milestones.
+The acceptance target is sustained fresh images from one identified source,
+a bounded exit and working passthrough. A successful API call, existing
+shared-memory file or stale repeated image does not pass. Color and geometry
+remain separate milestones.
 
 ## Connect the working application
 
 After the capture-only trial passes, extract a common frame-source boundary
 from `ReplayWorker` while preserving the replay tests. Carry image format,
 dimensions, stride, source identity, sequence, timestamp and timebase provenance
-with each frame. Add the live reader as an optional source feeding the same
-detector and display.
+with each frame. Add live input as an optional source feeding the same detector
+and display; mirror input additionally requires the feedback check above.
 
 Use one latest-frame slot and discard old live input when inference is slow.
-Keep each detection attached to its source image. If the first input is luma,
-convert it explicitly for the three-channel demo detector and measure detection
-quality; copied grayscale channels do not recover color.
+Keep each detection attached to its source image. For the luma prototype,
+convert explicitly to the detector's three-channel input and measure recognition
+quality; repeated grayscale channels do not recover color.
 
-Begin at a low inference rate, then measure delivered/processed rates, frame
-age from observation, CPU/GPU load and compositor behavior. Reuse the working
-head-relative panel before pursuing stereo rendering or spatial labels. Test
-built-in passthrough as a separate source with the same acceptance checks.
+Begin at a target of 5 processed fps, then measure delivered/processed rates,
+frame age from observation, CPU/GPU load and compositor behavior before increasing
+load. This target does not change the recorded replay's implemented 10 fps
+default. Actual color requires UV extraction or verified YCbCr sampling and
+color-range/matrix handling. Built-in camera support requires buffers that
+actually update. Reuse the head-relative panel before stereo rendering or
+world-space labels; those need stronger timing and calibration evidence.
 
 ## Vendor interface questions
 

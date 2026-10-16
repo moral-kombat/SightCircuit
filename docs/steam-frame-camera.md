@@ -37,44 +37,17 @@ contract or a result for every firmware version.
 
 ## Project device results
 
-The user's Frame inventory reports `aarch64`, SteamOS 0.4.5 build
-`20261007.6125817`, an active SteamVR user service, and `arcimx616` sensor-driver
-nodes. The user confirms that the [official Arcturus Camera app][arcturus-camera]
-shows live passthrough and can record video. This is evidence of a functioning
-vendor capture path on that device.
+Detailed project results live in [status and evidence](status.md). The vendor
+app works according to the user, while our public probe returned no frames and
+interrupted passthrough. [E3](status.md#e3-public-camera-probe) records the API
+errors and their limits; [E4–E6](status.md#e4-recordings-and-container-metadata)
+record the file-decoding and presentation results.
 
-Our public OpenVR probe was run by the user before and after toggling
-passthrough. Both reports show successful background initialization,
-`IVRTrackedCamera_006` availability, `HasCamera=true`, camera count zero, and
-`OperationFailed` (`100`) from all three frame-size queries before and after
-acquisition. Acquisition reports success with a nonzero handle, but header-only
-retrieval and stream release return `InvalidHandle` (`101`). No valid frame was
-copied. The schema-1 `handle_valid` field records only a nonzero value; it does
-not demonstrate that the runtime accepts the handle.
-
-The user also reports that **passthrough goes black while the probe runs**.
-This associates the disruption with the probe as a whole; it does not isolate
-the responsible call or prove a hardware fault. A successful vendor app and a
-failing public API are separate results. The public API report cannot identify
-the Arcturus RGB source because it received no frames.
-
-Do not repeat the unchanged probe on this tested runtime. The binary now does
-no OpenVR work by default and requires `--allow-passthrough-interruption` for a
-deliberate future test after a material change. See the
-[device guide](on-device.md#then-verify-camera-access) for the guard and advanced
-procedure. The user has confirmed the file-replay window and head-relative VR
-panel work on Frame; a supported live-capture interface remains unresolved.
-
-The user's separate file-decode check now succeeds on Frame: PyAV 16.1.0 decoded
-three 2464 × 2464 HEVC frames from video-stream ordinal 0 and converted
-`yuvj420p` to RGB. The recording has two `hvc1` video tracks, `gpmd` metadata,
-audio and fragmented MP4 structure. This establishes selected-file decoding,
-not stereo camera identity, calibration or live capture. An annotated Qt replay
-window is tested offscreen in the cloud and confirmed working on Frame by the
-user. The user has also confirmed video playback, controls and the image
-following their head in the native VR panel; see the
-[window launch guide](on-device.md#open-the-annotated-replay-window) and
-[VR panel guide](vr-overlay.md). These display results use recorded input.
+Do not repeat the unchanged public probe. Its explicit interruption guard and
+future-retest procedure remain in the
+[on-device guide](on-device.md#then-verify-camera-access). This reference records
+public contracts and upstream research; those sources do not establish a
+working Framejacker live backend.
 
 ## Valve's documented application interface
 
@@ -219,43 +192,16 @@ or headset splat rendering.
 
 ## Implementation sequence and remaining checks
 
-The [live capture plan](live-capture.md) expands the provider choice, next code
-deliverable and first device trial. A capture-only reader is planned; no
-experimental layer has been deployed by this project.
+The [active live-capture plan](live-capture.md#current-work-order) owns the
+current work order, deliverables and device acceptance checks. The
+[dated source review](capture-reference-review.md) records the implementation
+evidence and reasoning behind that plan.
 
-1. Retain the confirmed working Qt replay window and VR panel as device baselines.
-   Playback and controls work according to the user. Measure object labels,
-   orientation, color, readability, performance and clean shutdown systematically.
-   Preserve original video tracks and metadata; track ordinal does not establish
-   stereo-side identity.
-   The generated cloud fixtures cover detector/presentation integration, not
-   vendor color, calibration or stereo alignment.
-2. Retain the device inventory and failed public-probe reports with their tested
-   runtime versions. Do not rerun the unchanged public probe or deploy an
-   experimental capture layer as the next diagnostic step. Its current
-   [advanced procedure](on-device.md#then-verify-camera-access) requires an
-   explicit interruption flag before any OpenVR calls.
-3. Seek a supported live capture contract from Arcturus/Valve and prefer that
-   interface if available. Evaluate the cited Vulkan path separately through
-   the capture-only reader and device trial in the live capture plan. Any
-   eventual live backend must verify color conversion,
-   stereo identity, orientation, timestamps, synchronization and behavior after
-   runtime updates.
-4. Pass frames to the detector with explicit pixel format/stride, camera identity,
-   timestamp and timebase provenance, optional producer sequence, calibration
-   reference and pose validity. Use a bounded latest-frame queue and measure
-   dropped frames, latency and contention with XRService/compositor work.
-5. Continue the working VR panel with recorded input and check label readability
-   and compositor impact. The public implementation uses Valve's
-   [overlay sample][openvr-overlay] as a reference. Add world-space labels only
-   after calibration and depth checks.
-
-The user has run the native probe on Frame and verified vendor-app capture,
-file replay and VR panel playback with working controls and head-relative
-placement. Those device results were not reproduced by the cloud agent. No
-camera SDK installation or Vulkan capture deployment has been validated by
-this project. Keep public SDK documentation, user device results,
-community hardware reports and cloud checks distinct in readiness claims.
+Use [status](status.md) for project compatibility and observed results, and the
+[on-device guide](on-device.md) for runnable procedures. Keep official SDK
+contracts, user device observations, upstream reports and cloud tests distinct.
+No live capture SDK or experimental Vulkan layer has been installed by this
+project.
 
 [openvr-api]: https://github.com/ValveSoftware/openvr/blob/0924064316de3effbcd1acf1e309182a2deb1c05/headers/openvr.h#L4919
 [openvr-sample]: https://github.com/ValveSoftware/openvr/blob/0924064316de3effbcd1acf1e309182a2deb1c05/samples/tracked_camera_openvr_sample/tracked_camera_openvr_sample.cpp#L349
