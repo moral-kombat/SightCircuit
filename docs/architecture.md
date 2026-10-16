@@ -1,14 +1,13 @@
 # Architecture and roadmap
 
-Framejacker's first application target is an annotated Linux window showing
-objects detected in camera frames. The eventual target is a Steam Frame VR
-overlay using the Arcturus Vision Camera. A file-replay prototype now decodes one
-selected track with PyAV, runs the demo MobileNet-SSD detector and presents
+Framejacker targets an annotated Linux window and a Steam Frame VR panel showing
+objects detected in Arcturus Vision Camera frames. A file-replay prototype
+decodes one selected track with PyAV, runs the demo MobileNet-SSD detector and presents
 annotated images in a Qt window. Its offscreen cloud tests pass; the user has
 verified three-frame decoding and reports that the replay window works on
-Frame. Detailed detection accuracy and performance remain unmeasured. A native
-public OpenVR overlay bridge and optional replay-panel controls are implemented
-but not yet tested on a headset. Live capture remains proposed.
+Frame. The user has also confirmed video playback, controls and a native public
+OpenVR panel following their head. Detailed detection accuracy and performance
+remain unmeasured. Live capture remains proposed.
 
 See [Steam Frame camera integration](steam-frame-camera.md) for pinned sources,
 known interface limits, calibration requirements, and the device checks still
@@ -25,7 +24,7 @@ flowchart LR
     Queue --> Detect[Object detector]
     Detect --> Results[Detections with source-frame metadata]
     Results --> Window[Annotated Linux window]
-    Results --> Overlay[Future VR overlay]
+    Results --> Overlay[Head-relative VR panel]
 ```
 
 Keep capture, inference, and presentation separate so a new camera backend does
@@ -40,7 +39,7 @@ misplace labels.
 | Frame metadata | Carry dimensions, stride, pixel format, camera identity, orientation, timestamp/timebase provenance, optional producer sequence, calibration reference, and pose validity |
 | Preprocessing | Convert the actual source format to the model's input; retain crop/resize transforms so detections map back to source pixels |
 | Detector | Prototype: MobileNet-SSD through OpenCV DNN on CPU; select a production model/runtime using device measurements |
-| Presentation | Prototype: annotated Qt replay window; add a separately validated headset overlay backend later |
+| Presentation | Prototype: annotated Qt replay window and optional native OpenVR panel; both confirmed working on Frame by the user |
 
 Choose the model, input size, execution provider, and update rate using measured
 accuracy and latency. CPU execution in the cloud does not establish the same
@@ -81,14 +80,14 @@ native process owning a public OpenVR overlay. A sender thread retains one
 pending RGBA image and sends settings independently of replay frames, keeping
 the GUI responsive while paused or while native writes are blocked. The panel
 follows the HMD; no calibrated world-space transform is implied. See the
-[overlay guide](vr-overlay.md) for transport, cleanup and the required first
-device test. Cloud validation exercises the same parser without OpenVR and
-does not establish headset rendering.
+[overlay guide](vr-overlay.md) for transport, cleanup and the timed test for a
+new device or runtime. Cloud validation exercises the same parser without
+OpenVR and does not establish headset rendering.
 
 A regular window or a VR panel can display the camera image with 2D detections.
-This is the initial proof of concept. Overlay creation and rendering still need
-testing on Steam Frame; Valve's general overlay examples do not prove device
-compatibility.
+This is the initial proof of concept. The user has confirmed visible replay,
+controls and head-relative panel movement on Steam Frame. Detection quality,
+readability and compositor impact still need systematic measurements.
 
 Labels anchored to objects in the world require additional geometry: calibrated
 intrinsics/distortion, camera-to-head transforms, object depth, and a headset pose
@@ -114,9 +113,10 @@ not been validated here.
 
 ## Milestones and acceptance checks
 
-The user has confirmed the replay window works on Frame. The next display
-milestone can use the same recording in a VR panel while live capture remains
-unresolved; a live camera backend is not required to prototype that panel.
+The user has confirmed the replay window and VR panel work on Frame, including
+playback, controls and the image following head movement. The next device checks
+are detection quality, label readability and playback performance with the same
+recording. A usable live camera backend remains unresolved.
 
 1. **Replay and window:** process a known recording, verify detection coordinates
    and frame association, open the window on a real display, and check clean
@@ -126,9 +126,10 @@ unresolved; a live camera backend is not required to prototype that panel.
    findings, and verify real frames, pixel conversion, camera
    identity/orientation, disconnect/reconnect, and wake/idle behavior. Record
    SteamOS/SteamVR versions and timing provenance.
-3. **VR panel:** render annotated frames through a tested overlay backend. Measure
-   end-to-end latency, frame drops, resource use, and tracking/compositor behavior
-   during the intended VR workload.
+3. **VR panel:** basic playback, controls and head-relative placement are confirmed
+   by the user. Measure label readability, processing rate, resource use and
+   tracking/compositor behavior during the intended VR workload. Measure
+   end-to-end latency and frame drops when a live backend is available.
 4. **World-space labels:** validate calibration, depth, pose timing, and label
    placement against known geometry while the headset and objects move.
 5. **Optional splat experiment:** reconstruct a recorded static scene, inspect its

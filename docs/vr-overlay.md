@@ -1,11 +1,21 @@
 # VR replay panel prototype
 
-The existing Qt replay window works on Frame according to the user. The VR
-panel is now implemented, but has not yet been run on a headset. Cloud tests
-verify its build, byte transport, RGB conversion, controls and failure paths;
-they do not establish Steam Frame overlay support or visible headset rendering.
+The user has confirmed both the Qt replay window and the native OpenVR replay
+panel working on Steam Frame. After the timed panel test succeeded, the user
+reported: "The controls and video playback all worked, as well as the image
+that followed my head."
+
+This establishes basic visible playback, working controls and head-relative
+placement on the tested device. Detection accuracy, label readability, color
+appearance and performance have not been measured. Cloud tests separately
+verify the build, byte transport, RGB conversion, controls and failure paths;
+they do not replace the user's headset observations. Live camera capture
+remains unimplemented.
 
 ## First device test: a timed panel
+
+This test has passed on the user's Frame. Use it to establish a baseline when
+testing a new device or runtime before launching the replay panel.
 
 Close the running replay window so its terminal is available. Keep SteamVR
 running and use the normal `steamos` graphical session. On Frame:
@@ -23,8 +33,8 @@ running and use the normal `steamos` graphical session. On Frame:
 This builds natively against the same pinned Valve SDK as the camera tool. The
 test uses public OpenVR overlay/system interfaces. It does not request a
 camera interface, open camera nodes, replace a compositor layer, or change
-camera settings. `VRApplication_Overlay` initialization and raw-image rendering
-still require validation on the actual runtime. The camera probe is not run.
+camera settings. It checks `VRApplication_Overlay` initialization and raw-image
+rendering on the actual runtime. The camera probe is not run.
 
 Look for a small panel following your head, slightly below the center of view.
 It has a grid, white **TOP** text, red/green upper quadrants and blue/yellow lower
@@ -82,7 +92,7 @@ remains 10 processed fps. This CPU-copy path is a prototype, not a measured
 low-latency graphics path. The runtime can reject `SetOverlayRaw`; use its named
 error rather than assuming general OpenVR support implies Frame compatibility.
 Color appearance, text readability, tracking/compositor impact and performance
-need device measurements.
+need device measurements beyond the confirmed basic playback and controls.
 
 ## Shutdown and reports
 

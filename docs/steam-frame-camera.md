@@ -60,8 +60,8 @@ Do not repeat the unchanged probe on this tested runtime. The binary now does
 no OpenVR work by default and requires `--allow-passthrough-interruption` for a
 deliberate future test after a material change. See the
 [device guide](on-device.md#then-verify-camera-access) for the guard and advanced
-procedure. The user has confirmed the file-replay window works on Frame;
-a supported live-capture interface remains unresolved.
+procedure. The user has confirmed the file-replay window and head-relative VR
+panel work on Frame; a supported live-capture interface remains unresolved.
 
 The user's separate file-decode check now succeeds on Frame: PyAV 16.1.0 decoded
 three 2464 × 2464 HEVC frames from video-stream ordinal 0 and converted
@@ -69,8 +69,10 @@ three 2464 × 2464 HEVC frames from video-stream ordinal 0 and converted
 audio and fragmented MP4 structure. This establishes selected-file decoding,
 not stereo camera identity, calibration or live capture. An annotated Qt replay
 window is tested offscreen in the cloud and confirmed working on Frame by the
-user; see the
-[window launch guide](on-device.md#open-the-annotated-replay-window).
+user. The user has also confirmed video playback, controls and the image
+following their head in the native VR panel; see the
+[window launch guide](on-device.md#open-the-annotated-replay-window) and
+[VR panel guide](vr-overlay.md). These display results use recorded input.
 
 ## Valve's documented application interface
 
@@ -205,10 +207,11 @@ or headset splat rendering.
 
 ## Implementation sequence and remaining checks
 
-1. Retain the confirmed working Qt replay window as the device baseline.
-   Measure object labels, orientation, color, pause/replay/loop controls and
-   clean shutdown systematically. Preserve original video
-   tracks and metadata; track ordinal does not establish stereo-side identity.
+1. Retain the confirmed working Qt replay window and VR panel as device baselines.
+   Playback and controls work according to the user. Measure object labels,
+   orientation, color, readability, performance and clean shutdown systematically.
+   Preserve original video tracks and metadata; track ordinal does not establish
+   stereo-side identity.
    The generated cloud fixtures cover detector/presentation integration, not
    vendor color, calibration or stereo alignment.
 2. Retain the device inventory and failed public-probe reports with their tested
@@ -225,14 +228,16 @@ or headset splat rendering.
    timestamp and timebase provenance, optional producer sequence, calibration
    reference and pose validity. Use a bounded latest-frame queue and measure
    dropped frames, latency and contention with XRService/compositor work.
-5. Prototype a VR panel with the working recorded input. Use Valve's
-   [overlay sample][openvr-overlay] as a public API reference, then validate it
-   on Frame. Add world-space labels only after calibration and depth checks.
+5. Continue the working VR panel with recorded input and check label readability
+   and compositor impact. The public implementation uses Valve's
+   [overlay sample][openvr-overlay] as a reference. Add world-space labels only
+   after calibration and depth checks.
 
-The user has run the native probe on Frame and verified vendor-app capture.
-Those results were not reproduced by the cloud agent. No camera SDK
-installation, Vulkan capture deployment or working VR overlay has been
-validated by this project. Keep public SDK documentation, user device results,
+The user has run the native probe on Frame and verified vendor-app capture,
+file replay and VR panel playback with working controls and head-relative
+placement. Those device results were not reproduced by the cloud agent. No
+camera SDK installation or Vulkan capture deployment has been validated by
+this project. Keep public SDK documentation, user device results,
 community hardware reports and cloud checks distinct in readiness claims.
 
 [openvr-api]: https://github.com/ValveSoftware/openvr/blob/0924064316de3effbcd1acf1e309182a2deb1c05/headers/openvr.h#L4919

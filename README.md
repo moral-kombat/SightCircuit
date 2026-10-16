@@ -2,12 +2,12 @@
 
 Framejacker is an early development project for a Linux app that recognizes
 objects from the **Arcturus Vision Camera** on **Steam Frame** and displays the
-results in a window, with a VR overlay as the eventual target.
+results in a window or a VR panel that follows the user's head.
 
 This repository contains an annotated file-replay prototype, camera-interface
 research, an architecture and reproducible development checks. Live camera
-capture remains unimplemented. A public OpenVR panel prototype is ready for
-its first on-headset test.
+capture remains unimplemented. The user has confirmed recorded-video playback,
+controls and the public OpenVR panel working on Steam Frame.
 
 ## Project status
 
@@ -22,7 +22,7 @@ its first on-headset test.
 | Native public OpenVR camera probe | No frames on the tested headset; interrupts passthrough; explicit opt-in required |
 | Live camera access from Framejacker | Unimplemented; a usable capture interface is still needed |
 | Annotated file-replay window | Confirmed working by the user on Frame; pause/replay/loop controls implemented; offscreen integration tests pass |
-| VR overlay | Native test panel and annotated replay integration implemented; headset validation pending |
+| VR overlay | Timed test panel and replay panel confirmed working by the user on Frame, including controls and following head movement |
 | Stereo depth and labels anchored in the room | Planned; requires calibration, depth and pose alignment |
 | Gaussian splat reconstruction | Optional future experiment using recorded data and a GPU computer |
 
@@ -84,14 +84,15 @@ The intended live path is:
 camera or replay input → preprocessing → detector → annotated window → VR overlay
 ```
 
-Capture, inference and presentation will be separate components. Use a short
-recording from the working Arcturus app to build a replay-backed application,
-then connect a verified live capture backend. World-space labels come after
-depth and pose validation.
+Capture, inference and presentation will be separate components. The replay
+application and VR panel now work on Frame using an Arcturus app recording.
+Next, check detection quality and measure playback performance before connecting
+a verified live capture backend. World-space labels come after depth and pose
+validation.
 
 On Frame, run `bash scripts/frame_replay_check.sh` after recording a short clip.
-It gathers the device inventory and metadata needed to begin the replay/window
-milestone without starting the unsafe public camera probe.
+It gathers the device inventory and recording metadata without starting the
+unsafe public camera probe.
 
 The user's recording contains two `hvc1` HEVC video tracks at 2464 × 2464,
 `gpmd` metadata and audio in fragmented MP4. To check actual file decoding,
@@ -116,11 +117,13 @@ the original recording. The user confirms the replay window works on Frame.
 Detection accuracy, color and performance have not been benchmarked. See the
 [window launch guide](docs/on-device.md#open-the-annotated-replay-window).
 
-The next device milestone is the [timed VR panel test](docs/vr-overlay.md).
-After that passes, `scripts/replay_window.py --overlay` also presents the
-annotated recording in a head-relative panel, with placement, size, opacity and
+Add `--overlay` to present the annotated recording in a head-relative panel,
+with placement, size, opacity and
 visibility controls in the Qt window. It uses public overlay APIs and does not
-run the camera probe. Actual headset rendering remains unverified.
+run the camera probe. The user confirms video playback, controls and the image
+following their head all work. See the [VR panel guide](docs/vr-overlay.md) for
+launch commands and the timed test for a new runtime. This confirms basic
+presentation; detection quality and performance still need measurement.
 
 Gaussian splats could provide a persistent visual map of a mostly static room.
 Reconstruction remains a separate recorded-data workflow; object recognition

@@ -74,7 +74,9 @@ smoke script does not invoke a separately installed `ffmpeg` executable.
 Do not copy an x86_64 virtual environment onto the headset. Device dependencies
 and camera/runtime capabilities must be installed and verified for the target
 architecture. Live capture, stereo synchronization, depth, tracking-space
-alignment, performance, acceleration and VR presentation remain untested here.
+alignment, performance and acceleration remain untested here. The user has
+confirmed replay video, controls and a VR panel following their head on Frame;
+the cloud tests do not exercise a headset runtime.
 See the [camera guide](steam-frame-camera.md) and
 [implementation milestones](architecture.md).
 
