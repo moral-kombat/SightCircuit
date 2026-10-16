@@ -21,7 +21,8 @@ unknown unless explicitly recorded below.
 | Bounded mirror recognition | Frame-confirmed execution | 100 captured / 51 processed reads, 4.993 processed fps, 42.044 ms mean inference and clean shutdown; user reports normal passthrough; label accuracy and live display remain separate; [E17](#e17-bounded-mirror-recognition-on-frame) |
 | Existing-mirror diagnostic | Frame capture confirmed; VR panel included in input | Physical-room preview and bounded inference work, but this composited view includes our overlay; physical camera identity/timing remain unknown; [E14](#e14-physical-room-visible-in-the-mirror-preview), [E18](#e18-vr-panel-included-in-mirror-input) |
 | Dedicated-camera shared-memory reader | Implemented; cloud-tested | Read-only native consumer, bounded supervisor and synthetic producer; actual provider and ARM64 validation pending; [E9](#e9-shared-memory-reader-cloud-checks) |
-| Native capture prerequisite report | Implemented; cloud-checked | Compiler, Vulkan build-file and existing configuration metadata only; Frame results pending; [E20](#e20-capture-prerequisite-report-cloud-checks) |
+| Native capture prerequisite report | Frame report received | aarch64 SteamOS 0.5.6, GCC 15.1.1 and Vulkan 1.4.309 development metadata/headers; no capture configuration at checked paths; [E21](#e21-capture-prerequisites-on-frame) |
+| Pinned capture reference build | Cloud compile/link check passed; native Frame build pending | Unmodified upstream inspection artifacts only; no activation, runtime fixes still required; [E22](#e22-capture-reference-build-cloud-checks) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
 | Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; no source-identified built-in-camera frames have been received |
 | Stereo depth and world-space labels | Planned | Calibration, depth and pose/timebase alignment remain unresolved |
@@ -572,8 +573,66 @@ missing/inaccessible paths and regular-file/directory/socket/symlink metadata.
 The default inventory retained `capture_validation: not_performed`.
 Documentation links, existing anchors, shell-example syntax and documented
 Python options were checked. No camera, Vulkan-loader, native provider build
-or ARM64 execution was exercised. Frame prerequisite output remains pending;
-use [the read-only procedure](on-device.md#check-native-capture-prerequisites).
+or ARM64 execution was exercised in this check. The subsequent Frame report is
+recorded below; use [the read-only procedure](on-device.md#check-native-capture-prerequisites)
+for a new inventory.
+
+### E21: Capture prerequisites on Frame
+
+Source: user-supplied `capture_build_prerequisites` JSON received 2026-10-16,
+with terminal prompt `steamos@frame`. Exact execution time, checkout revision
+and SteamVR version were not supplied. The report records:
+
+| Field | Reported value |
+| --- | --- |
+| Architecture | `aarch64` |
+| OS / build | SteamOS `0.5.6` / `20261015.6141207` |
+| Kernel | `6.18.0-g83913f38113c` |
+| C++ compiler | `g++ (GCC) 15.1.1 20250729` |
+| Vulkan `pkg-config` version | `1.4.309` |
+| Vulkan headers | `/usr/include/vulkan/vulkan.h` and `vk_layer.h` present as regular files |
+| Vulkan linker/runtime path entries | `libvulkan.so` and `libvulkan.so.1` symlinks under `/usr/lib` and `/lib` |
+| Known community capture paths | Manifest, layer library, enable marker, runtime socket and luma shared memory absent |
+| Runtime initialization / capture / files changed by diagnostic | `false` / `false` / `false` |
+
+The checked paths were the reviewed community locations under the user's
+`.local/share`, `.config`, `/run/user/1000/mrhand/cam.sock` and
+`/dev/shm/mrhand-pt`. Absence there does not exclude another installation path.
+Symlink targets were not resolved; the four library entries are not evidence
+of four distinct libraries. This supports proceeding to a native compile/link
+check without a routine development-package installation. It does not prove a
+working Vulkan device, camera import or active passthrough source.
+
+This OS/build differs from E1's older inventory. Retain the runtime evidence
+attached to each earlier test; this report does not revalidate replay, mirror
+capture or inference on the newly reported build. Arcturus connection remains
+confirmed and source selection remains unknown, as recorded in E19.
+
+### E22: Capture reference build cloud checks
+
+Source: local cloud execution on 2026-10-16 of the reference-builder worktree
+based on `8dab44b`. The pinned upstream layer and `ptgrab` compiled/linked on
+x86_64 using GCC 14.2.0, Vulkan-Headers v1.4.309 at
+`952f776f6573aafbb62ea717d871cd1d6816c387` and the existing Linux Vulkan loader.
+Source remains unmodified at capture revision
+`ff6a2b29bc50c9497d66fd7ff07e00b61f9eb082`.
+
+The build report records source/artifact SHA-256 hashes and compiler target.
+Inspection verified ELF x86_64 headers, the layer negotiation export,
+`ptgrab`'s `libvulkan.so.1` dependency and missing execute permissions on both
+artifacts. Argument checks and changed-cache refusal passed; a rejected cache
+was retained and the previous build report preserved. Neither artifact was
+loaded or run, and no layer manifest or enable marker was created.
+Fresh-cache downloads retained the pinned sources and license texts. A repeat
+build using compiler-search-path headers also passed. The CI artifact-check
+command was executed locally; both dependency caches remained clean.
+
+The documented reader build/test sequence also passed all 14 shared-memory
+tests in 6.623 seconds with no skips, using synthetic input on cloud x86_64.
+A dedicated CI job was added for the reference build; its hosted result has
+not been checked. Native ARM64 compilation/reader tests, provider runtime fixes,
+configuration restoration and camera capture remain pending. See
+[the next device procedure](on-device.md#build-the-capture-reference-without-activation).
 
 ## Maintaining the evidence
 

@@ -278,6 +278,35 @@ does not establish compatibility or a running provider. No installer or capture
 build is invoked. See [the operating procedure](on-device.md#check-native-capture-prerequisites)
 and [the capture plan](live-capture.md#current-work-order) for the next device step.
 
+### Compile the unmodified capture reference
+
+```bash
+bash scripts/build_capture_reference.sh
+```
+
+This build-only script compiles `handcam_layer.cpp` and `ptgrab.cpp` from the
+reviewed `ff6a2b29bc50c9497d66fd7ff07e00b61f9eb082` capture subtree. The clean,
+pinned source cache is `.cache/capture-reference`; altered caches are retained
+and refused. No upstream build/install script is executed. When the compiler
+cannot find both Vulkan headers, it fetches Vulkan-Headers v1.4.309 at
+`952f776f6573aafbb62ea717d871cd1d6816c387` into `.cache/vulkan-headers`, including
+license texts. It links the producer directly to Linux `libvulkan.so.1`; this
+checks loader linkage without requiring an unversioned development symlink.
+The loader itself must already be installed. No package manager is invoked.
+
+Outputs are `reference-libVkLayer_mrhand.so`, `reference-ptgrab` and
+`build-report.json` in `artifacts/capture-reference/`. The report records source
+and artifact SHA-256 digests, compiler target and header origin. Both ELF files
+lack execute permission. No binary is run/loaded and no layer manifest is
+created. `deployment_ready: false` is intentional: the upstream FD/socket,
+publication-ordering and cleanup issues remain. These artifacts prove only
+that the reference compiles and links on the tested machine. The provider
+adaptation, configuration restoration and controlled live trial remain pending.
+
+The dedicated CI job builds these inspection artifacts and checks their hashes,
+ELF headers and permissions without executing them. For Frame, follow
+[the combined build and reader-test procedure](on-device.md#build-the-capture-reference-without-activation).
+
 ## Isolated luma reader and synthetic producer
 
 The shared-memory diagnostic is independent of inference, Qt, OpenVR and Vulkan.

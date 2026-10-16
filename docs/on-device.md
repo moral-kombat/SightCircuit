@@ -573,7 +573,43 @@ headers or linker files are installed. Search locations are limited, and
 symlink targets are not verified. Do not unlock SteamOS or run the upstream
 installer to fill gaps; choose the build approach from the report first.
 The [development guide](development.md#dedicated-capture-build-prerequisites)
-explains the distinction. Native Frame results are still pending.
+explains the distinction. The Frame report now confirms GCC 15.1.1 and Vulkan
+1.4.309 development metadata/headers; see [E21](status.md#e21-capture-prerequisites-on-frame).
+Compilation and real capture remain separate checks.
+
+### Build the capture reference without activation
+
+The pinned reference build is an intermediate compiler/linker compatibility
+check. It has passed on cloud x86_64; a native Frame result is pending. Its
+unmodified upstream code still needs the lifecycle and publication fixes in
+the [capture review](capture-reference-review.md#findings-that-affect-our-implementation)
+before deployment. It does not provide a runnable live-capture command.
+
+In the existing Frame checkout, run:
+
+```bash
+cd "$HOME/framejacker" &&
+git pull --ff-only &&
+bash scripts/build_capture_reference.sh &&
+bash scripts/build_shm_reader.sh &&
+.venv-replay/bin/python -m unittest discover -s tests -p test_shm_capture_check.py -v
+```
+
+The reference build needs Bash, Git, Python 3, C++17 and a linkable Linux Vulkan
+loader. It fetches pinned source from GitHub into ignored `.cache/`, preserving
+notices and rejecting changed caches. Existing compiler-search-path Vulkan
+headers are used when available; otherwise pinned headers are fetched. No
+package installation or upstream script execution occurs. It writes two
+non-executable inspection artifacts and `build-report.json` under ignored
+`artifacts/capture-reference/`. No manifest or enable marker is generated, and
+neither artifact is loaded or run. SteamVR and camera-source settings are untouched.
+
+Share the build report and test summary. The existing shared-memory tests use
+synthetic images in temporary ordinary files, not cameras or the compositor.
+They check native ARM64 reader behavior without activating a provider. A passed
+build/fixture test does not establish live-camera synchronization or compatibility.
+Keep the reference artifacts for inspection; do not install them, add execute
+permission or run `ptgrab` as the next step.
 
 ### Check existing luma shared memory
 
@@ -753,9 +789,14 @@ Bounded mirror recognition then processed 51/100 reads at 4.993 fps with normal
 passthrough and clean shutdown. Earlier labels were chair/tvmonitor; the final
 frame had no detections. The fixed-panel test then confirmed our panel appears
 in mirror input; its grayscale/no-label output was expected because no detector ran.
-Arcturus is connected; its selection for passthrough is unknown. Next run
-python3 scripts/device_check.py --capture-prerequisites and prepare input before
-overlay composition. Physical camera identity and scene freshness remain unverified.
+Arcturus is connected; its selection for passthrough is unknown. The latest
+prerequisite report is aarch64 SteamOS 0.5.6 build 20261015.6141207, GCC 15.1.1
+and Vulkan 1.4.309 with development headers. Earlier capture tests have their
+own runtime evidence; do not silently attach this newer build to them.
+Next build the pinned capture reference without activation and run the existing
+synthetic reader tests on ARM64. Then finish provider lifecycle/publication fixes
+and configuration restoration before deployment. Physical camera identity and
+scene freshness remain unverified.
 The isolated shared-memory reader and synthetic fixture are implemented and
 cloud-tested; ARM64/provider validation and capture-layer deployment are pending.
 Keep user observations, cloud checks and upstream capture claims distinct.

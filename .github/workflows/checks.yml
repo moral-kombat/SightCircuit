@@ -9,6 +9,42 @@ permissions:
   contents: read
 
 jobs:
+  capture-reference:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the Linux Vulkan loader for linking
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libvulkan1
+      - name: Build the pinned reference without activation
+        run: bash scripts/build_capture_reference.sh
+      - name: Check inspection artifacts without executing them
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          root = Path('artifacts/capture-reference')
+          report = json.loads((root / 'build-report.json').read_text())
+          assert report['status'] == 'built_reference'
+          for field in ('runtime_initialized', 'capture_started',
+                        'layer_installation_performed', 'deployment_ready',
+                        'upstream_sources_modified'):
+              assert report[field] is False, field
+          assert len(report['artifacts']) == 2
+          for item in report['artifacts']:
+              path = root / item['name']
+              data = path.read_bytes()
+              assert data[:4] == b'\x7fELF'
+              assert not path.stat().st_mode & 0o111
+              assert len(data) == item['size_bytes']
+              assert hashlib.sha256(data).hexdigest() == item['sha256']
+          print('Reference binaries built and verified without loading or running them.')
+          PY
+
   shm-reader:
     runs-on: ubuntu-24.04
     timeout-minutes: 5

@@ -82,11 +82,12 @@ room. Recognition on that still completed but mislabeled a rug as sofa. The
 then processed 51 reads at 4.993 fps, with clean shutdown and normal passthrough.
 The [fixed-panel check](docs/on-device.md#check-whether-the-vr-panel-appears-in-mirror-input)
 confirmed that this mirror captures our VR output. Arcturus is connected; its
-selection for passthrough is unknown. Next collect
-[native build prerequisites](docs/on-device.md#check-native-capture-prerequisites)
-and prepare an input independent of our output before continuous VR image
-display. Bounded recognition and snapshots shown after capture remain
-useful. The model's class coverage and false positives need separate work.
+selection for passthrough is unknown. The Frame reports GCC 15 and Vulkan 1.4.309
+development files. Next run the
+[build-only reference check and synthetic ARM64 reader tests](docs/on-device.md#build-the-capture-reference-without-activation),
+then finish the provider fixes needed for input independent of our output before
+continuous VR image display. Bounded recognition and snapshots shown after
+capture remain useful. The model's class coverage and false positives need separate work.
 The [isolated shared-memory reader](docs/on-device.md#check-existing-luma-shared-memory)
 also passes controlled cloud tests; no dedicated capture provider has been
 deployed. Built-in camera capture needs separate validation. The

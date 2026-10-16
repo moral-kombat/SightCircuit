@@ -66,6 +66,24 @@ luma shared-memory layout; no upstream capture layer, `ptgrab`, installer,
 driver or hand-tracking model is bundled or activated. The controlled producer
 is original test code, not a camera source.
 
+## Capture reference build dependencies
+
+`scripts/build_capture_reference.sh` fetches the same MIT-licensed capture project
+at `ff6a2b29bc50c9497d66fd7ff07e00b61f9eb082` into ignored
+`.cache/capture-reference`, retaining its root license. It compiles unmodified
+`handcam_layer.cpp` and `ptgrab.cpp` as non-executable inspection artifacts.
+It does not run upstream scripts, install a layer or start a producer. These
+sources and binaries are not vendored into tracked files; runtime fixes remain
+required before deployment.
+
+If compiler-search-path Vulkan headers are unavailable, the builder fetches
+[Khronos Vulkan-Headers v1.4.309](https://github.com/KhronosGroup/Vulkan-Headers/tree/952f776f6573aafbb62ea717d871cd1d6816c387)
+at `952f776f6573aafbb62ea717d871cd1d6816c387` into ignored
+`.cache/vulkan-headers`. Its [license notice](https://github.com/KhronosGroup/Vulkan-Headers/blob/952f776f6573aafbb62ea717d871cd1d6816c387/LICENSE.md)
+and `LICENSES` texts are retained; per-file Apache-2.0/MIT notices apply.
+No Vulkan loader/driver binary is downloaded. The existing system loader is
+linked for the compile-only compatibility check.
+
 ## Research references
 
 The [camera guide](docs/steam-frame-camera.md) links Valve's OpenVR SDK, Arcturus's
