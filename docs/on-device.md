@@ -4,8 +4,9 @@ Use this guide for device access, inventory and recorded-video replay. Start
 with [status and evidence](status.md) for compatibility and verified results,
 then the [overlay guide](vr-overlay.md) to run the VR panel. The
 [active capture plan](live-capture.md#current-work-order) owns upcoming live-input
-work. The mirror diagnostic below is implemented; dedicated camera capture and
-its shared-memory reader remain planned.
+work. The mirror diagnostic and isolated shared-memory reader below are
+implemented and cloud-tested. Dedicated camera-provider deployment remains
+planned.
 
 ## Confirm where commands run
 
@@ -323,6 +324,77 @@ to make this check pass. Device capture and ARM64 execution remain pending;
 see [cloud evidence](status.md#e8-mirror-diagnostic-cloud-checks) and the
 [active plan](live-capture.md#current-work-order).
 
+### Check existing luma shared memory
+
+This is a separate diagnostic for an **already running** compatible provider.
+Framejacker has not installed or started that provider. With no flags the
+command only checks file metadata; it does not read a header, map pixels or
+start capture:
+
+```bash
+python3 scripts/shm_capture_check.py
+```
+
+`source.present: false` is expected when no provider publishes
+`/dev/shm/mrhand-pt`. A present file alone does not prove live camera input.
+Do not install a layer merely to make this check report a file.
+
+Build the reader on Frame using its existing Bash and C++17 compiler:
+
+```bash
+bash scripts/build_shm_reader.sh
+```
+
+The build downloads nothing, installs no packages and starts no producer. It
+creates native binaries in ignored `artifacts/shm-reader/`; do not copy the
+cloud's x86_64 binaries onto ARM64 Frame. To exercise generated images first,
+use the [synthetic procedure](development.md#isolated-luma-reader-and-synthetic-producer).
+That checks the reader on the device without touching a camera or compositor.
+
+Only when a compatible provider is already running, explicitly read one slot:
+
+```bash
+python3 scripts/shm_capture_check.py --read --camera 0 --seconds 10
+```
+
+The source must be an ordinary file, not a symlink, device or FIFO. It is opened
+read-only. The reader validates the pinned native layout, exact file length,
+dimensions, slot count and per-slot sequence before and after copying. Copies
+are capped at 10 per second and 16 MiB per slot, with at most two slots. It
+rejects incomplete/changing copies, old or invalid observation timestamps,
+observable counter resets and changes to the file identity, size or header.
+Slot numbers do not establish left/right or physical camera identity.
+
+`native` reports accepted frames, observed rate, dimensions, gray8 format,
+sequence/frame counters, stale/busy/rejected copies and cleanup. The default
+maximum observation age is 1,000 ms; `--max-age-ms` changes this diagnostic
+threshold. `--frames N` permits an earlier exit after N accepted publications.
+These are provider observation times on `CLOCK_MONOTONIC`, not exposures.
+Writer ordering and original camera-frame integrity remain explicitly
+unverified even when a copy succeeds. See [status](status.md#e9-shared-memory-reader-cloud-checks).
+
+No images are saved by default. To request a grayscale still, choose a new PNG
+path in an existing directory:
+
+```bash
+mkdir -p artifacts/shm-check
+python3 scripts/shm_capture_check.py --read --camera 0 --seconds 10 \
+  --preview artifacts/shm-check/new-preview.png
+```
+
+The input is unmapped and closed before preview output is written. The still
+fits within 640 × 640 and is published only after successful reader shutdown;
+existing destinations are preserved. Inspect it after the command ends.
+
+The supervisor allows the requested duration plus three seconds, then up to
+two seconds of terminate/kill cleanup. Ctrl+C or SIGTERM stops and reaps the
+reader. A concurrent truncation can fault a native mapping; the supervisor
+reports that failure and never publishes a preview. Forced shutdown does not
+claim normal source cleanup. Exit codes are `0` for metadata inspection or
+successful capture, `1` for unavailable/stale/malformed input or another error,
+`2` for invalid arguments, and `130`/`143` for cancellation. Retain the JSON
+instead of restarting services or retrying a disruptive camera path.
+
 ### Advanced probe, only for a deliberate future retest
 
 Building the probe does not initialize OpenVR:
@@ -423,7 +495,8 @@ future retest after a material change.
 Read docs/live-capture.md#current-work-order for the next engineering task.
 The mirror diagnostic is implemented; run python3 scripts/mirror_check.py first
 for metadata-only discovery. Actual mirror acquisition remains unverified.
-The dedicated-camera shared-memory reader is still planned.
+The isolated shared-memory reader and synthetic fixture are implemented and
+cloud-tested; ARM64/provider validation and capture-layer deployment are pending.
 Keep user observations, cloud checks and upstream capture claims distinct.
 Record new results in docs/status.md, including unknown dates/versions explicitly.
 ```

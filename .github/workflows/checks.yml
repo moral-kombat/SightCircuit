@@ -9,6 +9,19 @@ permissions:
   contents: read
 
 jobs:
+  shm-reader:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build standalone shared-memory tools
+        run: bash scripts/build_shm_reader.sh
+      - name: Verify controlled publications and bounded reader failures
+        run: python -m unittest discover -s tests -p test_shm_capture_check.py -v
+
   mirror-check:
     runs-on: ubuntu-24.04
     timeout-minutes: 5

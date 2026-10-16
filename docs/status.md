@@ -18,7 +18,7 @@ unknown unless explicitly recorded below.
 | Public OpenVR tracked-camera probe | Device-confirmed failure | No frames and observed passthrough interruption; do not repeat the unchanged test; [E3](#e3-public-camera-probe) |
 | Live input in the detector/VR application | Planned; unimplemented | No integrated live capture backend; [active work plan](live-capture.md) |
 | Existing-mirror diagnostic | Implemented; cloud-tested | Metadata-only discovery, guarded read-only capture, bounded worker and explicit preview; Frame capture/ARM64 execution pending; [E8](#e8-mirror-diagnostic-cloud-checks) |
-| Dedicated-camera shared-memory reader | Planned; unimplemented | Protocol and upstream implementation reviewed; no Framejacker consumer yet |
+| Dedicated-camera shared-memory reader | Implemented; cloud-tested | Read-only native consumer, bounded supervisor and synthetic producer; actual provider and ARM64 validation pending; [E9](#e9-shared-memory-reader-cloud-checks) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
 | Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; our project has received no live frames |
 | Stereo depth and world-space labels | Planned | Calibration, depth and pose/timebase alignment remain unresolved |
@@ -193,6 +193,39 @@ locally alongside these checks. These results do not demonstrate actual mirror
 capture, camera content, compatibility with the Frame's driver, ARM64 execution
 or a GitHub Actions result. Follow the
 [device procedure](on-device.md#check-an-existing-steamvr-mirror) for those checks.
+
+### E9: Shared-memory reader cloud checks
+
+Execution date: 2026-10-16, Linux x86_64 cloud environment. The
+[native reader](../tools/shm_reader.cpp),
+[supervisor](../scripts/shm_capture_check.py) and original
+[synthetic producer](../tools/shm_fixture.cpp) exercise the pinned
+[MRHAND layout](../third_party/mrhand/README.md). No camera provider, Vulkan
+layer or SteamVR service was started.
+
+[Behavioral checks](../tests/test_shm_capture_check.py) cover both slots and
+pixel/counter association across real processes, deliberately split writes,
+odd/incomplete publications, stale/stalled input, malformed dimensions/lengths,
+nonregular files, truncation, replacement and observable producer resets. They
+also exercise native crash containment, deadlines, SIGTERM process reaping,
+new-file preview publication and preservation of concurrent destinations.
+With PyAV installed, the generated PNG is decoded by a real image decoder.
+The full local replay/window/native-transport suite passed alongside these
+checks. This is local validation, not a GitHub Actions result.
+
+The controlled producer includes a barrier after the odd sequence marker;
+the reviewed upstream writer still requires ordering review/correction on
+ARM64. Reader-side sequence checks cannot repair that writer or establish
+completion of the original GPU image. The format also has no producer-generation
+field, so a restart that catches up between polls may escape detection.
+`writer_ordering_verified` and `camera_frame_integrity_verified` remain false.
+
+The default command here reports `discovery_only`, with the upstream shared
+file absent and no read attempted. Native ARM64 execution, real-provider input,
+physical source identity and actual camera freshness remain unverified. The
+[operating procedure](on-device.md#check-existing-luma-shared-memory) and
+[controlled fixture](development.md#isolated-luma-reader-and-synthetic-producer)
+describe the distinct next checks.
 
 ## Maintaining the evidence
 

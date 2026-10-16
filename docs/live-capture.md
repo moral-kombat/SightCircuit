@@ -11,7 +11,7 @@ layer has been deployed by Framejacker.
 | Order | Deliverable | State | Acceptance |
 | --- | --- | --- | --- |
 | 1 | Bounded diagnostic for an existing SteamVR mirror | Implemented and cloud-tested; next is Frame validation | Discover existing virtual feed metadata, exit within a deadline and obtain device evidence of actual mirror/passthrough content; [procedure](on-device.md#check-an-existing-steamvr-mirror) |
-| 2 | Isolated shared-memory reader and controlled producer | Planned; unimplemented | Validate the pinned layout, consistent frame copies, stale/malformed/restarted input and shutdown; test synchronization on ARM64 before a Frame claim |
+| 2 | Isolated shared-memory reader and controlled producer | Implemented and cloud-tested; ARM64 and real-provider validation pending | Validate the pinned layout, consistent frame copies, stale/malformed/restarted input and shutdown; [cloud evidence](status.md#e9-shared-memory-reader-cloud-checks) |
 | 3 | Dedicated Arcturus capture provider | Planned; not deployed | Pin only the capture components, address lifecycle findings, build natively and prepare exact configuration restoration for a controlled trial |
 | 4 | Capture-only device trial | Planned | Ten seconds of fresh images from one identified source, correct orientation, clean exit and working normal passthrough |
 | 5 | Live input in the detector and existing display | Planned | Preserve source-frame association and one latest input; begin at a target of 5 processed fps and measure device/compositor impact |
@@ -89,9 +89,15 @@ Keep the reader separate from inference, Qt and OpenVR. It should consume an
 already running provider; it must not install or activate a compositor layer,
 restart SteamVR or open camera devices. Its first target is the pinned
 [`MrhandPtHeader` shared-memory contract][protocol], produced by
-[`ptgrab`][producer]. This tool has not been implemented yet.
+[`ptgrab`][producer]. The standalone reader, supervisor and synthetic producer
+are now implemented; [development checks](development.md#isolated-luma-reader-and-synthetic-producer)
+cover the controlled x86_64 publication path. Follow the
+[operating procedure](on-device.md#check-existing-luma-shared-memory) for existing
+input. ARM64 execution, upstream writer ordering and original camera-buffer
+completion remain unverified.
 
-The implementation and tests need to cover:
+The implementation and controlled tests cover these requirements; ARM64 and
+real-provider acceptance remain pending:
 
 - Exact native layout, magic, file size, dimensions and camera-slot bounds.
   Keep the consumer read-only and bound all allocations and copies.
@@ -114,6 +120,19 @@ observed a buffer change; they are not exposure timestamps. Preserve source
 identity and timing validity explicitly. Apply the source review's lifecycle,
 descriptor and import validation findings to the provider before a trial;
 building a read-only consumer does not deploy or repair the provider itself.
+
+The controlled producer includes a full barrier after marking a slot odd. The
+reviewed upstream writer's odd release-store alone does not order later payload
+stores on ARM64; provider preparation must address that contract. The reader
+rejects observable counter regressions and file changes, but this layout has no
+producer-generation field: a restart that catches up between polls may be
+undetectable. Successful synthetic copies do not resolve GPU completion or
+physical source identity.
+
+The next offline engineering task is the dedicated provider: pin only its
+capture components, repair descriptor/publication lifecycle issues from the
+source review, and prepare a native ARM64 build and exact layer-configuration
+restoration. Deployment and the first camera trial remain separate steps.
 
 ## First live device trial
 

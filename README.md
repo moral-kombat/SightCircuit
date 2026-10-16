@@ -75,8 +75,10 @@ next tasks: a bounded diagnostic for an existing headset mirror, followed by an
 isolated Arcturus shared-memory reader and capture-only device trial. The
 [mirror diagnostic](docs/on-device.md#check-an-existing-steamvr-mirror) is
 implemented and cloud-tested; actual Frame acquisition remains unverified.
-The shared-memory reader is still planned. Built-in camera capture needs separate
-validation. The [dated reference review](docs/capture-reference-review.md)
+The [isolated shared-memory reader](docs/on-device.md#check-existing-luma-shared-memory)
+also passes controlled cloud tests; no dedicated capture provider has been
+deployed. Built-in camera capture needs separate validation. The
+[dated reference review](docs/capture-reference-review.md)
 explains the strategy; [architecture](docs/architecture.md) describes components,
 frame ownership and longer-term acceptance criteria.
 

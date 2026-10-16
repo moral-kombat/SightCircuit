@@ -23,6 +23,7 @@ tests, install the window dependencies and build the bridge:
 ```bash
 bash scripts/setup_window.sh
 bash scripts/build_overlay_bridge.sh
+bash scripts/build_shm_reader.sh
 .venv-replay/bin/python -m unittest discover -s tests -v
 ```
 

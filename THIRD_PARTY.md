@@ -1,8 +1,9 @@
 # Third-party sources
 
 The repository's MIT license covers original Framejacker code and documentation.
-Dependencies and downloaded fixtures retain their upstream terms. No upstream
-model weights, images, SDK binaries or source trees are bundled in this commit.
+Dependencies, reused code and downloaded fixtures retain their upstream terms.
+No model weights, images or SDK binaries are bundled. The protocol header
+identified below is the only vendored capture-project source.
 
 ## Development fixtures
 
@@ -54,9 +55,21 @@ The overlay bridge also uses the SDK's bundled JsonCpp implementation; its
 public-domain/MIT notices remain in the cached `src/jsoncpp.cpp` source. No SDK
 or JsonCpp sources are copied into the project tree outside that ignored cache.
 
+## MRHAND protocol header
+
+[third_party/mrhand/handcam_proto.h](third_party/mrhand/handcam_proto.h) is copied
+unmodified from `spyjacob/steam-frame-hand-tracking` at commit
+`ff6a2b29bc50c9497d66fd7ff07e00b61f9eb082`. Its
+[upstream MIT license](third_party/mrhand/LICENSE) and
+[provenance](third_party/mrhand/README.md) are included. Framejacker uses the
+luma shared-memory layout; no upstream capture layer, `ptgrab`, installer,
+driver or hand-tracking model is bundled or activated. The controlled producer
+is original test code, not a camera source.
+
 ## Research references
 
 The [camera guide](docs/steam-frame-camera.md) links Valve's OpenVR SDK, Arcturus's
 Spirula fork and community capture/reconstruction projects. Those links provide
-research context; their code and binaries have not been vendored. Consult their
-licenses and preserve attribution when integrating any implementation.
+research context. Apart from the protocol header above, their code and binaries
+have not been vendored. Consult their licenses and preserve attribution when
+integrating any implementation.
