@@ -1,7 +1,9 @@
 # Contributing
 
-Framejacker is in early development. Camera research and environment validation
-exist; live capture and the application do not yet. Start with the
+Framejacker is in early development. The recorded-video application and native
+VR panel work on Steam Frame according to the user, including playback,
+controls and the panel following head movement. Live camera capture remains
+unimplemented. Start with the
 [README](README.md), [architecture](docs/architecture.md) and
 [camera interface research](docs/steam-frame-camera.md).
 
@@ -17,9 +19,20 @@ git diff --check
 ```
 
 The smoke check exercises decoding, CPU inference and offscreen rendering using
-generated sample video. There is no application unit-test suite yet. Add
-behavioral tests with new application components and keep claims about passing
-checks tied to what actually executed.
+generated sample video. To run the recording, replay-window and native overlay
+tests, install the window dependencies and build the bridge:
+
+```bash
+bash scripts/setup_window.sh
+bash scripts/build_overlay_bridge.sh
+.venv-replay/bin/python -m unittest discover -s tests -v
+```
+
+These tests run without a camera or SteamVR. Native transport tests use the
+bridge's validation-only mode; they do not validate headset rendering. See the
+[development guide](docs/development.md) for coverage and dependency limits.
+Add behavioral tests with new application components and keep claims about
+passing checks tied to what actually executed.
 
 ## Changes and pull requests
 
@@ -35,8 +48,10 @@ checks tied to what actually executed.
 - Keep raw recordings, personal calibration, credentials, downloaded weights and
   generated outputs out of commits. The repository ignores dedicated local
   `recordings/`, `calibration/`, `models/`, `.cache/` and `artifacts/` directories.
-- Keep dependency changes explicit in `requirements-dev.txt`. Preserve download
-  verification and include fixture provenance when changing sample assets.
+- Keep dependency changes explicit in `requirements-dev.txt`,
+  `requirements-replay.txt` and `requirements-window.txt` as appropriate.
+  Preserve download verification and include fixture provenance when changing
+  sample assets.
 
 Describe the resulting behavior and relevant checks in a pull request. Separate
 cloud smoke results from actual camera/headset results. Include source changes

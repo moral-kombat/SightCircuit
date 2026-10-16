@@ -151,7 +151,7 @@ durations when present. The script reads container headers and skips media
 payloads; it never changes the recording or accesses the camera. It does not
 decode images, establish left/right camera identity, validate calibration, or
 prove that the headset has a compatible decoder. Keep that metadata report as
-the input to the replay implementation. A recording is replay input, not a live
+a description of the replay input. A recording is replay input, not a live
 capture backend.
 
 The user has listed two completed recordings on Frame:
@@ -178,10 +178,12 @@ from video-stream ordinal 0, container stream index 0, track ID 1. All were
 stride. Reported media timestamps were 0, 0.016787 and 0.033532 seconds. This
 confirms that selected-track file decoding and RGB conversion work on Frame.
 The user then ran window setup and confirmed that the annotated replay window
-works on Frame. Detailed accuracy, color and performance measurements remain
-open. Avoid assuming the separate desktop development environment is installed.
+works on Frame. The native VR replay panel is also confirmed working, including
+playback, controls and the image following head movement. Detailed accuracy,
+color and performance measurements remain open. Avoid assuming the separate
+desktop development environment is installed.
 
-For the next session, one command runs the read-only inventory and selects the
+To inspect a new recording, one command runs the read-only inventory and selects the
 newest completed stereo recording automatically:
 
 ```bash
@@ -190,8 +192,8 @@ bash scripts/frame_replay_check.sh
 ```
 
 This does not initialize OpenVR, start or stop SteamVR, open camera device
-nodes, decode video, or modify the recording. Save its JSON output for the
-replay/window implementation.
+nodes, decode video, or modify the recording. Keep its JSON output alongside
+the playback observations when investigating a recording or runtime change.
 
 ### Decode one recorded video track
 

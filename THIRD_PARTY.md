@@ -43,10 +43,11 @@ as a demo detector; their upstream notices continue to apply.
 
 ## Native OpenVR tools
 
-The native camera probe and overlay bridge fetch Valve's OpenVR SDK at commit
-`0924064316de3effbcd1acf1e309182a2deb1c05` into ignored `.cache/openvr` and builds
-its portable loader from source. The SDK's [BSD 3-Clause license](https://github.com/ValveSoftware/openvr/blob/0924064316de3effbcd1acf1e309182a2deb1c05/LICENSE)
-and included notices apply to that loader. SDK sources and the compiled probe
+The native camera probe and overlay bridge build scripts fetch Valve's OpenVR
+SDK at commit `0924064316de3effbcd1acf1e309182a2deb1c05` into ignored
+`.cache/openvr` and build its portable loader from source. The SDK's
+[BSD 3-Clause license](https://github.com/ValveSoftware/openvr/blob/0924064316de3effbcd1acf1e309182a2deb1c05/LICENSE)
+and included notices apply to that loader. SDK sources and the compiled tool
 binaries remain outside the committed files.
 
 The overlay bridge also uses the SDK's bundled JsonCpp implementation; its
