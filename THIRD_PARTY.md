@@ -92,6 +92,13 @@ publication/control helpers and a generated-data fixture. Capture binaries remai
 non-executable inspection artifacts; tests run only the original synthetic fixture
 and the existing reader. No upstream installer or camera operation is executed.
 
+[patches/mrhand/0003-validated-image-import.patch](patches/mrhand/0003-validated-image-import.patch)
+applies after both earlier patches at the same pin and retains the same upstream
+MIT attribution. The optional `--import-fixes` mode adds original import/ownership
+helpers and a fake Vulkan dispatch fixture. Real capture binaries remain
+non-executable; only generated-data fixture code runs in its tests. The
+[provenance](patches/mrhand/README.md) and upstream notice above continue to apply.
+
 The standalone `scripts/build_capture_gpu_check.sh` builds original physical-device
 query code. It uses the same header cache and loads the installed Vulkan loader
 only through the query tool's explicit opt-in; it fetches no camera capture code.

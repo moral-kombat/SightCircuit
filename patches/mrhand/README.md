@@ -20,9 +20,19 @@ an odd-marker barrier, monotonic publication and cleanup. It adds explicit
 stream opt-in, duration/rate bounds and signals; image-dump mode is removed.
 The separate synthetic fixture exercises the same helper, without camera calls.
 
-Both capture binaries remain non-executable inspection artifacts. GPU import,
-GPU resource cleanup/watchdog, registry refresh, layer lifetime and configuration
+`0003-validated-image-import.patch` applies after both earlier patches. The
+optional `--import-fixes` mode adds the original `tools/capture_import.hpp` and
+its synthetic function-pointer fixture. It validates the reviewed metadata,
+modifier/memory-plane and external-image capabilities, memory requirements and
+FD ownership. Imported images are move-only; failure and completed-work paths
+destroy images before freeing memory. The shared submission helper checks fence
+reset/submit/wait before permitting retirement. Unconfirmed completion defers
+API destruction to process teardown. Command/host-memory status checks are also
+added; none of this establishes XRService producer synchronization.
+
+Both capture binaries remain non-executable inspection artifacts. Actual GPU
+imports, device and remaining GPU resource cleanup/watchdog, registry refresh, layer lifetime and configuration
 restoration still require work before deployment. A loop deadline does not
 bound every driver call. Follow the
 [active capture plan](../../docs/live-capture.md#current-work-order) and
-[publication device procedure](../../docs/on-device.md#test-owned-publication-without-capture).
+[import development procedure](../../docs/development.md#build-and-test-image-import-ownership).

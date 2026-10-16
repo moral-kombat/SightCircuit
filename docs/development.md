@@ -420,6 +420,86 @@ unbuilt; the dedicated CI job builds it before running them. Hosted CI results
 are separate from local results. For the real Frame query, use
 [the supervised device command](on-device.md#query-vulkan-capture-capabilities).
 
+### Build and test image import ownership
+
+This work can run without the headset, a camera or a working GPU driver:
+
+```bash
+bash scripts/build_capture_reference.sh --import-fixes
+python3 -m unittest discover -s tests -p test_capture_import.py -v
+```
+
+The fourth build mode applies patches 0001–0003 to a disposable copy of the
+same pinned capture source, adds `tools/capture_import.hpp`, and writes separate
+inspection artifacts under `artifacts/capture-import-reference/`. The report
+includes the import patch/helper hashes. The actual layer/producer stay
+non-executable and are never loaded/run by this procedure. The executable
+fixture is original synthetic code, defines `VK_NO_PROTOTYPES` and links no
+Vulkan loader. It uses function pointers and generated `memfd` payloads.
+
+The helper accepts only the reviewed 2464 × 2464 NV12 profile, **one** array
+layer, DMA-BUF, DRM modifier `0x0500000000000001`, sampled/transfer-source usage
+and **zero** binding offset. It creates non-disjoint exclusive images. Exporter
+flags/sharing mode are absent from this wire contract and remain unverified.
+A candidate's
+metadata is checked before the adapted producer initializes Vulkan. Declared
+allocation size is capped at 1 GiB; active plane offsets/pitches must fit at
+least one row within it, and unused plane metadata must be zero. Compressed
+memory planes are checked against the driver's modifier list, not inferred
+from the format's two color planes. This is a conservative initial profile;
+other formats, offsets, flags and source types need separate validation.
+Arrayed images are rejected because this record has no per-plane `arrayPitch`;
+the importer must not invent that layout. For a single layer and depth one,
+the explicit modifier layout's array/depth pitches are correctly zero under
+[Vulkan 1.4.309's layout rules][modifier-layout].
+
+At import, bounded modifier and external-image queries validate the actual
+physical device's format/usage, importability and extent/layer/resource limits.
+The allocation type intersects FD and image memory-type bits with the physical
+device's valid type range. Zero/oversized requirements and invalid alignment
+are rejected. Dedicated allocation uses the exact image requirement size,
+which must fit within the declared allocation, as required by
+[Vulkan 1.4.309, VUID 02964][dedicated-allocation]. It does not use the upstream
+`max(requirement size, declared size)` allocation. The actual external FD length,
+full compressed-plane footprint, and exporter GPU/driver provenance are not
+established by these metadata checks.
+
+An imported image is move-only. Its duplicated CLOEXEC FD remains application
+owned until `vkAllocateMemory` succeeds; failure closes it, and success transfers
+it to Vulkan without touching it again. Failed image creation does not acquire
+an undefined output handle. Allocation/binding failure unwinds owned resources;
+normal retirement destroys the image before freeing its memory. Partial-batch
+failure also retires earlier images.
+
+The shared serial-queue submission helper checks fence reset, queue submission
+and its two-second completion wait. Command reset/begin/end and mapped-memory
+invalidation results are also checked in the adaptation. Only a successful
+completion wait permits imported-image destruction. An uncertain submission
+leaves the gate non-idle; cleanup marks deferral and abandons API destruction
+to process teardown. The borrowed device and completion gate must outlive all
+image owners. They are confined to one worker thread. No unbounded idle wait
+is added, but a driver call itself can still hang: the capture supervisor
+remains to be implemented. This gate does not synchronize XRService's writes.
+
+Ten Python tests execute nine native fixture groups plus default/argument guards.
+They cover malformed metadata before driver calls, unsupported modifier/memory
+planes, format/limits, requirement bounds, memory bit 31, FD transfer and cleanup
+order, failure injection at FD query/create/allocate/bind, move/vector ownership,
+batch rollback, pending-work deferral, and reset/submit/wait failures. The native
+fixture counts FDs before/after each group. Deferred resources in its fake
+backend are reclaimed by simulated process teardown, not described as graceful
+Vulkan cleanup. CI builds before running these tests; unbuilt native fixtures
+produce explicit skips elsewhere.
+
+Cloud compile/link and synthetic tests do not validate a real import. Device
+selection/bootstrap, host/downscaler/command resource cleanup, capture watchdog,
+registry refresh and layer lifetime/restoration still need work. See the
+[offline work order](live-capture.md#offline-provider-work-while-the-frame-is-unavailable)
+and [optional native fixture procedure](on-device.md#test-import-ownership-without-capture).
+
+[dedicated-allocation]: https://github.com/KhronosGroup/Vulkan-Docs/blob/v1.4.309/chapters/memory.adoc#VUID-VkMemoryDedicatedAllocateInfo-image-02964
+[modifier-layout]: https://github.com/KhronosGroup/Vulkan-Docs/blob/v1.4.309/chapters/resources.adoc#VkImageDrmFormatModifierExplicitCreateInfoEXT
+
 ## Isolated luma reader and synthetic producer
 
 The shared-memory diagnostic is independent of inference, Qt, OpenVR and Vulkan.

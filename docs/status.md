@@ -26,6 +26,7 @@ unknown unless explicitly recorded below.
 | Descriptor transport adaptation | Controlled cloud and Frame ARM64 checks passed | Adapted components compile/link on Frame and fixture reports seven groups passed; live callbacks and remaining provider work unverified; [E25](#e25-descriptor-transport-on-frame) |
 | Provider publication and loop controls | Controlled cloud and Frame tests passed | Exclusive private runtime file, ordered writer and bounded loop controls; all eight generated-data process tests passed on Frame; full GPU/provider lifecycle pending; [E27](#e27-publication-and-loop-controls-on-frame) |
 | Bounded Vulkan capability query | Implemented; controlled cloud tests passed; Frame result pending | Eleven fake-loader/process tests; no usable cloud driver; no camera or actual external-memory import; [E28](#e28-vulkan-capability-query-cloud-checks) |
+| Image import validation and ownership | Inspection adaptation built; ten synthetic cloud tests passed | Strict profile/capability/requirement checks, FD transfer, rollback and completion-gated retirement; no real GPU import or ARM64 result; [E29](#e29-validated-import-and-ownership-cloud-checks) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
 | Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; no source-identified built-in-camera frames have been received |
 | Stereo depth and world-space labels | Planned | Calibration, depth and pose/timebase alignment remain unresolved |
@@ -804,6 +805,48 @@ external-memory import or capture configuration change was made.
 Use [the next device command](on-device.md#query-vulkan-capture-capabilities).
 A positive capability report would still leave real-buffer import and producer
 synchronization, resource cleanup and complete provider lifecycle unverified.
+
+### E29: Validated import and ownership cloud checks
+
+Source: local x86_64 cloud execution on 2026-10-16 of the import worktree based
+on `b379ac7`. This work proceeded while the user was away from the Frame; E28's
+pending device query remains pending. The capture source pin is unchanged.
+
+The new `--import-fixes` mode applies patches 0001–0003 to disposable source,
+compiles/links the adapted layer/producer, and records patch/helper hashes in
+`artifacts/capture-import-reference/build-report.json`. All four build modes
+passed local inspection artifact/hash/permission checks. Real capture binaries
+stay non-executable and were not loaded or executed. Pinned caches remain clean.
+
+All **ten import tests passed**, with no skips. Nine native groups use the same
+import/submission helper as the adaptation, fake Vulkan function pointers and
+generated `memfd` payloads. They cover metadata before driver calls, modifier
+and memory-plane counts, import/image limits, requirement bounds and memory-type
+intersection, CLOEXEC/FD transfer, exact dedicated allocation size, failure
+rollback, moves/vector relocation, batch rollback and pending-work deferral.
+Arrayed images are rejected because the wire record omits per-plane array pitch;
+exporter flags/sharing mode are also absent and cannot be verified by this helper.
+Reset, submission and completion-wait failures are injected separately. The
+tenth check verifies default/invalid invocation guards. FD counts match before
+and after each native group; repeated failures leave no fake resources. An
+uncertain submission intentionally leaves fake resources until simulated process
+teardown; this is not reported as graceful Vulkan cleanup.
+
+The fixture also passed address/undefined-behavior sanitizer checks. The prior
+eight publication tests and seven transport groups passed regression checks.
+CI now includes the fourth build and ten import tests; hosted results have not
+been checked. Vulkan 1.4.309's dedicated-allocation and FD ownership rules were
+reviewed against the versioned Khronos specification.
+
+These results validate helper control flow and ownership under synthetic
+dispatch. They do not prove real DMA-BUF size/provenance, a compressed-plane
+footprint, correct physical GPU/source selection, producer completion or ARM64
+execution. Device/bootstrap, host/downscaler/command resource ownership, a
+capture watchdog, registry/layer lifetime and restoration remain pending.
+No layer installation, camera access or actual external-memory import occurred.
+Continue the [offline work](live-capture.md#offline-provider-work-while-the-frame-is-unavailable);
+the [GPU query](on-device.md#query-vulkan-capture-capabilities) remains the next
+hardware-information check.
 
 ## Maintaining the evidence
 

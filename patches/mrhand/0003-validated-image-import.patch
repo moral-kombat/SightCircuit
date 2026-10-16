@@ -1,0 +1,182 @@
+diff --git a/capture/ptgrab.cpp b/capture/ptgrab.cpp
+index 14ac520..490c1d6 100644
+--- a/capture/ptgrab.cpp
++++ b/capture/ptgrab.cpp
+@@ -7,7 +7,7 @@
+ // copies the luma plane into host-visible memory with vkCmdCopyImageToBuffer
+ // (the driver decompresses).  Nothing is submitted on the compositor's queues.
+ //
+-//   ptgrab identify OUTDIR      dump every passthrough buffer's Y plane twice (PGM)
++// Framejacker inspection adaptation: validated imports; not deployment-ready.
+ #include <vulkan/vulkan.h>
+ 
+ #include <algorithm>
+@@ -28,6 +28,7 @@
+ #include "handcam_proto.h"
+ #include "capture_transport.hpp"
+ #include "capture_publication.hpp"
++#include "capture_import.hpp"
+ #include <sys/resource.h>
+ 
+ #define CHECK(x) do { VkResult r_ = (x); if (r_ != VK_SUCCESS) { fprintf(stderr, "%s:%d %s -> %d\n", __FILE__, __LINE__, #x, r_); throw std::runtime_error("Vulkan_operation_failed"); } } while (0)
+@@ -53,6 +54,7 @@ struct Gpu {
+     VkCommandPool pool;
+     VkPhysicalDeviceMemoryProperties mp;
+     PFN_vkGetMemoryFdPropertiesKHR getFdProps;
++    framejacker::capture_import::Completion importCompletion;
+ 
+     void init() {
+         VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+@@ -103,45 +105,20 @@ struct Gpu {
+ struct CamImage {
+     MrhandBufInfo info;
+     VkImage img;
+-    VkDeviceMemory mem;
++    framejacker::capture_import::Image owned;
+ };
+ 
+ static CamImage importImage(Gpu &g, const Buf &b) {
+-    CamImage ci{b.info};
+-    VkSubresourceLayout planes[MRHAND_MAX_PLANES]{};
+-    for (uint32_t p = 0; p < b.info.planeCount; p++) {
+-        planes[p].offset = b.info.planeOffset[p];
+-        planes[p].rowPitch = b.info.planeRowPitch[p];
+-    }
+-    VkImageDrmFormatModifierExplicitCreateInfoEXT mod{VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT};
+-    mod.drmFormatModifier = b.info.modifier;
+-    mod.drmFormatModifierPlaneCount = b.info.planeCount;
+-    mod.pPlaneLayouts = planes;
+-    VkExternalMemoryImageCreateInfo ext{VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO, &mod,
+-                                        VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT};
+-    VkImageCreateInfo ic{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, &ext};
+-    ic.imageType = VK_IMAGE_TYPE_2D;
+-    ic.format = (VkFormat)b.info.format;
+-    ic.extent = {b.info.width, b.info.height, 1};
+-    ic.mipLevels = 1;
+-    ic.arrayLayers = b.info.arrayLayers ? b.info.arrayLayers : 1;
+-    ic.samples = VK_SAMPLE_COUNT_1_BIT;
+-    ic.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
+-    ic.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+-    CHECK(vkCreateImage(g.dev, &ic, nullptr, &ci.img));
+-    VkMemoryRequirements req;
+-    vkGetImageMemoryRequirements(g.dev, ci.img, &req);
+-    int fd = dup(b.fd.get());   // Vulkan takes ownership of the imported fd
+-    VkMemoryFdPropertiesKHR fp{VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR};
+-    CHECK(g.getFdProps(g.dev, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, fd, &fp));
+-    VkMemoryDedicatedAllocateInfo ded{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO, nullptr, ci.img};
+-    VkImportMemoryFdInfoKHR imp{VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR, &ded,
+-                                VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, fd};
+-    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &imp, std::max<VkDeviceSize>(req.size, b.info.size),
+-                            g.memType(req.memoryTypeBits & fp.memoryTypeBits, 0)};
+-    CHECK(vkAllocateMemory(g.dev, &ai, nullptr, &ci.mem));
+-    CHECK(vkBindImageMemory(g.dev, ci.img, ci.mem, 0));
+-    return ci;
++    using namespace framejacker::capture_import;
++    Context context;
++    context.physical = g.phys; context.device = g.dev; context.memory = g.mp;
++    context.completion = &g.importCompletion;
++    context.api = {vkGetPhysicalDeviceFormatProperties2, vkGetPhysicalDeviceImageFormatProperties2,
++                   g.getFdProps, vkCreateImage, vkDestroyImage, vkGetImageMemoryRequirements2,
++                   vkAllocateMemory, vkFreeMemory, vkBindImageMemory};
++    auto owned = import_image(context, b.info, b.fd.get());
++    VkImage image = owned.image();
++    return {b.info, image, std::move(owned)};
+ }
+ 
+ struct HostBuf { VkBuffer buf; VkDeviceMemory mem; void *ptr; VkDeviceSize size; };
+@@ -189,8 +166,8 @@ static void copyRegions(Gpu &g, std::vector<CamImage> &ims, const std::vector<Re
+     }
+     VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+-    vkResetCommandBuffer(cb, 0);
+-    vkBeginCommandBuffer(cb, &bi);
++    CHECK(vkResetCommandBuffer(cb, 0));
++    CHECK(vkBeginCommandBuffer(cb, &bi));
+     for (auto &rg : regs) {
+         CamImage &ci = ims[rg.image];
+         VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+@@ -209,15 +186,14 @@ static void copyRegions(Gpu &g, std::vector<CamImage> &ims, const std::vector<Re
+         r.imageExtent = {ci.info.width, rg.rows, 1};
+         vkCmdCopyImageToBuffer(cb, ci.img, VK_IMAGE_LAYOUT_GENERAL, dst.buf, 1, &r);
+     }
+-    vkEndCommandBuffer(cb);
++    CHECK(vkEndCommandBuffer(cb));
+     VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+     si.commandBufferCount = 1;
+     si.pCommandBuffers = &cb;
+-    vkResetFences(g.dev, 1, &fence);
+-    CHECK(vkQueueSubmit(g.queue, 1, &si, fence));
+-    CHECK(vkWaitForFences(g.dev, 1, &fence, VK_TRUE, 2000000000ull));
++    framejacker::capture_import::submit_and_wait(g.importCompletion,
++        {vkResetFences, vkQueueSubmit, vkWaitForFences}, g.dev, g.queue, fence, si);
+     VkMappedMemoryRange mr{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, dst.mem, 0, VK_WHOLE_SIZE};
+-    vkInvalidateMappedMemoryRanges(g.dev, 1, &mr);
++    CHECK(vkInvalidateMappedMemoryRanges(g.dev, 1, &mr));
+ }
+ 
+ // GPU downscale of one camera's luma plane: plane0 -> R8 full -> R8 half-ish -> R8 out
+@@ -290,8 +266,8 @@ struct Downscaler {
+         const uint32_t W = src.info.width, M = outSize * 2, S = outSize;
+         VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+-        vkResetCommandBuffer(cb, 0);
+-        vkBeginCommandBuffer(cb, &bi);
++        CHECK(vkResetCommandBuffer(cb, 0));
++        CHECK(vkBeginCommandBuffer(cb, &bi));
+         barrier(cb, src.img, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_TRANSFER_READ_BIT,
+                 VK_IMAGE_ASPECT_PLANE_0_BIT, srcQ(), useQfot() ? g.qfam : VK_QUEUE_FAMILY_IGNORED);
+         barrier(cb, full, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT);
+@@ -314,15 +290,14 @@ struct Downscaler {
+         r.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+         r.imageExtent = {S, S, 1};
+         vkCmdCopyImageToBuffer(cb, out, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, host.buf, 1, &r);
+-        vkEndCommandBuffer(cb);
++        CHECK(vkEndCommandBuffer(cb));
+         VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+         si.commandBufferCount = 1;
+         si.pCommandBuffers = &cb;
+-        vkResetFences(g.dev, 1, &fence);
+-        CHECK(vkQueueSubmit(g.queue, 1, &si, fence));
+-        CHECK(vkWaitForFences(g.dev, 1, &fence, VK_TRUE, 2000000000ull));
++        framejacker::capture_import::submit_and_wait(g.importCompletion,
++            {vkResetFences, vkQueueSubmit, vkWaitForFences}, g.dev, g.queue, fence, si);
+         VkMappedMemoryRange mr{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, host.mem, 0, VK_WHOLE_SIZE};
+-        vkInvalidateMappedMemoryRanges(g.dev, 1, &mr);
++        CHECK(vkInvalidateMappedMemoryRanges(g.dev, 1, &mr));
+         return (const uint8_t *)host.ptr;
+     }
+ };
+@@ -448,14 +423,31 @@ int main(int argc, char **argv) {
+         if (std::none_of(bufs.begin(), bufs.end(), [](const Buf &buffer) {
+                 return buffer.info.hasImage && buffer.info.width == 2464 && buffer.info.height == 2464;
+             })) throw Error("no_Arcturus_sized_buffers");
++        // Reject malformed candidate metadata before initializing Vulkan.
++        for (const auto &buffer : bufs)
++            if (buffer.info.hasImage && buffer.info.width == 2464 && buffer.info.height == 2464)
++                framejacker::capture_import::validate_metadata(buffer.info);
+         Gpu g;
+         g.init();
+         std::vector<CamImage> ims;
+         for (auto &buffer : bufs)
+-            if (buffer.info.hasImage && buffer.info.width == 2464 && buffer.info.height == 2464)
++            if (buffer.info.hasImage && buffer.info.width == 2464 && buffer.info.height == 2464) {
++                if (!limit.running()) throw Error("capture_cancelled");
+                 ims.push_back(importImage(g, buffer));
++            }
+         if (!limit.running()) throw Error("capture_cancelled");
+-        return stream(g, ims, options.fps, 640, limit);
++        try {
++            const int code = stream(g, ims, options.fps, 640, limit);
++            ims.clear();
++            if (g.importCompletion.cleanup_deferred) throw Error("import_cleanup_deferred");
++            printf("{\"event\":\"imports_closed\",\"gpu_import_cleanup_ok\":true}\n");
++            return code;
++        } catch (...) {
++            ims.clear();
++            if (g.importCompletion.cleanup_deferred)
++                fprintf(stderr, "GPU import cleanup deferred: submitted work completion unconfirmed\n");
++            throw;
++        }
+     } catch (const std::exception &error) {
+         fprintf(stderr, "bounded capture failed: %s\n", error.what());
+         return 1;

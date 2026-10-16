@@ -16,7 +16,8 @@ layer has been deployed by Framejacker.
 | 1c | Check capture of our own display | Confirmed: the VR panel appears in captured output | Current composited mirror does not exclude our output; no continuous live-image panel from this source; [E18](status.md#e18-vr-panel-included-in-mirror-input) |
 | 1d | Detector quality and class coverage | Needs evaluation | Include the rug false positive; select supported target classes and evaluate correct labels, boxes and misses before claiming useful accuracy |
 | 2 | Isolated shared-memory reader and controlled producer | Controlled x86_64 and Frame ARM64 checks passed; real provider unverified | All 14 native/supervisor tests pass on Frame; upstream writer ordering and original GPU completion remain unresolved; [E23](status.md#e23-reference-build-and-controlled-reader-on-frame) |
-| 3 | Dedicated camera provider | Transport and publication build/tests pass on Frame; not deployed | Query actual GPU capabilities next, then finish GPU import/resource cleanup/watchdog, registry refresh, layer lifetime and restoration; physical source and built-in support unresolved |
+| 3 | Dedicated camera provider | Transport and publication build/tests pass on Frame; import ownership cloud-tested; not deployed | Continue GPU/provider lifecycle work offline; query actual GPU capabilities when Frame is available; physical source and built-in support unresolved |
+| 3a | Validated image import and ownership | Inspection adaptation compiles; ten synthetic cloud tests pass | Actual DMA-BUF/device compatibility and ARM64 execution remain pending; [E29](status.md#e29-validated-import-and-ownership-cloud-checks) |
 | 4 | Capture-only device trial | Planned | Ten seconds of fresh images from one identified source, correct orientation, clean exit and working normal passthrough |
 | 5 | Continuous live input in the existing display | Planned; needs input independent of our output | Reuse detector/display after a dedicated provider or supported overlay-excluded mirror mode is validated; current mirror includes the panel |
 | 6 | Color, built-in camera support and later geometry | Planned | Validate each source and color conversion separately; require calibration and stronger timing evidence before stereo depth or spatial labels |
@@ -197,6 +198,47 @@ Frame ARM64. Normal cleanup removes its file; abrupt death may leave a stale fil
 that is refused on restart. The implementation does not yet supply automatic
 lease recovery or an external watchdog for blocked GPU calls.
 
+## Offline provider work while the Frame is unavailable
+
+The Frame GPU report is needed before a device trial, not before all provider
+development. The `--import-fixes` inspection build applies a third versioned
+patch and shares its actual import helper with a fake Vulkan dispatch fixture.
+Ten cloud tests now pass. It rejects unsupported metadata, nonzero binding
+offsets, modifier/memory-plane mismatches and incompatible requirements; it
+owns duplicate FDs and imported image/memory resources through failure and
+normal retirement. Dedicated allocation uses the exact image requirement size,
+bounded by the declared allocation. See
+[the implementation and tests](development.md#build-and-test-image-import-ownership).
+
+The completion gate tracks only our serial queue: reset, submit and wait results
+are checked before allowing retirement. A failed submit or completion wait
+leaves destruction deferred to worker/process teardown, rather than freeing
+possibly active resources or adding an unbounded device-idle wait. This does
+not supply XRService's missing producer fence. The real capture binaries stay
+non-executable, and no layer has been installed or activated.
+
+Continue these independent tasks without waiting for the headset:
+
+1. Extend the buffer contract where needed for exporter flags/sharing and device
+   provenance. The initial importer rejects arrayed images because array-stride
+   metadata is absent. Finish device/bootstrap, host-buffer, downscaler, command/fence and mapped
+   memory ownership, including rollback after every partial initialization.
+   The import owner does not complete cleanup for these other resources.
+2. Add a supervised capture worker with a deadline around all driver calls and
+   explicit reporting when API cleanup or file recovery is unconfirmed.
+3. Handle registry changes/provider loss by stopping before using old image
+   bindings; test generation changes and shutdown with synthetic peers.
+4. Repair layer endpoint ownership, callback/device registry lifetime and server
+   shutdown. Prepare exact configuration backup/restoration before activation.
+
+Use the Frame query later to choose/validate device capabilities and revise any
+conservative profile restrictions against real metadata. The helper validates
+declared sizes and lets Vulkan validate layouts; it does not prove the actual
+DMA-BUF payload length, complete compressed-plane footprint, exporter flags/sharing
+or physical-device provenance. Actual image imports and ARM64 execution of this adaptation remain
+untested. Keep the source-buffer synchronization review and capture-only trial
+as separate acceptance gates.
+
 ## Next provider step: query GPU capabilities
 
 The standalone `capture_gpu_check.py` supervises an explicit Vulkan query with
@@ -215,10 +257,10 @@ R8 downscaling requirements. These are capability queries, not proof that an
 actual buffer can be imported or safely read. Missing capabilities should guide
 the next implementation change rather than trigger a camera trial.
 
-Next adapt GPU imports using the actual report: validate the full format,
-modifier, dimensions/layers, pitches/offsets and memory-type compatibility;
-use RAII for imported FDs and every GPU resource, and retain an external process
-watchdog around driver calls. The query's supervisor is not yet a capture
+Image import validation/ownership is now implemented offline in the inspection
+adaptation above. Use the actual report for GPU selection and capability policy;
+finish ownership for the remaining GPU resources and an external process
+watchdog around capture driver calls. The query's supervisor is not yet a capture
 supervisor. Do not infer XRService completion from our own command fence or
 from a successful CPU publication. Review producer synchronization/ownership
 before any live import. Registry changes, provider loss and layer lifecycle

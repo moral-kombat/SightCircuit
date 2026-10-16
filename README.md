@@ -87,7 +87,11 @@ development files. The reference build and all 14 synthetic reader tests passed
 on Frame ARM64. The transport adaptation passed seven fixture groups and the
 publisher/control suite passed all eight tests on Frame. Next run the bounded
 [Vulkan capability query](docs/on-device.md#query-vulkan-capture-capabilities)
-and finish GPU/provider lifecycle work for input independent of our output before
+when back on the headset. Offline work can continue meanwhile: the
+[validated import adaptation](docs/development.md#build-and-test-image-import-ownership)
+now checks the reviewed buffer profile and owns imported images/FDs, with ten
+synthetic tests passed in the cloud. Finish the remaining GPU/provider lifecycle
+work for input independent of our output before
 continuous VR image display. Bounded recognition and snapshots shown after
 capture remain useful. The model's class coverage and false positives need separate work.
 The [isolated shared-memory reader](docs/on-device.md#check-existing-luma-shared-memory)

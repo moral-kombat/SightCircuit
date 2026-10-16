@@ -712,6 +712,8 @@ count. Compressed memory planes are not necessarily the two NV12 color planes.
 The external-image query uses DMA-BUF, sampled/transfer-source usage and
 exclusive sharing; it reports importability and the dedicated-allocation flag.
 The reviewed size is 2464 × 2464, with support for up to two array layers.
+The query surveys that broader capability; the initial import adaptation below
+accepts only a single layer because the wire record lacks array-stride metadata.
 
 Exit `0`/`queried` means the queries completed, even if a device reports missing
 capabilities. `capability_checks_passed` describes only the queried requirements,
@@ -728,6 +730,33 @@ Even a positive Frame capability result leaves actual FD import, producer
 completion, camera identity, resource lifetime and layer restoration unverified.
 Follow the [active provider work order](live-capture.md#next-provider-step-query-gpu-capabilities)
 before any camera trial.
+
+### Test import ownership without capture
+
+This optional native check can wait until you are back on Frame. The same tests
+run in the cloud without headset access; the GPU capability query above remains
+the next hardware-information check. To validate the new import helper on ARM64:
+
+```bash
+cd "$HOME/framejacker" &&
+git pull --ff-only &&
+bash scripts/build_capture_reference.sh --import-fixes &&
+python3 -m unittest discover -s tests -p test_capture_import.py -v
+```
+
+Expect ten tests with no skips. The build applies three patches to a disposable
+copy and keeps the real capture binaries non-executable. Its original fixture
+uses generated `memfd` data and fake Vulkan function pointers; it neither loads
+Vulkan nor connects to a provider. It checks metadata rejection, allocation/FD
+ownership, rollback, move operations and completion-gated cleanup. No camera,
+layer configuration or service is changed. Share the build report and test
+summary when convenient; no immediate Frame access is required for development.
+
+The fixture's supported case is synthetic. It does not prove that actual
+Arcturus buffers match the conservative profile, import successfully, have
+finished being written or can be displayed without feedback. Complete the
+[remaining provider work](live-capture.md#offline-provider-work-while-the-frame-is-unavailable)
+before activation.
 
 ### Check existing luma shared memory
 
@@ -915,8 +944,12 @@ The pinned reference compiled/linked on aarch64 with system Vulkan headers; all
 14 synthetic reader tests passed in 7.204 seconds. The descriptor transport
 adaptation also passed seven fixture groups on ARM64. The publication build
 completed and all eight generated-data tests passed in 1.562 seconds on Frame.
-Next run the bounded Vulkan capability query, then finish GPU import
-validation/resource cleanup/watchdog, registry refresh, layer lifetime and exact
+The validated-import inspection adaptation compiles in the cloud and passes ten
+synthetic tests, including FD/image ownership, rollback and queue completion
+gating. Actual imports and ARM64 execution of this adaptation are unverified.
+Next hardware check remains the bounded Vulkan capability query. Continue
+offline with device/other GPU resource cleanup, the capture watchdog,
+registry refresh, layer lifetime and exact
 restoration before deployment. Physical camera identity and scene freshness remain unverified.
 The isolated shared-memory reader and synthetic fixture are implemented and
 tested on cloud x86_64 and Frame ARM64; real-provider validation and capture-layer
