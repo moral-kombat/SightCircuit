@@ -13,6 +13,9 @@ See [Steam Frame camera integration](steam-frame-camera.md) for pinned sources,
 known interface limits, calibration requirements, and the device checks still
 needed.
 
+The [live capture plan](live-capture.md) specifies provider selection, the
+standalone reader to implement next and the first device acceptance checks.
+
 ## Frame processing
 
 ```mermaid

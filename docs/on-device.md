@@ -10,6 +10,9 @@ backend is unimplemented. The user has also confirmed the native VR panel's
 playback, controls and image following their head. See the
 [overlay guide](vr-overlay.md) to launch the confirmed replay path or test a new
 runtime. Next, check detection quality, readability and playback performance.
+For live input, follow the [capture plan](live-capture.md): first prepare and
+test the isolated reader, then attempt a capture-only device trial. No live
+reader or compositor-layer installation is included in the current setup.
 
 ## Confirm where commands run
 
@@ -352,11 +355,11 @@ not use it to repeat the already failed test on the unchanged runtime:
 ```
 
 Keep any future report with the tested runtime version. No public live-capture
-SDK was found in the sources reviewed. A supported Arcturus or Valve live-capture
-contract remains necessary before selecting a live backend. The experimental
-community Vulkan path in the [camera guide](steam-frame-camera.md) has not been
-deployed by this project. Neither an active service nor listed sensor nodes
-replace actual frame retrieval.
+SDK was found in the sources reviewed. Seek a supported Arcturus or Valve
+live-capture contract first. The [capture plan](live-capture.md) also defines
+an isolated evaluation of the experimental community Vulkan path, which has
+not been deployed by this project. Neither an active service nor listed sensor
+nodes replace actual frame retrieval.
 
 Do not copy the cloud machine's x86_64 `.venv` to Frame. The existing dependency
 pins and smoke setup were validated on Linux x86_64, not the headset; verify

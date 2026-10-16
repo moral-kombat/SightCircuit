@@ -207,6 +207,10 @@ or headset splat rendering.
 
 ## Implementation sequence and remaining checks
 
+The [live capture plan](live-capture.md) expands the provider choice, next code
+deliverable and first device trial. A capture-only reader is planned; no
+experimental layer has been deployed by this project.
+
 1. Retain the confirmed working Qt replay window and VR panel as device baselines.
    Playback and controls work according to the user. Measure object labels,
    orientation, color, readability, performance and clean shutdown systematically.
@@ -219,9 +223,10 @@ or headset splat rendering.
    experimental capture layer as the next diagnostic step. Its current
    [advanced procedure](on-device.md#then-verify-camera-access) requires an
    explicit interruption flag before any OpenVR calls.
-3. Establish a supported live capture contract from Arcturus/Valve before
-   selecting a live backend. The cited Vulkan path remains a separate
-   experimental option. Any eventual live backend must verify color conversion,
+3. Seek a supported live capture contract from Arcturus/Valve and prefer that
+   interface if available. Evaluate the cited Vulkan path separately through
+   the capture-only reader and device trial in the live capture plan. Any
+   eventual live backend must verify color conversion,
    stereo identity, orientation, timestamps, synchronization and behavior after
    runtime updates.
 4. Pass frames to the detector with explicit pixel format/stride, camera identity,

@@ -90,6 +90,10 @@ Next, check detection quality and measure playback performance before connecting
 a verified live capture backend. World-space labels come after depth and pose
 validation.
 
+The [live capture plan](docs/live-capture.md) defines the next engineering task:
+an isolated capture-only reader, tested before a live device trial. It covers
+the experimental Arcturus path and separate validation of built-in passthrough.
+
 On Frame, run `bash scripts/frame_replay_check.sh` after recording a short clip.
 It gathers the device inventory and recording metadata without starting the
 unsafe public camera probe.
@@ -131,6 +135,7 @@ still comes from the live detector.
 
 - [Architecture and implementation milestones](docs/architecture.md)
 - [Steam Frame and Arcturus camera interfaces and sources](docs/steam-frame-camera.md)
+- [Live capture plan and first device trial](docs/live-capture.md)
 - [VR replay panel test and controls](docs/vr-overlay.md)
 - [Development commands and validation limits](docs/development.md)
 - [Contributing](CONTRIBUTING.md)
