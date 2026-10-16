@@ -16,6 +16,7 @@ application itself have not been implemented.
 | Video decoding, CPU detection and offscreen window rendering | Verified with the included smoke check |
 | Arcturus app live preview and recording | Confirmed working by the user on Steam Frame |
 | Recorded MP4 metadata inspection | Python standard library; decoding on Frame still unverified |
+| Selected-track file decoding and RGB conversion | Tested with generated fragmented HEVC on x86_64; ARM64 wheel available; Frame test pending |
 | Frame replay handoff check | Read-only inventory plus newest-recording metadata command |
 | Native public OpenVR camera probe | No frames on the tested headset; interrupts passthrough; explicit opt-in required |
 | Live camera access from Framejacker | Unimplemented; a usable capture interface is still needed |
@@ -89,6 +90,14 @@ depth and pose validation.
 On Frame, run `bash scripts/frame_replay_check.sh` after recording a short clip.
 It gathers the device inventory and metadata needed to begin the replay/window
 milestone without starting the unsafe public camera probe.
+
+The user's recording contains two `hvc1` HEVC video tracks at 2464 × 2464,
+`gpmd` metadata and audio in fragmented MP4. To check actual file decoding,
+run `bash scripts/setup_replay.sh`, then
+`.venv-replay/bin/python scripts/replay_decode_check.py`. This uses a separate
+Python 3.12 environment with PyAV and selects the first video track explicitly.
+See the [device instructions](docs/on-device.md#decode-one-recorded-video-track)
+for limits and expected output.
 
 Gaussian splats could provide a persistent visual map of a mostly static room.
 Reconstruction remains a separate recorded-data workflow; object recognition

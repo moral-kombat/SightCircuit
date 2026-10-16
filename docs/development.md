@@ -94,12 +94,32 @@ initialize OpenVR.
 Run the dependency-free parser checks with
 `python3 -m unittest discover -s tests -v`. They cover track metadata, malformed
 containers, parsing limits, media-payload skipping and nonregular-file rejection.
+Decoder integration tests are skipped when PyAV is unavailable.
+
+## File-decoding environment
+
+`bash scripts/setup_replay.sh` creates a separate Python 3.12 `.venv-replay` and
+installs the pinned binary wheel in `requirements-replay.txt`. Set
+`FRAMEJACKER_PYTHON=/path/to/python3.12` if the default `python3` differs.
+This check does not need the full desktop requirements or `uv`.
+
+```bash
+.venv-replay/bin/python scripts/replay_decode_check.py /path/to/recording.mp4
+.venv-replay/bin/python -m unittest discover -s tests -v
+```
+
+PyAV selects the requested video stream and converts a few decoded frames to
+RGB without NumPy, OpenCV or Qt. Tests generate real fragmented HEVC with two
+different video-track dimensions, exercise both selections, and check failures
+for absent streams and invalid/nonregular files. They do not reproduce Arcturus
+calibration, metadata payloads, dependent stereo views or HDR color management.
 
 ## Continuous integration
 
 The [GitHub Actions workflow](../.github/workflows/checks.yml) runs the same setup
 and smoke check on an Ubuntu runner with Python 3.12. It needs network access to
-the fixture sources. A separate job builds the native OpenVR probe, verifies that
+the fixture sources. A file-decoder job installs PyAV and exercises fragmented
+HEVC replay and RGB conversion. A separate job builds the native OpenVR probe, verifies that
 default and invalid invocations stop before OpenVR initialization, and checks
 missing-runtime diagnostics with explicit opt-in. The probe has interrupted
 visible passthrough on the tested headset; do not repeat that unchanged hardware

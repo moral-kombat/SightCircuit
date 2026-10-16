@@ -1,0 +1,3 @@
+# File-decoding check only; CPython 3.12 Linux ARM64/x86_64 wheels available.
+# PyAV bundles FFmpeg libraries; no separate ffmpeg executable is required.
+av==16.1.0

@@ -1,5 +1,6 @@
 # Local Python environments and generated files
 /.venv/
+/.venv-replay/
 /.cache/
 /artifacts/
 __pycache__/

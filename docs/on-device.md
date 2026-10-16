@@ -153,17 +153,24 @@ capture backend.
 The user has listed two completed recordings on Frame:
 `2026-10-15_21-20-34_stereo.mp4` (15,923,629 bytes) and
 `2026-10-15_21-17-18_stereo.mp4` (149,778,747 bytes). No `ffprobe` executable was
-reported on PATH. The next device check is:
+reported on PATH. The metadata command is:
 
 ```bash
 python3 scripts/recording_check.py \
   "$HOME/Videos/ArcturusVisionCamera/2026-10-15_21-20-34_stereo.mp4"
 ```
 
-The inspector has been checked in the cloud against generated AV1 and two-video
-MP4 files and malformed-container tests. It has not yet been run on either user
-recording. Actual recording decoding and detector/window behavior on Frame
-remain unverified.
+The user ran the inspector on the smaller recording. It reported two `hvc1`
+(HEVC) video tracks at 2464 × 2464, one `gpmd` metadata track, one `mp4a` audio
+track, fragmented MP4 structure and no encrypted sample entries. Its
+`unsupported: fragmented_mp4` result describes the metadata inspector's limited
+sample/timeline handling. Fragmentation alone does not establish a corrupt or
+undecodable file. The video `mdhd` headers report 0.515174 seconds; the full
+fragmented timeline has not been validated.
+
+Actual recording decoding and detector/window behavior on Frame remain
+unverified. Avoid assuming OpenCV or the desktop development environment is
+installed on the headset.
 
 For the next session, one command runs the read-only inventory and selects the
 newest completed stereo recording automatically:
@@ -176,6 +183,48 @@ bash scripts/frame_replay_check.sh
 This does not initialize OpenVR, start or stop SteamVR, open camera device
 nodes, decode video, or modify the recording. Save its JSON output for the
 replay/window implementation.
+
+### Decode one recorded video track
+
+Use the separate file-decoding environment on Frame's Python 3.12. This needs
+the standard-library `venv`/`ensurepip` modules and PyPI access. The pinned
+`av==16.1.0` release publishes CPython 3.12 Linux ARM64 and x86_64 wheels
+(glibc 2.28 or later). Installation permits binary wheels only; it does not
+compile FFmpeg or install system packages. If `venv` or a compatible wheel is
+unavailable, retain and share the error before choosing another setup route.
+
+```bash
+(
+  set -e
+  cd "$HOME/framejacker"
+  git pull --ff-only
+  bash scripts/setup_replay.sh
+  .venv-replay/bin/python scripts/replay_decode_check.py \
+    "$HOME/Videos/ArcturusVisionCamera/2026-10-15_21-20-34_stereo.mp4"
+)
+```
+
+This downloads PyAV into ignored `.venv-replay/`; its wheel includes FFmpeg
+libraries, so a separate `ffmpeg` executable, OpenCV and Qt are not required.
+The existing desktop `.venv` remains separate. `FRAMEJACKER_PYTHON` can select
+another Python 3.12 executable for setup.
+
+The check reads only the selected file. It defaults to video-stream ordinal
+`0`, decodes up to three frames using two software-decoder threads, and converts
+them to RGB. The decoder runs in a child process with a 45-second limit. The
+report includes actual dimensions, source pixel format, selected stream index,
+media timestamps and `frames_decoded`. `status: decoded` with at least one
+frame means this limited file check passed. No path argument selects the newest
+`*_stereo.mp4`; `--video-stream 1` selects the second video track for a later
+explicit test. Track order does not establish left/right identity, independence
+of stereo codec views, or synchronized decoding.
+
+This does not access cameras or OpenVR, save images, display a window, verify
+HDR appearance, validate the complete file, or measure real-time performance.
+Exit `0` means frames were decoded and converted; exit `1` means a missing
+dependency, input error, timeout or decode failure. The generated fragmented
+HEVC cloud tests pass; the user's recording and ARM64 runtime still need this
+device check. Use its result to implement the annotated replay window next.
 
 ### Advanced probe, only for a deliberate future retest
 

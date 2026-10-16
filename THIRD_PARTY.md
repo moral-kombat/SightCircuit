@@ -29,6 +29,13 @@ the installed package and is not copied into the repository.
 OpenCV headless, NumPy, ONNX Runtime, PySide6 Essentials and their supporting
 packages. Refer to each installed package's upstream license and notices.
 
+[requirements-replay.txt](requirements-replay.txt) separately pins
+[PyAV 16.1.0](https://github.com/PyAV-Org/PyAV/tree/v16.1.0), distributed under
+its [BSD 3-Clause license](https://github.com/PyAV-Org/PyAV/blob/v16.1.0/LICENSE.txt).
+PyAV binary wheels also include FFmpeg libraries and their dependencies; consult
+the installed wheel's notices and upstream licenses for those components. They
+are installed in ignored `.venv-replay/`, not committed to this repository.
+
 ## Native OpenVR probe
 
 The native camera probe fetches Valve's OpenVR SDK at commit
