@@ -14,6 +14,7 @@ application itself have not been implemented.
 | --- | --- |
 | Linux development setup | Tested on x86_64 with Python 3.12 |
 | Video decoding, CPU detection and offscreen window rendering | Verified with the included smoke check |
+| Native public OpenVR camera probe | Implemented; target headset capture test pending |
 | Live Arcturus camera access | Requires an on-headset capability probe |
 | Interactive camera window and VR overlay | Planned |
 | Stereo depth and labels anchored in the room | Planned; requires calibration, depth and pose alignment |

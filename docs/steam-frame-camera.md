@@ -164,7 +164,8 @@ or headset splat rendering.
    development. Add a capture abstraction so hardware experiments do not affect
    inference or presentation.
 2. On the actual headset, record the architecture and SteamOS/SteamVR versions,
-   then run a public OpenVR capability probe. Exercise discovery, frame sizes,
+   then run the [native public OpenVR probe](on-device.md#then-verify-camera-access).
+   Exercise discovery, frame sizes,
    calibration, acquisition, an actual frame copy and release. Log named errors
    without changing camera settings. Test camera connection and headset wake/idle.
 3. If public capture fails, obtain the supported live capture contract from

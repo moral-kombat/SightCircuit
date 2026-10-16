@@ -90,19 +90,72 @@ do not prove working capture or GPU access.
 
 ## Then verify camera access
 
-After confirming the terminal is on the headset and can reach its runtime:
+The first user-supplied inventory confirms an `aarch64` SteamOS 0.4.5 session
+(build `20261007.6125817`), Python 3.12.3, an active `steamvr.service`, native
+`g++`/CMake/Ninja tools, a render node and `arcimx616` sensor-driver nodes. This
+establishes the target context; it does not demonstrate a connected RGB stream
+or working public camera capture.
 
-1. Identify the installed OpenVR SDK/client library and available native build
-   tools. Preserve the runtime/build versions in the hardware notes.
-2. Build a public `IVRTrackedCamera` capability probe using the official sources
-   linked in the [camera guide](steam-frame-camera.md). Exercise discovery,
-   dimensions, calibration, stream acquisition, an actual frame retrieval and
-   release. A successful streaming handle alone does not validate capture.
-3. Record the observed frame format, camera identity, timestamps and named API
-   errors. Check connected-camera and headset wake/idle behavior.
-4. If the public API does not provide frames, establish a supported Arcturus or
-   Valve capture route before selecting an experimental backend. The community
-   Vulkan capture path described in the guide remains a separate investigation.
+Keep the headset awake, the camera connected, and SteamVR running. Run the
+probe as the normal `steamos` user in that session:
+
+```bash
+bash scripts/build_camera_probe.sh
+artifacts/camera-probe/framejacker-camera-probe
+```
+
+The build uses Git, Bash and a C++17 compiler. It needs no `uv`, Python packages,
+OpenGL or Vulkan development packages. It fetches the pinned Valve OpenVR SDK
+sources into `.cache/openvr` and compiles the portable loader for the current
+machine. The binary goes in `artifacts/camera-probe/`. Both paths are ignored by
+Git. A modified or different cached SDK causes an error rather than a reset.
+
+The probe uses the public `IVRTrackedCamera_006` interface in a background OpenVR
+application. It queries presence, count/layout, frame dimensions and calibration
+statuses, then requests a shared camera stream. It checks header-only retrieval
+for all three frame types and retries failed size queries after acquisition.
+Where dimensions are valid, it attempts an actual RGBA frame copy. A successful
+handle alone cannot pass the check.
+
+The retrieval loop has a shared three-second polling budget and a 64 MiB buffer
+limit; synchronous runtime calls can add time. It reports metadata and named
+errors as JSON, saves no images, and releases the stream before shutting down
+OpenVR. It does not change SteamVR settings, open physical video nodes, install
+compositor layers, or select an RGB/monochrome source. A received frame does not
+by itself identify the Arcturus RGB source.
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | At least one frame was copied with valid RGBA metadata and stream release succeeded |
+| `1` | Runtime initialization, interface access, cleanup or another probe error; inspect the JSON |
+| `2` | Runtime/interface access succeeded, but no valid frame was received |
+
+An unavailable runtime registry or `NoServerForBackgroundApp` is a runtime/session
+problem, not proof of unsupported camera hardware. Keep the existing home/XDG
+and OpenVR runtime configuration; the loader discovers SteamVR through its
+registered paths. Background initialization does not launch SteamVR.
+
+To save a report and preserve the probe's exit status in a terminal:
+
+```bash
+(
+  set -e
+  bash scripts/build_camera_probe.sh
+  framejacker_probe_status=0
+  artifacts/camera-probe/framejacker-camera-probe \
+    > artifacts/camera-probe/report.json || framejacker_probe_status=$?
+  python3 -m json.tool artifacts/camera-probe/report.json || cat artifacts/camera-probe/report.json
+  printf 'Probe exit code: %s\n' "$framejacker_probe_status"
+  exit "$framejacker_probe_status"
+)
+```
+
+Share the report for diagnosis. The next steps depend on the observed API errors,
+frame format, source identity and timing data. If the public API does not provide
+frames, establish a supported Arcturus or Valve capture route before selecting
+an experimental backend. The community Vulkan capture path described in the
+[camera guide](steam-frame-camera.md) remains a separate investigation. Neither
+an active service nor listed sensor nodes replace actual frame retrieval.
 
 Do not copy the cloud machine's x86_64 `.venv` to Frame. The existing dependency
 pins and smoke setup were validated on Linux x86_64, not the headset; verify
@@ -120,8 +173,9 @@ can proceed separately on a suitable GPU computer.
 Continue moral-kombat/framejacker on this Steam Frame.
 Read README.md, docs/on-device.md and docs/steam-frame-camera.md.
 First confirm where this terminal executes and run python3 scripts/device_check.py.
-Treat device presence as inventory, not camera validation. Next implement and run
-a public OpenVR capability probe before choosing the live camera backend.
+Treat device presence as inventory, not camera validation. Build and run the
+public OpenVR probe before choosing the live camera backend. Keep runtime/session
+errors separate from unavailable-camera results.
 ```
 
 [valve-setup]: https://partner.steamgames.com/doc/steamhardware/steamframe/setup

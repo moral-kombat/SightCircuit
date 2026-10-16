@@ -25,3 +25,28 @@ jobs:
         run: bash scripts/setup.sh
       - name: Validate decoding, inference and offscreen rendering
         run: .venv/bin/python scripts/smoke_check.py
+
+  camera-probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the native OpenVR camera probe
+        run: bash scripts/build_camera_probe.sh
+      - name: Verify missing-runtime diagnostics
+        shell: bash
+        run: |
+          probe_exit=0
+          VR_PATHREG_OVERRIDE="$RUNNER_TEMP/framejacker-missing-runtime.vrpath" \
+            artifacts/camera-probe/framejacker-camera-probe \
+            > artifacts/camera-probe/no-runtime.json || probe_exit=$?
+          test "$probe_exit" -eq 1
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path('artifacts/camera-probe/no-runtime.json').read_text())
+          assert report['status'] == 'initialization_failed'
+          assert report['initialization']['error_name'] == 'VRInitError_Init_PathRegistryNotFound'
+          assert report['exit_code'] == 1
+          print('Missing runtime produces JSON diagnostics and a failing exit code.')
+          PY
