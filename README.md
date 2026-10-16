@@ -16,6 +16,7 @@ application itself have not been implemented.
 | Video decoding, CPU detection and offscreen window rendering | Verified with the included smoke check |
 | Arcturus app live preview and recording | Confirmed working by the user on Steam Frame |
 | Recorded MP4 metadata inspection | Python standard library; decoding on Frame still unverified |
+| Frame replay handoff check | Read-only inventory plus newest-recording metadata command |
 | Native public OpenVR camera probe | No frames on the tested headset; interrupts passthrough; explicit opt-in required |
 | Live camera access from Framejacker | Unimplemented; a usable capture interface is still needed |
 | Interactive camera window and VR overlay | Planned |
@@ -84,6 +85,10 @@ Capture, inference and presentation will be separate components. Use a short
 recording from the working Arcturus app to build a replay-backed application,
 then connect a verified live capture backend. World-space labels come after
 depth and pose validation.
+
+On Frame, run `bash scripts/frame_replay_check.sh` after recording a short clip.
+It gathers the device inventory and metadata needed to begin the replay/window
+milestone without starting the unsafe public camera probe.
 
 Gaussian splats could provide a persistent visual map of a mostly static room.
 Reconstruction remains a separate recorded-data workflow; object recognition

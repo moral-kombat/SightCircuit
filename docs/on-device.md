@@ -165,6 +165,18 @@ MP4 files and malformed-container tests. It has not yet been run on either user
 recording. Actual recording decoding and detector/window behavior on Frame
 remain unverified.
 
+For the next session, one command runs the read-only inventory and selects the
+newest completed stereo recording automatically:
+
+```bash
+cd "$HOME/framejacker"
+bash scripts/frame_replay_check.sh
+```
+
+This does not initialize OpenVR, start or stop SteamVR, open camera device
+nodes, decode video, or modify the recording. Save its JSON output for the
+replay/window implementation.
+
 ### Advanced probe, only for a deliberate future retest
 
 Building the probe does not initialize OpenVR:

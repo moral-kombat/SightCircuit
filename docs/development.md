@@ -87,6 +87,10 @@ no path it selects the latest `*_stereo.mp4` in
 sample-entry codes and dimensions guide decoder selection; successful metadata
 inspection does not establish decoding or detection support for that recording.
 
+On the headset, `bash scripts/frame_replay_check.sh` combines this inspection
+with `scripts/device_check.py`. It is intentionally read-only and does not
+initialize OpenVR.
+
 Run the dependency-free parser checks with
 `python3 -m unittest discover -s tests -v`. They cover track metadata, malformed
 containers, parsing limits, media-payload skipping and nonregular-file rejection.
