@@ -17,10 +17,10 @@ unknown unless explicitly recorded below.
 | Native head-relative VR replay panel | Device-confirmed | Timed test panel, replay, controls and following head movement reported working; detailed performance unmeasured; [E6](#e6-window-and-vr-panel) |
 | Public OpenVR tracked-camera probe | Device-confirmed failure | No frames and observed passthrough interruption; do not repeat the unchanged test; [E3](#e3-public-camera-probe) |
 | Live input in the detector/VR application | Planned; unimplemented | No integrated live capture backend; [active work plan](live-capture.md) |
-| Existing-mirror diagnostic | Frame open/format checks confirmed; no frames yet | First ten-second trial returned no frames with normal cleanup and working passthrough; reader startup corrected, device retest pending; [E11](#e11-first-mirror-acquisition-trial) |
+| Existing-mirror diagnostic | Frame capture confirmed | Corrected reader received 100 complete 1920 × 1080 RGB3 frames in ten seconds with clean shutdown; scene/source identity and output feedback remain unverified; [E12](#e12-successful-mirror-frame-delivery) |
 | Dedicated-camera shared-memory reader | Implemented; cloud-tested | Read-only native consumer, bounded supervisor and synthetic producer; actual provider and ARM64 validation pending; [E9](#e9-shared-memory-reader-cloud-checks) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
-| Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; our project has received no live frames |
+| Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; no source-identified built-in-camera frames have been received |
 | Stereo depth and world-space labels | Planned | Calibration, depth and pose/timebase alignment remain unresolved |
 | Gaussian splat reconstruction and viewing | Optional future work | Recorded-data workflow researched; training and headset splat rendering not validated by this project |
 
@@ -290,8 +290,47 @@ does not identify the installed module revision or prove it caused this result.
 The reader now calls nonblocking `read()` directly at the existing bounded
 rate and reports read attempts, would-block results and interruptions. A
 controlled lazy-start regression check passes; the full local suite also
-passes. Device validation of this correction is pending. This first result
-therefore does not establish that the mirror has no usable producer.
+passes. Device validation was pending at this point; the
+[subsequent corrected-reader result](#e12-successful-mirror-frame-delivery)
+confirms frame delivery. This first result does not establish that the mirror
+has no usable producer.
+
+### E12: Successful mirror frame delivery
+
+Source: user-supplied `steamvr_mirror_check` schema-1 report received
+2026-10-16 after the corrected-reader command was provided. The report identifies
+`reader_method: nonblocking_read_without_poll_gate`; exact checkout revision,
+execution time and SteamVR version were not included. It reports:
+
+| Field | Reported value |
+| --- | --- |
+| Source | `/dev/video99`, virtual `SteamVR`, major `81`, minor `58` |
+| Driver / bus | `v4l2 loopback` / `platform:v4l2loopback-099` |
+| Format | 1920 × 1080 `RGB3`, progressive, 5,760-byte stride, 6,220,800-byte buffer |
+| Result / diagnostic exit | `captured` / `0` |
+| Complete frames / read attempts | `100` / `100` |
+| Would-block / interrupted / short reads | `0` / `0` / `0` |
+| Changed / unchanged grayscale samples | `99` / `0` |
+| Read-loop elapsed / observed rate | 10,000.214 ms / 10.0 reads per second |
+| First frame / maximum observed read gap | 2.446 ms / 103.707 ms |
+| Worker elapsed / exit | 10,065.699 ms / `0` |
+| Cleanup / forced termination / saved images | `true` / `false` / none |
+
+This establishes complete image delivery through the corrected read-only
+mirror path on Frame and normal worker cleanup. The 10 Hz rate is capped by
+our diagnostic, not a measurement of maximum producer/camera rate. First-frame
+delay is measured from the reader loop, not camera exposure or end-to-end
+latency. Changing sampled pixels do not identify the camera or establish
+exposure freshness.
+
+No image was supplied or saved by this command, so actual passthrough scene
+content, physical camera identity, orientation and recursive capture of our
+display remain unverified. Passthrough continuity was confirmed for the
+[previous trial](#e11-first-mirror-acquisition-trial); it has not yet been
+explicitly reported for this successful read trial. Next inspect an explicitly
+requested grayscale preview after acquisition closes, with our replay window
+and VR panel closed. Keep detector/VR integration separate until input content
+and output feedback are understood.
 
 ## Maintaining the evidence
 

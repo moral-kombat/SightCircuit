@@ -12,7 +12,7 @@ Start with the [documentation index](docs/README.md) for task-based navigation.
 | Area | Current summary |
 | --- | --- |
 | Recorded-video decoding, replay and VR panel | Confirmed working by the user on Frame, including controls and head-relative placement |
-| Live input in the recognition application | Unimplemented; mirror opened on Frame but returned no frames; corrected reader awaits testing |
+| Live input in the recognition application | Not integrated; standalone SteamVR mirror capture delivered 100 frames in ten seconds on Frame; passthrough content still needs visual confirmation |
 | Detection quality, color and performance | Not systematically measured on Frame |
 | Stereo depth, world-space labels and Gaussian splats | Future work; splat reconstruction is a separate recorded-data experiment |
 
@@ -74,7 +74,9 @@ The [active live-capture plan](docs/live-capture.md#current-work-order) owns the
 next tasks: a bounded diagnostic for an existing headset mirror, followed by an
 isolated Arcturus shared-memory reader and capture-only device trial. The
 [mirror diagnostic](docs/on-device.md#check-an-existing-steamvr-mirror) is
-implemented and cloud-tested; actual Frame acquisition remains unverified.
+implemented and has delivered 1920 × 1080 RGB3 frames on Frame at the diagnostic's
+10 reads/second limit. Confirm actual passthrough content and output feedback
+before connecting this composited input to the app.
 The [isolated shared-memory reader](docs/on-device.md#check-existing-luma-shared-memory)
 also passes controlled cloud tests; no dedicated capture provider has been
 deployed. Built-in camera capture needs separate validation. The

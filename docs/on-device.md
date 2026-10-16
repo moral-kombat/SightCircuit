@@ -287,10 +287,11 @@ with normal cleanup and working passthrough. The reader was then corrected to
 make nonblocking reads without waiting for an initial readiness event: some
 loopback drivers register file-I/O capture only on the first `read()`. The driver
 may internally initialize its capture reader as part of that call; the tool
-does not issue queue/stream-on ioctls or launch a producer. See
-[the recorded result](status.md#e11-first-mirror-acquisition-trial). After pulling
-the correction, use the same bounded capture command once; this is a changed
-reader, not a repeat of the public tracked-camera probe.
+does not issue queue/stream-on ioctls or launch a producer. The
+[corrected trial](status.md#e12-successful-mirror-frame-delivery) then received
+100 complete 1920 × 1080 RGB3 frames in ten seconds, with changing samples and
+clean shutdown. The next acceptance check is the explicit preview below;
+delivered mirror frames alone do not identify their scene or physical camera.
 
 Reads are capped at 10 per second. The worker budget is the requested duration
 plus three seconds for startup/driver calls, followed by up to 2.5 seconds of
@@ -312,6 +313,11 @@ after successful acquisition and shutdown. It fits within 640 × 640 and is not
 a color/HDR fidelity check. Without `--preview`, no image is saved. Open the
 still after the command ends and confirm that a moving physical object appears
 in the selected passthrough view; changing game/UI pixels alone are insufficient.
+Keep a recognizable real object in view near the end of capture. Report whether
+the saved image shows that physical scene, a rendered VR/app view, UI or black
+pixels, and describe orientation/cropping. Confirm passthrough works during and
+after this trial. A single still can establish recognizable content but does
+not by itself validate continuous scene freshness or camera identity.
 
 The report includes driver/capabilities, current format, `frames_read`, observed
 read rate, maximum read gap, changed/unchanged grayscale samples, short reads
@@ -335,9 +341,9 @@ the unchanged command or modifying the compositor.
 Retain the JSON for unavailable/unsupported results. An unsupported format is a
 limit of the current reader, not proof that the mirror is unusable or the camera
 is faulty. Do not activate a new mirror service or force a physical camera path
-to make this check pass. Frame discovery, opening and format queries succeeded;
-no actual frames have been received. See
-[device discovery](status.md#e10-mirror-discovery-on-frame),
+to make this check pass. Frame discovery, opening, format queries and complete
+frame delivery succeeded; passthrough content remains unverified. See
+[device capture](status.md#e12-successful-mirror-frame-delivery),
 [cloud evidence](status.md#e8-mirror-diagnostic-cloud-checks) and the
 [active plan](live-capture.md#current-work-order).
 
@@ -510,10 +516,10 @@ The public camera probe returned no frames and interrupted passthrough.
 Do not repeat it on the unchanged runtime; its explicit flag is for a deliberate
 future retest after a material change.
 Read docs/live-capture.md#current-work-order for the next engineering task.
-The mirror diagnostic found /dev/video99 and opened 1920x1080 RGB3, but its
-first ten-second trial returned no frames; passthrough remained working.
-The reader's initial polling gate was corrected; its device retest is pending.
-Read the mirror procedure before running the corrected bounded capture once.
+The corrected mirror reader received 100 complete 1920x1080 RGB3 frames from
+/dev/video99 in ten seconds with changing samples and normal cleanup.
+Next inspect an explicit preview with our replay window and VR panel closed;
+actual passthrough content, camera identity and output feedback are unverified.
 The isolated shared-memory reader and synthetic fixture are implemented and
 cloud-tested; ARM64/provider validation and capture-layer deployment are pending.
 Keep user observations, cloud checks and upstream capture claims distinct.
