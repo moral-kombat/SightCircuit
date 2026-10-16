@@ -16,7 +16,9 @@ unknown unless explicitly recorded below.
 | Annotated Qt replay window | Device-confirmed | User confirms visible playback; controlled offscreen tests exercise detection and frame association; [E6](#e6-window-and-vr-panel), [E7](#e7-cloud-validation) |
 | Native head-relative VR replay panel | Device-confirmed | Timed test panel, replay, controls and following head movement reported working; detailed performance unmeasured; [E6](#e6-window-and-vr-panel) |
 | Public OpenVR tracked-camera probe | Device-confirmed failure | No frames and observed passthrough interruption; do not repeat the unchanged test; [E3](#e3-public-camera-probe) |
-| Live input in the detector/VR application | Planned; unimplemented | No integrated live capture backend; [active work plan](live-capture.md) |
+| Continuous live input in the Qt/VR application | Planned; unimplemented | No continuous live display backend; standalone bounded recognition is separate; [active work plan](live-capture.md) |
+| Recognition on the saved room still | Frame execution confirmed; false positive | One image processed and annotated; user identifies the `sofa`-labeled item as a rug; [E15](#e15-saved-room-recognition-and-rug-false-positive) |
+| Bounded mirror recognition | Implemented; cloud-tested | Guarded capture plus shared CPU detector, latest pending input and optional preview after shutdown; Frame trial pending; [E16](#e16-bounded-mirror-recognition-cloud-checks) |
 | Existing-mirror diagnostic | Frame capture and physical-room preview confirmed | 100 complete RGB3 frames in ten seconds; user recognizes the room in the 640 × 360 grayscale still; physical camera identity, timing and output feedback remain unverified; [E12](#e12-successful-mirror-frame-delivery), [E14](#e14-physical-room-visible-in-the-mirror-preview) |
 | Dedicated-camera shared-memory reader | Implemented; cloud-tested | Read-only native consumer, bounded supervisor and synthetic producer; actual provider and ARM64 validation pending; [E9](#e9-shared-memory-reader-cloud-checks) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
@@ -390,7 +392,61 @@ and presented one frame, returned bicycle/car/dog labels, saved a decodable
 annotation image and requested no overlay. This confirms the existing tool
 can perform a bounded still-image recognition check; it is not a recognition
 result on the user's room image or on Frame. The next device step uses the
-saved room PNG after capture has stopped.
+saved room PNG after capture has stopped. The [subsequent device result](#e15-saved-room-recognition-and-rug-false-positive)
+confirms execution and records a false positive.
+
+### E15: Saved-room recognition and rug false positive
+
+Source: user-supplied `annotated_file_replay` JSON and observations received
+2026-10-16 after the one-image command. Exact execution time, checkout revision
+and SteamVR version were not included. The report has `status: finished`, one
+processed/presented frame, `labels_seen: ["sofa"]`, `images_saved: true`,
+`overlay_requested: false` and `qt_platform: offscreen`.
+
+The user saw a green box and `sofa` score around an item identified as a **rug**.
+This is a false positive, not a validated sofa detection. The demo's 20-class
+label set includes sofa and has no rug class. The user described a score around
+0.7; if the old annotation read `0.70`, that is a 70% model confidence score,
+not 0.7% and not a calibrated probability of correctness. Labels now use explicit
+percentage formatting; this presentation change does not improve model accuracy.
+
+Qt printed `This plugin does not support propagateSizeHints()` while rendering
+offscreen. The successful report and the visible annotation establish that
+this warning did not prevent processing/output. Chrome again printed launcher
+and zygote messages; the user nevertheless saw the annotated result. Neither
+message supplies evidence of a camera failure. No live capture or overlay was
+requested by this command.
+
+This validates the saved-image processing/display path on Frame while exposing
+a model-quality limit. It does not validate correct recognition, continuous
+live inference, physical camera identity or display-feedback exclusion.
+
+### E16: Bounded mirror recognition cloud checks
+
+Execution date: 2026-10-16, Linux x86_64 cloud environment. The new
+[mirror recognizer](../scripts/mirror_recognize.py) uses the existing guarded
+capture loop and a [shared checksum-verified CPU detector](../scripts/demo_detector.py).
+The replay application uses that same detector. No actual camera, SteamVR
+service, Qt window or VR panel was started by the recognizer checks.
+
+[Behavioral tests](../tests/test_mirror_recognize.py) exercise metadata-only
+defaults, argument guards, one pending input, RGB/BGR order and stride padding,
+slow inference with replaced inputs, exact source/result association, stale or
+empty input, model/read/close failures and cancellation. Spawned-worker checks
+run the real model on the checked image fixture, require bicycle/car/dog labels,
+encode only after source closure, decode the resulting PNG, and preserve
+existing/concurrently created destinations. Existing replay, mirror, shared-memory
+and overlay-transport tests also pass locally. This is not a GitHub Actions
+result or a Frame inference/performance test.
+
+The command targets at most five processing starts per second, reads at most
+ten times per second and retains one pending mirror read. Reports carry local
+read sequence and observation time with the final detections; those are not
+producer sequence or exposure timestamps. It opens no live display and saves
+no images by default. Optional final annotations are published after successful
+capture/inference shutdown. The [Frame procedure](on-device.md#run-bounded-recognition-from-the-mirror)
+is the next device test; the rug false positive remains unresolved by this
+capture/inference implementation.
 
 ## Maintaining the evidence
 

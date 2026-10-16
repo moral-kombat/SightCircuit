@@ -77,7 +77,7 @@ jobs:
         run: bash scripts/setup_window.sh
       - name: Build native overlay transport for validation tests
         run: bash scripts/build_overlay_bridge.sh
-      - name: Verify decoding, detection and offscreen window presentation
+      - name: Verify replay, offscreen presentation and bounded mirror recognition
         run: .venv-replay/bin/python -m unittest discover -s tests -v
 
   overlay-bridge:

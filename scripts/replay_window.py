@@ -1,6 +1,5 @@
 """Show annotated file replay in Qt, optionally mirrored into a public OpenVR panel."""
 import argparse
-import hashlib
 import json
 import math
 import os
@@ -14,28 +13,12 @@ import time
 
 if __package__:
     from .recording_check import RecordingError, latest_recording
+    from .demo_detector import DemoDetector
 else:
     from recording_check import RecordingError, latest_recording
+    from demo_detector import DemoDetector
 
 ROOT = Path(__file__).resolve().parents[1]
-ASSETS = ROOT / ".cache" / "framejacker" / "assets"
-CLASSES = (
-    "background aeroplane bicycle bird boat bottle bus car cat chair cow "
-    "diningtable dog horse motorbike person pottedplant sheep sofa train tvmonitor"
-).split()
-
-
-def verify_model():
-    manifest = json.loads((ROOT / "scripts" / "smoke-assets.json").read_text())
-    for asset in manifest["assets"]:
-        if not asset["name"].startswith("MobileNetSSD_"):
-            continue
-        path = ASSETS / asset["name"]
-        if not path.is_file():
-            raise RuntimeError("Detector model missing. Run bash scripts/setup_window.sh")
-        with path.open("rb") as source:
-            if hashlib.file_digest(source, "sha256").hexdigest() != asset["sha256"]:
-                raise RuntimeError(f"Detector model failed SHA-256 verification: {path.name}")
 
 
 class ReplayWorker(threading.Thread):
@@ -68,16 +51,7 @@ class ReplayWorker(threading.Thread):
     def run(self):
         try:
             import av
-            import cv2
-            import numpy as np
-
-            verify_model()
-            cv2.setNumThreads(2)
-            net = cv2.dnn.readNetFromCaffe(
-                str(ASSETS / "MobileNetSSD_deploy.prototxt"),
-                str(ASSETS / "MobileNetSSD_deploy.caffemodel"))
-            net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
-            net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+            detector = DemoDetector()
             while not self.stopping.is_set():
                 self.restart.clear()
                 self.at_end.clear()
@@ -105,36 +79,12 @@ class ReplayWorker(threading.Thread):
                         height = max(1, round(decoded.height * ratio))
                         image = decoded.reformat(width=width, height=height,
                                                  format="bgr24").to_ndarray()
-                        net.setInput(cv2.dnn.blobFromImage(image, 0.007843, (300, 300), 127.5))
-                        inference_start = time.monotonic()
-                        prediction = net.forward()
-                        inference_ms = (time.monotonic() - inference_start) * 1000
-                        if prediction.ndim != 4 or prediction.shape[-1] != 7:
-                            raise RuntimeError("Unexpected detector output shape")
-                        labels = set()
-                        for detection in prediction.reshape(-1, 7):
-                            if not np.isfinite(detection).all() or detection[2] < self.threshold:
-                                continue
-                            class_id = int(detection[1])
-                            if not 0 < class_id < len(CLASSES):
-                                continue
-                            bounds = detection[3:7] * np.array([width, height, width, height])
-                            x1, y1, x2, y2 = bounds.astype(int)
-                            x1, x2 = np.clip([x1, x2], 0, width - 1)
-                            y1, y2 = np.clip([y1, y2], 0, height - 1)
-                            if x2 <= x1 or y2 <= y1:
-                                continue
-                            label = CLASSES[class_id]
-                            labels.add(label)
-                            cv2.rectangle(image, (x1, y1), (x2, y2), (0, 230, 0), 2)
-                            cv2.putText(image, f"{label} {detection[2]:.2f}",
-                                        (x1, max(20, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX,
-                                        0.6, (0, 230, 0), 2)
+                        detected = detector.detect(image, self.threshold)
                         self.frames_processed += 1
                         pass_frames += 1
                         result = {
-                            "image": np.ascontiguousarray(image), "labels": sorted(labels),
-                            "inference_ms": inference_ms, "number": self.frames_processed,
+                            "image": detected["image"], "labels": detected["labels"],
+                            "inference_ms": detected["inference_ms"], "number": self.frames_processed,
                             "media_time": float(decoded.pts * decoded.time_base)
                             if decoded.pts is not None and decoded.time_base is not None else None,
                         }

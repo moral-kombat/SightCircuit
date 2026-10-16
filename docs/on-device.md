@@ -365,7 +365,9 @@ Retain the JSON for unavailable/unsupported results. An unsupported format is a
 limit of the current reader, not proof that the mirror is unusable or the camera
 is faulty. Do not activate a new mirror service or force a physical camera path
 to make this check pass. Frame discovery, opening, format queries and complete
-frame delivery succeeded; passthrough content remains unverified. See
+frame delivery succeeded, and the user recognized the room in the saved still.
+Physical camera identity and display feedback remain unknown. See
+[the room-image confirmation](status.md#e14-physical-room-visible-in-the-mirror-preview),
 [device capture](status.md#e12-successful-mirror-frame-delivery),
 [cloud evidence](status.md#e8-mirror-diagnostic-cloud-checks) and the
 [active plan](live-capture.md#current-work-order).
@@ -401,10 +403,78 @@ not a capture failure. The output is a screenshot of the annotated application
 including its controls; it is not a raw camera image.
 
 The grayscale input is converted to the detector's three-channel input; this
-does not recover source color. A controlled grayscale fixture passed in cloud,
-but the actual room-image result on Frame remains pending. Keep live input and
+does not recover source color. The user completed this test on Frame and saw a
+rug mislabeled `sofa`; see [the result](status.md#e15-saved-room-recognition-and-rug-false-positive).
+The demo has no rug class. An annotation score such as the earlier `0.70` means
+70% model confidence, not 0.7% or a calibrated probability of correctness.
+The shared detector now prints explicit percentages in both replay and mirror
+annotations. This formatting change does not improve classification. Keep live input and
 VR output separate until source freshness, camera identity and capture of our
 own output are understood; follow the [active plan](live-capture.md#current-work-order).
+
+### Run bounded recognition from the mirror
+
+This is the next Frame trial after capture and saved-image checks. It combines
+the existing guarded mirror reader and the same CPU demo detector, with no Qt
+window, OpenVR calls or live result display. Use the already configured
+`.venv-replay`; no new dependencies or native build are needed. Close the saved
+preview tab and any replay/result windows or VR panel, then keep normal
+passthrough working before starting:
+
+```bash
+(
+  set -e
+  cd "$HOME/framejacker"
+  git pull --ff-only
+  .venv-replay/bin/python scripts/mirror_recognize.py --capture \
+    --device /dev/video99 --seconds 10 --max-fps 5 \
+    --preview artifacts/mirror-check/live-detections.png
+  xdg-open "file://$HOME/framejacker/artifacts/mirror-check/live-detections.png"
+)
+```
+
+The device must still match current virtual SteamVR metadata and read-only
+driver/capability checks. The recognizer accepts RGB3/BGR3 only and never
+requests another format or falls back to a physical camera. It verifies/loads
+the model before opening the source. A capture thread reads at most ten times
+per second; a worker targets at most five processing starts per second. There
+is one pending input, replaced when processing falls behind. Each annotated
+result keeps its own input image, local read number and observation time.
+
+No flags means sysfs-only discovery, without loading the detector or opening a
+device. Without `--preview`, no image is saved. The explicit final PNG above
+is a copy of the last processed image with annotations, fitted within 640 × 640,
+encoded after source closure and published after normal worker shutdown. It is
+not a screenshot of a live window. Existing destinations are preserved; choose
+a new `.png` name for another trial. It retains the source's RGB/BGR channels;
+actual camera color/HDR fidelity remains unverified.
+
+The JSON has `report_kind: steamvr_mirror_recognition`; successful processing
+reports `status: recognized`, exit `0`, `cleanup_ok: true`, positive
+`frames_processed`, `display_started: false` and `overlay_requested: false`.
+`capture` contains read counters, source format and source cleanup. Other fields
+include replaced pending inputs, stale selections, actual processing rate,
+mean/maximum inference time, labels seen and the last result's input identity,
+score/boxes and age. At most 20 final boxes are reported, in the resized input's
+pixel coordinates (at most 960 pixels on its longer side), before optional PNG
+downscaling. `read_sequence` is our count, not a producer sequence. Times describe
+reader observation and processing, not exposure or full camera latency.
+
+Selections older than 1,000 ms are skipped; an old final observation produces
+`stale_input` and no preview. Empty labels alone are not a processing failure.
+The worker deadline is the requested duration plus 15 seconds for model startup
+and completion, then up to 2.5 seconds of bounded cleanup. Ctrl+C/SIGTERM cancels
+and reaps the worker. Forced termination does not claim normal source cleanup.
+Exit codes are `0` for discovery/recognized, `1` for unavailable/stale/error
+results, `2` for invalid options, and `130`/`143` for cancellation.
+
+Paste the JSON and report whether normal passthrough/tracking remained working
+during and after capture. Inspect the PNG after the process ends and compare
+labels/boxes with objects; the known rug-as-sofa false positive is unresolved.
+This initial check measures capture/inference interaction without introducing
+our result into its own input. A future live window/VR panel still requires a
+display-feedback check. [Cloud evidence](status.md#e16-bounded-mirror-recognition-cloud-checks)
+is distinct from that pending device validation.
 
 ### Check existing luma shared memory
 
@@ -579,7 +649,9 @@ The corrected mirror reader received 100 complete 1920x1080 RGB3 frames from
 /dev/video99 in ten seconds with changing samples and normal cleanup.
 An explicit 640x360 preview was saved at artifacts/mirror-check/scene-check.png.
 The user recognized a black-and-white photo of the room via its absolute file URL.
-Next run the one-image detector procedure on that saved PNG with capture stopped.
+The one-image detector ran, but a rug was mislabeled sofa; the demo has no rug class.
+Next use the bounded mirror-recognition procedure without live display.
+Its Frame capture/inference and passthrough-impact check remain pending.
 Physical camera identity, scene freshness and output feedback remain unverified.
 The isolated shared-memory reader and synthetic fixture are implemented and
 cloud-tested; ARM64/provider validation and capture-layer deployment are pending.

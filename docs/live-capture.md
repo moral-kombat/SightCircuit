@@ -11,11 +11,13 @@ layer has been deployed by Framejacker.
 | Order | Deliverable | State | Acceptance |
 | --- | --- | --- | --- |
 | 1 | Bounded diagnostic for an existing SteamVR mirror | Frame delivery and recognizable room content confirmed | Physical source identity, continuous scene freshness and output feedback remain unresolved; [evidence](status.md#e14-physical-room-visible-in-the-mirror-preview) |
-| 1a | Recognition on the saved mirror still | Existing file tool cloud-checked with grayscale PNG; room-image test on Frame next | Process one saved scene after capture closes, inspect labels/boxes and record the result; [procedure](on-device.md#run-recognition-on-the-saved-mirror-image) |
+| 1a | Recognition on the saved mirror still | Frame execution confirmed; rug incorrectly labeled sofa | Keep execution success separate from classification quality; [evidence](status.md#e15-saved-room-recognition-and-rug-false-positive) |
+| 1b | Bounded recognition from mirror frames | Implemented and cloud-tested; Frame trial next | Ten-second capture/inference check, one pending input, measured rate/age/cleanup and working normal passthrough; [procedure](on-device.md#run-bounded-recognition-from-the-mirror) |
+| 1c | Detector quality and class coverage | Needs evaluation | Include the rug false positive; select supported target classes and evaluate correct labels, boxes and misses before claiming useful accuracy |
 | 2 | Isolated shared-memory reader and controlled producer | Implemented and cloud-tested; ARM64 and real-provider validation pending | Validate the pinned layout, consistent frame copies, stale/malformed/restarted input and shutdown; [cloud evidence](status.md#e9-shared-memory-reader-cloud-checks) |
 | 3 | Dedicated Arcturus capture provider | Planned; not deployed | Pin only the capture components, address lifecycle findings, build natively and prepare exact configuration restoration for a controlled trial |
 | 4 | Capture-only device trial | Planned | Ten seconds of fresh images from one identified source, correct orientation, clean exit and working normal passthrough |
-| 5 | Live input in the detector and existing display | Planned | Preserve source-frame association and one latest input; begin at a target of 5 processed fps and measure device/compositor impact |
+| 5 | Continuous live input in the existing display | Planned | Reuse bounded mirror recognition only after device validation and an output-feedback check; dedicated-provider integration remains separate |
 | 6 | Color, built-in camera support and later geometry | Planned | Validate each source and color conversion separately; require calibration and stronger timing evidence before stereo depth or spatial labels |
 
 The mirror is a time-boxed opportunity for a first 2D demonstration, not a
@@ -41,9 +43,14 @@ This confirms a working composited input path at the diagnostic's capped rate;
 the user has now recognized the room in the saved 640 × 360 grayscale preview.
 The absolute local-file URL resolved the relative-path browser opening issue;
 see [the observation](status.md#e14-physical-room-visible-in-the-mirror-preview).
-Next use the existing detector on that saved still with capture stopped. This
-provides a bounded recognition check before live-input integration and creates
-no display feedback during acquisition. Identify the physical source and
+The saved-image detector ran on Frame but mislabeled a rug as sofa; the demo
+has no rug class. Record this false positive separately from successful capture
+and annotation. Next run `mirror_recognize.py` as a bounded capture/inference
+check with no live display, targeting five processed frames per second and
+retaining one latest pending input. It uses the same detector as replay and
+can publish a final annotated still after source closure. See
+[cloud checks](status.md#e16-bounded-mirror-recognition-cloud-checks). This
+does not resolve model quality. Identify the physical source and
 orientation, verify scene freshness and confirm normal passthrough during and
 after a successful capture trial. Evaluate output
 feedback before feeding live results into a visible window or VR panel.
@@ -144,7 +151,7 @@ producer-generation field: a restart that catches up between polls may be
 undetectable. Successful synthetic copies do not resolve GPU completion or
 physical source identity.
 
-The next offline engineering task is the dedicated provider: pin only its
+Dedicated-provider preparation remains an independent offline task: pin only its
 capture components, repair descriptor/publication lifecycle issues from the
 source review, and prepare a native ARM64 build and exact layer-configuration
 restoration. Deployment and the first camera trial remain separate steps.
@@ -180,6 +187,13 @@ shared-memory file or stale repeated image does not pass. Color and geometry
 remain separate milestones.
 
 ## Connect the working application
+
+The standalone `mirror_recognize.py` now exercises guarded mirror input and the
+shared `DemoDetector` without a visible result window. Frame validation and
+continuous Qt/VR integration remain pending; the bounded tool is not a live
+display backend. First measure capture, inference and normal passthrough
+together, then evaluate whether our output reappears in the input. Keep the
+head-relative panel off during the initial recognition trial.
 
 After the capture-only trial passes, extract a common frame-source boundary
 from `ReplayWorker` while preserving the replay tests. Carry image format,

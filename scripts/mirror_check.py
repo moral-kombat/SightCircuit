@@ -39,7 +39,7 @@ def new_report():
 
 
 def capture(candidate, seconds, stop, progress=lambda report: None, want_preview=False,
-            backend_factory=None):
+            backend_factory=None, on_frame=None):
     """Acquisition loop; injectable backend permits real lifecycle/failure tests."""
     report = new_report()
     report.update(status="opening", candidate=candidate, seconds_requested=seconds)
@@ -86,6 +86,8 @@ def capture(candidate, seconds, stop, progress=lambda report: None, want_preview
                 else:
                     max_gap = max(max_gap, observed - last_read)
                 last_read = observed
+                if on_frame is not None:
+                    on_frame(frame, backend.format, report["frames_read"], time.monotonic_ns())
                 if want_preview:
                     last_frame = frame
             if time.monotonic() >= next_progress:
@@ -160,12 +162,13 @@ def _worker(candidate, seconds, preview_temp, sender, stop, expected_parent):
         sender.close()
 
 
-def run_bounded(candidate, seconds, preview_temp=None, *, worker=_worker, timeout=None):
+def run_bounded(candidate, seconds, preview_temp=None, *, worker=_worker, timeout=None,
+                report_factory=new_report, success_status="captured"):
     ctx = multiprocessing.get_context("spawn")
     receiver, sender = ctx.Pipe(duplex=False)
     stop = ctx.Event()
     process = ctx.Process(target=worker, args=(candidate, seconds, preview_temp, sender, stop, os.getpid()), daemon=True)
-    report = new_report()
+    report = report_factory()
     report.update(candidate=candidate, seconds_requested=seconds)
     result_seen = False
     forced = False
@@ -223,7 +226,7 @@ def run_bounded(candidate, seconds, preview_temp=None, *, worker=_worker, timeou
     if forced or not result_seen:
         report["cleanup_ok"] = False  # OS closes FDs, but cooperative close was not confirmed.
     report["exit_code"] = (128 + interrupted if interrupted else
-                           0 if report["status"] == "captured" and report["cleanup_ok"] else 1)
+                           0 if report["status"] == success_status and report["cleanup_ok"] else 1)
     return report
 
 

@@ -118,6 +118,12 @@ calibration, metadata payloads, dependent stereo views or HDR color management.
 
 ## Annotated replay window
 
+Replay and bounded mirror recognition share `scripts/demo_detector.py`: the
+same checked MobileNet-SSD model, CPU execution, 20 labels, preprocessing and
+annotation code. Boxes now show explicit percentage confidence scores. These
+scores are not calibrated probabilities; the device's rug-as-sofa false positive
+is recorded in [status](status.md#e15-saved-room-recognition-and-rug-false-positive).
+
 ```bash
 bash scripts/setup_window.sh
 .venv-replay/bin/python scripts/replay_window.py /path/to/recording.mp4
@@ -210,6 +216,38 @@ also decodes the generated PNG. No test opens an actual camera. Read the
 [device procedure](on-device.md#check-an-existing-steamvr-mirror) before opt-in
 acquisition, and [status](status.md#e8-mirror-diagnostic-cloud-checks) for actual
 validation evidence.
+
+## Bounded mirror recognition
+
+`scripts/mirror_recognize.py` reuses the guarded capture loop and supervised
+process deadline. Default execution performs metadata-only discovery. Opt-in
+capture/inference needs the existing OpenCV/NumPy environment and checked model
+fixtures, with no Qt, PyAV or OpenVR initialization. The recognizer accepts only
+RGB3/BGR3, respects row padding and converts to owned BGR images of at most 960
+pixels on the longer side. A capture thread retains one latest pending read;
+slow inference replaces old input rather than accumulating a queue.
+
+```bash
+.venv-replay/bin/python -m unittest discover -s tests -p test_mirror_recognize.py -v
+```
+
+Tests cover guards, channel order/padding, overload and exact source/result
+association, old/empty input, model/read/close failures, cancellation and real
+spawned-model/preview publication with the checked fixture. Image encoding is
+checked to occur after source closure. Destinations created concurrently remain
+untouched. Dependency-specific tests skip without OpenCV/NumPy; the replay-window
+CI job installs these and exercises the complete suite. Existing supervision
+tests cover hard deadlines, abnormal worker exit and process reaping.
+
+The final report carries at most 20 detections from the last processed input,
+local observation/processing timing, captured/processed counts and replaced
+pending inputs. One pending read, one in-flight inference and bounded result
+storage limit memory; the kernel driver's own buffering is separate. The
+supervisor budget includes 15 seconds beyond capture duration for model startup
+and completion, then bounded cleanup. File output is opt-in and published only
+after capture/inference finishes. Read [the device procedure](on-device.md#run-bounded-recognition-from-the-mirror)
+before the first Frame trial; [status](status.md#e16-bounded-mirror-recognition-cloud-checks)
+records cloud-only validation and the model-quality limitation.
 
 ## Isolated luma reader and synthetic producer
 
