@@ -15,8 +15,8 @@ layer has been deployed by Framejacker.
 | 1b | Bounded recognition from mirror frames | Frame execution confirmed: 4.993 processed fps and normal passthrough | 100 reads, 51 processed, clean shutdown; user confirms chair/TV present, localization and broader accuracy unverified; [evidence](status.md#e17-bounded-mirror-recognition-on-frame) |
 | 1c | Check capture of our own display | Confirmed: the VR panel appears in captured output | Current composited mirror does not exclude our output; no continuous live-image panel from this source; [E18](status.md#e18-vr-panel-included-in-mirror-input) |
 | 1d | Detector quality and class coverage | Needs evaluation | Include the rug false positive; select supported target classes and evaluate correct labels, boxes and misses before claiming useful accuracy |
-| 2 | Isolated shared-memory reader and controlled producer | Implemented and cloud-tested; ARM64 and real-provider validation pending | Validate the pinned layout, consistent frame copies, stale/malformed/restarted input and shutdown; [cloud evidence](status.md#e9-shared-memory-reader-cloud-checks) |
-| 3 | Dedicated camera provider | Frame build prerequisites reported; reference builder cloud-tested; not deployed | Native reference build and synthetic reader tests next, then fix provider lifecycle/publication and prepare restoration; identify source during capture validation; built-in camera support unresolved |
+| 2 | Isolated shared-memory reader and controlled producer | Controlled x86_64 and Frame ARM64 checks passed; real provider unverified | All 14 native/supervisor tests pass on Frame; upstream writer ordering and original GPU completion remain unresolved; [E23](status.md#e23-reference-build-and-controlled-reader-on-frame) |
+| 3 | Dedicated camera provider | Reference builds on Frame; transport adaptation cloud-tested; not deployed | Verify transport adaptation on ARM64, then finish GPU import validation, writer ordering, bounded lifetime and restoration; source identity and built-in support unresolved |
 | 4 | Capture-only device trial | Planned | Ten seconds of fresh images from one identified source, correct orientation, clean exit and working normal passthrough |
 | 5 | Continuous live input in the existing display | Planned; needs input independent of our output | Reuse detector/display after a dedicated provider or supported overlay-excluded mirror mode is validated; current mirror includes the panel |
 | 6 | Color, built-in camera support and later geometry | Planned | Validate each source and color conversion separately; require calibration and stronger timing evidence before stereo depth or spatial labels |
@@ -59,10 +59,12 @@ tested mode. Keep bounded/no-display recognition and post-capture snapshots as
 the baseline. The user confirms Arcturus is physically connected, but does not
 know which passthrough source is selected. The native prerequisite report now
 shows GCC 15.1.1 and Vulkan 1.4.309 development files on SteamOS 0.5.6; see
-[E21](status.md#e21-capture-prerequisites-on-frame). Next run the
-[build-only compatibility check and ARM64 synthetic reader tests](on-device.md#build-the-capture-reference-without-activation),
-then finish the provider adaptation for input before overlay composition.
-The unmodified reference is not deployment-ready. Identify the selected source
+[E21](status.md#e21-capture-prerequisites-on-frame). The reference build and all
+14 controlled reader tests now pass on Frame; see [E23](status.md#e23-reference-build-and-controlled-reader-on-frame).
+The first provider adaptation addresses descriptor transport. Its
+[synthetic socket check](on-device.md#test-the-transport-adaptation-without-capture)
+is ready for ARM64 verification while the remaining provider work continues.
+The reference and transport-only adaptation are not deployment-ready. Identify the selected source
 during capture validation; connection alone does not identify past mirror frames.
 Prefer a supported interface; the reviewed
 community Arcturus provider remains an experimental alternative, with no
@@ -129,11 +131,11 @@ restart SteamVR or open camera devices. Its first target is the pinned
 are now implemented; [development checks](development.md#isolated-luma-reader-and-synthetic-producer)
 cover the controlled x86_64 publication path. Follow the
 [operating procedure](on-device.md#check-existing-luma-shared-memory) for existing
-input. ARM64 execution, upstream writer ordering and original camera-buffer
-completion remain unverified.
+input. Controlled reader tests passed on Frame ARM64; upstream writer ordering
+and original camera-buffer completion remain unverified.
 
-The implementation and controlled tests cover these requirements; ARM64 and
-real-provider acceptance remain pending:
+The implementation and controlled tests cover these requirements on x86_64 and
+Frame ARM64; real-provider acceptance remains pending:
 
 - Exact native layout, magic, file size, dimensions and camera-slot bounds.
   Keep the consumer read-only and bound all allocations and copies.
@@ -172,8 +174,18 @@ restoration. Deployment and the first camera trial remain separate steps.
 The prerequisite report distinguishes runtime-library metadata from compiler,
 Vulkan headers and linker files; the Frame result reports all expected types.
 The new pinned reference builder checks compilation/linkage only, keeps outputs
-non-executable and creates no layer manifest. A native Frame result is pending;
+non-executable and creates no layer manifest. The native Frame build passed;
 successful compilation does not resolve the reviewed runtime defects.
+
+The optional transport adaptation duplicates snapshot FDs under the registry
+lock and sends a single registry generation. Its shared sender/receiver handles
+partial messages, validates ancillary FD counts and metadata bounds, closes
+rejected descriptors and applies one 500 ms socket deadline per exchange.
+Controlled cloud tests cover disconnects, stalls, malformed responses and FD
+lifetime. ARM64 transport tests remain pending. It does not yet repair GPU
+import validation/completion, ongoing registry refresh, writer ordering,
+exclusive shared-memory ownership, provider shutdown or layer socket ownership.
+Finish those and exact restoration before a capture-only device deployment.
 
 ## First live device trial
 

@@ -21,6 +21,7 @@ owns the current capture work plan.
 | Test capture and recognition together without live display | [Bounded mirror recognition](on-device.md#run-bounded-recognition-from-the-mirror) |
 | Inspect native capture build prerequisites without starting capture | [Read-only prerequisite report](on-device.md#check-native-capture-prerequisites) |
 | Compile the capture reference without activating it | [Build-only check and synthetic ARM64 tests](on-device.md#build-the-capture-reference-without-activation) |
+| Test descriptor transport changes without camera access | [Transport adaptation and synthetic sockets](on-device.md#test-the-transport-adaptation-without-capture) |
 | Inspect existing luma input or test the isolated reader | [Shared-memory procedure](on-device.md#check-existing-luma-shared-memory) and [controlled fixture](development.md#isolated-luma-reader-and-synthetic-producer) |
 | Set up cloud or desktop development | [Development setup](development.md) |
 | Continue live capture development | [Active capture plan](live-capture.md#current-work-order) |

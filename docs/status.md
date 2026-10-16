@@ -20,9 +20,10 @@ unknown unless explicitly recorded below.
 | Recognition on the saved room still | Frame execution confirmed; false positive | One image processed and annotated; user identifies the `sofa`-labeled item as a rug; [E15](#e15-saved-room-recognition-and-rug-false-positive) |
 | Bounded mirror recognition | Frame-confirmed execution | 100 captured / 51 processed reads, 4.993 processed fps, 42.044 ms mean inference and clean shutdown; user reports normal passthrough; label accuracy and live display remain separate; [E17](#e17-bounded-mirror-recognition-on-frame) |
 | Existing-mirror diagnostic | Frame capture confirmed; VR panel included in input | Physical-room preview and bounded inference work, but this composited view includes our overlay; physical camera identity/timing remain unknown; [E14](#e14-physical-room-visible-in-the-mirror-preview), [E18](#e18-vr-panel-included-in-mirror-input) |
-| Dedicated-camera shared-memory reader | Implemented; cloud-tested | Read-only native consumer, bounded supervisor and synthetic producer; actual provider and ARM64 validation pending; [E9](#e9-shared-memory-reader-cloud-checks) |
+| Dedicated-camera shared-memory reader | Controlled x86_64 and Frame ARM64 tests passed | All 14 reader/supervisor tests pass on Frame; actual provider and upstream writer ordering remain unverified; [E23](#e23-reference-build-and-controlled-reader-on-frame) |
 | Native capture prerequisite report | Frame report received | aarch64 SteamOS 0.5.6, GCC 15.1.1 and Vulkan 1.4.309 development metadata/headers; no capture configuration at checked paths; [E21](#e21-capture-prerequisites-on-frame) |
-| Pinned capture reference build | Cloud compile/link check passed; native Frame build pending | Unmodified upstream inspection artifacts only; no activation, runtime fixes still required; [E22](#e22-capture-reference-build-cloud-checks) |
+| Pinned capture reference build | Cloud and Frame ARM64 compile/link checks passed | Unmodified upstream inspection artifacts only; no activation, runtime fixes still required; [E23](#e23-reference-build-and-controlled-reader-on-frame) |
+| Descriptor transport adaptation | Implemented; controlled cloud checks passed | Versioned layer/consumer patch and seven synthetic socket groups; native ARM64 transport tests and remaining provider fixes pending; [E24](#e24-descriptor-transport-adaptation-cloud-checks) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
 | Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; no source-identified built-in-camera frames have been received |
 | Stereo depth and world-space labels | Planned | Calibration, depth and pose/timebase alignment remain unresolved |
@@ -630,9 +631,64 @@ command was executed locally; both dependency caches remained clean.
 The documented reader build/test sequence also passed all 14 shared-memory
 tests in 6.623 seconds with no skips, using synthetic input on cloud x86_64.
 A dedicated CI job was added for the reference build; its hosted result has
-not been checked. Native ARM64 compilation/reader tests, provider runtime fixes,
-configuration restoration and camera capture remain pending. See
+not been checked. The subsequent ARM64 build/reader result is recorded in E23.
+Provider runtime fixes, configuration restoration and camera capture remain pending. See
 [the next device procedure](on-device.md#build-the-capture-reference-without-activation).
+
+### E23: Reference build and controlled reader on Frame
+
+Source: user-supplied build JSON and complete unittest summary received
+2026-10-16. Exact execution time and checkout revision were not supplied.
+The preceding inventory reported SteamOS 0.5.6; this build report supplies
+architecture/compiler target rather than a fresh OS or SteamVR version.
+
+The unmodified capture reference compiled and linked on `aarch64`, target
+`aarch64-unknown-linux-gnu`, using `system` Vulkan headers and
+`-l:libvulkan.so.1`. Capture revision is
+`ff6a2b29bc50c9497d66fd7ff07e00b61f9eb082`; all three source hashes match E22's
+upstream sources. The reported inspection artifacts are:
+
+| Artifact | Bytes | SHA-256 |
+| --- | --- | --- |
+| `reference-libVkLayer_mrhand.so` | 79,536 | `dbe97cd3338254c8dfdd0520bad1f4d22b8439158a848f6bcc5d23de372bec28` |
+| `reference-ptgrab` | 77,760 | `88d80d286b0ce2c50bc1b462856f94b0b340693d032f949c6105599c748bd8fa` |
+
+The report states `runtime_initialized: false`, `capture_started: false`,
+`layer_installation_performed: false` and `deployment_ready: false`. The builder
+reported non-executable inspection artifacts and no loading or execution.
+Successful linkage does not demonstrate GPU buffer import or live capture.
+
+The reader and synthetic producer also built natively. All **14 tests passed
+in 7.204 seconds**, with no failures or skips. The supplied output includes
+both-slot cross-process copies, stale/busy/stalled publications, malformed
+layouts and source types, truncation/replacement/restarts, preview publication,
+signal cleanup and a stuck-reader deadline. These use controlled generated
+input; they do not validate the original upstream writer's ordering, camera
+buffer completion or source identity. No live camera test was performed.
+
+### E24: Descriptor transport adaptation cloud checks
+
+Source: local x86_64 cloud execution on 2026-10-16 of the transport worktree
+based on `117df82`. The versioned patch applies to a disposable copy of the
+pinned layer/consumer, leaving the upstream cache unchanged. Both adapted
+components compile and link; the two inspection binaries remain non-executable.
+The original unmodified build remains a separate mode and artifact directory.
+
+The original socket fixture passed seven test groups for FD snapshot lifetime,
+fragmented records, ancillary validation/closure, metadata/generation/ID bounds,
+receive deadlines/EOF, send backpressure/disconnects and a named same-user
+connection. It counts descriptors before/after; none leaked. Extra/truncated
+rights were rejected repeatedly. The fixture uses generated three-byte `memfd`
+payloads, Unix sockets and a private temporary socket directory, with no Vulkan
+or camera calls. The layer snapshot duplicates each FD under its registry lock
+and freezes a single generation; live Vulkan callbacks were not exercised.
+
+Address/undefined-behavior sanitizer checks also passed the fixture. CI includes
+the adapted build and fixture; hosted results have not been checked. Native
+ARM64 transport verification remains pending. The adaptation still leaves GPU
+import validation, writer ordering, ongoing registry/provider lifetime, shared
+memory ownership and layer socket restoration unresolved; it is not ready for
+activation. Use [the synthetic device procedure](on-device.md#test-the-transport-adaptation-without-capture).
 
 ## Maintaining the evidence
 

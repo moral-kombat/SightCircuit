@@ -580,7 +580,8 @@ Compilation and real capture remain separate checks.
 ### Build the capture reference without activation
 
 The pinned reference build is an intermediate compiler/linker compatibility
-check. It has passed on cloud x86_64; a native Frame result is pending. Its
+check. It has passed on cloud x86_64 and Frame ARM64, along with all 14 synthetic
+reader tests on Frame; see [E23](status.md#e23-reference-build-and-controlled-reader-on-frame). Its
 unmodified upstream code still needs the lifecycle and publication fixes in
 the [capture review](capture-reference-review.md#findings-that-affect-our-implementation)
 before deployment. It does not provide a runnable live-capture command.
@@ -610,6 +611,32 @@ They check native ARM64 reader behavior without activating a provider. A passed
 build/fixture test does not establish live-camera synchronization or compatibility.
 Keep the reference artifacts for inspection; do not install them, add execute
 permission or run `ptgrab` as the next step.
+
+### Test the transport adaptation without capture
+
+The first provider adaptation repairs descriptor ownership and bounded socket
+messages. It has passed controlled cloud tests; native ARM64 transport checks
+are next. Run this separately from the completed unmodified-reference test:
+
+```bash
+cd "$HOME/framejacker" &&
+git pull --ff-only &&
+bash scripts/build_capture_reference.sh --transport-fixes &&
+artifacts/capture-transport-reference/framejacker-transport-fixture --self-test
+```
+
+The build applies our versioned patch to a disposable source copy, preserving
+the pinned upstream cache and the earlier reference artifacts. It creates
+separate non-executable capture inspection binaries plus an original synthetic
+test executable. The explicit `--self-test` runs seven test groups using Unix
+sockets and small generated `memfd` payloads; no camera or Vulkan calls occur.
+The tests include partial records, malformed/extra descriptors, mixed generations,
+stalls, disconnects and descriptor closure. A private temporary socket
+directory is removed after its test. Share the build report and fixture JSON.
+
+This remains a transport-only adaptation. GPU import, shared-memory publication,
+provider lifetime and exact restoration still need work before deployment; no
+capture binary is run and no layer configuration is created by this procedure.
 
 ### Check existing luma shared memory
 
@@ -793,12 +820,14 @@ Arcturus is connected; its selection for passthrough is unknown. The latest
 prerequisite report is aarch64 SteamOS 0.5.6 build 20261015.6141207, GCC 15.1.1
 and Vulkan 1.4.309 with development headers. Earlier capture tests have their
 own runtime evidence; do not silently attach this newer build to them.
-Next build the pinned capture reference without activation and run the existing
-synthetic reader tests on ARM64. Then finish provider lifecycle/publication fixes
-and configuration restoration before deployment. Physical camera identity and
-scene freshness remain unverified.
+The pinned reference compiled/linked on aarch64 with system Vulkan headers; all
+14 synthetic reader tests passed in 7.204 seconds. Next verify the descriptor
+transport adaptation with its synthetic socket fixture on ARM64, then finish
+GPU import validation, writer ordering, bounded lifetime and exact restoration
+before deployment. Physical camera identity and scene freshness remain unverified.
 The isolated shared-memory reader and synthetic fixture are implemented and
-cloud-tested; ARM64/provider validation and capture-layer deployment are pending.
+tested on cloud x86_64 and Frame ARM64; real-provider validation and capture-layer
+deployment are pending.
 Keep user observations, cloud checks and upstream capture claims distinct.
 Record new results in docs/status.md, including unknown dates/versions explicitly.
 ```

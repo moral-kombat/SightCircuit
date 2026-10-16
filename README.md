@@ -83,14 +83,15 @@ then processed 51 reads at 4.993 fps, with clean shutdown and normal passthrough
 The [fixed-panel check](docs/on-device.md#check-whether-the-vr-panel-appears-in-mirror-input)
 confirmed that this mirror captures our VR output. Arcturus is connected; its
 selection for passthrough is unknown. The Frame reports GCC 15 and Vulkan 1.4.309
-development files. Next run the
-[build-only reference check and synthetic ARM64 reader tests](docs/on-device.md#build-the-capture-reference-without-activation),
-then finish the provider fixes needed for input independent of our output before
+development files. The reference build and all 14 synthetic reader tests passed
+on Frame ARM64. Next verify the
+[descriptor transport adaptation](docs/on-device.md#test-the-transport-adaptation-without-capture)
+and finish the provider fixes needed for input independent of our output before
 continuous VR image display. Bounded recognition and snapshots shown after
 capture remain useful. The model's class coverage and false positives need separate work.
 The [isolated shared-memory reader](docs/on-device.md#check-existing-luma-shared-memory)
-also passes controlled cloud tests; no dedicated capture provider has been
-deployed. Built-in camera capture needs separate validation. The
+also passes controlled x86_64 and ARM64 tests; no dedicated capture provider has
+been deployed. Built-in camera capture needs separate validation. The
 [dated reference review](docs/capture-reference-review.md)
 explains the strategy; [architecture](docs/architecture.md) describes components,
 frame ownership and longer-term acceptance criteria.

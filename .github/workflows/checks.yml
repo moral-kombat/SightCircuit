@@ -20,6 +20,10 @@ jobs:
           sudo apt-get install -y --no-install-recommends libvulkan1
       - name: Build the pinned reference without activation
         run: bash scripts/build_capture_reference.sh
+      - name: Build transport-only adaptation and test synthetic sockets
+        run: |
+          bash scripts/build_capture_reference.sh --transport-fixes
+          artifacts/capture-transport-reference/framejacker-transport-fixture --self-test
       - name: Check inspection artifacts without executing them
         run: |
           python3 - <<'PY'
@@ -27,21 +31,23 @@ jobs:
           import json
           from pathlib import Path
 
-          root = Path('artifacts/capture-reference')
-          report = json.loads((root / 'build-report.json').read_text())
-          assert report['status'] == 'built_reference'
-          for field in ('runtime_initialized', 'capture_started',
-                        'layer_installation_performed', 'deployment_ready',
-                        'upstream_sources_modified'):
-              assert report[field] is False, field
-          assert len(report['artifacts']) == 2
-          for item in report['artifacts']:
-              path = root / item['name']
-              data = path.read_bytes()
-              assert data[:4] == b'\x7fELF'
-              assert not path.stat().st_mode & 0o111
-              assert len(data) == item['size_bytes']
-              assert hashlib.sha256(data).hexdigest() == item['sha256']
+          for directory, adapted in (('capture-reference', False),
+                                     ('capture-transport-reference', True)):
+              root = Path('artifacts') / directory
+              report = json.loads((root / 'build-report.json').read_text())
+              assert report['status'] == ('built_transport_reference' if adapted else 'built_reference')
+              assert report['upstream_sources_modified'] is adapted
+              for field in ('runtime_initialized', 'capture_started',
+                            'layer_installation_performed', 'deployment_ready'):
+                  assert report[field] is False, field
+              assert len(report['artifacts']) == 2
+              for item in report['artifacts']:
+                  path = root / item['name']
+                  data = path.read_bytes()
+                  assert data[:4] == b'\x7fELF'
+                  assert not path.stat().st_mode & 0o111
+                  assert len(data) == item['size_bytes']
+                  assert hashlib.sha256(data).hexdigest() == item['sha256']
           print('Reference binaries built and verified without loading or running them.')
           PY
 

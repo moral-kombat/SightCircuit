@@ -1,0 +1,205 @@
+diff --git a/capture/handcam_layer.cpp b/capture/handcam_layer.cpp
+index 9c2b76f..5c080ff 100644
+--- a/capture/handcam_layer.cpp
++++ b/capture/handcam_layer.cpp
+@@ -35,6 +35,7 @@
+ #include <vector>
+ 
+ #include "handcam_proto.h"
++#include "capture_transport.hpp"
+ 
+ #define EXPORT extern "C" __attribute__((visibility("default")))
+ 
+@@ -171,67 +172,60 @@ static const void *findPNext(const void *p, VkStructureType t) {
+ 
+ // ---------------------------------------------------------------- socket server
+ static void serveClient(int c) {
+-    ucred cr{};
+-    socklen_t cl = sizeof cr;
+-    if (getsockopt(c, SOL_SOCKET, SO_PEERCRED, &cr, &cl) != 0 || cr.uid != getuid()) {
+-        close(c);
+-        return;
+-    }
+-    std::vector<std::pair<MrhandBufInfo, int>> out;
+-    {
+-        std::lock_guard<std::mutex> l(g_regM);
+-        for (auto &kv : g_mems) {
+-            const MemRec &m = kv.second;
+-            if (m.fd < 0) continue;
+-            MrhandBufInfo bi{};
+-            bi.magic = MRHAND_MAGIC;
+-            bi.generation = g_generation;
+-            bi.id = m.id;
+-            bi.size = m.size;
+-            bi.handleType = m.handleType;
+-            bi.bindOffset = m.bindOffset;
+-            auto it = g_images.find(m.image);
+-            if (m.image && it != g_images.end()) {
+-                const ImageRec &ir = it->second;
+-                bi.hasImage = 1;
+-                bi.format = ir.ci.format;
+-                bi.width = ir.ci.extent.width;
+-                bi.height = ir.ci.extent.height;
+-                bi.arrayLayers = ir.ci.arrayLayers;
+-                bi.tiling = ir.ci.tiling;
+-                bi.usage = ir.ci.usage;
+-                bi.modifier = ir.modifier;
+-                bi.hasModifier = ir.hasModifier;
+-                bi.planeCount = ir.planeCount;
+-                for (uint32_t p = 0; p < ir.planeCount; p++) {
+-                    bi.planeOffset[p] = ir.planes[p].offset;
+-                    bi.planeRowPitch[p] = ir.planes[p].rowPitch;
++    using namespace framejacker::transport;
++    Fd client(c);
++    try {
++        require_same_user(client.get());
++        std::vector<Record> out;
++        uint32_t generation;
++        {
++            std::lock_guard<std::mutex> lock(g_regM);
++            generation = g_generation.load();
++            if (g_mems.size() > maximum_records) throw Error("registry_record_limit");
++            out.reserve(g_mems.size());
++            for (const auto &entry : g_mems) {
++                const MemRec &m = entry.second;
++                if (m.fd < 0) continue;
++                MrhandBufInfo bi{};
++                bi.magic = MRHAND_MAGIC;
++                bi.generation = generation;
++                bi.id = m.id;
++                bi.size = m.size;
++                bi.handleType = m.handleType;
++                bi.bindOffset = m.bindOffset;
++                auto it = g_images.find(m.image);
++                if (m.image && it != g_images.end()) {
++                    const ImageRec &ir = it->second;
++                    bi.hasImage = 1;
++                    bi.format = ir.ci.format;
++                    bi.width = ir.ci.extent.width;
++                    bi.height = ir.ci.extent.height;
++                    bi.arrayLayers = ir.ci.arrayLayers;
++                    bi.tiling = ir.ci.tiling;
++                    bi.usage = ir.ci.usage;
++                    bi.modifier = ir.modifier;
++                    bi.hasModifier = ir.hasModifier;
++                    bi.planeCount = ir.planeCount;
++                    for (uint32_t p = 0; p < ir.planeCount; p++) {
++                        bi.planeOffset[p] = ir.planes[p].offset;
++                        bi.planeRowPitch[p] = ir.planes[p].rowPitch;
++                    }
+                 }
++                // Own a snapshot lease while the registry lock still protects m.fd.
++                auto owned = duplicate(m.fd);
++                out.push_back({bi, std::move(owned)});
+             }
+-            out.push_back({bi, m.fd});
+         }
++        const auto deadline = Clock::now() + std::chrono::milliseconds(500);
++        for (const auto &entry : out)
++            send_record(client.get(), entry.info, entry.fd.get(), deadline);
++        MrhandBufInfo end{};
++        end.magic = MRHAND_MAGIC;
++        end.generation = generation;
++        send_record(client.get(), end, -1, deadline);
++    } catch (const std::exception &error) {
++        LOG("registry client closed: %s", error.what());
+     }
+-    for (auto &e : out) {
+-        iovec iov{&e.first, sizeof e.first};
+-        char ctrl[CMSG_SPACE(sizeof(int))] = {};
+-        msghdr mh{};
+-        mh.msg_iov = &iov;
+-        mh.msg_iovlen = 1;
+-        mh.msg_control = ctrl;
+-        mh.msg_controllen = sizeof ctrl;
+-        cmsghdr *cm = CMSG_FIRSTHDR(&mh);
+-        cm->cmsg_level = SOL_SOCKET;
+-        cm->cmsg_type = SCM_RIGHTS;
+-        cm->cmsg_len = CMSG_LEN(sizeof(int));
+-        memcpy(CMSG_DATA(cm), &e.second, sizeof(int));
+-        if (sendmsg(c, &mh, MSG_NOSIGNAL) < 0) break;
+-    }
+-    MrhandBufInfo end{};
+-    end.magic = MRHAND_MAGIC;
+-    end.id = 0;   // terminator
+-    end.generation = g_generation;
+-    send(c, &end, sizeof end, MSG_NOSIGNAL);
+-    close(c);
+ }
+ 
+ static void serverThread() {
+diff --git a/capture/ptgrab.cpp b/capture/ptgrab.cpp
+index 4de1bb0..7a0ab4f 100644
+--- a/capture/ptgrab.cpp
++++ b/capture/ptgrab.cpp
+@@ -26,38 +26,20 @@
+ #include <vector>
+ 
+ #include "handcam_proto.h"
++#include "capture_transport.hpp"
+ 
+ #define CHECK(x) do { VkResult r_ = (x); if (r_ != VK_SUCCESS) { fprintf(stderr, "%s:%d %s -> %d\n", __FILE__, __LINE__, #x, r_); exit(1); } } while (0)
+ 
+-struct Buf { MrhandBufInfo info; int fd; };
++using Buf = framejacker::transport::Record;
+ 
+ static std::vector<Buf> fetchBuffers() {
+-    const char *rt = getenv("XDG_RUNTIME_DIR");
+-    std::string path = std::string(rt ? rt : "/tmp") + "/mrhand/cam.sock";
+-    int s = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+-    sockaddr_un a{};
+-    a.sun_family = AF_UNIX;
+-    snprintf(a.sun_path, sizeof a.sun_path, "%s", path.c_str());
+-    if (connect(s, (sockaddr *)&a, sizeof a) != 0) { perror("connect cam.sock"); exit(1); }
+-    std::vector<Buf> out;
+-    while (true) {
+-        MrhandBufInfo bi;
+-        char ctrl[CMSG_SPACE(sizeof(int))];
+-        iovec iov{&bi, sizeof bi};
+-        msghdr mh{};
+-        mh.msg_iov = &iov;
+-        mh.msg_iovlen = 1;
+-        mh.msg_control = ctrl;
+-        mh.msg_controllen = sizeof ctrl;
+-        ssize_t n = recvmsg(s, &mh, MSG_WAITALL | MSG_CMSG_CLOEXEC);
+-        if (n != (ssize_t)sizeof bi || bi.magic != MRHAND_MAGIC || bi.id == 0) break;
+-        int fd = -1;
+-        for (cmsghdr *c = CMSG_FIRSTHDR(&mh); c; c = CMSG_NXTHDR(&mh, c))
+-            if (c->cmsg_type == SCM_RIGHTS) memcpy(&fd, CMSG_DATA(c), sizeof fd);
+-        out.push_back({bi, fd});
+-    }
+-    close(s);
+-    return out;
++    using namespace framejacker::transport;
++    const char *runtime = getenv("XDG_RUNTIME_DIR");
++    if (!runtime || runtime[0] != '/') throw Error("XDG_RUNTIME_DIR_missing_or_relative");
++    std::string path = std::string(runtime) + "/mrhand/cam.sock";
++    const auto deadline = Clock::now() + std::chrono::milliseconds(500);
++    auto connection = connect_registry(path.c_str(), deadline);
++    return receive_registry(connection.get(), deadline);
+ }
+ 
+ struct Gpu {
+@@ -147,7 +129,7 @@ static CamImage importImage(Gpu &g, const Buf &b) {
+     CHECK(vkCreateImage(g.dev, &ic, nullptr, &ci.img));
+     VkMemoryRequirements req;
+     vkGetImageMemoryRequirements(g.dev, ci.img, &req);
+-    int fd = dup(b.fd);   // Vulkan takes ownership of the imported fd
++    int fd = dup(b.fd.get());   // Vulkan takes ownership of the imported fd
+     VkMemoryFdPropertiesKHR fp{VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR};
+     CHECK(g.getFdProps(g.dev, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, fd, &fp));
+     VkMemoryDedicatedAllocateInfo ded{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO, nullptr, ci.img};
+@@ -503,7 +485,12 @@ int main(int argc, char **argv) {
+         fprintf(stderr, "usage: ptgrab identify OUTDIR | ptgrab stream [maxfps] [outsize=640]\n");
+         return 2;
+     }
+-    auto bufs = fetchBuffers();
++    std::vector<Buf> bufs;
++    try { bufs = fetchBuffers(); }
++    catch (const std::exception &error) {
++        fprintf(stderr, "registry fetch failed: %s\n", error.what());
++        return 1;
++    }
+     Gpu g;
+     g.init();
+     std::vector<CamImage> ims;
