@@ -200,21 +200,44 @@ class MirrorNativeTests(unittest.TestCase):
         source = device.NativeMirror(CANDIDATE)
         source.fd = 44
         source.format = device.validate_format(2, 2, "GREY", 2, 4)
-        with patch.object(device.select, "select", return_value=([], [], [])), patch.object(device.os, "read") as read:
-            self.assertIsNone(source.read_frame(0.01))
-            read.assert_not_called()
-        with patch.object(device.select, "select", return_value=([44], [], [])), \
-                patch.object(device.os, "read", side_effect=BlockingIOError(errno.EAGAIN, "not ready")):
-            self.assertIsNone(source.read_frame(0.01))
-        with patch.object(device.select, "select", return_value=([44], [], [])), \
-                patch.object(device.os, "read", return_value=b""):
+        for code in (errno.EAGAIN, errno.EINTR):
+            with patch.object(device.os, "read", side_effect=OSError(code, "not ready")) as read:
+                self.assertIsNone(source.read_frame(0.01))
+                read.assert_called_once_with(44, 4)
+        self.assertEqual(source.read_diagnostics, {"read_attempts": 2, "would_block_reads": 1, "interrupted_reads": 1})
+        with patch.object(device.os, "read", return_value=b""):
             with self.assertRaisesRegex(device.MirrorError, "end-of-stream"):
                 source.read_frame(0.01)
-        with patch.object(device.select, "select", return_value=([44], [], [])), \
-                patch.object(device.os, "read", return_value=bytes(4)), \
+        with patch.object(device.os, "read", return_value=bytes(4)), \
                 patch.object(source, "get_format", return_value=dict(source.format, width=4)):
             with self.assertRaisesRegex(device.MirrorError, "changed"):
                 source.read_frame(0.01)
+
+    def test_first_read_registers_lazy_driver_without_waiting_for_poll(self):
+        import errno
+
+        source = device.NativeMirror(CANDIDATE)
+        source.fd = 44
+        source.format = device.validate_format(2, 2, "GREY", 2, 4)
+        registered = False
+
+        def lazy_read(fd, count):
+            nonlocal registered
+            self.assertEqual((fd, count), (44, 4))
+            if not registered:
+                registered = True
+                raise BlockingIOError(errno.EAGAIN, "reader registered; waiting for producer")
+            return bytes([80]) * 4
+
+        # Such a driver's poll would never become ready until its first read.
+        with patch("select.select", side_effect=AssertionError("poll must not gate read startup")), \
+                patch.object(device.os, "read", side_effect=lazy_read), \
+                patch.object(source, "get_format", return_value=source.format):
+            self.assertIsNone(source.read_frame(0.05))
+            self.assertTrue(registered)
+            self.assertEqual(source.read_frame(0.05), bytes([80]) * 4)
+        self.assertEqual(source.read_diagnostics["read_attempts"], 2)
+        self.assertEqual(source.read_diagnostics["would_block_reads"], 1)
 
     @unittest.skipUnless(shutil.which("g++") and Path("/usr/include/linux/videodev2.h").is_file(), "Native compiler/UAPI headers needed for ABI check")
     def test_ctypes_abi_matches_native_linux_header(self):

@@ -17,7 +17,7 @@ unknown unless explicitly recorded below.
 | Native head-relative VR replay panel | Device-confirmed | Timed test panel, replay, controls and following head movement reported working; detailed performance unmeasured; [E6](#e6-window-and-vr-panel) |
 | Public OpenVR tracked-camera probe | Device-confirmed failure | No frames and observed passthrough interruption; do not repeat the unchanged test; [E3](#e3-public-camera-probe) |
 | Live input in the detector/VR application | Planned; unimplemented | No integrated live capture backend; [active work plan](live-capture.md) |
-| Existing-mirror diagnostic | Implemented; Frame discovery confirmed | One matching virtual SteamVR node found; actual frame acquisition remains unverified; [E8 cloud checks](#e8-mirror-diagnostic-cloud-checks), [E10 device discovery](#e10-mirror-discovery-on-frame) |
+| Existing-mirror diagnostic | Frame open/format checks confirmed; no frames yet | First ten-second trial returned no frames with normal cleanup and working passthrough; reader startup corrected, device retest pending; [E11](#e11-first-mirror-acquisition-trial) |
 | Dedicated-camera shared-memory reader | Implemented; cloud-tested | Read-only native consumer, bounded supervisor and synthetic producer; actual provider and ARM64 validation pending; [E9](#e9-shared-memory-reader-cloud-checks) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
 | Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; our project has received no live frames |
@@ -248,9 +248,50 @@ The report explicitly has `device_open_attempted: false`,
 `acquisition_started: false`, zero frames and no saved images. This establishes
 a candidate virtual mirror from current sysfs metadata. Driver/capability and
 format checks, actual frame delivery, passthrough content, physical source
-identity and output-feedback behavior remain untested. The next step is the
-[bounded opt-in acquisition](on-device.md#check-an-existing-steamvr-mirror),
-with the replay window and VR panel closed.
+identity and output-feedback behavior were untested at this point. The
+[subsequent trial](#e11-first-mirror-acquisition-trial) records what happened
+after opt-in acquisition.
+
+### E11: First mirror acquisition trial
+
+Source: user-supplied `steamvr_mirror_check` schema-1 report received
+2026-10-16, followed by confirmation that live passthrough stayed visible during
+and after the test. Exact execution time, checkout revision and SteamVR version
+were not included. This used the initial reader with readiness polling before
+its first `read()`.
+
+The verified `/dev/video99` opened successfully and passed capability/format
+checks:
+
+| Field | Reported value |
+| --- | --- |
+| Driver / card | `v4l2 loopback` / `SteamVR` |
+| Bus | `platform:v4l2loopback-099` |
+| Reported driver version integer / capability flags | `397824` / `85983233` (`0x05200001`) |
+| Format | 1920 × 1080, `RGB3`, progressive field `1` |
+| Row stride / image buffer | 5,760 / 6,220,800 bytes |
+| Read-loop elapsed time | 10,000.142 ms |
+| Complete / short frames | `0` / `0` |
+| Result / diagnostic exit | `no_frames` / `1` |
+| Worker exit / forced termination / cleanup | `0` / `false` / `true` |
+| Saved images | None |
+
+An open device and queried format do not establish delivered frames. The
+worker exited normally; diagnostic exit `1` reflects zero frames. The user
+explicitly confirmed passthrough remained working during and after this test.
+The installed loopback module version and underlying physical source remain
+unknown.
+
+Review of [upstream v4l2loopback v0.14.0 file-I/O startup](https://github.com/v4l2loopback/v4l2loopback/blob/v0.14.0/v4l2loopback.c#L2385-L2439)
+and [poll handling](https://github.com/v4l2loopback/v4l2loopback/blob/v0.14.0/v4l2loopback.c#L2263-L2306)
+identified a reader bug: waiting for readiness before the first nonblocking
+read can prevent file-I/O capture registration. That upstream source comparison
+does not identify the installed module revision or prove it caused this result.
+The reader now calls nonblocking `read()` directly at the existing bounded
+rate and reports read attempts, would-block results and interruptions. A
+controlled lazy-start regression check passes; the full local suite also
+passes. Device validation of this correction is pending. This first result
+therefore does not establish that the mirror has no usable producer.
 
 ## Maintaining the evidence
 

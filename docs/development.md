@@ -188,6 +188,12 @@ YUYV/UYVY/YVYU/VYUY and RGB3/BGR3. Other formats/capabilities are reported.
 
 The worker opens the verified node with `O_RDONLY | O_NONBLOCK | O_NOFOLLOW`,
 uses only `VIDIOC_QUERYCAP` and `VIDIOC_G_FMT`, and calls nonblocking `read()`.
+The first read is not gated on `select()`/`poll()`: some v4l2loopback releases
+register file-I/O capture inside that call, before readability can be signaled.
+The driver can initialize capture internally; no explicit queue or stream-on
+ioctl is sent by this tool. Read attempts and would-block/interrupted reads are
+reported separately from complete images. A lazy-start backend regression check
+exercises first-read registration followed by frame delivery without polling.
 No `S_FMT`, buffer-queue setup or explicit stream-on operation is requested.
 Raw buffers are bounded at 64 MiB and dimensions at 16 Mi pixels; samples skip
 padding and chroma. The supervisor enforces the driver deadline and handles

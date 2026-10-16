@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 import platform
 import re
-import select
 import stat
 import struct
 import zlib
@@ -175,6 +174,7 @@ class NativeMirror:
         self.capabilities = None
         self.format = None
         self.observed_format = None
+        self.read_diagnostics = {"read_attempts": 0, "would_block_reads": 0, "interrupted_reads": 0}
 
     def open(self):
         import fcntl
@@ -229,13 +229,20 @@ class NativeMirror:
                                ycbcr_encoding_code=encoding, quantization_code=quantization,
                                transfer_function_code=transfer)
 
-    def read_frame(self, timeout):
-        if not select.select([self.fd], [], [], timeout)[0]:
-            return None
+    def read_frame(self, _timeout):
+        # The caller paces attempts; O_NONBLOCK keeps each read nonblocking.
+        # v4l2loopback may register file-I/O capture on the first read(), while
+        # poll() reports no readable events for a still-unnegotiated opener.
+        # Waiting for readiness first can therefore prevent startup indefinitely.
+        self.read_diagnostics["read_attempts"] += 1
         try:
             frame = os.read(self.fd, self.format["buffer_bytes"])
         except OSError as error:
-            if error.errno in (errno.EAGAIN, errno.EINTR):
+            if error.errno == errno.EAGAIN:
+                self.read_diagnostics["would_block_reads"] += 1
+                return None
+            if error.errno == errno.EINTR:
+                self.read_diagnostics["interrupted_reads"] += 1
                 return None
             raise
         if not frame:

@@ -282,6 +282,16 @@ service, install a layer, or use the public tracked-camera API. Only existing
 single-plane `read()` capture is supported; unsupported drivers, capabilities
 or formats produce an explicit result instead of trying another source.
 
+The first Frame trial passed these open/format checks but returned zero frames,
+with normal cleanup and working passthrough. The reader was then corrected to
+make nonblocking reads without waiting for an initial readiness event: some
+loopback drivers register file-I/O capture only on the first `read()`. The driver
+may internally initialize its capture reader as part of that call; the tool
+does not issue queue/stream-on ioctls or launch a producer. See
+[the recorded result](status.md#e11-first-mirror-acquisition-trial). After pulling
+the correction, use the same bounded capture command once; this is a changed
+reader, not a repeat of the public tracked-camera probe.
+
 Reads are capped at 10 per second. The worker budget is the requested duration
 plus three seconds for startup/driver calls, followed by up to 2.5 seconds of
 bounded stop/terminate/kill cleanup. Ctrl+C requests cancellation. A worker
@@ -309,6 +319,11 @@ and worker cleanup. The sampled grid is at most 32 × 32. Identical samples can
 mean a static scene; changed samples cannot prove a live physical camera.
 Neither V4L2 producer sequence nor exposure timestamps are supplied by this
 read-based diagnostic. Physical source identity stays explicitly unverified.
+`reader_method: nonblocking_read_without_poll_gate` identifies the correction.
+`read_attempts`, `would_block_reads` and `interrupted_reads` distinguish actual
+reads from successful frame delivery. If the corrected trial still returns no
+frames, retain the JSON and continue provider preparation rather than repeating
+the unchanged command or modifying the compositor.
 
 | Exit code | Meaning |
 | --- | --- |
@@ -320,8 +335,8 @@ read-based diagnostic. Physical source identity stays explicitly unverified.
 Retain the JSON for unavailable/unsupported results. An unsupported format is a
 limit of the current reader, not proof that the mirror is unusable or the camera
 is faulty. Do not activate a new mirror service or force a physical camera path
-to make this check pass. Frame discovery has found one matching virtual node;
-actual device capture and its ARM64 V4L2 path remain unverified. See
+to make this check pass. Frame discovery, opening and format queries succeeded;
+no actual frames have been received. See
 [device discovery](status.md#e10-mirror-discovery-on-frame),
 [cloud evidence](status.md#e8-mirror-diagnostic-cloud-checks) and the
 [active plan](live-capture.md#current-work-order).
@@ -495,8 +510,10 @@ The public camera probe returned no frames and interrupted passthrough.
 Do not repeat it on the unchanged runtime; its explicit flag is for a deliberate
 future retest after a material change.
 Read docs/live-capture.md#current-work-order for the next engineering task.
-The mirror diagnostic is implemented; run python3 scripts/mirror_check.py first
-for metadata-only discovery. Actual mirror acquisition remains unverified.
+The mirror diagnostic found /dev/video99 and opened 1920x1080 RGB3, but its
+first ten-second trial returned no frames; passthrough remained working.
+The reader's initial polling gate was corrected; its device retest is pending.
+Read the mirror procedure before running the corrected bounded capture once.
 The isolated shared-memory reader and synthetic fixture are implemented and
 cloud-tested; ARM64/provider validation and capture-layer deployment are pending.
 Keep user observations, cloud checks and upstream capture claims distinct.

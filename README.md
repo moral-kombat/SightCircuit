@@ -12,7 +12,7 @@ Start with the [documentation index](docs/README.md) for task-based navigation.
 | Area | Current summary |
 | --- | --- |
 | Recorded-video decoding, replay and VR panel | Confirmed working by the user on Frame, including controls and head-relative placement |
-| Live input in the recognition application | Unimplemented; the existing-mirror diagnostic is ready for Frame testing |
+| Live input in the recognition application | Unimplemented; mirror opened on Frame but returned no frames; corrected reader awaits testing |
 | Detection quality, color and performance | Not systematically measured on Frame |
 | Stereo depth, world-space labels and Gaussian splats | Future work; splat reconstruction is a separate recorded-data experiment |
 

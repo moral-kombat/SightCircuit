@@ -29,6 +29,8 @@ def new_report():
             "status": "not_started", "images_saved": False,
             "device_open_attempted": False, "acquisition_started": False,
             "frames_read": 0, "grayscale_sample_changes": 0,
+            "read_attempts": 0, "would_block_reads": 0, "interrupted_reads": 0,
+            "reader_method": "nonblocking_read_without_poll_gate",
             "unchanged_sample_reads": 0, "short_reads": 0,
             "maximum_reads_per_second": 10, "cleanup_ok": True,
             "sample_change_proves_live_camera": False,
@@ -65,7 +67,9 @@ def capture(candidate, seconds, stop, progress=lambda report: None, want_preview
                 stop.wait(min(next_read - now, deadline - now, 0.05))
                 continue
             next_read = now + 0.1
+            report["read_attempts"] += 1
             frame = backend.read_frame(min(0.05, deadline - now))
+            report.update(getattr(backend, "read_diagnostics", {}))
             if frame is not None:
                 if len(frame) < backend.format["minimum_buffer_bytes"]:
                     report["short_reads"] += 1
@@ -92,6 +96,7 @@ def capture(candidate, seconds, stop, progress=lambda report: None, want_preview
         report.update(status="error", reason=getattr(error, "reason", "acquisition_failed"), error=str(error))
     finally:
         if backend is not None:
+            report.update(getattr(backend, "read_diagnostics", {}))
             if backend.capabilities is not None:
                 report["capabilities"] = backend.capabilities
             if getattr(backend, "observed_format", None) is not None:
