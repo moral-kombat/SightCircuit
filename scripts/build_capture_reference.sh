@@ -152,6 +152,15 @@ if [ "$framejacker_mode" != reference ]; then
             "$framejacker_root/patches/mrhand/0005-provider-lifetime-and-provenance.patch"
         git -C "$framejacker_sources" apply \
             "$framejacker_root/patches/mrhand/0005-provider-lifetime-and-provenance.patch"
+        git -C "$framejacker_sources" apply --check \
+            "$framejacker_root/patches/mrhand/0006-block-unleased-camera-reads.patch"
+        git -C "$framejacker_sources" apply \
+            "$framejacker_root/patches/mrhand/0006-block-unleased-camera-reads.patch"
+        cp -- "$framejacker_root/tools/capture_provider_inspect.cpp" "$framejacker_sources/capture/"
+        "$framejacker_compiler" -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Wno-missing-field-initializers "${framejacker_includes[@]}" \
+            "$framejacker_sources/capture/capture_provider_inspect.cpp" \
+            -o "$framejacker_stage/framejacker-provider-inspect"
         for framejacker_fixture in provider layer; do
             "$framejacker_compiler" -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -pthread \
                 -Wno-missing-field-initializers "${framejacker_includes[@]}" \
@@ -227,8 +236,13 @@ if mode == "provider":
     report["sources"].extend(digest(reference / "capture" / name) for name in
                              ("capture_provider.hpp", "capture_layer_gate.hpp", "capture_layer_impl.hpp"))
     report["provider_patch"] = digest(Path(sys.argv[7]) / "patches/mrhand/0005-provider-lifetime-and-provenance.patch")
-    report["provider_protocol_version"] = 2
-    report["notes"][2] = "Provider lifecycle/provenance inspection adaptation; actual driver execution, original producer synchronization, physical camera identity and device restoration remain unvalidated."
+    report["access_gate_patch"] = digest(Path(sys.argv[7]) / "patches/mrhand/0006-block-unleased-camera-reads.patch")
+    report["sources"].append(digest(reference / "capture/capture_provider_inspect.cpp"))
+    report["metadata_inspector"] = digest(stage / "framejacker-provider-inspect")
+    report["provider_protocol_version"] = 3
+    report["image_fd_export_enabled"] = False
+    report["layer_retains_image_fds"] = False
+    report["notes"][2] = "Metadata-only provider/diagnostic; original producer ownership contract is unavailable, so live image reads and image FD export are blocked."
 (stage / "build-report.json").write_text(json.dumps(report, indent=2) + "\n")
 PY
 if [ "$framejacker_mode" != reference ]; then
@@ -247,6 +261,7 @@ if [ "$framejacker_mode" = provider ]; then
     for framejacker_fixture in provider layer; do
         mv -- "$framejacker_stage/framejacker-${framejacker_fixture}-fixture" "$framejacker_build/"
     done
+    mv -- "$framejacker_stage/framejacker-provider-inspect" "$framejacker_build/"
 fi
 for framejacker_file in reference-libVkLayer_mrhand.so reference-ptgrab build-report.json; do
     mv -- "$framejacker_stage/$framejacker_file" "$framejacker_build/$framejacker_file"

@@ -89,22 +89,22 @@ static void snapshot_ownership() {
 }
 static void generations() {
     Temporary temporary; Source source; p::Server server(source.registry); server.start(temporary.path);
-    p::Lease lease(server.path()); lease.check();
+    p::Lease lease(server.path(), p::Access::metadata); lease.check();
     source.registry.bind(source.device, 20, 10, 0);
     rejects([&] { lease.check(); });
-    p::Lease next(server.path()); next.check();
+    p::Lease next(server.path(), p::Access::metadata); next.check();
     source.registry.destroy_image(source.device, 10);
     rejects([&] { next.check(); });
     require(server.stop());
 }
 static void provider_loss() {
     Temporary temporary; Source source; p::Server server(source.registry); server.start(temporary.path);
-    p::Lease lease(server.path()); lease.check();
+    p::Lease lease(server.path(), p::Access::metadata); lease.check();
     const auto started = t::Clock::now(); require(server.stop());
     require(t::Clock::now() - started < std::chrono::seconds(1));
     rejects([&] { lease.check(); });
     server.start(temporary.path);
-    p::Lease next(server.path()); next.check();
+    p::Lease next(server.path(), p::Access::metadata); next.check();
     source.registry.invalidate(); rejects([&] { next.check(); });
     require(server.stop());
 }
@@ -124,8 +124,6 @@ static void endpoint_ownership() {
 static void idle_shutdown() {
     Temporary temporary; Source source; p::Server server(source.registry); server.start(temporary.path);
     auto connection = t::connect_registry(server.path().c_str(), p::deadline());
-    const auto first = t::receive_packet<p::Packet>(connection.get(), p::deadline());
-    require(first.fd.get() >= 0);
     const auto started = t::Clock::now(); require(server.stop());
     require(t::Clock::now() - started < std::chrono::seconds(1));
 }
@@ -140,16 +138,51 @@ static void bounded_registry() {
     source.registry.invalidate(); p::Packet end;
     rejects([&] { source.registry.snapshot(end); });
 }
+static void metadata_only() {
+    Temporary temporary; Source source;
+    // Match the production layer: imported allocation metadata is retained,
+    // but no image descriptor is retained or available for snapshot export.
+    source.registry.free_memory(source.device, 20);
+    source.registry.memory_metadata(source.device, 20, 16 << 20, 0x200, 10, 0, 0, true);
+    p::Packet terminal;
+    rejects([&] { source.registry.snapshot(terminal); });
+    p::Server server(source.registry); server.start(temporary.path);
+    {
+        p::Lease lease(server.path(), p::Access::metadata);
+        require(lease.records().size() == 1 && lease.records()[0].fd.get() == -1);
+        p::validate_profile(lease.records()[0].info, source.uuid, source.driver);
+        lease.check();
+    }
+    rejects([&] { p::Lease unsafe(server.path(), p::Access::buffers); });
+    // Refusing an access request must not leave a stale client descriptor or
+    // prevent a later metadata-only observer.
+    { p::Lease next(server.path(), p::Access::metadata); next.check(); }
+    require(server.stop());
+}
 int main(int argc, char **argv) {
     if (argc == 1) { std::cout << "{\"status\":\"not_run\",\"exit_code\":3}\n"; return 3; }
-    if (argc == 3 && std::string(argv[1]) == "--serve-generated") {
+    if ((argc == 3 || argc == 4) && std::string(argv[1]) == "--serve-generated") {
         try { Source source; p::Server server(source.registry); server.start(argv[2]);
-              std::cout << "ready" << std::endl; for (;;) pause(); }
+              const std::string mode = argc == 4 ? argv[3] : "normal";
+              if (mode == "empty") source.registry.free_memory(source.device, 20);
+              if (mode == "unsupported") {
+                  source.registry.destroy_image(source.device, 10);
+                  auto image = description(); image.image_flags = 1;
+                  source.registry.image(source.device, 10, image); source.registry.bind(source.device, 20, 10, 0);
+              }
+              std::cout << "ready" << std::endl;
+              if (mode == "change" || mode == "drop") {
+                  std::this_thread::sleep_for(std::chrono::milliseconds(800));
+                  if (mode == "change") source.registry.bind(source.device, 20, 10, 0);
+                  else server.stop();
+              }
+              for (;;) pause(); }
         catch (const std::exception &error) { std::cerr << error.what() << '\n'; return 1; }
     }
     const std::pair<const char *, void(*)()> tests[] = {{"metadata", metadata}, {"device_scope", device_scope},
         {"snapshot_ownership", snapshot_ownership}, {"generations", generations}, {"provider_loss", provider_loss},
-        {"endpoint_ownership", endpoint_ownership}, {"idle_shutdown", idle_shutdown}, {"bounded_registry", bounded_registry}};
+        {"endpoint_ownership", endpoint_ownership}, {"idle_shutdown", idle_shutdown}, {"bounded_registry", bounded_registry},
+        {"metadata_only", metadata_only}};
     const bool all = argc == 2 && std::string(argv[1]) == "--self-test";
     const bool one = argc == 3 && std::string(argv[1]) == "--case";
     unsigned ran = 0;

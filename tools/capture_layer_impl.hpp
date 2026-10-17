@@ -98,13 +98,12 @@ static VKAPI_ATTR VkResult VKAPI_CALL AllocateMemory(VkDevice handle, const VkMe
             const auto &value = *reinterpret_cast<const VkMemoryAllocateFlagsInfo *>(next); flags = value.flags; mask = value.deviceMask;
         } else complete = false;
     }
-    transport::Fd owned;
-    // Keep registry failures from changing the compositor's Vulkan result.
-    if (current->token && import && import->fd >= 0) record([&] { owned = transport::duplicate(import->fd); });
     const auto result = current->AllocateMemory(handle, info, allocator, out);
-    if (result == VK_SUCCESS && owned.get() >= 0) record([&] {
-        registry().memory(current->token, handle_id(*out), std::move(owned), info->allocationSize,
-                          import->handleType, dedicated, flags, mask, complete);
+    // The inspection layer observes metadata only. It never duplicates or
+    // retains the import FD; a valid import transfers that FD to the driver.
+    if (result == VK_SUCCESS && current->token && import) record([&] {
+        registry().memory_metadata(current->token, handle_id(*out), info->allocationSize,
+                                   import->handleType, dedicated, flags, mask, complete);
     });
     return result;
 }

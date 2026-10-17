@@ -28,6 +28,7 @@ class ProviderTests(unittest.TestCase):
     def test_endpoint_ownership_and_foreign_file_preservation(self): self.run_case("endpoint_ownership")
     def test_server_shutdown_interrupts_idle_client(self): self.run_case("idle_shutdown")
     def test_registry_bounds_and_invalidation(self): self.run_case("bounded_registry")
+    def test_metadata_has_no_fds_and_capture_requests_are_blocked(self): self.run_case("metadata_only")
     def test_actual_hooks_and_same_dispatch_table_devices(self): self.run_case("lifecycle", "layer")
     def test_failed_driver_calls_and_missing_dispatch(self): self.run_case("failures", "layer")
     def test_opt_in_and_crash_loop_guard(self): self.run_case("gating", "layer")

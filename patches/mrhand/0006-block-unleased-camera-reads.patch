@@ -1,0 +1,427 @@
+diff --git a/capture/ptgrab.cpp b/capture/ptgrab.cpp
+index 39e1871..1eef471 100644
+--- a/capture/ptgrab.cpp
++++ b/capture/ptgrab.cpp
+@@ -1,410 +1,21 @@
+-// ptgrab — read the live passthrough camera buffers through our own GPU queue.
+-//
+-// The buffers XRService shares with vrcompositor are NV12 in Qualcomm's
+-// compressed tile format (DRM modifier 0x0500000000000001), which the CPU
+-// cannot read.  ptgrab gets the dup'd dma-buf fds from VK_LAYER_MRHAND,
+-// imports them into *its own* Vulkan device as images with that modifier, and
+-// copies the luma plane into host-visible memory with vkCmdCopyImageToBuffer
+-// (the driver decompresses).  Nothing is submitted on the compositor's queues.
+-//
+-// Framejacker inspection adaptation: validated imports; not deployment-ready.
+-#include <vulkan/vulkan.h>
+-
+-#include <algorithm>
+-#include <ctime>
+-#include <fcntl.h>
+-#include <sys/mman.h>
+-#include <chrono>
+-#include <cstdio>
+-#include <cstdlib>
+-#include <cstring>
+-#include <string>
+-#include <sys/socket.h>
+-#include <sys/un.h>
+-#include <thread>
+-#include <unistd.h>
+-#include <vector>
+-
+-#include "handcam_proto.h"
+-#include "capture_transport.hpp"
++// Framejacker access gate after the producer synchronization/ownership review.
++// The old reader cannot claim an externally released, completed camera frame.
++// Replace it only with a coordinated source lease or a compositor-owned copy.
+ #include "capture_publication.hpp"
+-#include "capture_import.hpp"
+-#include "capture_gpu_resources.hpp"
+-#include "capture_provider.hpp"
+-#include <sys/resource.h>
+-
+-#define CHECK(x) do { VkResult r_ = (x); if (r_ != VK_SUCCESS) { fprintf(stderr, "%s:%d %s -> %d\n", __FILE__, __LINE__, #x, r_); throw std::runtime_error("Vulkan_operation_failed"); } } while (0)
+-
+-using Buf = framejacker::transport::Record;
+-
+-static framejacker::provider::Lease fetchBuffers() {
+-    const char *runtime = getenv("XDG_RUNTIME_DIR");
+-    if (!runtime || runtime[0] != '/') throw framejacker::transport::Error("runtime_missing");
+-    return framejacker::provider::Lease(std::string(runtime) + "/framejacker-camera-provider/camera.sock");
+-}
+-
+-struct Gpu {
+-    framejacker::gpu::Device device;
+-    framejacker::gpu::Resource probeCommands;
+-    VkDevice dev = VK_NULL_HANDLE;
+-    VkQueue queue = VK_NULL_HANDLE;
+-    uint32_t qfam = 0;
+-    void init() {
+-        device = framejacker::gpu::Device::open(framejacker::gpu::system_api());
+-        dev = device.handle(); queue = device.queue(); qfam = device.family();
+-    }
+-    bool close() {
+-        const bool commandsClosed = probeCommands.close();
+-        const bool deviceClosed = device.close();
+-        dev = VK_NULL_HANDLE; queue = VK_NULL_HANDLE;
+-        return commandsClosed && deviceClosed;
+-    }
+-};
+-
+-struct CamImage {
+-    MrhandBufInfo info;
+-    VkImage img;
+-    framejacker::gpu::ImportedImage owned;
+-};
+-
+-static CamImage importImage(Gpu &g, const Buf &b) {
+-    auto owned = g.device.import_image(b.info, b.fd.get());
+-    VkImage image = owned.image();
+-    return {b.info, image, std::move(owned)};
+-}
+-
+-struct HostBuf {
+-    framejacker::gpu::Resource owned;
+-    VkBuffer buf = VK_NULL_HANDLE;
+-    void *ptr = nullptr;
+-    VkDeviceSize size = 0;
+-};
+-static HostBuf hostBuffer(Gpu &g, VkDeviceSize size) {
+-    auto owned = g.device.host_buffer(size);
+-    VkBuffer buffer = owned.buffer(); void *mapped = owned.mapped();
+-    return {std::move(owned), buffer, mapped, size};
+-}
+-
+-// PTGRAB_QFOT=0: no queue-family ownership transfer from FOREIGN (plain read barrier) — banding A/B test
+-static bool useQfot() {
+-    static int v = -1;
+-    if (v < 0) {
+-        const char *e = getenv("PTGRAB_QFOT");
+-        v = (e && e[0] == '0') ? 0 : 1;
+-    }
+-    return v == 1;
+-}
+-static uint32_t srcQ() { return useQfot() ? VK_QUEUE_FAMILY_FOREIGN_EXT : VK_QUEUE_FAMILY_IGNORED; }
+-
+-struct Region { size_t image; uint32_t y0, rows; VkDeviceSize dstOffset; };
+-
+-// Copy luma rows [y0, y0+rows) of the given images into dst (tightly packed).
+-static void copyRegions(Gpu &g, std::vector<CamImage> &ims, const std::vector<Region> &regs, HostBuf &dst) {
+-    if (!g.probeCommands.command()) g.probeCommands = g.device.commands();
+-    const VkCommandBuffer cb = g.probeCommands.command();
+-    const VkFence fence = g.probeCommands.fence();
+-    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+-    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+-    CHECK(vkResetCommandBuffer(cb, 0));
+-    CHECK(vkBeginCommandBuffer(cb, &bi));
+-    for (auto &rg : regs) {
+-        CamImage &ci = ims[rg.image];
+-        VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+-        b.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+-        b.oldLayout = b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+-        b.srcQueueFamilyIndex = srcQ();
+-        b.dstQueueFamilyIndex = useQfot() ? g.qfam : VK_QUEUE_FAMILY_IGNORED;
+-        b.image = ci.img;
+-        b.subresourceRange = {VK_IMAGE_ASPECT_PLANE_0_BIT, 0, 1, 0, 1};
+-        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+-                             nullptr, 1, &b);
+-        VkBufferImageCopy r{};
+-        r.bufferOffset = rg.dstOffset;
+-        r.imageSubresource = {VK_IMAGE_ASPECT_PLANE_0_BIT, 0, 0, 1};
+-        r.imageOffset = {0, (int32_t)rg.y0, 0};
+-        r.imageExtent = {ci.info.width, rg.rows, 1};
+-        vkCmdCopyImageToBuffer(cb, ci.img, VK_IMAGE_LAYOUT_GENERAL, dst.buf, 1, &r);
+-    }
+-    CHECK(vkEndCommandBuffer(cb));
+-    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+-    si.commandBufferCount = 1;
+-    si.pCommandBuffers = &cb;
+-    framejacker::capture_import::submit_and_wait(g.device.completion(),
+-        {vkResetFences, vkQueueSubmit, vkWaitForFences}, g.dev, g.queue, fence, si);
+-    dst.owned.invalidate();
+-}
+-
+-// GPU downscale of one camera's luma plane: plane0 -> R8 full -> R8 half-ish -> R8 out
+-// (two linear-filtered blits, the last one an exact 2x so it averages 2x2), then
+-// a small copy to host memory.  Runs on our own low-priority queue.
+-struct Downscaler {
+-    uint32_t outSize = 640;
+-    VkImage full = VK_NULL_HANDLE, mid = VK_NULL_HANDLE, out = VK_NULL_HANDLE;
+-    framejacker::gpu::Resource images[3];
+-    HostBuf host{};
+-    framejacker::gpu::Resource commands;
+-    VkCommandBuffer cb = VK_NULL_HANDLE;
+-    VkFence fence = VK_NULL_HANDLE;
+-    void init(Gpu &g, uint32_t W, uint32_t size) {
+-        if (W != 2464 || size != 640) throw std::runtime_error("unsupported_downscaler_profile");
+-        outSize = size;
+-        images[0] = g.device.image(W, W); full = images[0].image();
+-        images[1] = g.device.image(size * 2, size * 2); mid = images[1].image();
+-        images[2] = g.device.image(size, size); out = images[2].image();
+-        host = hostBuffer(g, (VkDeviceSize)size * size);
+-        commands = g.device.commands(); cb = commands.command(); fence = commands.fence();
+-    }
+-    static void barrier(VkCommandBuffer cb, VkImage img, VkImageLayout from, VkImageLayout to, VkAccessFlags src,
+-                        VkAccessFlags dst, VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT,
+-                        uint32_t srcQ = VK_QUEUE_FAMILY_IGNORED, uint32_t dstQ = VK_QUEUE_FAMILY_IGNORED) {
+-        VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+-        b.srcAccessMask = src;
+-        b.dstAccessMask = dst;
+-        b.oldLayout = from;
+-        b.newLayout = to;
+-        b.srcQueueFamilyIndex = srcQ;
+-        b.dstQueueFamilyIndex = dstQ;
+-        b.image = img;
+-        b.subresourceRange = {aspect, 0, 1, 0, 1};
+-        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr,
+-                             0, nullptr, 1, &b);
+-    }
+-    static void blit(VkCommandBuffer cb, VkImage src, uint32_t sw, VkImage dst, uint32_t dw) {
+-        VkImageBlit r{};
+-        r.srcSubresource = r.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+-        r.srcOffsets[1] = {(int32_t)sw, (int32_t)sw, 1};
+-        r.dstOffsets[1] = {(int32_t)dw, (int32_t)dw, 1};
+-        vkCmdBlitImage(cb, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r,
+-                       VK_FILTER_LINEAR);
+-    }
+-    // returns pointer to outSize*outSize luma bytes (valid until the next call)
+-    const uint8_t *run(Gpu &g, CamImage &src) {
+-        const uint32_t W = src.info.width, M = outSize * 2, S = outSize;
+-        VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+-        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+-        CHECK(vkResetCommandBuffer(cb, 0));
+-        CHECK(vkBeginCommandBuffer(cb, &bi));
+-        barrier(cb, src.img, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_TRANSFER_READ_BIT,
+-                VK_IMAGE_ASPECT_PLANE_0_BIT, srcQ(), useQfot() ? g.qfam : VK_QUEUE_FAMILY_IGNORED);
+-        barrier(cb, full, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT);
+-        VkImageCopy c{};
+-        c.srcSubresource = {VK_IMAGE_ASPECT_PLANE_0_BIT, 0, 0, 1};
+-        c.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+-        c.extent = {W, W, 1};
+-        vkCmdCopyImage(cb, src.img, VK_IMAGE_LAYOUT_GENERAL, full, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
+-        barrier(cb, full, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+-                VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+-        barrier(cb, mid, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT);
+-        blit(cb, full, W, mid, M);
+-        barrier(cb, mid, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+-                VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+-        barrier(cb, out, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT);
+-        blit(cb, mid, M, out, S);
+-        barrier(cb, out, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+-                VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+-        VkBufferImageCopy r{};
+-        r.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+-        r.imageExtent = {S, S, 1};
+-        vkCmdCopyImageToBuffer(cb, out, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, host.buf, 1, &r);
+-        CHECK(vkEndCommandBuffer(cb));
+-        VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+-        si.commandBufferCount = 1;
+-        si.pCommandBuffers = &cb;
+-        framejacker::capture_import::submit_and_wait(g.device.completion(),
+-            {vkResetFences, vkQueueSubmit, vkWaitForFences}, g.dev, g.queue, fence, si);
+-        host.owned.invalidate();
+-        return (const uint8_t *)host.ptr;
+-    }
+-};
+-
+-static uint64_t monoNs() {
+-    timespec ts;
+-    clock_gettime(CLOCK_MONOTONIC, &ts);
+-    return ts.tv_sec * 1000000000ull + ts.tv_nsec;
+-}
+-
+-// stream: detect which buffer XRService just refreshed (strip compare), copy
+-// that frame's luma into the shm slot of its camera.  Cameras = the two halves
+-// of the id-sorted buffer list (XRService allocates each camera's ring together).
+-static int stream(Gpu &g, std::vector<CamImage> &ims, int maxFps, uint32_t outSize,
+-                  framejacker::publication::RunLimit &limit, framejacker::provider::Lease &lease) {
+-    std::sort(ims.begin(), ims.end(), [](const CamImage &a, const CamImage &b) { return a.info.id < b.info.id; });
+-    const uint32_t W = ims[0].info.width, H = ims[0].info.height;
+-    const uint32_t S0 = H / 2 - 8, SR = 16;   // probe strip
+-    const VkDeviceSize strip = (VkDeviceSize)W * SR;
+-    const uint32_t OW = outSize ? outSize : W, OH = outSize ? outSize : H;
+-    const VkDeviceSize frame = (VkDeviceSize)OW * OH;
+-    HostBuf probe = hostBuffer(g, strip * ims.size());
+-    HostBuf full{};
+-    Downscaler ds;
+-    if (outSize) ds.init(g, W, outSize);
+-    else full = hostBuffer(g, frame);
+-    std::vector<std::vector<uint8_t>> last(ims.size(), std::vector<uint8_t>(strip));
+-    std::vector<int> camOf(ims.size());
+-    for (size_t i = 0; i < ims.size(); i++) camOf[i] = i < ims.size() / 2 ? 0 : 1;
+-
+-    const char *output = getenv("FRAMEJACKER_CAPTURE_OUTPUT");
+-    if (!output || output[0] != '/') throw framejacker::transport::Error("supervisor_output_missing");
+-    const std::string shmPath = output;
+-    framejacker::publication::Publisher publisher(shmPath, OW, OH, 2);
+-    uint64_t publications = 0;
+-    const auto &identity = publisher.identity();
+-    printf("{\"event\":\"publication_ready\",\"device\":%llu,\"inode\":%llu,\"size\":%llu,\"physical_camera_identity\":\"unverified\"}\n",
+-           (unsigned long long)identity.st_dev, (unsigned long long)identity.st_ino, (unsigned long long)identity.st_size);
+-    fflush(stdout);
+-
+-    std::vector<Region> probeRegs;
+-    for (size_t i = 0; i < ims.size(); i++) probeRegs.push_back({i, S0, SR, i * strip});
+-    uint64_t frames[2] = {0, 0}, lastPub[2] = {0, 0}, statT = monoNs(), copyNsSum = 0, copies = 0;
+-    const uint64_t minGap = maxFps > 0 ? 1000000000ull / maxFps : 0;
+-    bool primed = false;
+-    // A buffer that changed is published once a later probe shows it stable
+-    // (XRService writes take a few ms; copying mid-write would tear).
+-    std::vector<uint64_t> pendingSince(ims.size(), 0);
+-    while (limit.running()) {
+-        lease.check();
+-        copyRegions(g, ims, probeRegs, probe);
+-        lease.check();
+-        uint64_t tNow = monoNs();
+-        for (size_t i = 0; i < ims.size() && limit.running(); i++) {
+-            const uint8_t *p = (const uint8_t *)probe.ptr + i * strip;
+-            bool changed = memcmp(p, last[i].data(), strip) != 0;
+-            memcpy(last[i].data(), p, strip);
+-            if (!primed) continue;
+-            if (changed) {
+-                if (!pendingSince[i]) pendingSince[i] = tNow;
+-                continue;
+-            }
+-            if (!pendingSince[i]) continue;
+-            uint64_t tDetect = pendingSince[i];
+-            pendingSince[i] = 0;
+-            int cam = camOf[i];
+-            if (getenv("PTGRAB_TRACE")) {
+-                static uint64_t tPrev[2] = {0, 0};
+-                fprintf(stderr, "t=%.3f cam%d buf#%u dt=%.2fms\n", tDetect / 1e9, cam, ims[i].info.id,
+-                        tPrev[cam] ? (tDetect - tPrev[cam]) / 1e6 : 0.0);
+-                tPrev[cam] = tDetect;
+-            }
+-            frames[cam]++;
+-            if (tDetect <= lastPub[cam] || tDetect - lastPub[cam] < minGap) continue;
+-            lease.check();
+-            uint64_t t0 = monoNs();
+-            const uint8_t *px;
+-            if (outSize) {
+-                px = ds.run(g, ims[i]);
+-            } else {
+-                copyRegions(g, ims, {{i, 0, H, 0}}, full);
+-                px = (const uint8_t *)full.ptr;
+-            }
+-            copyNsSum += monoNs() - t0;
+-            copies++;
+-            if (!limit.running()) break;
+-            lease.check(); // Never publish after detecting a generation change.
+-            if (publisher.publish(cam, px, frame, tDetect, ims[i].info.id, frames[cam])) {
+-                lastPub[cam] = tDetect;
+-                publications++;
+-            }
+-        }
+-        primed = true;
+-        uint64_t now = monoNs();
+-        if (statT && now - statT > 5000000000ull) {
+-            double dt = (now - statT) / 1e9;
+-            printf("{\"event\":\"stats\",\"slot0_hz\":%.1f,\"slot1_hz\":%.1f,\"copy_ms\":%.2f}\n", frames[0] / dt, frames[1] / dt,
+-                   copies ? copyNsSum / 1e6 / copies : 0.0);
+-            fflush(stdout);
+-            statT = 0;
+-        }
+-        std::this_thread::sleep_for(std::chrono::milliseconds(4));
+-    }
+-    const bool clean = publisher.close();
+-    const int code = !clean ? 1 : limit.signal() ? 128 + limit.signal() : publications ? 0 : 1;
+-    printf("{\"event\":\"stream_closed\",\"publications\":%llu,\"cleanup_ok\":%s,\"exit_code\":%d}\n",
+-           (unsigned long long)publications, clean ? "true" : "false", code);
+-    return code;
+-}
+-
++#include <cstdio>
+ int main(int argc, char **argv) {
+     using namespace framejacker::publication;
+     RunOptions options;
+     try { options = parse_options(argc, argv); }
+-    catch (...) { fprintf(stderr, "invalid_arguments\n"); return 64; }
++    catch (...) { std::fprintf(stderr, "invalid_arguments\n"); return 64; }
+     if (options.mode == Mode::help) {
+-        printf("Experimental bounded stream: --allow-experimental-capture --seconds 1..10 [--max-fps 1..10]\n");
+-        printf("Inspection build: Provider inspection build: original producer synchronization and device validation remain required.\n");
++        std::puts("Live reads are blocked: producer release/ready/return ownership is unavailable.");
++        std::puts("Use python3 scripts/capture_provider_check.py --inspect for metadata only.");
+         return 0;
+     }
+-    if (options.mode == Mode::not_run) {
+-        printf("{\"status\":\"not_run\",\"runtime_initialized\":false,\"capture_started\":false,\"exit_code\":3}\n");
+-        return 3;
+-    }
+-    try {
+-        const char *parent = getenv("FRAMEJACKER_CAPTURE_SUPERVISOR_PID");
+-        const char *output = getenv("FRAMEJACKER_CAPTURE_OUTPUT");
+-        int parentSignal = 0;
+-        if (!parent || framejacker_shm::number(parent, 2, INT32_MAX) != static_cast<uint64_t>(getppid()) ||
+-            !output || output[0] != '/' || prctl(PR_GET_PDEATHSIG, &parentSignal) || parentSignal != SIGKILL)
+-            throw Error("capture_supervisor_required");
+-        rlimit core{0, 0};
+-        if (setrlimit(RLIMIT_CORE, &core) != 0) throw Error("core_limit_failed");
+-        RunLimit limit(options.seconds);
+-        auto lease = fetchBuffers();
+-        std::vector<Buf> bufs;
+-        uint64_t sourceDevice = 0;
+-        for (const auto &record : lease.records()) {
+-            const auto &packet = record.info;
+-            if (!packet.buffer.hasImage || packet.buffer.width != 2464 || packet.buffer.height != 2464) continue;
+-            framejacker::provider::validate_profile(packet);
+-            if (sourceDevice && sourceDevice != packet.device) throw Error("multiple_exporter_devices");
+-            sourceDevice = packet.device;
+-            bufs.push_back({packet.buffer, framejacker::transport::duplicate(record.fd.get())});
+-        }
+-        lease.check();
+-        if (!limit.running()) throw Error("capture_cancelled");
+-        if (std::none_of(bufs.begin(), bufs.end(), [](const Buf &buffer) {
+-                return buffer.info.hasImage && buffer.info.width == 2464 && buffer.info.height == 2464;
+-            })) throw Error("no_reviewed_profile_candidates");
+-        // Reject malformed candidate metadata before initializing Vulkan.
+-        for (const auto &buffer : bufs)
+-            if (buffer.info.hasImage && buffer.info.width == 2464 && buffer.info.height == 2464)
+-                framejacker::capture_import::validate_metadata(buffer.info);
+-        Gpu g;
+-        g.init();
+-        VkPhysicalDeviceIDProperties ids{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+-        VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &ids};
+-        vkGetPhysicalDeviceProperties2(g.device.physical(), &properties);
+-        for (const auto &record : lease.records())
+-            if (record.info.device == sourceDevice && record.info.buffer.hasImage &&
+-                record.info.buffer.width == 2464 && record.info.buffer.height == 2464)
+-                framejacker::provider::validate_profile(record.info, ids.deviceUUID, ids.driverUUID);
+-        lease.check();
+-        if (bufs.size() < 2 || (bufs.size() % 2)) throw Error("unsupported_buffer_grouping");
+-        std::vector<CamImage> ims;
+-        for (auto &buffer : bufs)
+-            if (buffer.info.hasImage && buffer.info.width == 2464 && buffer.info.height == 2464) {
+-                if (!limit.running()) throw Error("capture_cancelled");
+-                lease.check();
+-                ims.push_back(importImage(g, buffer));
+-                lease.check();
+-            }
+-        if (!limit.running()) throw Error("capture_cancelled");
+-        int code = 1;
+-        try {
+-            code = stream(g, ims, options.fps, 640, limit, lease);
+-            ims.clear();
+-            if (g.device.completion().cleanup_deferred) throw Error("import_cleanup_deferred");
+-            printf("{\"event\":\"imports_closed\",\"gpu_import_cleanup_ok\":true}\n");
+-        } catch (...) {
+-            ims.clear();
+-            if (g.device.completion().cleanup_deferred)
+-                fprintf(stderr, "GPU import cleanup deferred: submitted work completion unconfirmed\n");
+-            throw;
+-        }
+-        if (!g.close()) throw Error("gpu_resource_cleanup_deferred");
+-        printf("{\"event\":\"gpu_resources_closed\",\"gpu_resource_cleanup_ok\":true}\n");
+-        printf("{\"event\":\"capture_closed\",\"gpu_resource_cleanup_ok\":true,\"publication_cleanup_ok\":true,\"registry_unchanged\":true,\"physical_camera_identity\":\"unverified\",\"producer_completion\":\"unverified\",\"exit_code\":%d}\n", code);
+-        return code;
+-    } catch (const std::exception &error) {
+-        fprintf(stderr, "bounded capture failed: %s\n", error.what());
+-        return 1;
+-    }
++    std::printf("{\"report_kind\":\"framejacker_capture_access_gate\",\"schema_version\":1,\"status\":\"%s\","
++                "\"reason\":\"producer_access_contract_unavailable\",\"runtime_initialized\":false,"
++                "\"capture_started\":false,\"image_data_accessed\":false,\"exit_code\":3}\n",
++                options.mode == Mode::run ? "blocked" : "not_run");
++    return 3;
+ }

@@ -799,7 +799,9 @@ prerequisites and can be tested in one batch.
 
 ### Test the watchdog and provider without capture
 
-This is the next optional native validation milestone. It uses generated files,
+The earlier v2 milestone passed all 28 tests on Frame ARM64; see
+[E35](status.md#e35-watchdog-provider-and-recovery-tests-on-frame). The current
+full regression includes v3 metadata-only changes. It uses generated files,
 private local sockets and fake Vulkan dispatch, without opening a camera or
 loading the layer. The actual capture artifacts remain non-executable:
 
@@ -810,11 +812,12 @@ bash scripts/build_capture_supervisor.sh &&
 bash scripts/build_capture_reference.sh --provider-fixes &&
 python3 -m unittest discover -s tests -p test_capture_supervisor.py -v &&
 python3 -m unittest discover -s tests -p test_capture_provider.py -v &&
+python3 -m unittest discover -s tests -p test_capture_provider_check.py -v &&
 python3 -m unittest discover -s tests -p test_capture_layer_config.py -v
 ```
 
-Expect **10, 11 and 7 tests**, respectively, with no skips. Share the provider
-build report and test summaries when convenient. Cloud success does not
+Expect **10, 12, 12 and 7 tests**, respectively, with no skips. Share the provider
+build report and test summaries when convenient. Existing ARM64 v2 success does not
 establish ARM64 execution or live capture. This check changes no camera-source
 setting, layer installation or compositor service.
 
@@ -849,12 +852,69 @@ Restoration preserves later edits and does not restart SteamVR or unload a
 library already loaded by the compositor. A controlled restart is required if
 it was loaded. There has been no Framejacker layer activation to restore yet.
 
-After this milestone, resolve the original producer-completion/ownership gate
-and prepare the bounded real-driver/device restoration procedure. UUID and
+The synchronization review found no coordinated producer handoff. The latest
+layer therefore retains/exports no image FDs and the capture CLI is blocked.
+Next validate metadata-only changes and prepare the controlled layer-load/
+restoration procedure. UUID and
 layout checks do not identify Arcturus versus built-in cameras. During a future
 capture-only trial, verify the selected physical source, orientation, scene
 motion, shutdown and normal passthrough before connecting inference or a VR
 image panel. See the [active plan](live-capture.md#next-engineering-step-capture-worker-supervision).
+
+### Test metadata-only inspection without capture
+
+This is the next changed native check after the 28-test v2 result. It builds
+the metadata-only v3 layer and diagnostic, then runs generated peers and fake
+driver calls. It does not load the layer, contact a real camera provider or
+restart SteamVR:
+
+```bash
+cd "$HOME/framejacker" &&
+git pull --ff-only &&
+git rev-parse HEAD &&
+bash scripts/build_capture_reference.sh --provider-fixes &&
+python3 -m unittest discover -s tests -p test_capture_provider.py -v &&
+python3 -m unittest discover -s tests -p test_capture_provider_check.py -v
+```
+
+Expect **12 provider/layer tests and 12 metadata diagnostic tests**, with no
+skips. The build report should say `provider_protocol_version: 3`,
+`image_fd_export_enabled: false`, `layer_retains_image_fds: false` and
+`deployment_ready: false`. Share the revision, build report and test summaries.
+These checks do not establish actual driver execution or complete camera frames.
+
+Prepare a new inactive bundle with the command in the preceding section only
+after building v3; keep any earlier v2 bundle unchanged. To collect service
+metadata for a controlled load/restoration procedure:
+
+```bash
+systemctl --user show steamvr.service \
+  -p LoadState -p ActiveState -p SubState -p MainPID \
+  -p FragmentPath -p DropInPaths -p Type -p KillMode -p TimeoutStopUSec
+```
+
+This reads status and paths, without displaying service environment values or
+changing configuration. Loading even a metadata-only layer affects the
+compositor process; installation/restart commands are not prepared yet. Exact
+restoration must run independently of any browser/console lost during restart,
+and restoring files alone cannot unload the layer.
+
+For a **future already running v3 metadata provider**, the diagnostic command is:
+
+```bash
+python3 scripts/capture_provider_check.py --inspect --seconds 2
+```
+
+Do not run it merely to retry a missing provider; the generated tests above
+exercise the consumer now. The default without `--inspect` does nothing and
+exits 3. An existing provider is queried for metadata and registry stability
+only, with no Vulkan calls, image descriptors, pixel reads or file outputs.
+Success is `inspected`/exit 0; zero candidates or unsupported metadata still
+produce useful diagnostic results. Missing/old providers, generation changes,
+unexpected descriptors and deadline failures exit 1. Cancellation exits
+`128 + signal`. Capture remains blocked until the
+[producer handoff](live-capture.md#producer-synchronization-review-and-next-checkpoint)
+or a synchronized compositor-owned copy is established.
 
 ### Check existing luma shared memory
 
@@ -1049,12 +1109,14 @@ device API is 1.4.362. Normal passthrough stayed working during and after it.
 The validated-import inspection adaptation compiled on aarch64 and passed all
 ten original synthetic tests in 0.015 seconds. A new two-plane fixture test now
 passes in the cloud; that eleventh test has not run on Frame. Actual camera
-imports remain unverified. Both original device checks are complete. Continue
-with the new no-camera watchdog/provider/recovery milestone when back on Frame.
-Those prerequisites now pass 28 new synthetic cloud tests; use --provider-fixes
-and prepare an inactive configuration bundle. Complete original producer
-synchronization/FOREIGN ownership review and a controlled load/restoration
-procedure before deployment. Physical camera identity and scene freshness remain unverified.
+imports remain unverified. Both original device checks are complete. The v2
+watchdog/provider/recovery milestone also passed all 28 tests on Frame ARM64.
+Producer synchronization review found no coordinated handoff, so the latest v3
+provider records metadata without retaining/exporting image FDs and blocks live
+reads. Next run the changed provider and metadata diagnostic suites (12 each),
+then prepare a new inactive bundle and collect the SteamVR service properties.
+A controlled metadata-layer load/restoration procedure is still needed; no layer
+has been activated. Physical camera identity and scene freshness remain unverified.
 GPU device/resource ownership is implemented in --resource-fixes and has nine
 synthetic cloud tests passed, including 57 injected startup/resource errors.
 Its native ARM64 and actual driver execution remain untested; real capture

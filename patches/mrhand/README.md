@@ -50,9 +50,21 @@ watchdog and configuration tools provide bounded worker execution and exact
 conditional recovery; only generated peers/fake dispatch run in cloud tests.
 This patch contains removed upstream layer text under the upstream MIT notice.
 
+`0006-block-unleased-camera-reads.patch` applies after patches 0001–0005.
+The current `--provider-fixes` mode applies all six patches. It replaces the
+latest raw camera reader with a no-runtime access gate: explicit capture is
+blocked because producer release/ready/return synchronization is unavailable.
+The original Framejacker provider helpers now use a v3 metadata request, reject
+image-buffer requests, and retain no image FDs in production layer state.
+The separate metadata inspector reads only bounded registry records and links
+without Vulkan. The patch retains removed upstream/adapted source text under
+the same MIT attribution. Earlier non-executable modes preserve the historical
+inspection code; they are not live-capture alternatives.
+
 Both capture binaries remain non-executable inspection artifacts. Actual GPU
 execution, original producer synchronization/FOREIGN ownership, physical camera
 identity and on-device load/restoration remain unvalidated. The watchdog and
-provider/recovery prerequisites now have synthetic cloud tests. Follow the
+provider/recovery prerequisites passed their earlier 28-test v2 milestone on
+Frame ARM64; v3 metadata-only changes remain cloud-tested. Follow the
 [active capture plan](../../docs/live-capture.md#current-work-order) and
 [provider development procedure](../../docs/development.md#capture-watchdog-provider-lifecycle-and-restoration-preparation).

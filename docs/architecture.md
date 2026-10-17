@@ -149,8 +149,13 @@ capability does not establish fast or compatible model inference, and GPU
 inference may contend with capture and compositing on the headset. Benchmark
 capture alone before adding it.
 
-Dedicated input is currently a capture-only inspection adaptation. Connecting
-its grayscale luma to recognition remains work: replicating luma into three
+Dedicated input is currently a metadata-only inspection adaptation. The layer
+retains/exports no image FDs and raw capture remains blocked because the
+[producer synchronization review](live-capture.md#producer-synchronization-review-and-next-checkpoint)
+found no coordinated access interval. A future backend must publish an owned
+copy obtained through a supported frame lease or inside a verified synchronized
+compositor access window. Only then should it feed the latest-frame queue.
+Connecting grayscale luma to recognition remains work: replicating luma into three
 channels satisfies the detector's input shape but does not recover color or
 establish accuracy for a model trained on color images.
 

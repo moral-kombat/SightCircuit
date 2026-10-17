@@ -577,32 +577,38 @@ before deployment.
 
 ## Capture watchdog, provider lifecycle and restoration preparation
 
-The sixth inspection mode applies patches 0001–0005 and builds the provider and
-actual-layer-hook fixtures. Build the separate native exec boundary, then run
-the three new suites:
+The sixth inspection mode now applies patches 0001–0006 and builds the v3
+metadata-only provider, diagnostic and actual-layer-hook fixtures. The previous
+v2 milestone passed 10 watchdog, 11 provider and 7 recovery tests on Frame ARM64;
+see [E35](status.md#e35-watchdog-provider-and-recovery-tests-on-frame). For a full
+development regression, build the native exec boundary and run:
 
 ```bash
 bash scripts/build_capture_supervisor.sh &&
 bash scripts/build_capture_reference.sh --provider-fixes &&
 python3 -m unittest discover -s tests -p test_capture_supervisor.py -v &&
 python3 -m unittest discover -s tests -p test_capture_provider.py -v &&
+python3 -m unittest discover -s tests -p test_capture_provider_check.py -v &&
 python3 -m unittest discover -s tests -p test_capture_layer_config.py -v
 ```
 
-The current cloud results are **10 watchdog, 11 provider/layer and 7
-configuration/recovery tests**, with no skips. These use generated files,
+The current cloud suites contain **10 watchdog, 12 provider/layer, 12 metadata
+diagnostic and 7 configuration/recovery tests**. These use generated files,
 local sockets and fake driver dispatch. Neither the actual layer nor the
 camera producer is loaded/run. The real binaries remain mode 0644 in
 `artifacts/capture-provider-reference/`; the report records helper, patch and
 artifact hashes and `deployment_ready: false`. All earlier build modes remain
-available. Native ARM64 execution of this milestone is pending.
+available. The v3 changes have not run on Frame yet. The metadata inspector is
+a separate executable, linked without Vulkan; it is not the camera producer.
 
 ### Worker containment and publication recovery
 
 [`capture_supervisor.py`](../scripts/capture_supervisor.py) defaults to `not_run`
-(exit 3). Its explicit capture branch requires a separately prepared executable
-worker; it refuses the inspection artifact before starting a process. There is
-no installer or executable-enabling procedure at this stage.
+(exit 3). Its explicit `--capture` branch now returns `blocked` (exit 3), with
+`producer_access_contract_unavailable`, before starting a process. Patch 0006
+also replaces the latest producer with an access-gate stub. There is no
+installer or executable-enabling procedure. The internal supervision helper
+below remains tested against generated workers for a future synchronized copy.
 
 [`capture_worker_exec.cpp`](../tools/capture_worker_exec.cpp) establishes
 `PR_SET_NO_NEW_PRIVS`, SIGKILL parent-death handling, a parent-PID race check and
@@ -640,11 +646,13 @@ retirement, exact recovery and preservation of foreign files.
 
 ### Provider protocol and layer ownership
 
-[`capture_provider.hpp`](../tools/capture_provider.hpp) defines a separate v2,
+[`capture_provider.hpp`](../tools/capture_provider.hpp) defines a separate v3,
 328-byte native little-endian/64-bit packet ABI, not an extension sent to old
 MRHAND clients. The endpoint is
 `$XDG_RUNTIME_DIR/framejacker-camera-provider/camera.sock`; there is no `/tmp`
-fallback. Old protocol clients/providers fail closed. Snapshot records retain
+fallback. An explicit first request chooses metadata or image buffers; the
+server rejects buffer access because no producer handoff is available. Old
+protocol clients/providers fail closed. Snapshot records retain
 the original 144-byte buffer description inside the new packet and add an
 epoch, generation, logical-device token, physical-device/driver UUIDs,
 image flags/type/sharing/depth/mips/samples, external handle types, memory flags
@@ -652,8 +660,12 @@ and per-plane array/depth pitches. Unknown creation/allocation chains are marked
 incomplete and rejected for capture. Current policy accepts only the existing
 single-layer profile with exclusive sharing and zero unsupported flags/pitches.
 
-The registry scopes image/memory handles by logical device, bounds counts,
-assigns nonreused buffer IDs and duplicates snapshot FDs under its mutex.
+The registry scopes image/memory handles by logical device, bounds counts and
+assigns nonreused buffer IDs. The production layer records allocation metadata
+without retaining the imported image FD; Vulkan retains its normal ownership
+rules. Metadata snapshots duplicate no image descriptors. Descriptor-owning
+registry operations remain only for generated ownership fixtures; the server
+never grants descriptor access.
 Image destruction, binding, memory changes and device teardown advance the
 generation. The original layer implementation uses shared callback state and
 exact device-handle lookup; two devices may share a dispatch-table pointer.
@@ -661,15 +673,13 @@ Device destruction removes only its registry entries. The last device stops
 and joins the owned server thread before releasing its callback state. Registry
 errors invalidate capture without changing successful downstream Vulkan results.
 
-The consumer holds a bounded socket lease and checks the epoch/generation
-before and after copies and before publication. Provider loss, timeout,
-invalidation or changed registry ends the attempt; it never silently reuses
-old bindings or reconnects to a different provider. An update can race a GPU
-operation, so an FD lease and subsequent check are not an atomic lock on the
-camera producer. Real producer completion remains a separate unresolved gate.
-The importer compares the exported physical-device and driver UUIDs with its
-chosen GPU before image imports. This proves neither physical-camera identity
-nor stereo roles; ID-sorted slot grouping is still an upstream heuristic.
+The metadata consumer holds a bounded socket lease and checks epoch/generation.
+Provider loss, timeout, invalidation or changed registry ends the attempt; it
+never reconnects to a different provider. Registry stability describes resource
+bindings, not XRService frame completion or reuse. UUID metadata identifies a
+GPU/driver, not a physical camera or stereo role. Future pixel access must
+establish the [producer ownership and synchronization contract](live-capture.md#producer-synchronization-review-and-next-checkpoint)
+before reusing the tested import helpers.
 
 The server uses a private directory, same-user peers, an exclusive file lock,
 bounded I/O and identity-checked endpoint removal. A crash leaves a recorded
@@ -703,6 +713,35 @@ device procedure. Tests emulate staging only inside generated temporary homes.
 
 See the [device preparation procedure](on-device.md#test-the-watchdog-and-provider-without-capture)
 and [remaining live gates](live-capture.md#next-engineering-step-capture-worker-supervision).
+
+### Metadata-only provider inspection
+
+[`capture_provider_inspect.cpp`](../tools/capture_provider_inspect.cpp) uses the
+v3 metadata request and shared profile validators, without linking/loading
+Vulkan, requesting image FDs or reading pixels. It reports metadata for at most
+64 records: dimensions, format, allocation/binding, modifier/plane layout,
+exporter flags, UUIDs, epoch/generation and peer credentials. Profile rejection
+is recorded per entry; an empty or unsupported registry can still be inspected
+successfully. Compatibility is only a metadata predicate, not successful import,
+camera identification or synchronization proof.
+
+The standalone executable defaults to `not_run` (exit 3). Explicit `--inspect`
+checks an existing provider for 1–5 seconds (default 1), using 500 ms exchanges.
+[`capture_provider_check.py`](../scripts/capture_provider_check.py) supervises it
+with a duration-plus-two-second deadline, bounded output, signal/parent-death
+handling and a validated report. It installs/starts no provider and writes no
+files. `inspected` exits 0; missing/changed/old providers, malformed reports,
+unexpected descriptors and timeouts fail with exit 1. Cancellation exits
+`128 + signal`; forced termination does not claim graceful cleanup.
+
+The 12 generated-data diagnostic tests cover matching/empty/unsupported metadata,
+generation changes, provider loss, endpoint/protocol/descriptor rejection,
+invalid/default arguments, corrupt/oversized output, hangs, signals, parent
+death and the blocked capture CLI. Build with `--provider-fixes`, then run
+`test_capture_provider.py` and `test_capture_provider_check.py`. The fixtures
+generate their own peers in private temporary directories; no real provider
+or layer is needed. Native v3 execution and controlled layer activation remain
+separate checkpoints.
 
 ## Isolated luma reader and synthetic producer
 

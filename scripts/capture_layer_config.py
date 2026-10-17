@@ -133,7 +133,7 @@ def prepare(home, source, destination):
     before = {name: read_entry(home, name) for name in TARGETS}
     manifest = {"file_format_version": "1.2.0", "layer": {
         "name": "VK_LAYER_FRAMEJACKER_capture", "type": "GLOBAL", "api_version": "1.3.0",
-        "implementation_version": "2", "description": "Experimental Framejacker camera buffer registry",
+        "implementation_version": "3", "description": "Framejacker metadata-only camera buffer registry",
         "library_path": str(home / LIBRARY),
         "enable_environment": {"FRAMEJACKER_CAPTURE_LAYER": "1"},
         "disable_environment": {"FRAMEJACKER_DISABLE_CAPTURE_LAYER": "1"},
@@ -143,6 +143,7 @@ def prepare(home, source, destination):
     after = {LIBRARY: describe(payload(library), 0o600),
              MANIFEST: describe((json.dumps(manifest, indent=2) + "\n").encode(), 0o600)}
     plan = {"schema_version": 1, "home": str(home), "before": before, "after": after,
+            "provider_protocol_version": 3, "image_access_enabled": False,
             "activation_performed": False, "runtime_restart_performed": False,
             "restore_requires_controlled_restart_if_loaded": True}
     destination = Path(destination)

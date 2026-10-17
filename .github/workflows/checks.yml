@@ -57,10 +57,11 @@ jobs:
         run: |
           bash scripts/build_capture_reference.sh --resource-fixes
           python3 -m unittest discover -s tests -p test_capture_gpu_resources.py -v
-      - name: Build provider adaptation and verify registry, layer hooks and restoration
+      - name: Build metadata-only provider and verify hooks, inspection and restoration
         run: |
           bash scripts/build_capture_reference.sh --provider-fixes
           python3 -m unittest discover -s tests -p test_capture_provider.py -v
+          python3 -m unittest discover -s tests -p test_capture_provider_check.py -v
           python3 -m unittest discover -s tests -p test_capture_layer_config.py -v
       - name: Check inspection artifacts without executing them
         run: |
@@ -90,6 +91,15 @@ jobs:
                   assert not path.stat().st_mode & 0o111
                   assert len(data) == item['size_bytes']
                   assert hashlib.sha256(data).hexdigest() == item['sha256']
+              if directory == 'capture-provider-reference':
+                  assert report['provider_protocol_version'] == 3
+                  assert report['image_fd_export_enabled'] is False
+                  assert report['layer_retains_image_fds'] is False
+                  item = report['metadata_inspector']
+                  path = root / item['name']
+                  assert path.stat().st_mode & 0o111
+                  assert path.stat().st_size == item['size_bytes']
+                  assert hashlib.sha256(path.read_bytes()).hexdigest() == item['sha256']
           print('Reference binaries built and verified without loading or running them.')
           PY
 

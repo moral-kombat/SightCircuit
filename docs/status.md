@@ -28,7 +28,8 @@ unknown unless explicitly recorded below.
 | Bounded Vulkan capability query | Frame-confirmed; queried requirements passed | Turnip Adreno 750, target NV12 modifier has two memory planes, dedicated DMA-BUF import supported; clean query and normal passthrough; no actual FD import; [E30](#e30-vulkan-capabilities-on-frame) |
 | Image import validation and ownership | ARM64 build and ten synthetic tests passed; cloud suite now eleven | FD/image ownership and failure paths validated with fake dispatch; added two-plane case cloud-only; real GPU import remains untested; [E31](#e31-import-build-and-synthetic-tests-on-frame), [E32](#e32-two-plane-import-fixture-cloud-checks) |
 | Device and remaining GPU resource ownership | Inspection adaptation built; nine synthetic cloud tests passed | Startup/child lifetimes, private allocations, imported-image device retention and 57 injected failures; actual driver and ARM64 execution pending; [E33](#e33-gpu-resource-ownership-cloud-checks) |
-| Capture watchdog, provider/layer lifecycle and exact recovery | Implemented; 28 new synthetic cloud tests passed | Bounded worker, v2 metadata/GPU provenance, registry changes, owned endpoint and conditional restoration; ARM64 execution, original producer completion and on-device restoration pending; [E34](#e34-capture-watchdog-provider-lifecycle-and-recovery-cloud-checks) |
+| Capture watchdog, provider/layer lifecycle and exact recovery | Earlier v2 milestone passed all 28 generated-data tests on Frame ARM64 | Bounded worker, metadata/GPU provenance, registry changes, owned endpoint and conditional restoration; no real driver/layer execution or device restoration; [E35](#e35-watchdog-provider-and-recovery-tests-on-frame) |
+| Metadata-only provider and producer synchronization review | v3 diagnostic and access gate cloud-tested; ARM64 v3 pending | Layer retains/exports no image FDs; reviewed source lacks coordinated producer handoff; live reads blocked; [E36](#e36-metadata-only-provider-and-synchronization-review) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
 | Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; no source-identified built-in-camera frames have been received |
 | Stereo depth and world-space labels | Planned | Calibration, depth and pose/timebase alignment remain unresolved |
@@ -1046,6 +1047,79 @@ does not prove stereo roles. Capture binaries remain disabled while the
 producer synchronization/FOREIGN ownership review and controlled device
 load/restoration procedure are prepared. The next no-camera native milestone
 is [documented here](on-device.md#test-the-watchdog-and-provider-without-capture).
+
+### E35: Watchdog, provider and recovery tests on Frame
+
+Source: user-supplied native build report and complete test summaries, received
+2026-10-17 UTC. Exact execution time, checkout HEAD, current SteamVR version and
+OS/kernel/compiler versions were not included. The reported provider/layer
+helper and patch hashes match published commit `097f9ba`; this identifies the
+earlier **v2** adaptation, not the later metadata-only v3 code.
+
+The build reports `aarch64`, compiler target `aarch64-unknown-linux-gnu`, system
+Vulkan headers, `-l:libvulkan.so.1` and upstream capture pin
+`ff6a2b29bc50c9497d66fd7ff07e00b61f9eb082`. It completed without installation,
+runtime initialization or capture. Layer/producer remain non-executable
+inspection artifacts and `deployment_ready` is false.
+
+All **28 tests passed with no skips**: 10 watchdog tests in 3.479 seconds,
+11 provider/layer tests in 0.130 seconds and 7 configuration/recovery tests in
+0.069 seconds. They exercise generated workers/files/local peers and fake
+downstream Vulkan dispatch. Restoration tests use temporary generated homes;
+they do not restore an installed headset layer.
+
+Reported ARM64 artifact hashes:
+
+| Artifact | SHA-256 | Bytes |
+| --- | --- | --- |
+| `reference-libVkLayer_mrhand.so` | `afc51be3a62eb7e4d23ecbc2274645f16eb5dd3c18438fab5941736146ea20cd` | 157,376 |
+| `reference-ptgrab` | `b51620d2541bf646f94fa0df5b47424a9a5ca762bd70b01ef7d8b8e92b6679f2` | 156,872 |
+
+This extends the v2 synthetic milestone to ARM64. It establishes neither
+actual GPU import/copy, completed original camera frames, physical source,
+layer activation nor on-device restoration. No new passthrough observation was
+supplied with this report. The separate GPU-resource and added two-plane suites
+were not included in this batch. Continue with the
+[changed v3 native tests](on-device.md#test-metadata-only-inspection-without-capture).
+
+### E36: Metadata-only provider and synchronization review
+
+Source: source/specification review and local Linux x86_64 cloud checks on
+2026-10-17 UTC, worktree based on `097f9ba`. The
+[synchronization review](live-capture.md#producer-synchronization-review-and-next-checkpoint)
+records versioned Vulkan/Linux references. Pinned capture code has no
+coordinated producer release/ready/return interval, assumes imported image
+layout and lacks a matching return transfer. It also lacks the staging
+transfer-write to host-read dependency. Upstream HEAD
+`8852ec9bdd4f81fb5a359e5bf88ed25f0e6fc89e` was checked: all three capture source
+files plus `REPORT.md`, `FINDINGS.md` and `README.md` are byte-identical to the
+existing pin. The pin is unchanged; no code from that newer revision is adopted.
+
+The latest `--provider-fixes` mode applies a sixth patch that replaces the
+camera reader with a pre-runtime access gate. The production layer records
+metadata without retaining image FDs. Its explicit v3 handshake accepts
+metadata requests and rejects buffer requests; old protocol peers and
+unexpected received descriptors fail closed. `capture_supervisor.py --capture`
+returns `blocked`/exit 3 without starting a worker.
+
+The standalone metadata inspector uses shared profile validators and bounded
+registry checks without linking/loading Vulkan, reading image data, saving
+images or installing anything. It reports `capture_contract_available: false`;
+profile compatibility and registry stability do not establish complete frames.
+The v3 provider suite has 12 tests and the metadata diagnostic has 12 tests.
+The complete capture-related regression passed **80 tests with no skips**.
+Provider and actual-hook fixtures passed address/undefined-behavior sanitizer
+checks. The provider inspection build, artifact hashes/permissions, no Vulkan
+dependency for the inspector, pinned-cache cleanliness and documentation
+links/examples were checked. CI includes the new diagnostic suite; hosted
+results have not been checked.
+
+These remain generated-data and fake-dispatch checks. V3 has not yet run on
+Frame; no real layer was loaded, image imported/copied, service restarted or
+device configuration restored. A controlled metadata-layer load is the next
+device checkpoint after native v3 validation and service-aware recovery
+preparation. Live pixels still require a supported producer handoff or a copy
+inside a demonstrated synchronized compositor access window.
 
 ## Maintaining the evidence
 

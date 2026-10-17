@@ -16,10 +16,11 @@ layer has been deployed by Framejacker.
 | 1c | Check capture of our own display | Confirmed: the VR panel appears in captured output | Current composited mirror does not exclude our output; no continuous live-image panel from this source; [E18](status.md#e18-vr-panel-included-in-mirror-input) |
 | 1d | Detector quality and class coverage | Needs evaluation | Include the rug false positive; select supported target classes and evaluate correct labels, boxes and misses before claiming useful accuracy |
 | 2 | Isolated shared-memory reader and controlled producer | Controlled x86_64 and Frame ARM64 checks passed; real provider unverified | All 14 native/supervisor tests pass on Frame; upstream writer ordering and original GPU completion remain unresolved; [E23](status.md#e23-reference-build-and-controlled-reader-on-frame) |
-| 3 | Dedicated camera provider | Initial tests and GPU query pass on Frame; watchdog/provider/recovery inspection adaptation cloud-tested; not deployed | Native validation, original producer synchronization review and controlled restoration/trial remain; physical source and built-in support unresolved |
+| 3 | Dedicated camera provider | Initial tests, GPU query and 28 watchdog/provider/recovery tests pass on Frame; metadata-only adaptation prepared; not deployed | Producer handoff is absent in reviewed source; live reads blocked; controlled metadata-layer load/restoration and synchronized copy remain |
 | 3a | Validated image import and ownership | ARM64 build and ten synthetic tests passed; two-plane coverage added in cloud | Actual camera DMA-BUF import remains untested; [E31](status.md#e31-import-build-and-synthetic-tests-on-frame), [E32](status.md#e32-two-plane-import-fixture-cloud-checks) |
 | 3b | Device and remaining GPU resource ownership | Inspection build and nine synthetic cloud tests pass | Native ARM64 and actual driver execution pending; no activation; [E33](status.md#e33-gpu-resource-ownership-cloud-checks) |
-| 3c | Capture watchdog, provider metadata/lifetime and configuration recovery | Implemented; 28 new synthetic cloud tests pass | No real driver/layer activation; native ARM64 and on-device restoration remain pending; [E34](status.md#e34-capture-watchdog-provider-lifecycle-and-recovery-cloud-checks) |
+| 3c | Capture watchdog, provider metadata/lifetime and configuration recovery | Earlier v2 milestone passed all 28 tests on Frame ARM64 | Generated workers/fake dispatch only; no real layer activation or device restoration; [E35](status.md#e35-watchdog-provider-and-recovery-tests-on-frame) |
+| 3d | Producer synchronization and metadata-only inspection | Review complete; v3 metadata diagnostic and access gate implemented | No image FDs retained/exported by the layer; native v3 tests and controlled metadata-layer load are next; [review](#producer-synchronization-review-and-next-checkpoint), [E36](status.md#e36-metadata-only-provider-and-synchronization-review) |
 | 4 | Capture-only device trial | Planned | Ten seconds of fresh images from one identified source, correct orientation, clean exit and working normal passthrough |
 | 5 | Continuous live input in the existing display | Planned; needs input independent of our output | Reuse detector/display after a dedicated provider or supported overlay-excluded mirror mode is validated; current mirror includes the panel |
 | 6 | Color, built-in camera support and later geometry | Planned | Validate each source and color conversion separately; require calibration and stronger timing evidence before stereo depth or spatial labels |
@@ -74,8 +75,9 @@ builds and passes all ten synthetic tests on ARM64; see
 [E31](status.md#e31-import-build-and-synthetic-tests-on-frame). Continue device
 and remaining provider work before the next camera trial. GPU resource ownership
 is implemented in a separate cloud-tested inspection adaptation. Capture
-supervision, provider metadata/lifetime and recovery now have a further
-cloud-tested adaptation. The inspection builds are not
+supervision, provider metadata/lifetime and recovery passed 28 generated-data
+tests on Frame. The latest adaptation permits metadata inspection only: the
+review found no coordinated producer handoff for live reads. The inspection builds are not
 deployment-ready. Identify the selected source
 during capture validation; connection alone does not identify past mirror frames.
 Prefer a supported interface; the reviewed
@@ -125,7 +127,7 @@ Built-in camera capture requires separate validation.
 | Supported Arcturus/Valve interface | Prefer it if available; no public live-frame contract was found in the reviewed pages |
 | Public OpenVR tracked-camera API | Retain the [failed result](status.md#e3-public-camera-probe); do not repeat the unchanged probe |
 | Existing SteamVR composited mirror | Confirmed useful for bounded recognition; includes our VR panel, so not selected for continuous live-image output |
-| Community Vulkan layer and `ptgrab` | Prepare an isolated consumer, then adapt only capture components for a controlled Arcturus trial |
+| Community Vulkan layer and `ptgrab` | Use metadata-only inspection first; original buffer reads need a coordinated producer handoff or compositor-owned copy |
 | Built-in passthrough | Verify live buffers and source identity separately; the reviewed `ptgrab` size filter and empty-buffer reports do not establish support |
 
 The [camera reference](steam-frame-camera.md) owns interface research. The
@@ -236,25 +238,27 @@ private allocations. Nine synthetic tests pass, with 57 injected failures in
 the startup/private-resource path. This is not actual driver or ARM64 execution;
 see [E33](status.md#e33-gpu-resource-ownership-cloud-checks).
 
-The `--provider-fixes` adaptation adds a separate v2 metadata contract,
-GPU/driver UUID comparison, device-scoped registry entries, generation checks,
-shared callback lifetime and an owned/stoppable private endpoint. The external
-supervisor bounds the worker and records publication identities for recovery.
-An inactive configuration bundle and conditional exact restoration are
-implemented. Twenty-eight new cloud tests pass; see
-[E34](status.md#e34-capture-watchdog-provider-lifecycle-and-recovery-cloud-checks)
-and [the development procedure](development.md#capture-watchdog-provider-lifecycle-and-restoration-preparation).
+The earlier `--provider-fixes` v2 milestone added GPU/driver UUID checks,
+device-scoped registry entries, generation checks, shared callback lifetime,
+an owned private endpoint, worker supervision and conditional configuration
+recovery. Its 28 generated-data tests now pass on Frame ARM64; see
+[E35](status.md#e35-watchdog-provider-and-recovery-tests-on-frame).
+The current v3 adaptation retains only allocation metadata, exports no image
+FDs, and blocks the real reader before GPU initialization. Its separate
+metadata diagnostic checks profile compatibility and registry stability;
+[development](development.md#metadata-only-provider-inspection) documents its tests.
 
 Remaining work does not need another unchanged GPU query or initial import test:
 
-1. Run the new no-camera milestone on ARM64 when available, and prepare an
-   inactive bundle against that Frame's exact existing configuration.
-2. Complete the original producer synchronization/FOREIGN queue-ownership review.
-   The reference exposes no producer fence or exposure sequence. Our queue
-   fence, stable-strip heuristic and registry checks cannot supply one.
-3. Prepare a controlled layer-load/restoration and actual-driver procedure using
-   the exact bundle. A file restore cannot unload a currently running layer.
-4. Identify the selected physical camera during a bounded capture-only trial,
+1. Run the changed v3 provider and metadata diagnostic tests on ARM64, then
+   prepare a new inactive bundle against that Frame's exact configuration.
+2. Prepare a bounded metadata-only layer-load/restoration procedure from the
+   actual SteamVR service details. Keep image access disabled. Verify the
+   observed profile, process identity, registry stability and restoration.
+3. Establish a coordinated producer release/ready/return contract or design a
+   copy within the compositor's existing synchronized access window. Validate
+   ownership, layout, completion and host visibility before allowing pixel reads.
+4. Once that contract is implemented, identify the physical camera in a capture-only trial,
    then verify orientation, scene motion, clean shutdown and normal passthrough.
    Keep inference and live VR image output out of that first trial.
 
@@ -284,14 +288,62 @@ metadata validation, layer/server lifetime and exact configuration recovery
 also have synthetic tests. The heading is retained for existing links; this
 implementation milestone is complete in the cloud.
 
-The next acceptance gate is the original XRService producer synchronization and
-FOREIGN ownership review, followed by native validation and a controlled
-load/restoration procedure. The new metadata contract proves neither camera
-identity nor completed original writes. No device layer has been installed, and
-the real capture binary remains non-executable. The supervisor's capture flag
-is guarded; it is not a ready-to-run live-capture procedure. Use the
-[no-camera native milestone](on-device.md#test-the-watchdog-and-provider-without-capture)
-when back on Frame.
+The original synchronization/FOREIGN ownership review is complete; it found a
+missing producer handoff. The earlier no-camera milestone also passed on Frame.
+The next checkpoint is v3 metadata-only native validation, followed by a
+controlled metadata-layer load/restoration procedure. No layer has been installed.
+The supervisor's capture flag returns `blocked` before launching a worker.
+Use the [updated native procedure](on-device.md#test-metadata-only-inspection-without-capture).
+
+## Producer synchronization review and next checkpoint
+
+Review date: 2026-10-17 UTC. At upstream pin `ff6a2b2`, `copyRegions` and the
+downscaler acquire from `VK_QUEUE_FAMILY_FOREIGN_EXT` into their own queue with
+`GENERAL` layout. The source supplies no producer completion wait or coordinated
+hold on the buffer and no matching return to the external owner. Current upstream
+HEAD `8852ec9bdd4f81fb5a359e5bf88ed25f0e6fc89e` was also checked: the three capture
+source files and `REPORT.md`/`FINDINGS.md` are byte-identical to the pin. The build pin
+remains unchanged. These are source findings, not an observed device failure.
+
+The review changes the implementation boundary:
+
+- Duplicating a DMA-BUF FD preserves allocation lifetime. It does not prevent
+  XRService or an ISP from rewriting that allocation while we copy it.
+- A registry generation tracks binding/destruction, not frame completion or
+  reuse. A stable 16-row strip and our own queue fence cannot supply the missing
+  producer sequence, release or exclusive access interval.
+- Vulkan [external sharing rules][vk-external-sharing] require ordered ownership
+  release/acquire; [ownership transfers][vk-ownership] may themselves read and
+  write memory. The correct owner and actual image layout must come from the
+  producer contract. `PTGRAB_QFOT=0`, a guessed `GENERAL` layout or an unmatched
+  return barrier does not establish that contract.
+- Linux DMA-BUF [sync-file export][linux-dmabuf] snapshots current fences. Its
+  export/submit/import sequence is not atomic; userspace must coordinate against
+  other submissions. Waiting on that snapshot alone cannot exclude a later writer.
+- A private staging copy also needs a transfer-write to host-read memory
+  dependency, completion wait and any noncoherent invalidation before CPU access.
+  The reviewed reference lacks the host-read barrier. A fence wait alone does
+  not establish [host visibility][vk-host-visibility].
+
+The v3 layer therefore records metadata without retaining imported image FDs.
+The server accepts explicit metadata requests and rejects buffer requests; the
+worker/supervisor stop before live access. The diagnostic makes no Vulkan calls,
+reads no image data and reports `capture_contract_available: false`. A matching
+2464-square NV12 profile is only a candidate; it does not identify Arcturus,
+prove complete frames or authorize import.
+
+For live input, prefer a supported vendor frame lease that provides ready/return
+synchronization, valid layout, ownership and reuse rules. The alternative is to
+copy into our own allocation during a demonstrated synchronized compositor
+access window, then publish only that owned copy. Do not add independent GPU
+reads until one path is justified and tested. Metadata observation is the next
+small device checkpoint; installation and compositor restart still need an
+exact service-aware rollback procedure.
+
+[vk-external-sharing]: https://github.com/KhronosGroup/Vulkan-Docs/blob/v1.4.309/chapters/resources.adoc#resources-external-sharing
+[vk-ownership]: https://github.com/KhronosGroup/Vulkan-Docs/blob/v1.4.309/chapters/synchronization.adoc#synchronization-queue-transfers
+[vk-host-visibility]: https://github.com/KhronosGroup/Vulkan-Docs/blob/v1.4.309/chapters/synchronization.adoc#synchronization-fences-waiting
+[linux-dmabuf]: https://github.com/torvalds/linux/blob/v6.18/include/uapi/linux/dma-buf.h
 
 ## Next provider step: query GPU capabilities
 
@@ -317,16 +369,13 @@ Image import validation/ownership is implemented in the inspection adaptation
 above, and its initial ten-test suite passes on ARM64. Use the actual report for
 GPU selection and capability policy. The separate GPU resource adaptation now
 supplies ownership for other resources.
-Next add an external process watchdog around capture driver calls. The query's supervisor is not yet a capture
-supervisor. Do not infer XRService completion from our own command fence or
-from a successful CPU publication. Review producer synchronization/ownership
-before any live import. Registry changes, provider loss and layer lifecycle
-must also stop or rebuild the stream safely.
-
-Before deployment, finish GPU import validation/resource cleanup, the process
-watchdog, registry refresh, layer lifetime/socket ownership and exact restoration.
-Original camera-buffer completion and source identity remain separate hardware
-acceptance checks even after shared-memory publication is correct.
+The separate capture watchdog, registry invalidation, layer lifetime and exact
+file recovery helpers are now implemented and tested with generated data.
+The producer review found no coordinated access contract; the latest mode
+allows metadata inspection only. Complete native v3 validation and a controlled
+metadata-layer load/restoration checkpoint before designing the synchronized
+copy path. Original camera-buffer completion and source identity remain
+separate acceptance checks even after shared-memory publication is correct.
 
 ## First live device trial
 

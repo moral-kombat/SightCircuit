@@ -120,6 +120,14 @@ exec boundary and configuration/recovery tools are original Framejacker code.
 Tests run fake downstream Vulkan dispatch and generated local peers only; no
 upstream installer or real layer/camera operation is executed.
 
+[patches/mrhand/0006-block-unleased-camera-reads.patch](patches/mrhand/0006-block-unleased-camera-reads.patch)
+applies after patches 0001–0005 and retains MIT attribution for removed
+upstream/adapted reader text. The current `--provider-fixes` mode applies it
+to block raw camera access before runtime initialization. Its v3 metadata-only
+provider and standalone inspector are original Framejacker code. The inspector
+uses Vulkan header types for metadata validation without linking/loading the
+Vulkan loader or requesting image descriptors.
+
 If compiler-search-path Vulkan headers are unavailable, either builder fetches
 [Khronos Vulkan-Headers v1.4.309](https://github.com/KhronosGroup/Vulkan-Headers/tree/952f776f6573aafbb62ea717d871cd1d6816c387)
 at `952f776f6573aafbb62ea717d871cd1d6816c387` into ignored

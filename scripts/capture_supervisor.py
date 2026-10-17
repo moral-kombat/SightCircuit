@@ -208,7 +208,7 @@ def supervise(*, worker=WORKER, launcher=LAUNCHER, runtime=None, seconds=10, max
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--capture", action="store_true", help="Requires a separately prepared executable worker; inspection artifacts remain disabled")
+    mode.add_argument("--capture", action="store_true", help="Blocked pending a coordinated producer access contract; use the metadata diagnostic next")
     mode.add_argument("--recover-session", type=Path, help="Recover a dead session using its recorded process/file identities")
     parser.add_argument("--seconds", type=int, choices=range(1, 11), default=10)
     parser.add_argument("--max-fps", type=int, choices=range(1, 11), default=5)
@@ -220,7 +220,9 @@ def main(argv=None):
         for number in (signal.SIGINT, signal.SIGTERM):
             previous[number] = signal.signal(number, stop)
         if args.capture:
-            report = supervise(seconds=args.seconds, max_fps=args.max_fps)
+            report = new_report()
+            report.update(status="blocked", reason="producer_access_contract_unavailable",
+                          next_step="python3 scripts/capture_provider_check.py --inspect")
         elif args.recover_session:
             report = new_report()
             try:

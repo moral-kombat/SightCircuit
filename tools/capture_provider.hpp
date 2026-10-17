@@ -16,9 +16,11 @@
 namespace framejacker::provider {
 using namespace transport;
 constexpr uint32_t magic = 0x50434a46; // FJCP, a separate endpoint/ABI from MRHAND.
-enum Kind : uint32_t { data = 1, end = 2, ping = 3, unchanged = 4, changed = 5 };
+enum Kind : uint32_t { data = 1, end = 2, ping = 3, unchanged = 4, changed = 5,
+                       request_metadata = 6, request_buffers = 7, capture_blocked = 8 };
+enum class Access { metadata, buffers };
 struct Packet {
-    uint32_t magic_value = magic, version = 2, bytes = sizeof(Packet), kind = 0;
+    uint32_t magic_value = magic, version = 3, bytes = sizeof(Packet), kind = 0;
     uint64_t epoch = 0, generation = 0, device = 0;
     uint8_t device_uuid[16]{}, driver_uuid[16]{};
     uint32_t image_flags = 0, sharing_mode = 0, image_type = 0, depth = 0;
@@ -33,7 +35,7 @@ static_assert(sizeof(Packet) == 328 && offsetof(Packet, device_uuid) == 40 &&
 using Record = OwnedPacket<Packet>;
 inline Deadline deadline() { return Clock::now() + std::chrono::milliseconds(500); }
 inline void validate_header(const Packet &packet) {
-    if (packet.magic_value != magic || packet.version != 2 || packet.bytes != sizeof(Packet) ||
+    if (packet.magic_value != magic || packet.version != 3 || packet.bytes != sizeof(Packet) ||
         !packet.epoch || !packet.generation || packet.generation > UINT32_MAX)
         throw Error("provider_protocol_mismatch");
 }
@@ -76,6 +78,22 @@ class Registry {
     void require_device(uint64_t device) const {
         if (!valid_ || !devices_.count(device)) throw Error("provider_device_unavailable");
     }
+    void store_memory(uint64_t device, uint64_t handle, Fd fd, uint64_t size,
+                uint32_t type, uint64_t dedicated_image, uint32_t flags = 0,
+                uint32_t mask = 0, bool complete = true) {
+        std::lock_guard<std::mutex> lock(mutex_); require_device(device);
+        if (!handle || !size || size > (1ULL << 30) ||
+            memory_.size() >= maximum_records || memory_.count({device, handle}) || !next_id_)
+            throw Error("provider_memory_registry_limit_or_reuse");
+        Memory value;
+        value.packet.device = device;
+        value.packet.buffer.id = next_id_++;
+        value.packet.buffer.size = size; value.packet.buffer.handleType = type;
+        value.packet.allocation_flags = flags; value.packet.device_mask = mask;
+        value.packet.memory_metadata_complete = complete ? 1 : 0;
+        value.fd = std::move(fd); value.image = dedicated_image;
+        memory_.emplace(std::make_pair(device, handle), std::move(value)); bump();
+    }
 public:
     Registry() {
         if (getrandom(&epoch_, sizeof(epoch_), 0) != sizeof(epoch_) || !epoch_)
@@ -116,18 +134,13 @@ public:
     void memory(uint64_t device, uint64_t handle, Fd fd, uint64_t size,
                 uint32_t type, uint64_t dedicated_image, uint32_t flags = 0,
                 uint32_t mask = 0, bool complete = true) {
-        std::lock_guard<std::mutex> lock(mutex_); require_device(device);
-        if (!handle || fd.get() < 0 || !size || size > (1ULL << 30) ||
-            memory_.size() >= maximum_records || memory_.count({device, handle}) || !next_id_)
-            throw Error("provider_memory_registry_limit_or_reuse");
-        Memory value;
-        value.packet.device = device;
-        value.packet.buffer.id = next_id_++;
-        value.packet.buffer.size = size; value.packet.buffer.handleType = type;
-        value.packet.allocation_flags = flags; value.packet.device_mask = mask;
-        value.packet.memory_metadata_complete = complete ? 1 : 0;
-        value.fd = std::move(fd); value.image = dedicated_image;
-        memory_.emplace(std::make_pair(device, handle), std::move(value)); bump();
+        if (fd.get() < 0) throw Error("provider_descriptor_missing");
+        store_memory(device, handle, std::move(fd), size, type, dedicated_image, flags, mask, complete);
+    }
+    void memory_metadata(uint64_t device, uint64_t handle, uint64_t size,
+                         uint32_t type, uint64_t dedicated_image, uint32_t flags,
+                         uint32_t mask, bool complete) {
+        store_memory(device, handle, Fd(), size, type, dedicated_image, flags, mask, complete);
     }
     void free_memory(uint64_t device, uint64_t handle) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -140,7 +153,7 @@ public:
             entry->second.image = image; entry->second.packet.buffer.bindOffset = offset; bump();
         }
     }
-    std::vector<Record> snapshot(Packet &terminal) const {
+    std::vector<Record> snapshot(Packet &terminal, bool copy_descriptors = true) const {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!valid_) throw Error("provider_registry_invalidated");
         std::vector<Record> result;
@@ -166,7 +179,8 @@ public:
             std::copy(device->second.driver.begin(), device->second.driver.end(), packet.driver_uuid);
             packet.kind = data; packet.epoch = epoch_; packet.generation = generation_;
             packet.buffer.magic = MRHAND_MAGIC; packet.buffer.generation = static_cast<uint32_t>(generation_);
-            result.push_back({packet, duplicate(value.fd.get())});
+            if (copy_descriptors && value.fd.get() < 0) throw Error("provider_image_descriptor_unavailable");
+            result.push_back({packet, copy_descriptors ? duplicate(value.fd.get()) : Fd()});
         }
         terminal = Packet{}; terminal.kind = end; terminal.epoch = epoch_; terminal.generation = generation_;
         return result;
@@ -213,9 +227,21 @@ class Server {
         { std::lock_guard<std::mutex> lock(client_mutex_); client_ = fd; }
         try {
             require_same_user(fd);
+            auto request = receive_packet<Packet>(fd, deadline());
+            if (request.fd.get() >= 0 || request.info.magic_value != magic || request.info.version != 3 ||
+                request.info.bytes != sizeof(Packet) || request.info.epoch || request.info.generation ||
+                (request.info.kind != request_metadata && request.info.kind != request_buffers))
+                throw Error("provider_invalid_access_request");
             Packet terminal;
-            auto entries = registry_.snapshot(terminal);
+            // The live producer has no coordinated release/ready/return lease.
+            // Inspect metadata without even duplicating snapshot image FDs.
+            auto entries = registry_.snapshot(terminal, false);
             const auto limit = deadline();
+            if (request.info.kind == request_buffers) {
+                terminal.kind = capture_blocked;
+                send_packet(fd, terminal, -1, limit);
+                throw Error("producer_access_contract_unavailable");
+            }
             for (const auto &entry : entries) send_packet(fd, entry.info, entry.fd.get(), limit);
             send_packet(fd, terminal, -1, limit);
             while (!stopping_) {
@@ -308,8 +334,9 @@ class Lease {
     Fd connection_;
     Packet terminal_;
     std::vector<Record> records_;
+    ucred peer_{};
 public:
-    explicit Lease(const std::string &path) {
+    explicit Lease(const std::string &path, Access access = Access::buffers) {
         const auto parent = path.substr(0, path.rfind('/'));
         Fd directory(open(parent.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
         struct stat info{};
@@ -318,23 +345,32 @@ public:
         if (lstat(path.c_str(), &info) || !S_ISSOCK(info.st_mode) || info.st_uid != geteuid() ||
             (info.st_mode & 0077)) throw Error("provider_endpoint_not_private");
         const auto limit = deadline(); connection_ = connect_registry(path.c_str(), limit);
+        socklen_t peer_size = sizeof peer_;
+        if (getsockopt(connection_.get(), SOL_SOCKET, SO_PEERCRED, &peer_, &peer_size) || peer_size != sizeof peer_)
+            throw Error("provider_peer_identity_unavailable");
+        Packet request;
+        request.kind = access == Access::metadata ? request_metadata : request_buffers;
+        send_packet(connection_.get(), request, -1, limit);
         std::set<uint32_t> identifiers;
         for (;;) {
             auto record = receive_packet<Packet>(connection_.get(), limit);
             validate_header(record.info);
+            if (record.info.kind == capture_blocked) throw Error("producer_access_contract_unavailable");
             if (!records_.empty() && (record.info.epoch != records_[0].info.epoch ||
                 record.info.generation != records_[0].info.generation)) throw Error("provider_snapshot_changed");
             if (record.info.kind == end) {
                 if (record.fd.get() >= 0) throw Error("provider_terminator_descriptor");
                 terminal_ = record.info; break;
             }
-            if (record.info.kind != data || record.fd.get() < 0 || !record.info.buffer.id ||
+            if (record.info.kind != data || (access == Access::buffers) != (record.fd.get() >= 0) || !record.info.buffer.id ||
                 records_.size() == maximum_records || !identifiers.insert(record.info.buffer.id).second)
                 throw Error("provider_invalid_record");
             records_.push_back(std::move(record));
         }
     }
     const std::vector<Record> &records() const { return records_; }
+    const Packet &terminal() const { return terminal_; }
+    const ucred &peer() const { return peer_; }
     void check() {
         Packet request = terminal_; request.kind = ping;
         const auto limit = deadline();

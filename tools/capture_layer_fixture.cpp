@@ -90,17 +90,18 @@ static void lifecycle(const std::string &runtime) {
     // Deliberately identical dispatch-table pointers; handles still remain distinct.
     require(l::devices.size() == 2 && l::device(first) != l::device(second));
     import(first); import(second);
-    p::Packet terminal; auto records = l::registry().snapshot(terminal);
+    p::Packet terminal; auto records = l::registry().snapshot(terminal, false);
     require(records.size() == 2 && records[0].info.device != records[1].info.device);
+    require(records[0].fd.get() == -1 && records[1].fd.get() == -1);
     for (const auto &record : records) p::validate_profile(record.info);
-    p::Lease lease(runtime + "/framejacker-camera-provider/camera.sock"); lease.check();
+    p::Lease lease(runtime + "/framejacker-camera-provider/camera.sock", p::Access::metadata); lease.check();
     auto retained = l::device(first);
     l::DestroyDevice(first, nullptr); // Purges only this device, even without per-resource callbacks.
     require(!l::device(first) && retained.use_count() == 1 && l::devices.size() == 1);
     bool rejected = false; try { lease.check(); } catch (...) { rejected = true; } require(rejected);
-    records = l::registry().snapshot(terminal); require(records.size() == 1);
+    records = l::registry().snapshot(terminal, false); require(records.size() == 1);
     l::DestroyImage(second, reinterpret_cast<VkImage>(10), nullptr);
-    records = l::registry().snapshot(terminal); require(records[0].info.buffer.hasImage == 0);
+    records = l::registry().snapshot(terminal, false); require(records[0].info.buffer.hasImage == 0);
     l::FreeMemory(second, reinterpret_cast<VkDeviceMemory>(20), nullptr);
     l::DestroyDevice(second, nullptr); l::DestroyInstance(inst, nullptr);
     require(l::registry().empty() && l::devices.empty() && l::instances.empty());
