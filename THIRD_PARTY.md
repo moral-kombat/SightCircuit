@@ -104,6 +104,13 @@ query code. It uses the same header cache and loads the installed Vulkan loader
 only through the query tool's explicit opt-in; it fetches no camera capture code.
 The synthetic dispatch library in its tests is original test code.
 
+[patches/mrhand/0004-owned-gpu-resources.patch](patches/mrhand/0004-owned-gpu-resources.patch)
+applies after patches 0001–0003 at the same capture pin, with the same retained
+MIT source/context attribution. The optional `--resource-fixes` mode adds
+original GPU ownership helpers and a fake-dispatch fixture. Capture binaries
+remain non-executable inspection artifacts. No upstream installer or real
+Vulkan/camera operation is executed by this build/test procedure.
+
 If compiler-search-path Vulkan headers are unavailable, either builder fetches
 [Khronos Vulkan-Headers v1.4.309](https://github.com/KhronosGroup/Vulkan-Headers/tree/952f776f6573aafbb62ea717d871cd1d6816c387)
 at `952f776f6573aafbb62ea717d871cd1d6816c387` into ignored

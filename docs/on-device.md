@@ -772,6 +772,32 @@ finished being written or can be displayed without feedback. Complete the
 [remaining provider work](live-capture.md#offline-provider-work-while-the-frame-is-unavailable)
 before activation.
 
+### Test GPU resource ownership without capture
+
+The new resource-lifetime adaptation is cloud-tested; ARM64 execution is pending.
+This optional check can be batched with a later milestone. It does not create
+a real Vulkan device or open a camera:
+
+```bash
+cd "$HOME/framejacker" &&
+git pull --ff-only &&
+bash scripts/build_capture_reference.sh --resource-fixes &&
+python3 -m unittest discover -s tests -p test_capture_gpu_resources.py -v
+```
+
+Expect nine tests with no skips. The builder applies four versioned patches
+and keeps the capture layer/producer non-executable. Tests run an original fake
+Vulkan backend: startup/resource rollback, memory limits and device/child
+lifetimes, including imported-image ownership. They call no actual Vulkan
+loader/driver and use no camera data. Neither layer installation nor service
+restart is performed. Share the build report and final summary if you run it.
+
+Passing these tests would extend synthetic evidence to ARM64. Actual GPU
+startup/import/copy/teardown, provider metadata/registry and layer restoration
+are still separate checks. The
+[capture worker watchdog](live-capture.md#next-engineering-step-capture-worker-supervision)
+is the next implementation step before real driver execution.
+
 ### Check existing luma shared memory
 
 This is a separate diagnostic for an **already running** compatible provider.
@@ -966,9 +992,12 @@ The validated-import inspection adaptation compiled on aarch64 and passed all
 ten original synthetic tests in 0.015 seconds. A new two-plane fixture test now
 passes in the cloud; that eleventh test has not run on Frame. Actual camera
 imports remain unverified. Both original device checks are complete. Continue
-offline with device/other GPU resource cleanup, the capture watchdog,
-registry refresh, layer lifetime and exact
+offline with the capture watchdog, provider metadata/registry, layer lifetime and exact
 restoration before deployment. Physical camera identity and scene freshness remain unverified.
+GPU device/resource ownership is implemented in --resource-fixes and has nine
+synthetic cloud tests passed, including 57 injected startup/resource errors.
+Its native ARM64 and actual driver execution remain untested; real capture
+binaries are still non-executable inspection artifacts.
 The isolated shared-memory reader and synthetic fixture are implemented and
 tested on cloud x86_64 and Frame ARM64; real-provider validation and capture-layer
 deployment are pending.

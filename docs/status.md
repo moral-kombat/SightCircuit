@@ -27,6 +27,7 @@ unknown unless explicitly recorded below.
 | Provider publication and loop controls | Controlled cloud and Frame tests passed | Exclusive private runtime file, ordered writer and bounded loop controls; all eight generated-data process tests passed on Frame; full GPU/provider lifecycle pending; [E27](#e27-publication-and-loop-controls-on-frame) |
 | Bounded Vulkan capability query | Frame-confirmed; queried requirements passed | Turnip Adreno 750, target NV12 modifier has two memory planes, dedicated DMA-BUF import supported; clean query and normal passthrough; no actual FD import; [E30](#e30-vulkan-capabilities-on-frame) |
 | Image import validation and ownership | ARM64 build and ten synthetic tests passed; cloud suite now eleven | FD/image ownership and failure paths validated with fake dispatch; added two-plane case cloud-only; real GPU import remains untested; [E31](#e31-import-build-and-synthetic-tests-on-frame), [E32](#e32-two-plane-import-fixture-cloud-checks) |
+| Device and remaining GPU resource ownership | Inspection adaptation built; nine synthetic cloud tests passed | Startup/child lifetimes, private allocations, imported-image device retention and 57 injected failures; actual driver and ARM64 execution pending; [E33](#e33-gpu-resource-ownership-cloud-checks) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
 | Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; no source-identified built-in-camera frames have been received |
 | Stereo depth and world-space labels | Planned | Calibration, depth and pose/timebase alignment remain unresolved |
@@ -946,6 +947,47 @@ The GPU query and initial native suite are complete. Continue device/bootstrap
 and remaining resource ownership, the capture watchdog and registry/layer
 lifetime/restoration before a live camera trial. There is no need to repeat the
 unchanged device checks to continue that engineering work.
+
+### E33: GPU resource ownership cloud checks
+
+Source: local x86_64 cloud execution on 2026-10-16 (client date), resource
+worktree based on `1334d21`. The new `--resource-fixes` inspection mode applies
+four patches to disposable source at the unchanged capture pin. It records
+helper/patch/artifact hashes under `artifacts/capture-resources-reference/`.
+All five modes compiled/linked and passed inspection artifact/hash/permission
+checks; real capture binaries stayed non-executable and were not loaded/run.
+
+All **nine resource tests passed**, with no skips. Eight native groups use the
+actual ownership helper with fake Vulkan dispatch and generated memfd data for
+import lifetime handling. They cover normal teardown and child-before-parent
+ordering, 57 injected failures (three passes over the 19 fallible operations
+in the tested startup/private-resource path), compatible-device/graphics queue
+selection, ambiguous devices, API/enumeration/size/budget checks, coherent host
+preference/noncoherent fallback, memory bit 31, moves and child-retained devices.
+Imported images retain their logical device across parent scope exit and moves
+between contexts. Deferred API destruction is tested both while work remains
+unconfirmed and after a caller subsequently marks the queue idle; the poisoned
+state stays unusable. Fake process reclamation is not reported as graceful
+Vulkan cleanup.
+
+The complete native fixture passed address/undefined-behavior sanitizer checks.
+The prior eleven import tests, eight publication tests and seven transport
+fixture groups passed regression checks. Pinned caches stayed clean. CI now
+builds the fifth mode and runs its tests; hosted results have not been checked.
+
+The new helper owns instance/device/pool, mapped host buffers, private scratch
+images, memory and command/fence pairs. Imported-image wrappers retain the
+same device state. Private allocations have a 256 MiB aggregate budget; source
+shared camera allocations remain separately bounded. Static probe resources
+are removed in this adaptation. The earlier import-only mode remains available
+and does not include this resource ownership work.
+
+These are synthetic control-flow/ownership results, not real logical-device
+startup, GPU commands, camera imports or new ARM64 evidence. Bootstrap capability
+selection does not establish exporter GPU provenance. The capture watchdog,
+provider metadata/registry, layer lifetime/restoration and producer synchronization
+review remain required before a live trial. No layer was installed or activated.
+Continue with [capture worker supervision](live-capture.md#next-engineering-step-capture-worker-supervision).
 
 ## Maintaining the evidence
 

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 if [ "$#" -eq 1 ] && { [ "$1" = --help ] || [ "$1" = -h ]; }; then
-    echo "Usage: bash scripts/build_capture_reference.sh [--transport-fixes|--publication-fixes|--import-fixes]"
+    echo "Usage: bash scripts/build_capture_reference.sh [--transport-fixes|--publication-fixes|--import-fixes|--resource-fixes]"
     echo "Builds the reference or a selected adaptation as inspection artifacts."
     echo "Does not install, load or run it. Runtime fixes are required before deployment."
     exit 0
@@ -15,6 +15,8 @@ elif [ "$#" -eq 1 ] && [ "$1" = --publication-fixes ]; then
     framejacker_mode=publication
 elif [ "$#" -eq 1 ] && [ "$1" = --import-fixes ]; then
     framejacker_mode=import
+elif [ "$#" -eq 1 ] && [ "$1" = --resource-fixes ]; then
+    framejacker_mode=resources
 elif [ "$#" -ne 0 ]; then
     echo "Unexpected arguments; use --help." >&2
     exit 64
@@ -103,7 +105,7 @@ if [ "$framejacker_mode" != reference ]; then
         "$framejacker_root/patches/mrhand/0001-bounded-descriptor-transport.patch"
     git -C "$framejacker_sources" apply \
         "$framejacker_root/patches/mrhand/0001-bounded-descriptor-transport.patch"
-    if [ "$framejacker_mode" = publication ] || [ "$framejacker_mode" = import ]; then
+    if [ "$framejacker_mode" = publication ] || [ "$framejacker_mode" = import ] || [ "$framejacker_mode" = resources ]; then
         for framejacker_header in capture_publication.hpp shm_common.hpp; do
             cp -- "$framejacker_root/tools/$framejacker_header" "$framejacker_sources/capture/"
         done
@@ -116,7 +118,7 @@ if [ "$framejacker_mode" != reference ]; then
             "$framejacker_root/tools/capture_publication_fixture.cpp" \
             -o "$framejacker_stage/framejacker-publication-fixture"
     fi
-    if [ "$framejacker_mode" = import ]; then
+    if [ "$framejacker_mode" = import ] || [ "$framejacker_mode" = resources ]; then
         cp -- "$framejacker_root/tools/capture_import.hpp" "$framejacker_sources/capture/"
         git -C "$framejacker_sources" apply --check \
             "$framejacker_root/patches/mrhand/0003-validated-image-import.patch"
@@ -127,6 +129,18 @@ if [ "$framejacker_mode" != reference ]; then
             -I"$framejacker_root/tools" -I"$framejacker_root/third_party/mrhand" \
             "$framejacker_root/tools/capture_import_fixture.cpp" \
             -o "$framejacker_stage/framejacker-import-fixture"
+    fi
+    if [ "$framejacker_mode" = resources ]; then
+        cp -- "$framejacker_root/tools/capture_gpu_resources.hpp" "$framejacker_sources/capture/"
+        git -C "$framejacker_sources" apply --check \
+            "$framejacker_root/patches/mrhand/0004-owned-gpu-resources.patch"
+        git -C "$framejacker_sources" apply \
+            "$framejacker_root/patches/mrhand/0004-owned-gpu-resources.patch"
+        "$framejacker_compiler" -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror \
+            -Wno-missing-field-initializers "${framejacker_includes[@]}" \
+            -I"$framejacker_root/tools" -I"$framejacker_root/third_party/mrhand" \
+            "$framejacker_root/tools/capture_gpu_resources_fixture.cpp" \
+            -o "$framejacker_stage/framejacker-gpu-resources-fixture"
     fi
     "$framejacker_compiler" -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -pthread \
         -I"$framejacker_root/tools" -I"$framejacker_root/third_party/mrhand" \
@@ -178,25 +192,32 @@ if adapted:
     report["sources"].append(digest(reference / "capture/capture_transport.hpp"))
     report["transport_patch"] = digest(Path(sys.argv[7]) / "patches/mrhand/0001-bounded-descriptor-transport.patch")
     report["notes"][2] = "Transport fixes only; GPU import, writer ordering, provider lifecycle and restoration remain pending."
-if mode in ("publication", "import"):
+if mode in ("publication", "import", "resources"):
     report["sources"].extend(digest(reference / "capture" / name)
                              for name in ("capture_publication.hpp", "shm_common.hpp"))
     report["publication_patch"] = digest(Path(sys.argv[7]) / "patches/mrhand/0002-owned-bounded-publication.patch")
     report["notes"][2] = "Publication and loop controls added; GPU import/resource cleanup, registry refresh and layer lifetime/restoration remain pending."
-if mode == "import":
+if mode in ("import", "resources"):
     report["sources"].append(digest(reference / "capture/capture_import.hpp"))
     report["import_patch"] = digest(Path(sys.argv[7]) / "patches/mrhand/0003-validated-image-import.patch")
     report["notes"][2] = "Image import validation/ownership added; real GPU support, other GPU resource cleanup/watchdog, registry and layer lifetime/restoration remain pending."
+if mode == "resources":
+    report["sources"].append(digest(reference / "capture/capture_gpu_resources.hpp"))
+    report["resource_patch"] = digest(Path(sys.argv[7]) / "patches/mrhand/0004-owned-gpu-resources.patch")
+    report["notes"][2] = "GPU ownership/bootstrap added; real driver execution, capture watchdog, provider metadata/registry and layer lifetime/restoration remain pending."
 (stage / "build-report.json").write_text(json.dumps(report, indent=2) + "\n")
 PY
 if [ "$framejacker_mode" != reference ]; then
     mv -- "$framejacker_stage/framejacker-transport-fixture" "$framejacker_build/"
 fi
-if [ "$framejacker_mode" = publication ] || [ "$framejacker_mode" = import ]; then
+if [ "$framejacker_mode" = publication ] || [ "$framejacker_mode" = import ] || [ "$framejacker_mode" = resources ]; then
     mv -- "$framejacker_stage/framejacker-publication-fixture" "$framejacker_build/"
 fi
-if [ "$framejacker_mode" = import ]; then
+if [ "$framejacker_mode" = import ] || [ "$framejacker_mode" = resources ]; then
     mv -- "$framejacker_stage/framejacker-import-fixture" "$framejacker_build/"
+fi
+if [ "$framejacker_mode" = resources ]; then
+    mv -- "$framejacker_stage/framejacker-gpu-resources-fixture" "$framejacker_build/"
 fi
 for framejacker_file in reference-libVkLayer_mrhand.so reference-ptgrab build-report.json; do
     mv -- "$framejacker_stage/$framejacker_file" "$framejacker_build/$framejacker_file"

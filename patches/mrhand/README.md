@@ -30,8 +30,18 @@ reset/submit/wait before permitting retirement. Unconfirmed completion defers
 API destruction to process teardown. Command/host-memory status checks are also
 added; none of this establishes XRService producer synchronization.
 
+`0004-owned-gpu-resources.patch` applies after patches 0001–0003. The optional
+`--resource-fixes` mode adds original `tools/capture_gpu_resources.hpp` and its
+fake-dispatch fixture. It validates bootstrap capability/queue selection, owns
+the instance/device/pool and private GPU resources, and retains the device for
+imported images. Static probe command resources are replaced with per-device
+owners. Partial construction unwinds resources; uncertain completion defers
+remaining API destruction and poisons the state until process exit. Host memory
+invalidation and a private allocation budget are enforced. Actual driver
+execution is not tested by the fixture; no XRService producer fence is supplied.
+
 Both capture binaries remain non-executable inspection artifacts. Actual GPU
-imports, device and remaining GPU resource cleanup/watchdog, registry refresh, layer lifetime and configuration
+execution, the capture watchdog, provider metadata/registry, layer lifetime and configuration
 restoration still require work before deployment. A loop deadline does not
 bound every driver call. Follow the
 [active capture plan](../../docs/live-capture.md#current-work-order) and

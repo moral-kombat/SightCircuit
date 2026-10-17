@@ -91,10 +91,12 @@ also passed on Turnip Adreno 750, reporting two memory planes for the target
 NV12 modifier, with normal passthrough throughout and afterward. The
 [validated import adaptation](docs/development.md#build-and-test-image-import-ownership)
 compiled on ARM64 and passed ten synthetic tests on Frame. The cloud suite now
-also covers the two-plane case explicitly. Finish device/other GPU resource
-cleanup, the capture watchdog and remaining provider lifecycle
-work for input independent of our output before
-continuous VR image display. Bounded recognition and snapshots shown after
+also covers the two-plane case explicitly. A separate GPU resource-ownership
+adaptation now passes nine synthetic cloud tests, including startup rollback
+and parent/child lifetime handling. Next implement the capture watchdog,
+complete provider metadata/registry and layer lifecycle/restoration, and validate
+actual driver execution before continuous VR image display from independent
+input. Bounded recognition and snapshots shown after
 capture remain useful. The model's class coverage and false positives need separate work.
 The [isolated shared-memory reader](docs/on-device.md#check-existing-luma-shared-memory)
 also passes controlled x86_64 and ARM64 tests; no dedicated capture provider has

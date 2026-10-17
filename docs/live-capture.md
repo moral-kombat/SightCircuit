@@ -16,8 +16,9 @@ layer has been deployed by Framejacker.
 | 1c | Check capture of our own display | Confirmed: the VR panel appears in captured output | Current composited mirror does not exclude our output; no continuous live-image panel from this source; [E18](status.md#e18-vr-panel-included-in-mirror-input) |
 | 1d | Detector quality and class coverage | Needs evaluation | Include the rug false positive; select supported target classes and evaluate correct labels, boxes and misses before claiming useful accuracy |
 | 2 | Isolated shared-memory reader and controlled producer | Controlled x86_64 and Frame ARM64 checks passed; real provider unverified | All 14 native/supervisor tests pass on Frame; upstream writer ordering and original GPU completion remain unresolved; [E23](status.md#e23-reference-build-and-controlled-reader-on-frame) |
-| 3 | Dedicated camera provider | Transport/publication/import tests and GPU capability query pass on Frame; not deployed | Finish device/other GPU resource cleanup, capture watchdog, registry and layer lifetime/restoration; physical source and built-in support unresolved |
+| 3 | Dedicated camera provider | Initial tests and GPU query pass on Frame; GPU ownership adaptation cloud-tested; not deployed | Next implement capture supervision, then finish metadata/registry and layer lifetime/restoration; physical source and built-in support unresolved |
 | 3a | Validated image import and ownership | ARM64 build and ten synthetic tests passed; two-plane coverage added in cloud | Actual camera DMA-BUF import remains untested; [E31](status.md#e31-import-build-and-synthetic-tests-on-frame), [E32](status.md#e32-two-plane-import-fixture-cloud-checks) |
+| 3b | Device and remaining GPU resource ownership | Inspection build and nine synthetic cloud tests pass | Native ARM64 and actual driver execution pending; no activation; [E33](status.md#e33-gpu-resource-ownership-cloud-checks) |
 | 4 | Capture-only device trial | Planned | Ten seconds of fresh images from one identified source, correct orientation, clean exit and working normal passthrough |
 | 5 | Continuous live input in the existing display | Planned; needs input independent of our output | Reuse detector/display after a dedicated provider or supported overlay-excluded mirror mode is validated; current mirror includes the panel |
 | 6 | Color, built-in camera support and later geometry | Planned | Validate each source and color conversion separately; require calibration and stronger timing evidence before stereo depth or spatial labels |
@@ -70,8 +71,9 @@ now passes on Frame, with normal passthrough; see
 [E30](status.md#e30-vulkan-capabilities-on-frame). The import adaptation also
 builds and passes all ten synthetic tests on ARM64; see
 [E31](status.md#e31-import-build-and-synthetic-tests-on-frame). Continue device
-and remaining resource ownership, the capture watchdog and provider/layer lifetime
-work before the next camera trial. The inspection builds are not
+and remaining provider work before the next camera trial. GPU resource ownership
+is now implemented in a separate cloud-tested inspection adaptation; capture
+supervision is next. The inspection builds are not
 deployment-ready. Identify the selected source
 during capture validation; connection alone does not identify past mirror frames.
 Prefer a supported interface; the reviewed
@@ -225,13 +227,20 @@ possibly active resources or adding an unbounded device-idle wait. This does
 not supply XRService's missing producer fence. The real capture binaries stay
 non-executable, and no layer has been installed or activated.
 
+The `--resource-fixes` adaptation now owns the instance/device/pool, host mappings,
+private images, command buffers/fences and imported-image device references.
+It removes static command resources, validates bootstrap capabilities and bounds
+private allocations. Nine synthetic tests pass, with 57 injected failures in
+the startup/private-resource path. This is not actual driver or ARM64 execution;
+see [E33](status.md#e33-gpu-resource-ownership-cloud-checks).
+
 The next engineering work does not need another unchanged query or import test:
 
 1. Extend the buffer contract where needed for exporter flags/sharing and device
    provenance. The initial importer rejects arrayed images because array-stride
-   metadata is absent. Finish device/bootstrap, host-buffer, downscaler, command/fence and mapped
-   memory ownership, including rollback after every partial initialization.
-   The import owner does not complete cleanup for these other resources.
+   metadata is absent. GPU bootstrap and resource ownership are implemented in
+   the resource adaptation; retain native and actual-driver validation as
+   separate checks. The earlier `--import-fixes` mode does not include them.
 2. Add a supervised capture worker with a deadline around all driver calls and
    explicit reporting when API cleanup or file recovery is unconfirmed.
 3. Handle registry changes/provider loss by stopping before using old image
@@ -253,6 +262,22 @@ or physical-device provenance. Actual image imports remain untested; ARM64
 compile/link and synthetic helper execution are confirmed. Keep the source-buffer
 synchronization review and capture-only trial
 as separate acceptance gates.
+
+## Next engineering step: capture worker supervision
+
+Put the resource adaptation behind an external process watchdog before any real
+driver/camera trial. Supervise startup, import, copy and destruction calls;
+driver calls can block even when the stream loop checks a deadline. Preserve
+signal/cancellation handling, parent-death containment, bounded output and reaping.
+Report graceful API cleanup separately from forced process termination, and
+recover only identity-checked publication files belonging to that worker.
+This supervisor is not yet implemented; the existing GPU-query watchdog does
+not supervise capture.
+
+Then address provider generation/loss, missing exporter metadata and layer/server
+lifetime, followed by exact installation/restoration preparation. Keep the
+XRService producer synchronization/ownership review separate from our own queue
+completion gate. No live-capture command is ready yet.
 
 ## Next provider step: query GPU capabilities
 
@@ -276,9 +301,9 @@ the next implementation change rather than trigger a camera trial.
 
 Image import validation/ownership is implemented in the inspection adaptation
 above, and its initial ten-test suite passes on ARM64. Use the actual report for
-GPU selection and capability policy;
-finish ownership for the remaining GPU resources and an external process
-watchdog around capture driver calls. The query's supervisor is not yet a capture
+GPU selection and capability policy. The separate GPU resource adaptation now
+supplies ownership for other resources.
+Next add an external process watchdog around capture driver calls. The query's supervisor is not yet a capture
 supervisor. Do not infer XRService completion from our own command fence or
 from a successful CPU publication. Review producer synchronization/ownership
 before any live import. Registry changes, provider loss and layer lifecycle

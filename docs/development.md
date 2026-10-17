@@ -504,14 +504,76 @@ the eleventh two-plane case has only been run in the cloud. The GPU query report
 two modifier memory planes and dedicated-only imports on Turnip Adreno 750;
 see [E30](status.md#e30-vulkan-capabilities-on-frame) and
 [E31](status.md#e31-import-build-and-synthetic-tests-on-frame).
-Compile/link and synthetic tests do not validate a real import. Device
-selection/bootstrap, host/downscaler/command resource cleanup, capture watchdog,
-registry refresh and layer lifetime/restoration still need work. See the
+Compile/link and synthetic tests do not validate a real import. The earlier
+import-only mode still leaves device and other GPU resources unmanaged; the
+resource adaptation below addresses those lifetimes. Capture supervision,
+provider metadata/registry and layer lifetime/restoration remain pending. See the
 [offline work order](live-capture.md#offline-provider-work-while-the-frame-is-unavailable)
 and [optional native fixture procedure](on-device.md#test-import-ownership-without-capture).
 
 [dedicated-allocation]: https://github.com/KhronosGroup/Vulkan-Docs/blob/v1.4.309/chapters/memory.adoc#VUID-VkMemoryDedicatedAllocateInfo-image-02964
 [modifier-layout]: https://github.com/KhronosGroup/Vulkan-Docs/blob/v1.4.309/chapters/resources.adoc#VkImageDrmFormatModifierExplicitCreateInfoEXT
+
+### Build and test GPU resource ownership
+
+```bash
+bash scripts/build_capture_reference.sh --resource-fixes &&
+python3 -m unittest discover -s tests -p test_capture_gpu_resources.py -v
+```
+
+This fifth mode applies patches 0001–0004 to disposable pinned source and adds
+`tools/capture_gpu_resources.hpp`. Separate artifacts/report live under
+`artifacts/capture-resources-reference/`; the report includes the new helper and
+patch hashes. The real layer/producer remain non-executable inspection binaries
+and are never loaded/run by this procedure. Only the original synthetic fixture
+runs. It defines `VK_NO_PROTOTYPES`, links no Vulkan loader and uses injected
+function pointers, fake handles and a generated memfd for import lifetime tests.
+
+Bootstrap requires loader/device Vulkan 1.3, the four reviewed import extensions,
+YCbCr conversion, graphics queues, host-visible/cached and device-local memory,
+and the reviewed R8 downscaling capabilities. Counts are bounded. CPU devices
+are excluded; multiple compatible hardware candidates are rejected for explicit
+selection instead of choosing the first. This capability policy does not prove
+which physical device exported a camera FD. NV12/modifier/FD checks still occur
+per import through the existing import helper.
+
+One shared state owns instance, device, command pool and the serial-queue
+completion gate. Move-only private resources and imported-image wrappers retain
+that state until their own destruction. Host buffers own their mapping and
+memory; R8 images own dedicated memory; command bundles own buffer/fence pairs.
+Normal teardown unmaps, destroys resources before freeing bound memory, and
+releases pool/device/instance last. Explicit device close refuses live children.
+Imported images also retain the device across wrapper moves and parent scope exit.
+
+Private allocations use exact dedicated requirement sizes, compatible memory
+types and a **256 MiB aggregate budget**. Host buffer requests are capped at
+64 MiB; scratch dimensions at 2464 × 2464. Coherent cached host memory is
+preferred; cached noncoherent memory has checked invalidation over the whole
+mapped allocation. The budget covers new private allocations, not the imported
+shared camera allocations bounded separately by the import/transport contract.
+
+If submitted work is unconfirmed, all remaining resource/parent API destruction
+is deferred to process teardown. A deferred state stays unusable even if a later
+caller marks its queue idle; it cannot recover abandoned handles. No unbounded
+device-idle wait is added. Individual create/destroy calls can still hang, so the
+capture watchdog remains necessary before actual driver execution. This gate
+tracks only our queue and does not synchronize XRService's writes.
+
+Nine tests execute eight native groups plus default/argument guards. They
+exercise normal and partial teardown, 57 injected failures (three passes over
+19 fallible startup/private-resource calls), graphics-family selection,
+ambiguous devices, API/count/size/budget limits, noncoherent fallback, memory
+bit 31, moves, child-retained devices, cross-context imported-image moves, and
+deferred cleanup. The fake backend checks the resource graph and models process
+reclamation separately from graceful Vulkan destruction. Missing fixture builds
+produce explicit skips; CI builds this mode before running its tests.
+
+This implementation is cloud-tested with fake dispatch, not actual logical-device
+creation, command execution or Frame ARM64 validation. The
+[native fixture procedure](on-device.md#test-gpu-resource-ownership-without-capture)
+can be batched with a later milestone. Follow the
+[next work order](live-capture.md#next-engineering-step-capture-worker-supervision)
+before deployment.
 
 ## Isolated luma reader and synthetic producer
 

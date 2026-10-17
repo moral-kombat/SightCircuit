@@ -1,0 +1,253 @@
+diff --git a/capture/ptgrab.cpp b/capture/ptgrab.cpp
+index 490c1d6..4b8f7e3 100644
+--- a/capture/ptgrab.cpp
++++ b/capture/ptgrab.cpp
+@@ -29,6 +29,7 @@
+ #include "capture_transport.hpp"
+ #include "capture_publication.hpp"
+ #include "capture_import.hpp"
++#include "capture_gpu_resources.hpp"
+ #include <sys/resource.h>
+ 
+ #define CHECK(x) do { VkResult r_ = (x); if (r_ != VK_SUCCESS) { fprintf(stderr, "%s:%d %s -> %d\n", __FILE__, __LINE__, #x, r_); throw std::runtime_error("Vulkan_operation_failed"); } } while (0)
+@@ -46,98 +47,45 @@ static std::vector<Buf> fetchBuffers() {
+ }
+ 
+ struct Gpu {
+-    VkInstance inst;
+-    VkPhysicalDevice phys;
+-    VkDevice dev;
+-    VkQueue queue;
++    framejacker::gpu::Device device;
++    framejacker::gpu::Resource probeCommands;
++    VkDevice dev = VK_NULL_HANDLE;
++    VkQueue queue = VK_NULL_HANDLE;
+     uint32_t qfam = 0;
+-    VkCommandPool pool;
+-    VkPhysicalDeviceMemoryProperties mp;
+-    PFN_vkGetMemoryFdPropertiesKHR getFdProps;
+-    framejacker::capture_import::Completion importCompletion;
+-
+     void init() {
+-        VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+-        app.pApplicationName = "ptgrab";
+-        app.apiVersion = VK_API_VERSION_1_3;
+-        VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+-        ici.pApplicationInfo = &app;
+-        CHECK(vkCreateInstance(&ici, nullptr, &inst));
+-        uint32_t n = 1;
+-        vkEnumeratePhysicalDevices(inst, &n, &phys);
+-        vkGetPhysicalDeviceMemoryProperties(phys, &mp);
+-        uint32_t qn = 0;
+-        vkGetPhysicalDeviceQueueFamilyProperties(phys, &qn, nullptr);
+-        std::vector<VkQueueFamilyProperties> qp(qn);
+-        vkGetPhysicalDeviceQueueFamilyProperties(phys, &qn, qp.data());
+-        for (uint32_t i = 0; i < qn; i++)
+-            if (qp[i].queueFlags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) { qfam = i; break; }
+-        float prio = 0.0f;   // lowest priority: never compete with the compositor
+-        VkDeviceQueueCreateInfo q{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
+-        q.queueFamilyIndex = qfam;
+-        q.queueCount = 1;
+-        q.pQueuePriorities = &prio;
+-        const char *exts[] = {"VK_KHR_external_memory_fd", "VK_EXT_external_memory_dma_buf",
+-                              "VK_EXT_image_drm_format_modifier", "VK_EXT_queue_family_foreign"};
+-        VkPhysicalDeviceVulkan11Features f11{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES};
+-        f11.samplerYcbcrConversion = VK_TRUE;
+-        VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, &f11};
+-        dci.queueCreateInfoCount = 1;
+-        dci.pQueueCreateInfos = &q;
+-        dci.enabledExtensionCount = 4;
+-        dci.ppEnabledExtensionNames = exts;
+-        CHECK(vkCreateDevice(phys, &dci, nullptr, &dev));
+-        vkGetDeviceQueue(dev, qfam, 0, &queue);
+-        VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+-        pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+-        pci.queueFamilyIndex = qfam;
+-        CHECK(vkCreateCommandPool(dev, &pci, nullptr, &pool));
+-        getFdProps = (PFN_vkGetMemoryFdPropertiesKHR)vkGetDeviceProcAddr(dev, "vkGetMemoryFdPropertiesKHR");
++        device = framejacker::gpu::Device::open(framejacker::gpu::system_api());
++        dev = device.handle(); queue = device.queue(); qfam = device.family();
+     }
+-    uint32_t memType(uint32_t bits, VkMemoryPropertyFlags want) {
+-        for (uint32_t i = 0; i < mp.memoryTypeCount; i++)
+-            if ((bits & (1u << i)) && (mp.memoryTypes[i].propertyFlags & want) == want) return i;
+-        fprintf(stderr, "no memory type for bits 0x%x\n", bits);
+-        throw std::runtime_error("Vulkan_memory_type_unavailable");
++    bool close() {
++        const bool commandsClosed = probeCommands.close();
++        const bool deviceClosed = device.close();
++        dev = VK_NULL_HANDLE; queue = VK_NULL_HANDLE;
++        return commandsClosed && deviceClosed;
+     }
+ };
+ 
+ struct CamImage {
+     MrhandBufInfo info;
+     VkImage img;
+-    framejacker::capture_import::Image owned;
++    framejacker::gpu::ImportedImage owned;
+ };
+ 
+ static CamImage importImage(Gpu &g, const Buf &b) {
+-    using namespace framejacker::capture_import;
+-    Context context;
+-    context.physical = g.phys; context.device = g.dev; context.memory = g.mp;
+-    context.completion = &g.importCompletion;
+-    context.api = {vkGetPhysicalDeviceFormatProperties2, vkGetPhysicalDeviceImageFormatProperties2,
+-                   g.getFdProps, vkCreateImage, vkDestroyImage, vkGetImageMemoryRequirements2,
+-                   vkAllocateMemory, vkFreeMemory, vkBindImageMemory};
+-    auto owned = import_image(context, b.info, b.fd.get());
++    auto owned = g.device.import_image(b.info, b.fd.get());
+     VkImage image = owned.image();
+     return {b.info, image, std::move(owned)};
+ }
+ 
+-struct HostBuf { VkBuffer buf; VkDeviceMemory mem; void *ptr; VkDeviceSize size; };
++struct HostBuf {
++    framejacker::gpu::Resource owned;
++    VkBuffer buf = VK_NULL_HANDLE;
++    void *ptr = nullptr;
++    VkDeviceSize size = 0;
++};
+ static HostBuf hostBuffer(Gpu &g, VkDeviceSize size) {
+-    HostBuf h{};
+-    h.size = size;
+-    VkBufferCreateInfo bc{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+-    bc.size = size;
+-    bc.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+-    CHECK(vkCreateBuffer(g.dev, &bc, nullptr, &h.buf));
+-    VkMemoryRequirements req;
+-    vkGetBufferMemoryRequirements(g.dev, h.buf, &req);
+-    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, nullptr, req.size,
+-                            g.memType(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+-                                                              VK_MEMORY_PROPERTY_HOST_CACHED_BIT)};
+-    CHECK(vkAllocateMemory(g.dev, &ai, nullptr, &h.mem));
+-    CHECK(vkBindBufferMemory(g.dev, h.buf, h.mem, 0));
+-    CHECK(vkMapMemory(g.dev, h.mem, 0, VK_WHOLE_SIZE, 0, &h.ptr));
+-    return h;
++    auto owned = g.device.host_buffer(size);
++    VkBuffer buffer = owned.buffer(); void *mapped = owned.mapped();
++    return {std::move(owned), buffer, mapped, size};
+ }
+ 
+ // PTGRAB_QFOT=0: no queue-family ownership transfer from FOREIGN (plain read barrier) — banding A/B test
+@@ -155,15 +103,9 @@ struct Region { size_t image; uint32_t y0, rows; VkDeviceSize dstOffset; };
+ 
+ // Copy luma rows [y0, y0+rows) of the given images into dst (tightly packed).
+ static void copyRegions(Gpu &g, std::vector<CamImage> &ims, const std::vector<Region> &regs, HostBuf &dst) {
+-    static VkCommandBuffer cb = VK_NULL_HANDLE;
+-    static VkFence fence = VK_NULL_HANDLE;
+-    if (!cb) {
+-        VkCommandBufferAllocateInfo ca{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, nullptr, g.pool,
+-                                       VK_COMMAND_BUFFER_LEVEL_PRIMARY, 1};
+-        CHECK(vkAllocateCommandBuffers(g.dev, &ca, &cb));
+-        VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+-        CHECK(vkCreateFence(g.dev, &fci, nullptr, &fence));
+-    }
++    if (!g.probeCommands.command()) g.probeCommands = g.device.commands();
++    const VkCommandBuffer cb = g.probeCommands.command();
++    const VkFence fence = g.probeCommands.fence();
+     VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+     CHECK(vkResetCommandBuffer(cb, 0));
+@@ -190,10 +132,9 @@ static void copyRegions(Gpu &g, std::vector<CamImage> &ims, const std::vector<Re
+     VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+     si.commandBufferCount = 1;
+     si.pCommandBuffers = &cb;
+-    framejacker::capture_import::submit_and_wait(g.importCompletion,
++    framejacker::capture_import::submit_and_wait(g.device.completion(),
+         {vkResetFences, vkQueueSubmit, vkWaitForFences}, g.dev, g.queue, fence, si);
+-    VkMappedMemoryRange mr{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, dst.mem, 0, VK_WHOLE_SIZE};
+-    CHECK(vkInvalidateMappedMemoryRanges(g.dev, 1, &mr));
++    dst.owned.invalidate();
+ }
+ 
+ // GPU downscale of one camera's luma plane: plane0 -> R8 full -> R8 half-ish -> R8 out
+@@ -202,41 +143,19 @@ static void copyRegions(Gpu &g, std::vector<CamImage> &ims, const std::vector<Re
+ struct Downscaler {
+     uint32_t outSize = 640;
+     VkImage full = VK_NULL_HANDLE, mid = VK_NULL_HANDLE, out = VK_NULL_HANDLE;
+-    VkDeviceMemory mem[3] = {};
++    framejacker::gpu::Resource images[3];
+     HostBuf host{};
++    framejacker::gpu::Resource commands;
+     VkCommandBuffer cb = VK_NULL_HANDLE;
+     VkFence fence = VK_NULL_HANDLE;
+-
+-    VkImage makeImage(Gpu &g, uint32_t w, uint32_t h, VkDeviceMemory &m) {
+-        VkImageCreateInfo ic{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+-        ic.imageType = VK_IMAGE_TYPE_2D;
+-        ic.format = VK_FORMAT_R8_UNORM;
+-        ic.extent = {w, h, 1};
+-        ic.mipLevels = ic.arrayLayers = 1;
+-        ic.samples = VK_SAMPLE_COUNT_1_BIT;
+-        ic.tiling = VK_IMAGE_TILING_OPTIMAL;
+-        ic.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+-        VkImage img;
+-        CHECK(vkCreateImage(g.dev, &ic, nullptr, &img));
+-        VkMemoryRequirements req;
+-        vkGetImageMemoryRequirements(g.dev, img, &req);
+-        VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, nullptr, req.size,
+-                                g.memType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)};
+-        CHECK(vkAllocateMemory(g.dev, &ai, nullptr, &m));
+-        CHECK(vkBindImageMemory(g.dev, img, m, 0));
+-        return img;
+-    }
+     void init(Gpu &g, uint32_t W, uint32_t size) {
++        if (W != 2464 || size != 640) throw std::runtime_error("unsupported_downscaler_profile");
+         outSize = size;
+-        full = makeImage(g, W, W, mem[0]);
+-        mid = makeImage(g, size * 2, size * 2, mem[1]);
+-        out = makeImage(g, size, size, mem[2]);
++        images[0] = g.device.image(W, W); full = images[0].image();
++        images[1] = g.device.image(size * 2, size * 2); mid = images[1].image();
++        images[2] = g.device.image(size, size); out = images[2].image();
+         host = hostBuffer(g, (VkDeviceSize)size * size);
+-        VkCommandBufferAllocateInfo ca{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, nullptr, g.pool,
+-                                       VK_COMMAND_BUFFER_LEVEL_PRIMARY, 1};
+-        CHECK(vkAllocateCommandBuffers(g.dev, &ca, &cb));
+-        VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+-        CHECK(vkCreateFence(g.dev, &fci, nullptr, &fence));
++        commands = g.device.commands(); cb = commands.command(); fence = commands.fence();
+     }
+     static void barrier(VkCommandBuffer cb, VkImage img, VkImageLayout from, VkImageLayout to, VkAccessFlags src,
+                         VkAccessFlags dst, VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT,
+@@ -294,10 +213,9 @@ struct Downscaler {
+         VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+         si.commandBufferCount = 1;
+         si.pCommandBuffers = &cb;
+-        framejacker::capture_import::submit_and_wait(g.importCompletion,
++        framejacker::capture_import::submit_and_wait(g.device.completion(),
+             {vkResetFences, vkQueueSubmit, vkWaitForFences}, g.dev, g.queue, fence, si);
+-        VkMappedMemoryRange mr{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, host.mem, 0, VK_WHOLE_SIZE};
+-        CHECK(vkInvalidateMappedMemoryRanges(g.dev, 1, &mr));
++        host.owned.invalidate();
+         return (const uint8_t *)host.ptr;
+     }
+ };
+@@ -436,18 +354,21 @@ int main(int argc, char **argv) {
+                 ims.push_back(importImage(g, buffer));
+             }
+         if (!limit.running()) throw Error("capture_cancelled");
++        int code = 1;
+         try {
+-            const int code = stream(g, ims, options.fps, 640, limit);
++            code = stream(g, ims, options.fps, 640, limit);
+             ims.clear();
+-            if (g.importCompletion.cleanup_deferred) throw Error("import_cleanup_deferred");
++            if (g.device.completion().cleanup_deferred) throw Error("import_cleanup_deferred");
+             printf("{\"event\":\"imports_closed\",\"gpu_import_cleanup_ok\":true}\n");
+-            return code;
+         } catch (...) {
+             ims.clear();
+-            if (g.importCompletion.cleanup_deferred)
++            if (g.device.completion().cleanup_deferred)
+                 fprintf(stderr, "GPU import cleanup deferred: submitted work completion unconfirmed\n");
+             throw;
+         }
++        if (!g.close()) throw Error("gpu_resource_cleanup_deferred");
++        printf("{\"event\":\"gpu_resources_closed\",\"gpu_resource_cleanup_ok\":true}\n");
++        return code;
+     } catch (const std::exception &error) {
+         fprintf(stderr, "bounded capture failed: %s\n", error.what());
+         return 1;

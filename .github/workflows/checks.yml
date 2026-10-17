@@ -43,6 +43,10 @@ jobs:
         run: |
           bash scripts/build_capture_reference.sh --import-fixes
           python3 -m unittest discover -s tests -p test_capture_import.py -v
+      - name: Build GPU resource adaptation and verify synthetic lifecycle failures
+        run: |
+          bash scripts/build_capture_reference.sh --resource-fixes
+          python3 -m unittest discover -s tests -p test_capture_gpu_resources.py -v
       - name: Check inspection artifacts without executing them
         run: |
           python3 - <<'PY'
@@ -53,7 +57,8 @@ jobs:
           for directory, status, adapted in (('capture-reference', 'built_reference', False),
                                              ('capture-transport-reference', 'built_transport_reference', True),
                                              ('capture-publication-reference', 'built_publication_reference', True),
-                                             ('capture-import-reference', 'built_import_reference', True)):
+                                             ('capture-import-reference', 'built_import_reference', True),
+                                             ('capture-resources-reference', 'built_resources_reference', True)):
               root = Path('artifacts') / directory
               report = json.loads((root / 'build-report.json').read_text())
               assert report['status'] == status
