@@ -939,7 +939,7 @@ python3 scripts/capture_layer_config.py --prepare artifacts/capture-layer-plan-v
 python3 scripts/capture_layer_trial.py --preflight artifacts/capture-layer-plan-v3-trial
 ```
 
-Current suites contain **14, 12 and 23 tests**, with no skips; the original
+Current suites contain **14, 12 and 24 tests**, with no skips; the original
 preparation expected `prepared_inactive_bundle`
 and `preflight_passed`. If the new directory already exists, preserve it and
 use a different new name throughout. Preflight requires matching current
@@ -1050,6 +1050,31 @@ Share this output. It does not expose the service environment or backup plan.
 If the journal has no matching entries, record that result; do not restart the
 experiment to generate more logs. The corrected runner adds phase and safe
 operation diagnostics for offline testing; it remains blocked for activation.
+
+### Inspect the service relationships without restarting
+
+The focused journal and policy query were received; see
+[E42](status.md#e42-focused-service-window-and-restart-policy-on-frame).
+Manual start/stop are allowed. The worker failed while SteamVR was stopping;
+SteamVR started again after the rollback error. `Restart=always` alone does
+not explain that sequence. Keep the working headset running and do not repeat
+the trial or rollback.
+
+Pull the diagnostic update, then query service relationships and executable
+paths on Frame. This changes repository files only; the diagnostic performs
+one `systemctl show` query and makes no runtime/configuration change:
+
+```bash
+cd "$HOME/framejacker" &&
+git pull --ff-only &&
+python3 scripts/capture_layer_trial.py --service-details
+```
+
+Expect `status: service_details`, exit 0, `activation_requested: false`, and
+service relationships plus executable paths for start/stop hooks. Command
+arguments and environment values are omitted. Share the JSON report. No
+rebuild is needed. The activation pause stays in place while the unit
+relationships/launcher behavior are reviewed.
 
 ### Check existing luma shared memory
 
@@ -1256,8 +1281,12 @@ shows a passing dummy recovery rehearsal, followed by worker and rollback
 systemctl errors. Configuration restoration is reported; SteamVR was later
 active/no drop-ins, with working UI/passthrough. No inspection report was produced
 and actual layer loading is unverified. Activation is blocked while a focused
-read-only journal query diagnoses the service failure. Do not repeat the trial
-or rollback on the working headset. Current trial tests number 23 in cloud.
+read-only service query diagnoses the service failure. The focused journal
+shows stopping at 10:36:41, worker failure at :42, stopped/rollback error at :46,
+and startup at :47–48. Manual start/stop are allowed; Restart=always and a zero
+restart counter do not establish what initiated startup. Next read service
+relationships with --service-details. Do not repeat the trial or rollback on
+the working headset. Current trial tests number 24 in cloud.
 Physical camera identity and scene freshness remain unverified.
 GPU device/resource ownership is implemented in --resource-fixes and has nine
 synthetic cloud tests passed, including 57 injected startup/resource errors.

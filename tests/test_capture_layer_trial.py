@@ -316,6 +316,26 @@ class MetadataLayerTrialTests(unittest.TestCase):
             self.assertNotIn("stderr", caught.exception.details)
             self.assertNotIn("private", str(caught.exception.details))
 
+    def test_service_details_only_reads_status_and_redacts_command_arguments(self):
+        text = ("Id=steamvr.service\nRestart=always\nAfter=graphical-session.target\n"
+                "ExecStart={ path=/usr/bin/launcher ; argv[]=/usr/bin/launcher private-argument ; ignore_errors=no ; }\n"
+                "ExecStop=\nEnvironment=SECRET=private-environment\nUnrequested=private-unknown\n")
+        completed = subprocess.CompletedProcess([], 0, text, "")
+        output = io.StringIO()
+        with patch.object(trial.subprocess, "run", return_value=completed) as run, \
+             contextlib.redirect_stdout(output):
+            self.assertEqual(trial.main(["--service-details"]), 0)
+        report = json.loads(output.getvalue())
+        self.assertEqual(report["status"], "service_details")
+        self.assertFalse(report["activation_requested"])
+        self.assertEqual(report["service"]["ExecStart"], {"executables": ["/usr/bin/launcher"], "arguments_included": False})
+        self.assertNotIn("private", output.getvalue())
+        args = run.call_args.args[0]
+        self.assertEqual(args[:4], ["systemctl", "--user", "show", trial.SERVICE])
+        self.assertFalse(any("Environment" in value for value in args))
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(list(self.home.iterdir()), [])
+
     def test_partial_installation_is_recovered_after_write_failure(self):
         run = self.create()
         write = config.write_entry

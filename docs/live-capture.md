@@ -253,12 +253,13 @@ metadata-diagnostic tests; see [E37](status.md#e37-metadata-only-provider-and-di
 
 Remaining work does not need another unchanged GPU query or initial import test:
 
-1. Read the focused 10:36 service-failure window from the existing journal.
-   The saved reports were received; uptime and user observations confirm a
-   SteamVR restart followed by working UI/passthrough. Do not repeat activation.
-2. Identify the failed service operation and adapt service control only after
-   that evidence. Configuration restoration is reported, but the restart command
-   failed and later service activation is unexplained. Require independent
+1. Read service relationships and launcher executable paths with `--service-details`.
+   The focused journal is received: manual start/stop are allowed, with the
+   worker failing during shutdown and later startup after rollback's error.
+   Do not repeat activation or rollback on the working headset.
+2. Identify the controller/launcher sequencing and failed operation before
+   adapting service control. `Restart=always` alone does not explain an explicit
+   stop followed by startup, and the restart counter is zero. Require independent
    access before reassessing the device gate; keep image access disabled.
 3. Establish a coordinated producer release/ready/return contract or design a
    copy within the compositor's existing synchronized access window. Validate

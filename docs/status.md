@@ -31,7 +31,7 @@ unknown unless explicitly recorded below.
 | Capture watchdog, provider/layer lifecycle and exact recovery | Earlier v2 milestone passed all 28 generated-data tests on Frame ARM64 | Bounded worker, metadata/GPU provenance, registry changes, owned endpoint and conditional restoration; no real driver/layer execution or device restoration; [E35](#e35-watchdog-provider-and-recovery-tests-on-frame) |
 | Metadata-only provider and producer synchronization review | v3 ARM64 build and all 24 generated-data tests passed on Frame | Layer retains/exports no image FDs; no real layer activation or live camera access; controlled load/restoration remains next; [E36](#e36-metadata-only-provider-and-synchronization-review), [E37](#e37-metadata-only-provider-and-diagnostic-on-frame) |
 | Inactive v3 bundle and SteamVR service preflight | Frame report received | Bundle prepared without activation; active simple/control-group user service, 20-second stop timeout, no drop-ins; [E38](#e38-inactive-bundle-and-steamvr-service-on-frame) |
-| Bounded metadata-layer trial and post-exit recovery | Paused after service-control failures on Frame | Rehearsal ran; rollback reports configuration restored, but service restart returned an error; later SteamVR active/no drop-ins and normal UI/passthrough confirmed; no inspection report; [E41](#e41-frame-trial-report-and-service-control-failures) |
+| Bounded metadata-layer trial and post-exit recovery | Paused after service-control failures on Frame | Rollback reports configuration restored; later SteamVR/UI/passthrough work. Manual start/stop allowed; stop/start sequencing and exact failed command unresolved; no inspection report; [E41](#e41-frame-trial-report-and-service-control-failures), [E42](#e42-focused-service-window-and-restart-policy-on-frame) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
 | Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; no source-identified built-in-camera frames have been received |
 | Stereo depth and world-space labels | Planned | Calibration, depth and pose/timebase alignment remain unresolved |
@@ -1302,6 +1302,51 @@ stderr. The 23 cloud trial tests pass, including phase attribution, service
 errors and environment-output exclusion; no Frame service operation was repeated.
 The [focused read-only diagnostic](on-device.md#read-the-service-failure-window)
 is the next step. Raw journals and unrelated user identifiers remain outside Git.
+
+### E42: Focused service window and restart policy on Frame
+
+Source: user-supplied focused journal for 2026-10-17 10:36:30–10:37:05 Eastern,
+plus current service policy. The paste also repeats E41's collector output; it
+is not a second trial. Exact time of the new policy query was not included.
+The grep/line-limited journal is displayed in descending time order. Reordered
+chronologically, it shows:
+
+| Time, Eastern | Observation |
+| --- | --- |
+| 10:36:38 | Trial worker service starts |
+| 10:36:41 | SteamVR Launcher begins stopping |
+| 10:36:42 | Worker reports the generic systemctl error and exits 1 |
+| 10:36:44 | Previous XRService manager reports stopping monitoring |
+| 10:36:46 | SteamVR Launcher is stopped; rollback reports configuration restored but an unconfirmed service start/error |
+| 10:36:47 | SteamVR Launcher begins starting |
+| 10:36:48 | SteamVR Launcher is started; later service status is success |
+
+Policy reports `RefuseManualStart=no`, `RefuseManualStop=no`, `Restart=always`,
+`RestartUSec=100ms`, `NRestarts=0`, `ExecMainStatus=0`, and active-enter time
+10:36:48 EDT. Manual-operation refusal is not the explanation. `Restart=always`
+does not establish who initiated the later start: normal systemd semantics
+suppress automatic restart after an explicit stop, and the observed counter
+is zero. Relationships, other controllers and launcher behavior remain to be
+reviewed before changing service control. See the
+[systemd v257 reference](https://github.com/systemd/systemd/blob/v257/man/systemd.service.xml)
+for semantics; this is not a new Frame systemd-version measurement.
+
+During the 10:36:48 startup, systemd reports leftover cgroup processes, including
+vrcompositor, XRService, vrserver and dashboard helpers. The logs alone do not
+establish whether these were older survivors or processes created during startup.
+That startup also prints Gamescope non-hooked-swapchain errors, CAP_SYS_NICE/
+process-capability warnings, and an XRService ONNX discovery warning. They occur
+after the 10:36:42 worker failure and 10:36:46 rollback error; their causal role
+and baseline frequency are unverified. They do not prove Framejacker image
+import, model execution or a camera hardware failure.
+
+The original command stderr is still missing, so the exact failed systemctl
+operation remains unresolved. The new `--service-details` mode performs one
+read-only query for allowlisted service relationships/status and Exec* executable
+paths. It excludes command arguments, environment values and unrequested fields.
+All 24 cloud trial tests pass, including output exclusion and no activation for
+this mode. No device mutation or new camera trial was performed. Continue with
+[the read-only service topology report](on-device.md#inspect-the-service-relationships-without-restarting).
 
 ## Maintaining the evidence
 

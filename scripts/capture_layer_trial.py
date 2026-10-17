@@ -27,6 +27,14 @@ EXPECTED = {"LoadState": "loaded", "ActiveState": "active", "SubState": "running
             "Type": "simple", "KillMode": "control-group", "TimeoutStopUSec": "20s",
             "FragmentPath": "/usr/lib/systemd/user/steamvr.service", "DropInPaths": ""}
 PROPERTIES = (*EXPECTED, "MainPID", "ControlGroup")
+SERVICE_DETAIL_PROPERTIES = (
+    "Id", "LoadState", "ActiveState", "SubState", "Result", "Type", "MainPID", "ControlGroup",
+    "Restart", "RestartUSec", "NRestarts", "RefuseManualStart", "RefuseManualStop",
+    "Before", "After", "Requires", "Requisite", "Wants", "BindsTo", "PartOf", "Conflicts",
+    "Upholds", "UpheldBy", "PropagatesStopTo", "StopPropagatedFrom", "StopWhenUnneeded",
+    "JobTimeoutUSec", "JobRunningTimeoutUSec", "KillMode", "SendSIGKILL", "TimeoutStopUSec",
+    "FragmentPath", "DropInPaths")
+SERVICE_EXEC_PROPERTIES = ("ExecCondition", "ExecStartPre", "ExecStart", "ExecStartPost", "ExecStop", "ExecStopPost")
 FLAG_NAMES = {"FRAMEJACKER_CAPTURE_LAYER", "FRAMEJACKER_DISABLE_CAPTURE_LAYER"}
 RUNS = ROOT / "artifacts/metadata-trials"
 ACTIVATION_BLOCKED_REASON = "service_control_failure_unresolved"
@@ -72,6 +80,21 @@ class Systemd:
         import shlex
         names.update(word.split("=", 1)[0] for word in shlex.split(service))
         return sorted(names & FLAG_NAMES)
+
+    def details(self):
+        fields = (*SERVICE_DETAIL_PROPERTIES, *SERVICE_EXEC_PROPERTIES)
+        text = command(["systemctl", "--user", "show", SERVICE,
+                        *("--property=" + field for field in fields)], timeout=5)
+        raw = dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
+        # Return only the allowlisted relationship/status fields. Exec* values
+        # contain argv and other data; retain their executable paths only.
+        result = {name: raw[name] for name in SERVICE_DETAIL_PROPERTIES if name in raw}
+        for name in SERVICE_EXEC_PROPERTIES:
+            if name in raw:
+                result[name] = {"executables": re.findall(r"\bpath=([^;{}]+)", raw[name]),
+                                "arguments_included": False}
+                result[name]["executables"] = [value.strip() for value in result[name]["executables"]]
+        return result
 
     def action(self, action):
         return command(["systemctl", "--user", action, SERVICE], timeout=25)
@@ -441,6 +464,7 @@ def main(argv=None):
     mode.add_argument("--worker", type=Path, help=argparse.SUPPRESS)
     mode.add_argument("--rollback", type=Path, help="Recover a known trial after its worker has exited")
     mode.add_argument("--report-latest", action="store_true", help="Read the last trial and rollback reports without runtime calls")
+    mode.add_argument("--service-details", action="store_true", help="Read current SteamVR service relationships and executable paths; no changes, command arguments or environment values")
     mode.add_argument("--recovery-hold", type=Path, help=argparse.SUPPRESS)
     mode.add_argument("--recovery-complete", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
@@ -453,7 +477,9 @@ def main(argv=None):
         return report["exit_code"]
     try:
         manager = Systemd()
-        if args.recovery_hold or args.recovery_complete:
+        if args.service_details:
+            report.update(status="service_details", exit_code=0, service=manager.details())
+        elif args.recovery_hold or args.recovery_complete:
             if not os.environ.get("INVOCATION_ID"):
                 raise ValueError("recovery_check_requires_systemd")
             if args.recovery_hold:
