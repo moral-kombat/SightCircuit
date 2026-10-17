@@ -598,7 +598,8 @@ local sockets and fake driver dispatch. Neither the actual layer nor the
 camera producer is loaded/run. The real binaries remain mode 0644 in
 `artifacts/capture-provider-reference/`; the report records helper, patch and
 artifact hashes and `deployment_ready: false`. All earlier build modes remain
-available. The v3 changes have not run on Frame yet. The metadata inspector is
+available. The v3 ARM64 build and both changed 12-test suites now pass on Frame;
+see [E37](status.md#e37-metadata-only-provider-and-diagnostic-on-frame). The metadata inspector is
 a separate executable, linked without Vulkan; it is not the camera producer.
 
 ### Worker containment and publication recovery
@@ -740,8 +741,8 @@ invalid/default arguments, corrupt/oversized output, hangs, signals, parent
 death and the blocked capture CLI. Build with `--provider-fixes`, then run
 `test_capture_provider.py` and `test_capture_provider_check.py`. The fixtures
 generate their own peers in private temporary directories; no real provider
-or layer is needed. Native v3 execution and controlled layer activation remain
-separate checkpoints.
+or layer is needed. Native v3 execution passed on Frame; controlled layer
+activation and restoration remain separate checkpoints.
 
 ## Isolated luma reader and synthetic producer
 

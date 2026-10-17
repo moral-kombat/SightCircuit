@@ -99,8 +99,9 @@ implemented; its earlier v2 milestone passed all 28 tests on Frame ARM64.
 The [producer synchronization review](docs/live-capture.md#producer-synchronization-review-and-next-checkpoint)
 found no coordinated handoff for original camera buffers. The latest v3 layer
 therefore records metadata without retaining/exporting image FDs, and live reads
-remain blocked. Next run the changed [metadata-only native checks](docs/on-device.md#test-metadata-only-inspection-without-capture)
-and prepare a controlled metadata-layer load/restoration procedure. An inactive
+remain blocked. The [metadata-only native checks](docs/on-device.md#test-metadata-only-inspection-without-capture)
+now pass all 24 tests on Frame ARM64. Next prepare an inactive v3 bundle and a
+controlled metadata-layer load/restoration procedure. An inactive
 configuration bundle can be prepared without installation. Actual driver imports, camera identity and
 on-device restoration remain unvalidated. Bounded recognition and snapshots shown after
 capture remain useful. The model's class coverage and false positives need separate work.

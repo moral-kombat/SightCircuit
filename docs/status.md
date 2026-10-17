@@ -29,7 +29,7 @@ unknown unless explicitly recorded below.
 | Image import validation and ownership | ARM64 build and ten synthetic tests passed; cloud suite now eleven | FD/image ownership and failure paths validated with fake dispatch; added two-plane case cloud-only; real GPU import remains untested; [E31](#e31-import-build-and-synthetic-tests-on-frame), [E32](#e32-two-plane-import-fixture-cloud-checks) |
 | Device and remaining GPU resource ownership | Inspection adaptation built; nine synthetic cloud tests passed | Startup/child lifetimes, private allocations, imported-image device retention and 57 injected failures; actual driver and ARM64 execution pending; [E33](#e33-gpu-resource-ownership-cloud-checks) |
 | Capture watchdog, provider/layer lifecycle and exact recovery | Earlier v2 milestone passed all 28 generated-data tests on Frame ARM64 | Bounded worker, metadata/GPU provenance, registry changes, owned endpoint and conditional restoration; no real driver/layer execution or device restoration; [E35](#e35-watchdog-provider-and-recovery-tests-on-frame) |
-| Metadata-only provider and producer synchronization review | v3 diagnostic and access gate cloud-tested; ARM64 v3 pending | Layer retains/exports no image FDs; reviewed source lacks coordinated producer handoff; live reads blocked; [E36](#e36-metadata-only-provider-and-synchronization-review) |
+| Metadata-only provider and producer synchronization review | v3 ARM64 build and all 24 generated-data tests passed on Frame | Layer retains/exports no image FDs; no real layer activation or live camera access; controlled load/restoration remains next; [E36](#e36-metadata-only-provider-and-synchronization-review), [E37](#e37-metadata-only-provider-and-diagnostic-on-frame) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
 | Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; no source-identified built-in-camera frames have been received |
 | Stereo depth and world-space labels | Planned | Calibration, depth and pose/timebase alignment remain unresolved |
@@ -1114,12 +1114,54 @@ dependency for the inspector, pinned-cache cleanliness and documentation
 links/examples were checked. CI includes the new diagnostic suite; hosted
 results have not been checked.
 
-These remain generated-data and fake-dispatch checks. V3 has not yet run on
-Frame; no real layer was loaded, image imported/copied, service restarted or
+These remain generated-data and fake-dispatch checks. At this cloud checkpoint,
+v3 had not yet run on Frame; the later ARM64 result is [E37](#e37-metadata-only-provider-and-diagnostic-on-frame).
+No real layer was loaded, image imported/copied, service restarted or
 device configuration restored. A controlled metadata-layer load is the next
 device checkpoint after native v3 validation and service-aware recovery
 preparation. Live pixels still require a supported producer handoff or a copy
 inside a demonstrated synchronized compositor access window.
+
+### E37: Metadata-only provider and diagnostic on Frame
+
+Source: user-supplied native build report and complete test summaries, received
+2026-10-17 (America/New_York). Exact execution time, checkout HEAD, current
+SteamVR version and OS/kernel/compiler versions were not included. All 12
+reported source hash/size records and all six patch records match the published
+v3 build at `2675af3`. This identifies the build inputs; it does not establish
+the entire checkout revision or the test files' hashes.
+
+The build reports `aarch64`, compiler target `aarch64-unknown-linux-gnu`, system
+Vulkan headers, `-l:libvulkan.so.1`, and unchanged upstream capture pin
+`ff6a2b29bc50c9497d66fd7ff07e00b61f9eb082`. Protocol version is 3;
+`image_fd_export_enabled` and `layer_retains_image_fds` are false. Runtime
+initialization, capture, layer installation and deployment readiness are false.
+The layer and access-gate artifacts remain non-executable inspection outputs.
+
+All **24 tests passed with no skips**: 12 provider/layer tests in 0.627 seconds
+and 12 metadata-diagnostic tests in 6.926 seconds. The former includes metadata
+without image FDs and blocked buffer requests. The latter exercises the native
+inspector against generated peers: matching/empty/unsupported metadata, registry
+change/provider loss, old protocol/unexpected descriptors, output validation,
+deadlines, cancellation and parent death. Driver calls in the layer fixture
+are fake; no real camera provider is contacted by these tests.
+
+Reported ARM64 artifact hashes:
+
+| Artifact | SHA-256 | Bytes |
+| --- | --- | --- |
+| `reference-libVkLayer_mrhand.so` | `0252b2e7e974af367a1f586c0a3f3dceca2a9456164b25e1c9a97cf411864210` | 157,200 |
+| `reference-ptgrab` | `a9f788769f1731ac5b6ee011314e8663ada9817c9def49297b657d48a2dbf7ce` | 73,256 |
+| `framejacker-provider-inspect` | `51f4bcee93cd2150dc8698b36675c209b9a8140b7463fbd14753842fc554996c` | 77,704 |
+
+This completes native v3 generated-data validation. It does not establish a
+loaded layer, actual camera metadata, completed camera frames, GPU import/copy,
+physical camera identity or device configuration restoration. No new passthrough
+observation accompanied the report; prior v2 watchdog/recovery tests were not
+rerun in this batch. The next preparation is an inactive v3 bundle and the
+actual SteamVR service properties, followed by an independently recoverable
+metadata-layer trial. Live image reads remain blocked pending a producer
+handoff or synchronized compositor-owned copy.
 
 ## Maintaining the evidence
 

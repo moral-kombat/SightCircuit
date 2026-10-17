@@ -28,6 +28,7 @@ owns the current capture work plan.
 | Test GPU startup, memory and resource cleanup without a driver | [GPU ownership adaptation and fault injection](development.md#build-and-test-gpu-resource-ownership) |
 | Test hung capture workers, provider lifecycle and recovery | [Watchdog/provider development](development.md#capture-watchdog-provider-lifecycle-and-restoration-preparation) and [native preparation](on-device.md#test-the-watchdog-and-provider-without-capture) |
 | Test metadata inspection without image access | [Changed native v3 checks](on-device.md#test-metadata-only-inspection-without-capture) and [producer synchronization findings](live-capture.md#producer-synchronization-review-and-next-checkpoint) |
+| Prepare the next metadata-layer checkpoint | [Inactive bundle and service preflight](on-device.md#prepare-the-metadata-layer-trial) |
 | Understand or replace the recognition model | [Recognition architecture and model candidates](architecture.md#recognition-implementation-and-model-replacement) |
 | Inspect existing luma input or test the isolated reader | [Shared-memory procedure](on-device.md#check-existing-luma-shared-memory) and [controlled fixture](development.md#isolated-luma-reader-and-synthetic-producer) |
 | Set up cloud or desktop development | [Development setup](development.md) |

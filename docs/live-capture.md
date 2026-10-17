@@ -20,7 +20,7 @@ layer has been deployed by Framejacker.
 | 3a | Validated image import and ownership | ARM64 build and ten synthetic tests passed; two-plane coverage added in cloud | Actual camera DMA-BUF import remains untested; [E31](status.md#e31-import-build-and-synthetic-tests-on-frame), [E32](status.md#e32-two-plane-import-fixture-cloud-checks) |
 | 3b | Device and remaining GPU resource ownership | Inspection build and nine synthetic cloud tests pass | Native ARM64 and actual driver execution pending; no activation; [E33](status.md#e33-gpu-resource-ownership-cloud-checks) |
 | 3c | Capture watchdog, provider metadata/lifetime and configuration recovery | Earlier v2 milestone passed all 28 tests on Frame ARM64 | Generated workers/fake dispatch only; no real layer activation or device restoration; [E35](status.md#e35-watchdog-provider-and-recovery-tests-on-frame) |
-| 3d | Producer synchronization and metadata-only inspection | Review complete; v3 metadata diagnostic and access gate implemented | No image FDs retained/exported by the layer; native v3 tests and controlled metadata-layer load are next; [review](#producer-synchronization-review-and-next-checkpoint), [E36](status.md#e36-metadata-only-provider-and-synchronization-review) |
+| 3d | Producer synchronization and metadata-only inspection | Review complete; v3 ARM64 build and all 24 generated-data tests passed on Frame | No image FDs retained/exported by the layer; inactive bundle, service preflight and controlled metadata-layer load remain; [review](#producer-synchronization-review-and-next-checkpoint), [E37](status.md#e37-metadata-only-provider-and-diagnostic-on-frame) |
 | 4 | Capture-only device trial | Planned | Ten seconds of fresh images from one identified source, correct orientation, clean exit and working normal passthrough |
 | 5 | Continuous live input in the existing display | Planned; needs input independent of our output | Reuse detector/display after a dedicated provider or supported overlay-excluded mirror mode is validated; current mirror includes the panel |
 | 6 | Color, built-in camera support and later geometry | Planned | Validate each source and color conversion separately; require calibration and stronger timing evidence before stereo depth or spatial labels |
@@ -247,11 +247,13 @@ The current v3 adaptation retains only allocation metadata, exports no image
 FDs, and blocks the real reader before GPU initialization. Its separate
 metadata diagnostic checks profile compatibility and registry stability;
 [development](development.md#metadata-only-provider-inspection) documents its tests.
+Both changed suites now pass on Frame ARM64: 12 provider/layer tests and 12
+metadata-diagnostic tests; see [E37](status.md#e37-metadata-only-provider-and-diagnostic-on-frame).
 
 Remaining work does not need another unchanged GPU query or initial import test:
 
-1. Run the changed v3 provider and metadata diagnostic tests on ARM64, then
-   prepare a new inactive bundle against that Frame's exact configuration.
+1. Prepare a new inactive v3 bundle against that Frame's exact configuration.
+   Native v3 build and both changed suites are complete; no unchanged rerun needed.
 2. Prepare a bounded metadata-only layer-load/restoration procedure from the
    actual SteamVR service details. Keep image access disabled. Verify the
    observed profile, process identity, registry stability and restoration.
@@ -290,8 +292,8 @@ implementation milestone is complete in the cloud.
 
 The original synchronization/FOREIGN ownership review is complete; it found a
 missing producer handoff. The earlier no-camera milestone also passed on Frame.
-The next checkpoint is v3 metadata-only native validation, followed by a
-controlled metadata-layer load/restoration procedure. No layer has been installed.
+Native v3 validation also passed all 24 tests on Frame. Next prepare the inactive
+bundle and service-aware metadata-layer load/restoration procedure. No layer has been installed.
 The supervisor's capture flag returns `blocked` before launching a worker.
 Use the [updated native procedure](on-device.md#test-metadata-only-inspection-without-capture).
 

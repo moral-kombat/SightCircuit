@@ -863,7 +863,9 @@ image panel. See the [active plan](live-capture.md#next-engineering-step-capture
 
 ### Test metadata-only inspection without capture
 
-This is the next changed native check after the 28-test v2 result. It builds
+This check passed on Frame ARM64: all 24 tests, with no skips; see
+[E37](status.md#e37-metadata-only-provider-and-diagnostic-on-frame). No unchanged
+rerun is needed. The command is retained for regression testing. It builds
 the metadata-only v3 layer and diagnostic, then runs generated peers and fake
 driver calls. It does not load the layer, contact a real camera provider or
 restart SteamVR:
@@ -883,18 +885,28 @@ skips. The build report should say `provider_protocol_version: 3`,
 `deployment_ready: false`. Share the revision, build report and test summaries.
 These checks do not establish actual driver execution or complete camera frames.
 
-Prepare a new inactive bundle with the command in the preceding section only
-after building v3; keep any earlier v2 bundle unchanged. To collect service
-metadata for a controlled load/restoration procedure:
+### Prepare the metadata-layer trial
+
+The native v3 build and generated-data checks are complete. Next prepare an
+inactive bundle from the tested build and collect service metadata. Run on
+Frame in the existing checkout:
 
 ```bash
+cd "$HOME/framejacker" &&
+python3 scripts/capture_layer_config.py --prepare artifacts/capture-layer-plan-v3-new &&
 systemctl --user show steamvr.service \
   -p LoadState -p ActiveState -p SubState -p MainPID \
   -p FragmentPath -p DropInPaths -p Type -p KillMode -p TimeoutStopUSec
 ```
 
-This reads status and paths, without displaying service environment values or
-changing configuration. Loading even a metadata-only layer affects the
+Expect `prepared_inactive_bundle`, with activation and restart both false. If
+the directory already exists, preserve it and use another new bundle name.
+Keep any earlier v2 bundle unchanged. Share the preparation report and service
+properties; keep the bundle's backups local.
+
+Preparation writes only the inactive artifact bundle. The service query reads
+status and paths without displaying environment values. Neither command
+installs a layer or restarts SteamVR. Loading even a metadata-only layer affects the
 compositor process; installation/restart commands are not prepared yet. Exact
 restoration must run independently of any browser/console lost during restart,
 and restoring files alone cannot unload the layer.
@@ -1113,8 +1125,9 @@ imports remain unverified. Both original device checks are complete. The v2
 watchdog/provider/recovery milestone also passed all 28 tests on Frame ARM64.
 Producer synchronization review found no coordinated handoff, so the latest v3
 provider records metadata without retaining/exporting image FDs and blocks live
-reads. Next run the changed provider and metadata diagnostic suites (12 each),
-then prepare a new inactive bundle and collect the SteamVR service properties.
+reads. The v3 ARM64 build and both changed suites (12 provider/layer tests and
+12 metadata-diagnostic tests) passed with no skips. Next prepare a new inactive
+v3 bundle and collect the SteamVR service properties.
 A controlled metadata-layer load/restoration procedure is still needed; no layer
 has been activated. Physical camera identity and scene freshness remain unverified.
 GPU device/resource ownership is implemented in --resource-fixes and has nine
