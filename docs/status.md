@@ -1,6 +1,6 @@
 # Project status and evidence
 
-Documentation review: 2026-10-16. This is the authoritative record of current
+Documentation review: 2026-10-17. This is the authoritative record of current
 capability and validation evidence. The review date is not a new device-test
 date. Detailed test dates, installed code revisions and SteamVR versions are
 unknown unless explicitly recorded below.
@@ -28,6 +28,7 @@ unknown unless explicitly recorded below.
 | Bounded Vulkan capability query | Frame-confirmed; queried requirements passed | Turnip Adreno 750, target NV12 modifier has two memory planes, dedicated DMA-BUF import supported; clean query and normal passthrough; no actual FD import; [E30](#e30-vulkan-capabilities-on-frame) |
 | Image import validation and ownership | ARM64 build and ten synthetic tests passed; cloud suite now eleven | FD/image ownership and failure paths validated with fake dispatch; added two-plane case cloud-only; real GPU import remains untested; [E31](#e31-import-build-and-synthetic-tests-on-frame), [E32](#e32-two-plane-import-fixture-cloud-checks) |
 | Device and remaining GPU resource ownership | Inspection adaptation built; nine synthetic cloud tests passed | Startup/child lifetimes, private allocations, imported-image device retention and 57 injected failures; actual driver and ARM64 execution pending; [E33](#e33-gpu-resource-ownership-cloud-checks) |
+| Capture watchdog, provider/layer lifecycle and exact recovery | Implemented; 28 new synthetic cloud tests passed | Bounded worker, v2 metadata/GPU provenance, registry changes, owned endpoint and conditional restoration; ARM64 execution, original producer completion and on-device restoration pending; [E34](#e34-capture-watchdog-provider-lifecycle-and-recovery-cloud-checks) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
 | Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; no source-identified built-in-camera frames have been received |
 | Stereo depth and world-space labels | Planned | Calibration, depth and pose/timebase alignment remain unresolved |
@@ -988,6 +989,63 @@ selection does not establish exporter GPU provenance. The capture watchdog,
 provider metadata/registry, layer lifetime/restoration and producer synchronization
 review remain required before a live trial. No layer was installed or activated.
 Continue with [capture worker supervision](live-capture.md#next-engineering-step-capture-worker-supervision).
+
+### E34: Capture watchdog, provider lifecycle and recovery cloud checks
+
+Source: local Linux x86_64 cloud execution on 2026-10-17 UTC, worktree based on
+`3a02fba`. All six reference/adaptation modes compiled and linked. The new
+`--provider-fixes` mode applies five patches to disposable source at the
+unchanged upstream pin. The real producer/layer remain non-executable inspection
+artifacts, were not loaded/run, and have `deployment_ready: false`. Hashes are
+recorded in `artifacts/capture-provider-reference/build-report.json`.
+
+The new suites passed **28 tests with no skips**:
+
+- **10 capture supervisor tests:** real native exec boundary plus a generated
+  worker, covering startup/import/copy/destruction stand-in hangs, graceful
+  deadline retirement versus forced kill, bounded/corrupt output, crashes,
+  SIGINT/SIGTERM, parent death before worker setup, reaping, exact publication
+  recovery and preservation of unknown/replaced files.
+- **11 provider/layer tests:** original registry/socket helpers and actual layer
+  hooks with fake downstream driver calls. They cover exporter metadata and
+  GPU/driver UUID validation, device-scoped handle collisions, snapshot FD
+  ownership, nonreused IDs, binding/image/device generation changes, provider
+  loss/restart/invalidation, bounded registry, idle-client shutdown, endpoint
+  ownership, failed Vulkan calls, callback lifetime and the opt-in/crash guard.
+- **7 configuration/recovery tests:** inactive preparation, exact prior bytes
+  and mode restoration, new/partial/repeated restoration, later-edit protection,
+  symlink/hardlink/FIFO/parent-symlink refusal, checksums/home identity, and
+  recovery of a deliberately killed synthetic provider while preserving living
+  or replaced endpoints.
+
+The complete capture-related suite passed **67 tests**, including prior GPU
+query/import/resource/publication coverage, with no skips. The seven native
+transport fixture groups passed. Provider and actual-hook fixtures also passed
+address/undefined-behavior sanitizer checks. Build reports/artifact hashes,
+non-executable permissions, pinned-cache cleanliness and documentation links/
+examples were checked. CI now builds the new tools and runs these suites;
+hosted CI results have not been checked.
+
+The worker watchdog covers driver startup through destruction, with parent-death
+containment established before exec. Private per-run leases record process start
+times and publication file identities; recovery never guesses ownership from a
+filename. The provider has a separate v2 packet ABI and private endpoint, records
+exporter creation/allocation metadata and UUIDs, and fails on changed generations
+or provider loss. Its server thread is owned/stopped, callback state is shared,
+and registry handles are scoped by logical device. Configuration preparation
+writes only an inactive local bundle; conditional restoration changes only the
+exact prior/staged Framejacker files and cannot unload an already running layer.
+
+These are synthetic control-flow/ownership results, not a real logical-device
+or camera import/copy, physical camera identification, native ARM64 execution,
+layer installation, headset restoration or a new passthrough observation.
+Generation checks do not lock XRService's writes. The reference still supplies
+no original producer fence/exposure sequence; stable-strip readiness and our own
+queue completion do not prove complete camera frames. ID-sorted slot grouping
+does not prove stereo roles. Capture binaries remain disabled while the
+producer synchronization/FOREIGN ownership review and controlled device
+load/restoration procedure are prepared. The next no-camera native milestone
+is [documented here](on-device.md#test-the-watchdog-and-provider-without-capture).
 
 ## Maintaining the evidence
 

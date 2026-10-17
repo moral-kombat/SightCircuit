@@ -575,6 +575,135 @@ can be batched with a later milestone. Follow the
 [next work order](live-capture.md#next-engineering-step-capture-worker-supervision)
 before deployment.
 
+## Capture watchdog, provider lifecycle and restoration preparation
+
+The sixth inspection mode applies patches 0001–0005 and builds the provider and
+actual-layer-hook fixtures. Build the separate native exec boundary, then run
+the three new suites:
+
+```bash
+bash scripts/build_capture_supervisor.sh &&
+bash scripts/build_capture_reference.sh --provider-fixes &&
+python3 -m unittest discover -s tests -p test_capture_supervisor.py -v &&
+python3 -m unittest discover -s tests -p test_capture_provider.py -v &&
+python3 -m unittest discover -s tests -p test_capture_layer_config.py -v
+```
+
+The current cloud results are **10 watchdog, 11 provider/layer and 7
+configuration/recovery tests**, with no skips. These use generated files,
+local sockets and fake driver dispatch. Neither the actual layer nor the
+camera producer is loaded/run. The real binaries remain mode 0644 in
+`artifacts/capture-provider-reference/`; the report records helper, patch and
+artifact hashes and `deployment_ready: false`. All earlier build modes remain
+available. Native ARM64 execution of this milestone is pending.
+
+### Worker containment and publication recovery
+
+[`capture_supervisor.py`](../scripts/capture_supervisor.py) defaults to `not_run`
+(exit 3). Its explicit capture branch requires a separately prepared executable
+worker; it refuses the inspection artifact before starting a process. There is
+no installer or executable-enabling procedure at this stage.
+
+[`capture_worker_exec.cpp`](../tools/capture_worker_exec.cpp) establishes
+`PR_SET_NO_NEW_PRIVS`, SIGKILL parent-death handling, a parent-PID race check and
+a zero core-dump limit before loading the worker's libraries. It executes an
+already opened, owned, non-writable-by-others ELF descriptor, avoiding a
+pathname substitution between the supervisor's check and exec. Only the required
+FD is inherited. The stream retains its own signal/deadline checks, but an
+external deadline covers startup, imports, copying and destruction too.
+
+The outer budget is the requested 1–10 seconds plus three seconds. On timeout
+or cancellation it requests SIGTERM, allows 0.3 seconds, then uses SIGKILL if
+needed, with a bounded one-second reap attempt. A kernel task stuck in
+uninterruptible I/O may remain unreaped; the report must say so, and its files
+are preserved. Output has a 256 KiB total cap, an 8 KiB event-line cap and a
+256-event cap. Partial/malformed/inconsistent completion reports are failures.
+Clean cancellation is distinguished from forced termination. A killed process
+does not establish graceful Vulkan API cleanup.
+
+Each run uses an exclusive mode-0700
+`$XDG_RUNTIME_DIR/framejacker-capture-*/` directory and a locked, mode-0600 lease.
+The worker publishes to its assigned `frames.shm` and announces device/inode/size.
+The supervisor records those identities before recovery and removes a remaining
+publication only after reaping that worker and matching the private file. It
+preserves replaced, unannounced or unknown files. A very short worker may remove
+its publication before the event is consumed; an already absent file needs no
+unlink. The reader can later use the report's exact session path with `--source`;
+the existing reader default remains the upstream compatibility path.
+
+For a known dead session, `--recover-session PATH` checks the locked lease and
+recorded `/proc` process start times before removing only its recorded file.
+It refuses a living run or unconfirmed identity. No automatic directory sweep
+or unconditional stale-file deletion occurs. The tests cover hangs at each
+GPU phase, crashes/output limits, signals, parent death, graceful deadline
+retirement, exact recovery and preservation of foreign files.
+
+### Provider protocol and layer ownership
+
+[`capture_provider.hpp`](../tools/capture_provider.hpp) defines a separate v2,
+328-byte native little-endian/64-bit packet ABI, not an extension sent to old
+MRHAND clients. The endpoint is
+`$XDG_RUNTIME_DIR/framejacker-camera-provider/camera.sock`; there is no `/tmp`
+fallback. Old protocol clients/providers fail closed. Snapshot records retain
+the original 144-byte buffer description inside the new packet and add an
+epoch, generation, logical-device token, physical-device/driver UUIDs,
+image flags/type/sharing/depth/mips/samples, external handle types, memory flags
+and per-plane array/depth pitches. Unknown creation/allocation chains are marked
+incomplete and rejected for capture. Current policy accepts only the existing
+single-layer profile with exclusive sharing and zero unsupported flags/pitches.
+
+The registry scopes image/memory handles by logical device, bounds counts,
+assigns nonreused buffer IDs and duplicates snapshot FDs under its mutex.
+Image destruction, binding, memory changes and device teardown advance the
+generation. The original layer implementation uses shared callback state and
+exact device-handle lookup; two devices may share a dispatch-table pointer.
+Device destruction removes only its registry entries. The last device stops
+and joins the owned server thread before releasing its callback state. Registry
+errors invalidate capture without changing successful downstream Vulkan results.
+
+The consumer holds a bounded socket lease and checks the epoch/generation
+before and after copies and before publication. Provider loss, timeout,
+invalidation or changed registry ends the attempt; it never silently reuses
+old bindings or reconnects to a different provider. An update can race a GPU
+operation, so an FD lease and subsequent check are not an atomic lock on the
+camera producer. Real producer completion remains a separate unresolved gate.
+The importer compares the exported physical-device and driver UUIDs with its
+chosen GPU before image imports. This proves neither physical-camera identity
+nor stereo roles; ID-sorted slot grouping is still an upstream heuristic.
+
+The server uses a private directory, same-user peers, an exclusive file lock,
+bounded I/O and identity-checked endpoint removal. A crash leaves a recorded
+socket identity and owner PID/start time. Explicit provider-runtime recovery
+locks that lease and removes the socket only after the recorded process is gone
+and the endpoint still matches. Competing/live providers and foreign replacements
+are preserved. Server shutdown interrupts an idle client; there is no detached
+thread. The opt-in gate permits only `vrcompositor` with
+`FRAMEJACKER_CAPTURE_LAYER=1`, and allows at most two accepted starts in 120
+seconds using locked private runtime state. Other processes/default invocation
+are rejected; the setting must not be enabled globally.
+
+### Inactive configuration bundle
+
+[`capture_layer_config.py`](../scripts/capture_layer_config.py) defaults to no
+action. `--prepare NEW_DIRECTORY` creates a private local bundle containing a
+disabled-by-default manifest, the inspection library and a checksummed plan.
+It snapshots exact existing bytes/modes or absence at the two proposed
+Framejacker manifest/library paths. It does not write those active paths,
+install anything, set environment variables or restart a runtime. Backups may
+contain local configuration and remain in ignored artifacts.
+
+The implemented restoration path preflights both targets and changes only a
+file matching either its recorded prior state or staged state. Later edits,
+symlinks, hardlinks, FIFOs, parent symlinks, changed hashes and a different home
+are refused. Original bytes/modes are restored; originally absent files are
+removed. Partial restoration is repeatable. No unrelated MRHAND, Vulkan or
+SteamVR configuration is changed. Restoring files cannot unload a library from
+a running compositor; a controlled restart remains part of a future approved
+device procedure. Tests emulate staging only inside generated temporary homes.
+
+See the [device preparation procedure](on-device.md#test-the-watchdog-and-provider-without-capture)
+and [remaining live gates](live-capture.md#next-engineering-step-capture-worker-supervision).
+
 ## Isolated luma reader and synthetic producer
 
 The shared-memory diagnostic is independent of inference, Qt, OpenVR and Vulkan.

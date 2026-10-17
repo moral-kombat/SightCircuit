@@ -40,9 +40,19 @@ remaining API destruction and poisons the state until process exit. Host memory
 invalidation and a private allocation budget are enforced. Actual driver
 execution is not tested by the fixture; no XRService producer fence is supplied.
 
+`0005-provider-lifetime-and-provenance.patch` applies after patches 0001–0004.
+The optional `--provider-fixes` mode replaces the old layer implementation with
+the original Framejacker registry/dispatch/server helpers and extends the worker
+to a separate v2 endpoint/packet ABI. It captures exporter metadata and GPU/driver
+UUIDs, checks generations around copies/publication, scopes handles by device,
+owns callback/server lifetime and preserves foreign runtime files. Original
+watchdog and configuration tools provide bounded worker execution and exact
+conditional recovery; only generated peers/fake dispatch run in cloud tests.
+This patch contains removed upstream layer text under the upstream MIT notice.
+
 Both capture binaries remain non-executable inspection artifacts. Actual GPU
-execution, the capture watchdog, provider metadata/registry, layer lifetime and configuration
-restoration still require work before deployment. A loop deadline does not
-bound every driver call. Follow the
+execution, original producer synchronization/FOREIGN ownership, physical camera
+identity and on-device load/restoration remain unvalidated. The watchdog and
+provider/recovery prerequisites now have synthetic cloud tests. Follow the
 [active capture plan](../../docs/live-capture.md#current-work-order) and
-[import development procedure](../../docs/development.md#build-and-test-image-import-ownership).
+[provider development procedure](../../docs/development.md#capture-watchdog-provider-lifecycle-and-restoration-preparation).

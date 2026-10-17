@@ -1,0 +1,676 @@
+diff --git a/capture/handcam_layer.cpp b/capture/handcam_layer.cpp
+index 5c080ff..4d358f0 100644
+--- a/capture/handcam_layer.cpp
++++ b/capture/handcam_layer.cpp
+@@ -1,500 +1,2 @@
+-// VK_LAYER_MRHAND — passive camera-buffer registry for vrcompositor.
+-//
+-// Independent of the mr-chroma project.  Loads only into vrcompositor, only
+-// while ~/.config/mrhand/enable-capture exists, and stops loading after the
+-// compositor starts 3x within 120 s (crash guard).
+-//
+-// It records no commands and touches no queues.  When the compositor imports
+-// external memory (the dma-bufs XRService shares for passthrough/tracking
+-// camera frames), the layer dup()s the fd *before* passing the import down,
+-// remembers the image it is bound to (format, extent, tiling, DRM modifier and
+-// plane layout), and serves {metadata + dup'd fd} over a private unix socket
+-// ($XDG_RUNTIME_DIR/mrhand/cam.sock, same-uid peers only).  The consumer
+-// (handtrack) mmaps those buffers read-only on its own time.
+-
+-#include <vulkan/vulkan.h>
+-#include <vulkan/vk_layer.h>
+-
+-#include <algorithm>
+-#include <atomic>
+-#include <cerrno>
+-#include <cstdarg>
+-#include <cstdio>
+-#include <cstdlib>
+-#include <cstring>
+-#include <ctime>
+-#include <fcntl.h>
+-#include <mutex>
+-#include <string>
+-#include <sys/socket.h>
+-#include <sys/stat.h>
+-#include <sys/un.h>
+-#include <thread>
+-#include <unistd.h>
+-#include <unordered_map>
+-#include <vector>
+-
+-#include "handcam_proto.h"
+-#include "capture_transport.hpp"
+-
+-#define EXPORT extern "C" __attribute__((visibility("default")))
+-
+-// ---------------------------------------------------------------- logging
+-static FILE *g_log;
+-static std::mutex g_logM;
+-static int g_logLines;
+-static double monoMs() {
+-    timespec ts;
+-    clock_gettime(CLOCK_MONOTONIC, &ts);
+-    return ts.tv_sec * 1e3 + ts.tv_nsec / 1e6;
+-}
+-static void LOG(const char *fmt, ...) {
+-    std::lock_guard<std::mutex> l(g_logM);
+-    if (g_logLines > 20000) return;
+-    if (!g_log) {
+-        char p[128];
+-        snprintf(p, sizeof p, "/tmp/mrhandcam-%d.log", getpid());
+-        g_log = fopen(p, "w");
+-        if (!g_log) return;
+-        setvbuf(g_log, nullptr, _IOLBF, 0);
+-    }
+-    fprintf(g_log, "[%.3f] ", monoMs());
+-    va_list ap;
+-    va_start(ap, fmt);
+-    vfprintf(g_log, fmt, ap);
+-    va_end(ap);
+-    fputc('\n', g_log);
+-    g_logLines++;
+-}
+-static std::string home(const char *rel) {
+-    const char *h = getenv("HOME");
+-    return std::string(h ? h : "/tmp") + rel;
+-}
+-
+-// ---------------------------------------------------------------- load gating
+-static bool fileExists(const std::string &p) {
+-    struct stat st;
+-    return stat(p.c_str(), &st) == 0;
+-}
+-static bool compositorAllowed() {
+-    if (!fileExists(home("/.config/mrhand/enable-capture"))) return false;
+-    std::string dir = home("/.local/share/mrhand");
+-    mkdir(dir.c_str(), 0755);
+-    if (fileExists(dir + "/guard-tripped")) return false;
+-    // crash guard: remember recent start times
+-    std::vector<long> starts;
+-    long now = time(nullptr);
+-    if (FILE *f = fopen((dir + "/compositor-starts").c_str(), "r")) {
+-        long t;
+-        while (fscanf(f, "%ld", &t) == 1)
+-            if (now - t < 120) starts.push_back(t);
+-        fclose(f);
+-    }
+-    starts.push_back(now);
+-    if (starts.size() >= 3) {
+-        if (FILE *f = fopen((dir + "/guard-tripped").c_str(), "w")) {
+-            fprintf(f, "vrcompositor started %zu times in 120 s with VK_LAYER_MRHAND; layer disabled.\n"
+-                       "Delete this file to re-arm.\n", starts.size());
+-            fclose(f);
+-        }
+-        return false;
+-    }
+-    if (FILE *f = fopen((dir + "/compositor-starts").c_str(), "w")) {
+-        for (long t : starts) fprintf(f, "%ld\n", t);
+-        fclose(f);
+-    }
+-    return true;
+-}
+-static bool processAllowed() {
+-    char exe[512];
+-    ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
+-    if (n <= 0) return false;
+-    exe[n] = 0;
+-    const char *base = strrchr(exe, '/');
+-    base = base ? base + 1 : exe;
+-    if (strcmp(base, "vrcompositor")) return false;
+-    static int decided = -1;   // evaluate (and count the start) once per process
+-    if (decided < 0) decided = compositorAllowed() ? 1 : 0;
+-    return decided == 1;
+-}
+-
+-// ---------------------------------------------------------------- registry
+-struct ImageRec {
+-    VkImageCreateInfo ci{};
+-    uint64_t modifier = 0;
+-    bool hasModifier = false;
+-    uint32_t planeCount = 0;
+-    VkSubresourceLayout planes[MRHAND_MAX_PLANES]{};
+-    VkExternalMemoryHandleTypeFlags extTypes = 0;
+-};
+-struct MemRec {
+-    int fd = -1;              // our dup
+-    uint64_t size = 0;        // dma-buf size (lseek) or allocationSize
+-    uint32_t handleType = 0;
+-    VkImage image = VK_NULL_HANDLE;
+-    uint64_t bindOffset = 0;
+-    uint32_t id = 0;
+-};
+-
+-template <typename T> static void *key(T h) { return *(void **)h; }
+-
+-struct InstanceData {
+-    PFN_vkGetInstanceProcAddr gipa;
+-    PFN_vkDestroyInstance DestroyInstance;
+-};
+-struct DeviceData {
+-    VkDevice device;
+-    PFN_vkGetDeviceProcAddr gdpa;
+-    PFN_vkDestroyDevice DestroyDevice;
+-    PFN_vkCreateImage CreateImage;
+-    PFN_vkDestroyImage DestroyImage;
+-    PFN_vkAllocateMemory AllocateMemory;
+-    PFN_vkFreeMemory FreeMemory;
+-    PFN_vkBindImageMemory BindImageMemory;
+-    PFN_vkBindImageMemory2 BindImageMemory2;
+-};
+-
+-static std::mutex g_mapM;
+-static std::unordered_map<void *, InstanceData *> g_inst;
+-static std::unordered_map<void *, DeviceData *> g_dev;
+-
+-static std::mutex g_regM;
+-static std::unordered_map<VkImage, ImageRec> g_images;
+-static std::unordered_map<VkDeviceMemory, MemRec> g_mems;
+-static uint32_t g_nextId = 1;
+-static std::atomic<uint32_t> g_generation{1};
+-
+-static const void *findPNext(const void *p, VkStructureType t) {
+-    for (auto *b = (const VkBaseInStructure *)p; b; b = b->pNext)
+-        if (b->sType == t) return b;
+-    return nullptr;
+-}
+-
+-// ---------------------------------------------------------------- socket server
+-static void serveClient(int c) {
+-    using namespace framejacker::transport;
+-    Fd client(c);
+-    try {
+-        require_same_user(client.get());
+-        std::vector<Record> out;
+-        uint32_t generation;
+-        {
+-            std::lock_guard<std::mutex> lock(g_regM);
+-            generation = g_generation.load();
+-            if (g_mems.size() > maximum_records) throw Error("registry_record_limit");
+-            out.reserve(g_mems.size());
+-            for (const auto &entry : g_mems) {
+-                const MemRec &m = entry.second;
+-                if (m.fd < 0) continue;
+-                MrhandBufInfo bi{};
+-                bi.magic = MRHAND_MAGIC;
+-                bi.generation = generation;
+-                bi.id = m.id;
+-                bi.size = m.size;
+-                bi.handleType = m.handleType;
+-                bi.bindOffset = m.bindOffset;
+-                auto it = g_images.find(m.image);
+-                if (m.image && it != g_images.end()) {
+-                    const ImageRec &ir = it->second;
+-                    bi.hasImage = 1;
+-                    bi.format = ir.ci.format;
+-                    bi.width = ir.ci.extent.width;
+-                    bi.height = ir.ci.extent.height;
+-                    bi.arrayLayers = ir.ci.arrayLayers;
+-                    bi.tiling = ir.ci.tiling;
+-                    bi.usage = ir.ci.usage;
+-                    bi.modifier = ir.modifier;
+-                    bi.hasModifier = ir.hasModifier;
+-                    bi.planeCount = ir.planeCount;
+-                    for (uint32_t p = 0; p < ir.planeCount; p++) {
+-                        bi.planeOffset[p] = ir.planes[p].offset;
+-                        bi.planeRowPitch[p] = ir.planes[p].rowPitch;
+-                    }
+-                }
+-                // Own a snapshot lease while the registry lock still protects m.fd.
+-                auto owned = duplicate(m.fd);
+-                out.push_back({bi, std::move(owned)});
+-            }
+-        }
+-        const auto deadline = Clock::now() + std::chrono::milliseconds(500);
+-        for (const auto &entry : out)
+-            send_record(client.get(), entry.info, entry.fd.get(), deadline);
+-        MrhandBufInfo end{};
+-        end.magic = MRHAND_MAGIC;
+-        end.generation = generation;
+-        send_record(client.get(), end, -1, deadline);
+-    } catch (const std::exception &error) {
+-        LOG("registry client closed: %s", error.what());
+-    }
+-}
+-
+-static void serverThread() {
+-    const char *rt = getenv("XDG_RUNTIME_DIR");
+-    std::string dir = std::string(rt ? rt : "/tmp") + "/mrhand";
+-    mkdir(dir.c_str(), 0700);
+-    chmod(dir.c_str(), 0700);
+-    std::string path = dir + "/cam.sock";
+-    unlink(path.c_str());
+-    int s = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+-    sockaddr_un a{};
+-    a.sun_family = AF_UNIX;
+-    snprintf(a.sun_path, sizeof a.sun_path, "%s", path.c_str());
+-    if (s < 0 || bind(s, (sockaddr *)&a, sizeof a) != 0 || listen(s, 4) != 0) {
+-        LOG("socket server failed: %s", strerror(errno));
+-        if (s >= 0) close(s);
+-        return;
+-    }
+-    chmod(path.c_str(), 0600);
+-    LOG("serving %s", path.c_str());
+-    while (true) {
+-        int c = accept4(s, nullptr, nullptr, SOCK_CLOEXEC);
+-        if (c < 0) {
+-            if (errno == EINTR) continue;
+-            LOG("accept: %s", strerror(errno));
+-            return;
+-        }
+-        serveClient(c);
+-    }
+-}
+-static std::once_flag g_serverOnce;
+-
+-// ---------------------------------------------------------------- hooks
+-static VKAPI_ATTR VkResult VKAPI_CALL CreateImage(VkDevice dev, const VkImageCreateInfo *ci,
+-                                                  const VkAllocationCallbacks *a, VkImage *out) {
+-    DeviceData *d;
+-    { std::lock_guard<std::mutex> l(g_mapM); d = g_dev[key(dev)]; }
+-    VkResult r = d->CreateImage(dev, ci, a, out);
+-    if (r != VK_SUCCESS) return r;
+-    auto *ext = (const VkExternalMemoryImageCreateInfo *)findPNext(
+-        ci->pNext, VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO);
+-    if (!ext) return r;   // only external images are interesting
+-    ImageRec ir;
+-    ir.ci = *ci;
+-    ir.ci.pNext = nullptr;
+-    ir.ci.pQueueFamilyIndices = nullptr;
+-    ir.extTypes = ext->handleTypes;
+-    if (auto *mx = (const VkImageDrmFormatModifierExplicitCreateInfoEXT *)findPNext(
+-            ci->pNext, VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT)) {
+-        ir.hasModifier = true;
+-        ir.modifier = mx->drmFormatModifier;
+-        ir.planeCount = std::min<uint32_t>(mx->drmFormatModifierPlaneCount, MRHAND_MAX_PLANES);
+-        for (uint32_t p = 0; p < ir.planeCount; p++) ir.planes[p] = mx->pPlaneLayouts[p];
+-    }
+-    LOG("CreateImage %p ext=0x%x fmt=%d %ux%ux%u layers=%u tiling=%d usage=0x%x mod=%s0x%llx planes=%u",
+-        (void *)*out, ext->handleTypes, ci->format, ci->extent.width, ci->extent.height, ci->extent.depth,
+-        ci->arrayLayers, ci->tiling, ci->usage, ir.hasModifier ? "" : "(none)", (unsigned long long)ir.modifier,
+-        ir.planeCount);
+-    for (uint32_t p = 0; p < ir.planeCount; p++)
+-        LOG("    plane%u offset=%llu rowPitch=%llu size=%llu", p, (unsigned long long)ir.planes[p].offset,
+-            (unsigned long long)ir.planes[p].rowPitch, (unsigned long long)ir.planes[p].size);
+-    std::lock_guard<std::mutex> l(g_regM);
+-    g_images[*out] = ir;
+-    return r;
+-}
+-
+-static VKAPI_ATTR void VKAPI_CALL DestroyImage(VkDevice dev, VkImage img, const VkAllocationCallbacks *a) {
+-    DeviceData *d;
+-    { std::lock_guard<std::mutex> l(g_mapM); d = g_dev[key(dev)]; }
+-    {
+-        std::lock_guard<std::mutex> l(g_regM);
+-        g_images.erase(img);
+-    }
+-    d->DestroyImage(dev, img, a);
+-}
+-
+-static VKAPI_ATTR VkResult VKAPI_CALL AllocateMemory(VkDevice dev, const VkMemoryAllocateInfo *ai,
+-                                                     const VkAllocationCallbacks *a, VkDeviceMemory *out) {
+-    DeviceData *d;
+-    { std::lock_guard<std::mutex> l(g_mapM); d = g_dev[key(dev)]; }
+-    auto *imp = (const VkImportMemoryFdInfoKHR *)findPNext(ai->pNext, VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR);
+-    int dupfd = -1;
+-    if (imp && imp->fd >= 0) dupfd = fcntl(imp->fd, F_DUPFD_CLOEXEC, 0);   // before the driver takes ownership
+-    VkResult r = d->AllocateMemory(dev, ai, a, out);
+-    if (r != VK_SUCCESS || !imp) {
+-        if (dupfd >= 0) close(dupfd);
+-        return r;
+-    }
+-    auto *ded = (const VkMemoryDedicatedAllocateInfo *)findPNext(ai->pNext,
+-                                                                 VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO);
+-    MemRec m;
+-    m.fd = dupfd;
+-    m.handleType = imp->handleType;
+-    off_t sz = dupfd >= 0 ? lseek(dupfd, 0, SEEK_END) : -1;
+-    if (dupfd >= 0) lseek(dupfd, 0, SEEK_SET);
+-    m.size = sz > 0 ? (uint64_t)sz : ai->allocationSize;
+-    if (ded && ded->image) m.image = ded->image;
+-    {
+-        std::lock_guard<std::mutex> l(g_regM);
+-        m.id = g_nextId++;
+-        g_mems[*out] = m;
+-        g_generation++;
+-    }
+-    LOG("ImportMemory #%u mem=%p handleType=0x%x size=%llu alloc=%llu dedicatedImage=%p dup=%d", m.id, (void *)*out,
+-        imp->handleType, (unsigned long long)m.size, (unsigned long long)ai->allocationSize, (void *)m.image, dupfd);
+-    std::call_once(g_serverOnce, [] { std::thread(serverThread).detach(); });
+-    return r;
+-}
+-
+-static VKAPI_ATTR void VKAPI_CALL FreeMemory(VkDevice dev, VkDeviceMemory mem, const VkAllocationCallbacks *a) {
+-    DeviceData *d;
+-    { std::lock_guard<std::mutex> l(g_mapM); d = g_dev[key(dev)]; }
+-    {
+-        std::lock_guard<std::mutex> l(g_regM);
+-        auto it = g_mems.find(mem);
+-        if (it != g_mems.end()) {
+-            LOG("FreeMemory #%u", it->second.id);
+-            if (it->second.fd >= 0) close(it->second.fd);
+-            g_mems.erase(it);
+-            g_generation++;
+-        }
+-    }
+-    d->FreeMemory(dev, mem, a);
+-}
+-
+-static void noteBind(VkImage img, VkDeviceMemory mem, VkDeviceSize off) {
+-    std::lock_guard<std::mutex> l(g_regM);
+-    auto it = g_mems.find(mem);
+-    if (it == g_mems.end()) return;
+-    it->second.image = img;
+-    it->second.bindOffset = off;
+-    g_generation++;
+-    auto ii = g_images.find(img);
+-    if (ii != g_images.end())
+-        LOG("Bind #%u -> image %p fmt=%d %ux%u off=%llu", it->second.id, (void *)img, ii->second.ci.format,
+-            ii->second.ci.extent.width, ii->second.ci.extent.height, (unsigned long long)off);
+-}
+-
+-static VKAPI_ATTR VkResult VKAPI_CALL BindImageMemory(VkDevice dev, VkImage img, VkDeviceMemory mem,
+-                                                      VkDeviceSize off) {
+-    DeviceData *d;
+-    { std::lock_guard<std::mutex> l(g_mapM); d = g_dev[key(dev)]; }
+-    VkResult r = d->BindImageMemory(dev, img, mem, off);
+-    if (r == VK_SUCCESS) noteBind(img, mem, off);
+-    return r;
+-}
+-
+-static VKAPI_ATTR VkResult VKAPI_CALL BindImageMemory2(VkDevice dev, uint32_t n, const VkBindImageMemoryInfo *b) {
+-    DeviceData *d;
+-    { std::lock_guard<std::mutex> l(g_mapM); d = g_dev[key(dev)]; }
+-    VkResult r = d->BindImageMemory2(dev, n, b);
+-    if (r == VK_SUCCESS)
+-        for (uint32_t i = 0; i < n; i++) noteBind(b[i].image, b[i].memory, b[i].memoryOffset);
+-    return r;
+-}
+-
+-// ---------------------------------------------------------------- instance / device plumbing
+-EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL mrhand_GetDeviceProcAddr(VkDevice dev, const char *name);
+-EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL mrhand_GetInstanceProcAddr(VkInstance inst, const char *name);
+-
+-static VKAPI_ATTR VkResult VKAPI_CALL CreateInstance(const VkInstanceCreateInfo *ci, const VkAllocationCallbacks *a,
+-                                                     VkInstance *out) {
+-    auto *chain = (VkLayerInstanceCreateInfo *)ci->pNext;
+-    while (chain && !(chain->sType == VK_STRUCTURE_TYPE_LOADER_INSTANCE_CREATE_INFO &&
+-                      chain->function == VK_LAYER_LINK_INFO))
+-        chain = (VkLayerInstanceCreateInfo *)chain->pNext;
+-    if (!chain) return VK_ERROR_INITIALIZATION_FAILED;
+-    PFN_vkGetInstanceProcAddr gipa = chain->u.pLayerInfo->pfnNextGetInstanceProcAddr;
+-    chain->u.pLayerInfo = chain->u.pLayerInfo->pNext;
+-    auto create = (PFN_vkCreateInstance)gipa(VK_NULL_HANDLE, "vkCreateInstance");
+-    VkResult r = create(ci, a, out);
+-    if (r != VK_SUCCESS) return r;
+-    auto *id = new InstanceData{gipa, (PFN_vkDestroyInstance)gipa(*out, "vkDestroyInstance")};
+-    std::lock_guard<std::mutex> l(g_mapM);
+-    g_inst[key(*out)] = id;
+-    LOG("CreateInstance");
+-    return r;
+-}
+-
+-static VKAPI_ATTR void VKAPI_CALL DestroyInstance(VkInstance inst, const VkAllocationCallbacks *a) {
+-    InstanceData *id;
+-    {
+-        std::lock_guard<std::mutex> l(g_mapM);
+-        id = g_inst[key(inst)];
+-        g_inst.erase(key(inst));
+-    }
+-    id->DestroyInstance(inst, a);
+-    delete id;
+-}
+-
+-static VKAPI_ATTR VkResult VKAPI_CALL CreateDevice(VkPhysicalDevice phys, const VkDeviceCreateInfo *ci,
+-                                                   const VkAllocationCallbacks *a, VkDevice *out) {
+-    auto *chain = (VkLayerDeviceCreateInfo *)ci->pNext;
+-    while (chain && !(chain->sType == VK_STRUCTURE_TYPE_LOADER_DEVICE_CREATE_INFO &&
+-                      chain->function == VK_LAYER_LINK_INFO))
+-        chain = (VkLayerDeviceCreateInfo *)chain->pNext;
+-    if (!chain) return VK_ERROR_INITIALIZATION_FAILED;
+-    PFN_vkGetInstanceProcAddr gipa = chain->u.pLayerInfo->pfnNextGetInstanceProcAddr;
+-    PFN_vkGetDeviceProcAddr gdpa = chain->u.pLayerInfo->pfnNextGetDeviceProcAddr;
+-    chain->u.pLayerInfo = chain->u.pLayerInfo->pNext;
+-    auto create = (PFN_vkCreateDevice)gipa(VK_NULL_HANDLE, "vkCreateDevice");
+-    VkResult r = create(phys, ci, a, out);
+-    if (r != VK_SUCCESS) return r;
+-    auto *d = new DeviceData{};
+-    d->device = *out;
+-    d->gdpa = gdpa;
+-#define DF(n) d->n = (PFN_vk##n)gdpa(*out, "vk" #n);
+-    DF(DestroyDevice) DF(CreateImage) DF(DestroyImage) DF(AllocateMemory) DF(FreeMemory) DF(BindImageMemory)
+-    DF(BindImageMemory2)
+-#undef DF
+-    if (!d->BindImageMemory2) d->BindImageMemory2 = (PFN_vkBindImageMemory2)gdpa(*out, "vkBindImageMemory2KHR");
+-    std::lock_guard<std::mutex> l(g_mapM);
+-    g_dev[key(*out)] = d;
+-    LOG("CreateDevice");
+-    return r;
+-}
+-
+-static VKAPI_ATTR void VKAPI_CALL DestroyDevice(VkDevice dev, const VkAllocationCallbacks *a) {
+-    DeviceData *d;
+-    {
+-        std::lock_guard<std::mutex> l(g_mapM);
+-        d = g_dev[key(dev)];
+-        g_dev.erase(key(dev));
+-    }
+-    d->DestroyDevice(dev, a);
+-    delete d;
+-}
+-
+-static PFN_vkVoidFunction deviceHook(const char *n) {
+-#define H(x) if (!strcmp(n, "vk" #x)) return (PFN_vkVoidFunction)x;
+-    H(DestroyDevice) H(CreateImage) H(DestroyImage) H(AllocateMemory) H(FreeMemory) H(BindImageMemory)
+-    H(BindImageMemory2)
+-    if (!strcmp(n, "vkBindImageMemory2KHR")) return (PFN_vkVoidFunction)BindImageMemory2;
+-#undef H
+-    return nullptr;
+-}
+-
+-EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL mrhand_GetDeviceProcAddr(VkDevice dev, const char *name) {
+-    if (!strcmp(name, "vkGetDeviceProcAddr")) return (PFN_vkVoidFunction)mrhand_GetDeviceProcAddr;
+-    DeviceData *d;
+-    { std::lock_guard<std::mutex> l(g_mapM); d = g_dev[key(dev)]; }
+-    PFN_vkVoidFunction next = d->gdpa(dev, name);
+-    if (!next) return nullptr;
+-    if (auto h = deviceHook(name)) return h;
+-    return next;
+-}
+-
+-EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL mrhand_GetInstanceProcAddr(VkInstance inst, const char *name) {
+-    if (!strcmp(name, "vkGetInstanceProcAddr")) return (PFN_vkVoidFunction)mrhand_GetInstanceProcAddr;
+-    if (!strcmp(name, "vkCreateInstance")) return (PFN_vkVoidFunction)CreateInstance;
+-    if (!strcmp(name, "vkDestroyInstance")) return (PFN_vkVoidFunction)DestroyInstance;
+-    if (!strcmp(name, "vkCreateDevice")) return (PFN_vkVoidFunction)CreateDevice;
+-    if (!strcmp(name, "vkGetDeviceProcAddr")) return (PFN_vkVoidFunction)mrhand_GetDeviceProcAddr;
+-    if (!inst) return nullptr;
+-    InstanceData *id;
+-    { std::lock_guard<std::mutex> l(g_mapM); id = g_inst[key(inst)]; }
+-    if (auto h = deviceHook(name)) {   // device functions queried through the instance
+-        if (id->gipa(inst, name)) return h;
+-        return nullptr;
+-    }
+-    return id->gipa(inst, name);
+-}
+-
+-EXPORT VKAPI_ATTR VkResult VKAPI_CALL mrhand_NegotiateLoaderLayerInterfaceVersion(VkNegotiateLayerInterface *v) {
+-    if (!processAllowed()) return VK_ERROR_INITIALIZATION_FAILED;
+-    if (v->loaderLayerInterfaceVersion < 2) return VK_ERROR_INITIALIZATION_FAILED;
+-    v->loaderLayerInterfaceVersion = 2;
+-    v->pfnGetInstanceProcAddr = mrhand_GetInstanceProcAddr;
+-    v->pfnGetDeviceProcAddr = mrhand_GetDeviceProcAddr;
+-    v->pfnGetPhysicalDeviceProcAddr = nullptr;
+-    return VK_SUCCESS;
+-}
++// Framejacker inspection adaptation. Upstream context is covered by its MIT notice.
++#include "capture_layer_impl.hpp"
+diff --git a/capture/ptgrab.cpp b/capture/ptgrab.cpp
+index 4b8f7e3..39e1871 100644
+--- a/capture/ptgrab.cpp
++++ b/capture/ptgrab.cpp
+@@ -30,20 +30,17 @@
+ #include "capture_publication.hpp"
+ #include "capture_import.hpp"
+ #include "capture_gpu_resources.hpp"
++#include "capture_provider.hpp"
+ #include <sys/resource.h>
+ 
+ #define CHECK(x) do { VkResult r_ = (x); if (r_ != VK_SUCCESS) { fprintf(stderr, "%s:%d %s -> %d\n", __FILE__, __LINE__, #x, r_); throw std::runtime_error("Vulkan_operation_failed"); } } while (0)
+ 
+ using Buf = framejacker::transport::Record;
+ 
+-static std::vector<Buf> fetchBuffers() {
+-    using namespace framejacker::transport;
++static framejacker::provider::Lease fetchBuffers() {
+     const char *runtime = getenv("XDG_RUNTIME_DIR");
+-    if (!runtime || runtime[0] != '/') throw Error("XDG_RUNTIME_DIR_missing_or_relative");
+-    std::string path = std::string(runtime) + "/mrhand/cam.sock";
+-    const auto deadline = Clock::now() + std::chrono::milliseconds(500);
+-    auto connection = connect_registry(path.c_str(), deadline);
+-    return receive_registry(connection.get(), deadline);
++    if (!runtime || runtime[0] != '/') throw framejacker::transport::Error("runtime_missing");
++    return framejacker::provider::Lease(std::string(runtime) + "/framejacker-camera-provider/camera.sock");
+ }
+ 
+ struct Gpu {
+@@ -230,7 +227,7 @@ static uint64_t monoNs() {
+ // that frame's luma into the shm slot of its camera.  Cameras = the two halves
+ // of the id-sorted buffer list (XRService allocates each camera's ring together).
+ static int stream(Gpu &g, std::vector<CamImage> &ims, int maxFps, uint32_t outSize,
+-                  framejacker::publication::RunLimit &limit) {
++                  framejacker::publication::RunLimit &limit, framejacker::provider::Lease &lease) {
+     std::sort(ims.begin(), ims.end(), [](const CamImage &a, const CamImage &b) { return a.info.id < b.info.id; });
+     const uint32_t W = ims[0].info.width, H = ims[0].info.height;
+     const uint32_t S0 = H / 2 - 8, SR = 16;   // probe strip
+@@ -246,10 +243,14 @@ static int stream(Gpu &g, std::vector<CamImage> &ims, int maxFps, uint32_t outSi
+     std::vector<int> camOf(ims.size());
+     for (size_t i = 0; i < ims.size(); i++) camOf[i] = i < ims.size() / 2 ? 0 : 1;
+ 
+-    const std::string shmPath = framejacker::publication::runtime_source();
++    const char *output = getenv("FRAMEJACKER_CAPTURE_OUTPUT");
++    if (!output || output[0] != '/') throw framejacker::transport::Error("supervisor_output_missing");
++    const std::string shmPath = output;
+     framejacker::publication::Publisher publisher(shmPath, OW, OH, 2);
+     uint64_t publications = 0;
+-    printf("{\"event\":\"publication_ready\",\"physical_camera_identity\":\"unverified\"}\n");
++    const auto &identity = publisher.identity();
++    printf("{\"event\":\"publication_ready\",\"device\":%llu,\"inode\":%llu,\"size\":%llu,\"physical_camera_identity\":\"unverified\"}\n",
++           (unsigned long long)identity.st_dev, (unsigned long long)identity.st_ino, (unsigned long long)identity.st_size);
+     fflush(stdout);
+ 
+     std::vector<Region> probeRegs;
+@@ -261,7 +262,9 @@ static int stream(Gpu &g, std::vector<CamImage> &ims, int maxFps, uint32_t outSi
+     // (XRService writes take a few ms; copying mid-write would tear).
+     std::vector<uint64_t> pendingSince(ims.size(), 0);
+     while (limit.running()) {
++        lease.check();
+         copyRegions(g, ims, probeRegs, probe);
++        lease.check();
+         uint64_t tNow = monoNs();
+         for (size_t i = 0; i < ims.size() && limit.running(); i++) {
+             const uint8_t *p = (const uint8_t *)probe.ptr + i * strip;
+@@ -284,6 +287,7 @@ static int stream(Gpu &g, std::vector<CamImage> &ims, int maxFps, uint32_t outSi
+             }
+             frames[cam]++;
+             if (tDetect <= lastPub[cam] || tDetect - lastPub[cam] < minGap) continue;
++            lease.check();
+             uint64_t t0 = monoNs();
+             const uint8_t *px;
+             if (outSize) {
+@@ -295,6 +299,7 @@ static int stream(Gpu &g, std::vector<CamImage> &ims, int maxFps, uint32_t outSi
+             copyNsSum += monoNs() - t0;
+             copies++;
+             if (!limit.running()) break;
++            lease.check(); // Never publish after detecting a generation change.
+             if (publisher.publish(cam, px, frame, tDetect, ims[i].info.id, frames[cam])) {
+                 lastPub[cam] = tDetect;
+                 publications++;
+@@ -304,7 +309,7 @@ static int stream(Gpu &g, std::vector<CamImage> &ims, int maxFps, uint32_t outSi
+         uint64_t now = monoNs();
+         if (statT && now - statT > 5000000000ull) {
+             double dt = (now - statT) / 1e9;
+-            printf("cam0 %.1f fps  cam1 %.1f fps  full-copy avg %.2f ms\n", frames[0] / dt, frames[1] / dt,
++            printf("{\"event\":\"stats\",\"slot0_hz\":%.1f,\"slot1_hz\":%.1f,\"copy_ms\":%.2f}\n", frames[0] / dt, frames[1] / dt,
+                    copies ? copyNsSum / 1e6 / copies : 0.0);
+             fflush(stdout);
+             statT = 0;
+@@ -325,7 +330,7 @@ int main(int argc, char **argv) {
+     catch (...) { fprintf(stderr, "invalid_arguments\n"); return 64; }
+     if (options.mode == Mode::help) {
+         printf("Experimental bounded stream: --allow-experimental-capture --seconds 1..10 [--max-fps 1..10]\n");
+-        printf("Inspection build: GPU/resource and layer lifecycle work still required before deployment.\n");
++        printf("Inspection build: Provider inspection build: original producer synchronization and device validation remain required.\n");
+         return 0;
+     }
+     if (options.mode == Mode::not_run) {
+@@ -333,30 +338,58 @@ int main(int argc, char **argv) {
+         return 3;
+     }
+     try {
++        const char *parent = getenv("FRAMEJACKER_CAPTURE_SUPERVISOR_PID");
++        const char *output = getenv("FRAMEJACKER_CAPTURE_OUTPUT");
++        int parentSignal = 0;
++        if (!parent || framejacker_shm::number(parent, 2, INT32_MAX) != static_cast<uint64_t>(getppid()) ||
++            !output || output[0] != '/' || prctl(PR_GET_PDEATHSIG, &parentSignal) || parentSignal != SIGKILL)
++            throw Error("capture_supervisor_required");
+         rlimit core{0, 0};
+         if (setrlimit(RLIMIT_CORE, &core) != 0) throw Error("core_limit_failed");
+         RunLimit limit(options.seconds);
+-        auto bufs = fetchBuffers();
++        auto lease = fetchBuffers();
++        std::vector<Buf> bufs;
++        uint64_t sourceDevice = 0;
++        for (const auto &record : lease.records()) {
++            const auto &packet = record.info;
++            if (!packet.buffer.hasImage || packet.buffer.width != 2464 || packet.buffer.height != 2464) continue;
++            framejacker::provider::validate_profile(packet);
++            if (sourceDevice && sourceDevice != packet.device) throw Error("multiple_exporter_devices");
++            sourceDevice = packet.device;
++            bufs.push_back({packet.buffer, framejacker::transport::duplicate(record.fd.get())});
++        }
++        lease.check();
+         if (!limit.running()) throw Error("capture_cancelled");
+         if (std::none_of(bufs.begin(), bufs.end(), [](const Buf &buffer) {
+                 return buffer.info.hasImage && buffer.info.width == 2464 && buffer.info.height == 2464;
+-            })) throw Error("no_Arcturus_sized_buffers");
++            })) throw Error("no_reviewed_profile_candidates");
+         // Reject malformed candidate metadata before initializing Vulkan.
+         for (const auto &buffer : bufs)
+             if (buffer.info.hasImage && buffer.info.width == 2464 && buffer.info.height == 2464)
+                 framejacker::capture_import::validate_metadata(buffer.info);
+         Gpu g;
+         g.init();
++        VkPhysicalDeviceIDProperties ids{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
++        VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &ids};
++        vkGetPhysicalDeviceProperties2(g.device.physical(), &properties);
++        for (const auto &record : lease.records())
++            if (record.info.device == sourceDevice && record.info.buffer.hasImage &&
++                record.info.buffer.width == 2464 && record.info.buffer.height == 2464)
++                framejacker::provider::validate_profile(record.info, ids.deviceUUID, ids.driverUUID);
++        lease.check();
++        if (bufs.size() < 2 || (bufs.size() % 2)) throw Error("unsupported_buffer_grouping");
+         std::vector<CamImage> ims;
+         for (auto &buffer : bufs)
+             if (buffer.info.hasImage && buffer.info.width == 2464 && buffer.info.height == 2464) {
+                 if (!limit.running()) throw Error("capture_cancelled");
++                lease.check();
+                 ims.push_back(importImage(g, buffer));
++                lease.check();
+             }
+         if (!limit.running()) throw Error("capture_cancelled");
+         int code = 1;
+         try {
+-            code = stream(g, ims, options.fps, 640, limit);
++            code = stream(g, ims, options.fps, 640, limit, lease);
+             ims.clear();
+             if (g.device.completion().cleanup_deferred) throw Error("import_cleanup_deferred");
+             printf("{\"event\":\"imports_closed\",\"gpu_import_cleanup_ok\":true}\n");
+@@ -368,6 +401,7 @@ int main(int argc, char **argv) {
+         }
+         if (!g.close()) throw Error("gpu_resource_cleanup_deferred");
+         printf("{\"event\":\"gpu_resources_closed\",\"gpu_resource_cleanup_ok\":true}\n");
++        printf("{\"event\":\"capture_closed\",\"gpu_resource_cleanup_ok\":true,\"publication_cleanup_ok\":true,\"registry_unchanged\":true,\"physical_camera_identity\":\"unverified\",\"producer_completion\":\"unverified\",\"exit_code\":%d}\n", code);
+         return code;
+     } catch (const std::exception &error) {
+         fprintf(stderr, "bounded capture failed: %s\n", error.what());

@@ -26,6 +26,8 @@ owns the current capture work plan.
 | Query GPU import prerequisites without opening the camera | [Bounded Vulkan capability query](on-device.md#query-vulkan-capture-capabilities) |
 | Develop and test buffer imports without the headset | [Import validation and synthetic Vulkan ownership tests](development.md#build-and-test-image-import-ownership) |
 | Test GPU startup, memory and resource cleanup without a driver | [GPU ownership adaptation and fault injection](development.md#build-and-test-gpu-resource-ownership) |
+| Test hung capture workers, provider lifecycle and recovery | [Watchdog/provider development](development.md#capture-watchdog-provider-lifecycle-and-restoration-preparation) and [native preparation](on-device.md#test-the-watchdog-and-provider-without-capture) |
+| Understand or replace the recognition model | [Recognition architecture and model candidates](architecture.md#recognition-implementation-and-model-replacement) |
 | Inspect existing luma input or test the isolated reader | [Shared-memory procedure](on-device.md#check-existing-luma-shared-memory) and [controlled fixture](development.md#isolated-luma-reader-and-synthetic-producer) |
 | Set up cloud or desktop development | [Development setup](development.md) |
 | Continue live capture development | [Active capture plan](live-capture.md#current-work-order) |

@@ -318,6 +318,7 @@ public:
     }
     ci::Completion &completion() const { return state().completion; }
     VkDevice handle() const { return state().device; }
+    VkPhysicalDevice physical() const { return state().physical; }
     VkQueue queue() const { return state().queue; }
     uint32_t family() const { return state().family; }
     uint64_t allocated_bytes() const { return state().allocated_bytes; }

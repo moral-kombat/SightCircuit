@@ -63,7 +63,7 @@ unmodified from `spyjacob/steam-frame-hand-tracking` at commit
 [upstream MIT license](third_party/mrhand/LICENSE) and
 [provenance](third_party/mrhand/README.md) are included. Framejacker uses the
 luma shared-memory layout. The adaptation patches below include upstream
-source context; no complete upstream capture layer, `ptgrab`, installer, driver
+source context/deletions; no upstream capture binary, installer, driver
 or hand-tracking model is bundled or activated. The controlled producer is
 original test code, not a camera source.
 
@@ -110,6 +110,15 @@ MIT source/context attribution. The optional `--resource-fixes` mode adds
 original GPU ownership helpers and a fake-dispatch fixture. Capture binaries
 remain non-executable inspection artifacts. No upstream installer or real
 Vulkan/camera operation is executed by this build/test procedure.
+
+[patches/mrhand/0005-provider-lifetime-and-provenance.patch](patches/mrhand/0005-provider-lifetime-and-provenance.patch)
+applies after patches 0001–0004 at the same pin and retains upstream MIT
+attribution, including the removed layer implementation in its diff. The
+`--provider-fixes` mode adds original Framejacker provider/protocol, layer
+dispatch/lifetime, opt-in guard and synthetic fixtures. The worker supervisor,
+exec boundary and configuration/recovery tools are original Framejacker code.
+Tests run fake downstream Vulkan dispatch and generated local peers only; no
+upstream installer or real layer/camera operation is executed.
 
 If compiler-search-path Vulkan headers are unavailable, either builder fetches
 [Khronos Vulkan-Headers v1.4.309](https://github.com/KhronosGroup/Vulkan-Headers/tree/952f776f6573aafbb62ea717d871cd1d6816c387)

@@ -16,9 +16,10 @@ layer has been deployed by Framejacker.
 | 1c | Check capture of our own display | Confirmed: the VR panel appears in captured output | Current composited mirror does not exclude our output; no continuous live-image panel from this source; [E18](status.md#e18-vr-panel-included-in-mirror-input) |
 | 1d | Detector quality and class coverage | Needs evaluation | Include the rug false positive; select supported target classes and evaluate correct labels, boxes and misses before claiming useful accuracy |
 | 2 | Isolated shared-memory reader and controlled producer | Controlled x86_64 and Frame ARM64 checks passed; real provider unverified | All 14 native/supervisor tests pass on Frame; upstream writer ordering and original GPU completion remain unresolved; [E23](status.md#e23-reference-build-and-controlled-reader-on-frame) |
-| 3 | Dedicated camera provider | Initial tests and GPU query pass on Frame; GPU ownership adaptation cloud-tested; not deployed | Next implement capture supervision, then finish metadata/registry and layer lifetime/restoration; physical source and built-in support unresolved |
+| 3 | Dedicated camera provider | Initial tests and GPU query pass on Frame; watchdog/provider/recovery inspection adaptation cloud-tested; not deployed | Native validation, original producer synchronization review and controlled restoration/trial remain; physical source and built-in support unresolved |
 | 3a | Validated image import and ownership | ARM64 build and ten synthetic tests passed; two-plane coverage added in cloud | Actual camera DMA-BUF import remains untested; [E31](status.md#e31-import-build-and-synthetic-tests-on-frame), [E32](status.md#e32-two-plane-import-fixture-cloud-checks) |
 | 3b | Device and remaining GPU resource ownership | Inspection build and nine synthetic cloud tests pass | Native ARM64 and actual driver execution pending; no activation; [E33](status.md#e33-gpu-resource-ownership-cloud-checks) |
+| 3c | Capture watchdog, provider metadata/lifetime and configuration recovery | Implemented; 28 new synthetic cloud tests pass | No real driver/layer activation; native ARM64 and on-device restoration remain pending; [E34](status.md#e34-capture-watchdog-provider-lifecycle-and-recovery-cloud-checks) |
 | 4 | Capture-only device trial | Planned | Ten seconds of fresh images from one identified source, correct orientation, clean exit and working normal passthrough |
 | 5 | Continuous live input in the existing display | Planned; needs input independent of our output | Reuse detector/display after a dedicated provider or supported overlay-excluded mirror mode is validated; current mirror includes the panel |
 | 6 | Color, built-in camera support and later geometry | Planned | Validate each source and color conversion separately; require calibration and stronger timing evidence before stereo depth or spatial labels |
@@ -72,8 +73,9 @@ now passes on Frame, with normal passthrough; see
 builds and passes all ten synthetic tests on ARM64; see
 [E31](status.md#e31-import-build-and-synthetic-tests-on-frame). Continue device
 and remaining provider work before the next camera trial. GPU resource ownership
-is now implemented in a separate cloud-tested inspection adaptation; capture
-supervision is next. The inspection builds are not
+is implemented in a separate cloud-tested inspection adaptation. Capture
+supervision, provider metadata/lifetime and recovery now have a further
+cloud-tested adaptation. The inspection builds are not
 deployment-ready. Identify the selected source
 during capture validation; connection alone does not identify past mirror frames.
 Prefer a supported interface; the reviewed
@@ -201,8 +203,8 @@ monotonic publication. Its stream has explicit duration/rate/opt-in parsing,
 signal checks and parent-death killing. Eight controlled cloud tests cover the
 same publisher helper and actual reader together; all eight also passed on
 Frame ARM64. Normal cleanup removes its file; abrupt death may leave a stale file
-that is refused on restart. The implementation does not yet supply automatic
-lease recovery or an external watchdog for blocked GPU calls.
+that is refused on restart. This earlier mode does not include the external
+watchdog or identity-based recovery added by the newer milestone below.
 
 ## Offline provider work while the Frame is unavailable
 
@@ -234,19 +236,27 @@ private allocations. Nine synthetic tests pass, with 57 injected failures in
 the startup/private-resource path. This is not actual driver or ARM64 execution;
 see [E33](status.md#e33-gpu-resource-ownership-cloud-checks).
 
-The next engineering work does not need another unchanged query or import test:
+The `--provider-fixes` adaptation adds a separate v2 metadata contract,
+GPU/driver UUID comparison, device-scoped registry entries, generation checks,
+shared callback lifetime and an owned/stoppable private endpoint. The external
+supervisor bounds the worker and records publication identities for recovery.
+An inactive configuration bundle and conditional exact restoration are
+implemented. Twenty-eight new cloud tests pass; see
+[E34](status.md#e34-capture-watchdog-provider-lifecycle-and-recovery-cloud-checks)
+and [the development procedure](development.md#capture-watchdog-provider-lifecycle-and-restoration-preparation).
 
-1. Extend the buffer contract where needed for exporter flags/sharing and device
-   provenance. The initial importer rejects arrayed images because array-stride
-   metadata is absent. GPU bootstrap and resource ownership are implemented in
-   the resource adaptation; retain native and actual-driver validation as
-   separate checks. The earlier `--import-fixes` mode does not include them.
-2. Add a supervised capture worker with a deadline around all driver calls and
-   explicit reporting when API cleanup or file recovery is unconfirmed.
-3. Handle registry changes/provider loss by stopping before using old image
-   bindings; test generation changes and shutdown with synthetic peers.
-4. Repair layer endpoint ownership, callback/device registry lifetime and server
-   shutdown. Prepare exact configuration backup/restoration before activation.
+Remaining work does not need another unchanged GPU query or initial import test:
+
+1. Run the new no-camera milestone on ARM64 when available, and prepare an
+   inactive bundle against that Frame's exact existing configuration.
+2. Complete the original producer synchronization/FOREIGN queue-ownership review.
+   The reference exposes no producer fence or exposure sequence. Our queue
+   fence, stable-strip heuristic and registry checks cannot supply one.
+3. Prepare a controlled layer-load/restoration and actual-driver procedure using
+   the exact bundle. A file restore cannot unload a currently running layer.
+4. Identify the selected physical camera during a bounded capture-only trial,
+   then verify orientation, scene motion, clean shutdown and normal passthrough.
+   Keep inference and live VR image output out of that first trial.
 
 Use the Frame report for device capability policy: graphics family 0, all four
 required extensions, YCbCr conversion and dedicated DMA-BUF imports are
@@ -257,27 +267,31 @@ memory types are candidates; actual import still needs the FD/image memory-bit
 intersection. Exporter/source metadata is still needed to revise conservative
 profile restrictions. The helper validates
 declared sizes and lets Vulkan validate layouts; it does not prove the actual
-DMA-BUF payload length, complete compressed-plane footprint, exporter flags/sharing
-or physical-device provenance. Actual image imports remain untested; ARM64
+DMA-BUF payload length or complete compressed-plane footprint. The new provider
+records/restricts exporter flags/sharing and checks GPU/driver UUIDs, but those
+checks have only synthetic evidence. Actual image imports remain untested; ARM64
 compile/link and synthetic helper execution are confirmed. Keep the source-buffer
 synchronization review and capture-only trial
 as separate acceptance gates.
 
 ## Next engineering step: capture worker supervision
 
-Put the resource adaptation behind an external process watchdog before any real
-driver/camera trial. Supervise startup, import, copy and destruction calls;
-driver calls can block even when the stream loop checks a deadline. Preserve
-signal/cancellation handling, parent-death containment, bounded output and reaping.
-Report graceful API cleanup separately from forced process termination, and
-recover only identity-checked publication files belonging to that worker.
-This supervisor is not yet implemented; the existing GPU-query watchdog does
-not supervise capture.
+The external supervisor is now implemented and cloud-tested for startup,
+import, copy and destruction hangs, signals, parent death, bounded output and
+reaping. It distinguishes graceful API cleanup from forced termination and
+recovers only recorded publication identities. Provider generation/loss,
+metadata validation, layer/server lifetime and exact configuration recovery
+also have synthetic tests. The heading is retained for existing links; this
+implementation milestone is complete in the cloud.
 
-Then address provider generation/loss, missing exporter metadata and layer/server
-lifetime, followed by exact installation/restoration preparation. Keep the
-XRService producer synchronization/ownership review separate from our own queue
-completion gate. No live-capture command is ready yet.
+The next acceptance gate is the original XRService producer synchronization and
+FOREIGN ownership review, followed by native validation and a controlled
+load/restoration procedure. The new metadata contract proves neither camera
+identity nor completed original writes. No device layer has been installed, and
+the real capture binary remains non-executable. The supervisor's capture flag
+is guarded; it is not a ready-to-run live-capture procedure. Use the
+[no-camera native milestone](on-device.md#test-the-watchdog-and-provider-without-capture)
+when back on Frame.
 
 ## Next provider step: query GPU capabilities
 

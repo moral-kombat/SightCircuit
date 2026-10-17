@@ -107,7 +107,8 @@ inline Fd connect_registry(const char *path, Deadline deadline) {
     return connection;
 }
 
-inline void send_record(int socket, const MrhandBufInfo &info, int fd, Deadline deadline) {
+template<class Packet>
+inline void send_packet(int socket, const Packet &info, int fd, Deadline deadline) {
     size_t offset = 0;
     while (offset != sizeof(info)) {
         wait_ready(socket, POLLOUT, deadline);
@@ -134,8 +135,11 @@ inline void send_record(int socket, const MrhandBufInfo &info, int fd, Deadline 
     }
 }
 
-inline Record receive_record(int socket, Deadline deadline) {
-    Record record;
+template<class Packet> struct OwnedPacket { Packet info{}; Fd fd; };
+
+template<class Packet>
+inline OwnedPacket<Packet> receive_packet(int socket, Deadline deadline) {
+    OwnedPacket<Packet> record;
     size_t offset = 0;
     std::vector<Fd> descriptors;
     while (offset != sizeof(record.info)) {
@@ -172,19 +176,29 @@ inline Record receive_record(int socket, Deadline deadline) {
             throw Error("invalid_ancillary_data");
         offset += static_cast<size_t>(received);
     }
+    if (!descriptors.empty()) record.fd = std::move(descriptors.front());
+    return record;
+}
+
+inline void send_record(int socket, const MrhandBufInfo &info, int fd, Deadline deadline) {
+    send_packet(socket, info, fd, deadline);
+}
+
+inline Record receive_record(int socket, Deadline deadline) {
+    auto packet = receive_packet<MrhandBufInfo>(socket, deadline);
+    Record record{packet.info, std::move(packet.fd)};
     if (record.info.magic != MRHAND_MAGIC || record.info.generation == 0)
         throw Error("invalid_registry_header");
     if (record.info.id == 0) {
-        if (!descriptors.empty()) throw Error("terminator_has_descriptor");
+        if (record.fd.get() >= 0) throw Error("terminator_has_descriptor");
         return record;
     }
-    if (descriptors.size() != 1) throw Error("record_descriptor_missing");
+    if (record.fd.get() < 0) throw Error("record_descriptor_missing");
     if (record.info.size == 0 || record.info.size > (1ull << 30) ||
         record.info.hasImage > 1 || record.info.hasModifier > 1 ||
         record.info.planeCount > MRHAND_MAX_PLANES || record.info.width > 8192 ||
         record.info.height > 8192 || record.info.arrayLayers > 2)
         throw Error("registry_metadata_out_of_bounds");
-    record.fd = std::move(descriptors.front());
     return record;
 }
 

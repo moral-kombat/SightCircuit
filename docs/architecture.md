@@ -47,6 +47,113 @@ accuracy and latency. CPU execution in the cloud does not establish the same
 runtime or performance on the headset. Model weights, labels, preprocessing,
 and license must be recorded together for reproducible results.
 
+## Recognition implementation and model replacement
+
+The implemented detector is [`DemoDetector`](../scripts/demo_detector.py), shared
+by file replay and the bounded mirror recognizer. It loads SHA-256-verified
+MobileNet-SSD Caffe weights/configuration into OpenCV DNN, explicitly selects
+CPU execution and limits OpenCV to two threads. It recognizes the 20 Pascal VOC
+foreground classes plus a background output; it has no rug class. A rug labeled
+sofa is a false positive, not evidence that rug recognition is supported.
+
+```mermaid
+flowchart LR
+    File[Recorded track: PyAV] --> BGR[Owned BGR image, longest side at most 960]
+    Mirror[Bounded mirror: RGB3 or BGR3 with stride] --> Latest[One pending input; replace older reads]
+    Latest --> BGR
+    BGR --> Adapter[DemoDetector: resize to 300 by 300, scale and mean]
+    Adapter --> CPU[OpenCV DNN on CPU]
+    CPU --> Decode[Filter scores/classes and map boxes to this input image]
+    Decode --> Result[Labels, boxes, scores, annotated image and inference time]
+    Result --> Replay[Replay: Qt and optional head-relative VR panel]
+    Result --> Check[Mirror: JSON and optional still after capture]
+```
+
+Replay converts its selected decoded track to BGR24 and scales it to at most
+960 pixels on the longest side. The mirror path handles padded RGB3/BGR3 reads,
+converts to BGR and uses the same limit. The detector requires a nonempty
+`uint8` image with three BGR channels. Its `blobFromImage` uses a 300 × 300
+resize, scale `0.007843` and mean `127.5`; this resize stretches the image,
+rather than adding letterbox padding. SSD's normalized boxes are mapped back
+to the dimensions of that specific input image, clamped and drawn on an owned
+copy. The default score threshold is 0.5. Scores are not calibrated
+probabilities or a measured accuracy percentage.
+
+The current adapter boundary is an ordinary Python method:
+
+```python
+result = detector.detect(bgr_image, threshold)
+# result contains:
+# image: owned annotated uint8 BGR image matching this input
+# labels: sorted label strings
+# detections: [{"label": str, "confidence": float, "box_xyxy": [x1, y1, x2, y2]}]
+# inference_ms: time spent in the model's forward call
+```
+
+Both callers currently construct `DemoDetector` directly; there is no model
+selector or second detector adapter yet. The mirror worker already accepts an
+injected detector factory for tests. Replay presents one latest completed
+result, while mirror capture keeps one pending owned input for inference and
+drops observations older than one second. The measured 42.044 ms mean forward
+time and roughly 5 processed fps belong to the bounded mirror/MobileNet trial,
+not to a replacement model or a full live VR pipeline.
+
+### Candidate models
+
+These are candidates to evaluate, not installed backends or Frame benchmarks.
+The exact weights, export graph and redistribution terms must be checked when
+selecting an artifact; a repository license alone does not settle every weight's
+terms.
+
+| Candidate | Why consider it | Runtime and tradeoff |
+| --- | --- | --- |
+| Current MobileNet-SSD | Small working baseline with measured Frame execution | OpenCV DNN CPU; only 20 foreground classes and observed false positives |
+| [YOLOX-Nano](https://github.com/Megvii-BaseDetection/YOLOX) | First compact alternative to compare on indoor objects; standard COCO training covers 80 classes | Export/pin ONNX, implement its preprocessing, output decoding and NMS, test OpenCV DNN or ONNX Runtime CPU; source uses Apache-2.0 |
+| [YOLO11n](https://docs.ultralytics.com/models/yolo11/) | Another small 80-class COCO detector with an established export workflow | Export off-device instead of requiring the training stack on Frame; verify ONNX operators/runtime and AGPL-3.0 or applicable commercial licensing |
+| [EfficientDet-Lite0](https://ai.google.dev/edge/litert/libraries/task_library/object_detector) | A mobile-oriented alternative, including quantized deployment | Requires a LiteRT/TFLite adapter and verified ARM64 runtime; quantized accuracy and preprocessing need measurement |
+| [Grounding DINO](https://github.com/IDEA-Research/GroundingDINO) or [OWLv2](https://huggingface.co/docs/transformers/model_doc/owlv2) | Text-prompted categories such as rug/carpet without the current fixed label list | Much heavier candidates; begin with offline evaluation or an explicit companion-computer experiment before headset deployment |
+| A small detector fine-tuned for our target objects | Best route if rugs or a specific set of household objects are essential | Collect/label representative color and grayscale camera images, retain a held-out test set and export a compact model; training happens off-device |
+
+COCO's 80 classes also omit rug/carpet. Switching to a COCO model alone will not
+add that category. Use suitable custom training or test an open-vocabulary model
+if naming rugs is a requirement. Segmentation models can add object outlines;
+a generic segmenter does not automatically supply correct object names. Gaussian
+splats concern scene reconstruction and do not replace the detector.
+
+### Replacement procedure
+
+1. Agree on target classes and an annotated evaluation set from representative
+   recordings/stills, including rugs and objects previously confused. Measure
+   correct classes, missed objects, false positives and box placement.
+2. Add a detector adapter that preserves the method/result boundary above.
+   Pin weights and label-map hashes, input dtype/shape, RGB/BGR order,
+   normalization, model/runtime versions and licenses. Add the runtime only to
+   environments that use it. ONNX Runtime is present in the cloud smoke setup;
+   it is not currently a replay dependency or a recognition backend.
+3. Perform the new model's own preprocessing/output decoding, score filtering
+   and NMS where needed. Invert any letterbox/crop/resize transform before
+   returning boxes. Keep the original frame association and owned output image;
+   changing a weight filename alone is insufficient.
+4. Introduce a shared factory/model selection for both callers and retain
+   MobileNet-SSD as the comparison baseline. Test decoding, class IDs, finite
+   scores, coordinate transforms, empty results and shutdown with the adapter.
+5. Compare the models on the same inputs, then benchmark ARM64 startup, memory,
+   preprocessing/inference/render times, input age, thermals and passthrough
+   behavior. Begin at the existing 5 processed fps target; drop older pending
+   input instead of accumulating latency.
+
+CPU is the established inference backend. An ARM64 CPU ONNX runtime or an
+[ncnn Vulkan](https://github.com/Tencent/ncnn) adapter is a possible later
+deployment choice, subject to graph support and measurement. Vulkan capture
+capability does not establish fast or compatible model inference, and GPU
+inference may contend with capture and compositing on the headset. Benchmark
+capture alone before adding it.
+
+Dedicated input is currently a capture-only inspection adaptation. Connecting
+its grayscale luma to recognition remains work: replicating luma into three
+channels satisfies the detector's input shape but does not recover color or
+establish accuracy for a model trained on color images.
+
 ## Camera backend boundary
 
 The standalone mirror recognizer uses the verified virtual SteamVR reader in

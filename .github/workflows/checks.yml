@@ -9,6 +9,16 @@ permissions:
   contents: read
 
 jobs:
+  capture-supervisor:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the native exec boundary without starting capture
+        run: bash scripts/build_capture_supervisor.sh
+      - name: Verify hung workers, signals, parent death and owned publication recovery
+        run: python3 -m unittest discover -s tests -p test_capture_supervisor.py -v
+
   capture-gpu-check:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -47,6 +57,11 @@ jobs:
         run: |
           bash scripts/build_capture_reference.sh --resource-fixes
           python3 -m unittest discover -s tests -p test_capture_gpu_resources.py -v
+      - name: Build provider adaptation and verify registry, layer hooks and restoration
+        run: |
+          bash scripts/build_capture_reference.sh --provider-fixes
+          python3 -m unittest discover -s tests -p test_capture_provider.py -v
+          python3 -m unittest discover -s tests -p test_capture_layer_config.py -v
       - name: Check inspection artifacts without executing them
         run: |
           python3 - <<'PY'
@@ -58,7 +73,8 @@ jobs:
                                              ('capture-transport-reference', 'built_transport_reference', True),
                                              ('capture-publication-reference', 'built_publication_reference', True),
                                              ('capture-import-reference', 'built_import_reference', True),
-                                             ('capture-resources-reference', 'built_resources_reference', True)):
+                                             ('capture-resources-reference', 'built_resources_reference', True),
+                                             ('capture-provider-reference', 'built_provider_reference', True)):
               root = Path('artifacts') / directory
               report = json.loads((root / 'build-report.json').read_text())
               assert report['status'] == status

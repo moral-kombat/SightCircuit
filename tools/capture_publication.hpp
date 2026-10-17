@@ -82,6 +82,7 @@ public:
     Publisher(const Publisher &) = delete;
     Publisher &operator=(const Publisher &) = delete;
     ~Publisher() { close(); }
+    const struct stat &identity() const { return identity_; }
 
     void verify() const {
         struct stat opened{}, named{}, parent{};

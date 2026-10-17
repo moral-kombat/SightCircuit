@@ -93,10 +93,13 @@ NV12 modifier, with normal passthrough throughout and afterward. The
 compiled on ARM64 and passed ten synthetic tests on Frame. The cloud suite now
 also covers the two-plane case explicitly. A separate GPU resource-ownership
 adaptation now passes nine synthetic cloud tests, including startup rollback
-and parent/child lifetime handling. Next implement the capture watchdog,
-complete provider metadata/registry and layer lifecycle/restoration, and validate
-actual driver execution before continuous VR image display from independent
-input. Bounded recognition and snapshots shown after
+and parent/child lifetime handling. The capture watchdog, versioned provider
+metadata/registry, owned layer lifetime and exact configuration recovery are now
+implemented and cloud-tested with synthetic peers. An inactive configuration
+bundle can be prepared without installation. Next validate the new milestone
+on ARM64, finish the original-producer synchronization review and prepare a
+controlled capture-only trial. Actual driver imports, camera identity and
+on-device restoration remain unvalidated. Bounded recognition and snapshots shown after
 capture remain useful. The model's class coverage and false positives need separate work.
 The [isolated shared-memory reader](docs/on-device.md#check-existing-luma-shared-memory)
 also passes controlled x86_64 and ARM64 tests; no dedicated capture provider has
@@ -104,6 +107,8 @@ been deployed. Built-in camera capture needs separate validation. The
 [dated reference review](docs/capture-reference-review.md)
 explains the strategy; [architecture](docs/architecture.md) describes components,
 frame ownership and longer-term acceptance criteria.
+Its [model replacement guide](docs/architecture.md#recognition-implementation-and-model-replacement)
+explains the shared detector, candidate models and evaluation procedure.
 
 ## License
 
