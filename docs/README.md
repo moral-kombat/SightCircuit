@@ -32,6 +32,7 @@ owns the current capture work plan.
 | Run the bounded metadata-layer activation and recovery test | [Opt-in trial and result reports](on-device.md#run-the-bounded-metadata-layer-trial) |
 | Diagnose the paused trial without another restart | [Focused service-failure journal](on-device.md#read-the-service-failure-window) |
 | Inspect SteamVR dependencies and launcher paths | [Read-only service details](on-device.md#inspect-the-service-relationships-without-restarting) |
+| Review the platform start/stop hooks | [Read shipped launcher definitions without executing them](on-device.md#read-the-platform-launcher-definitions) |
 | Understand or replace the recognition model | [Recognition architecture and model candidates](architecture.md#recognition-implementation-and-model-replacement) |
 | Inspect existing luma input or test the isolated reader | [Shared-memory procedure](on-device.md#check-existing-luma-shared-memory) and [controlled fixture](development.md#isolated-luma-reader-and-synthetic-producer) |
 | Set up cloud or desktop development | [Development setup](development.md) |

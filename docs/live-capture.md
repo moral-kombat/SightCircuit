@@ -253,14 +253,14 @@ metadata-diagnostic tests; see [E37](status.md#e37-metadata-only-provider-and-di
 
 Remaining work does not need another unchanged GPU query or initial import test:
 
-1. Read service relationships and launcher executable paths with `--service-details`.
-   The focused journal is received: manual start/stop are allowed, with the
-   worker failing during shutdown and later startup after rollback's error.
-   Do not repeat activation or rollback on the working headset.
-2. Identify the controller/launcher sequencing and failed operation before
-   adapting service control. `Restart=always` alone does not explain an explicit
-   stop followed by startup, and the restart counter is zero. Require independent
-   access before reassessing the device gate; keep image access disabled.
+1. Read the shipped unit's Exec* definitions and `select_steamvr.sh` source.
+   Service relationships are received: SteamVR belongs to the graphical session,
+   uses the platform selector and has Bash start/stop post-hooks. Their bodies
+   remain unreviewed. Do not repeat activation or rollback on the working headset.
+2. Identify hook side effects, controller sequencing and the failed operation
+   before adapting service control. Dependency ordering alone does not prove
+   stop propagation; `Restart=always` does not identify the later start's trigger.
+   Require independent access before reassessing the gate; keep image access disabled.
 3. Establish a coordinated producer release/ready/return contract or design a
    copy within the compositor's existing synchronized access window. Validate
    ownership, layout, completion and host visibility before allowing pixel reads.

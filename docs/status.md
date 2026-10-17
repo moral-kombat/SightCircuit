@@ -31,7 +31,7 @@ unknown unless explicitly recorded below.
 | Capture watchdog, provider/layer lifecycle and exact recovery | Earlier v2 milestone passed all 28 generated-data tests on Frame ARM64 | Bounded worker, metadata/GPU provenance, registry changes, owned endpoint and conditional restoration; no real driver/layer execution or device restoration; [E35](#e35-watchdog-provider-and-recovery-tests-on-frame) |
 | Metadata-only provider and producer synchronization review | v3 ARM64 build and all 24 generated-data tests passed on Frame | Layer retains/exports no image FDs; no real layer activation or live camera access; controlled load/restoration remains next; [E36](#e36-metadata-only-provider-and-synchronization-review), [E37](#e37-metadata-only-provider-and-diagnostic-on-frame) |
 | Inactive v3 bundle and SteamVR service preflight | Frame report received | Bundle prepared without activation; active simple/control-group user service, 20-second stop timeout, no drop-ins; [E38](#e38-inactive-bundle-and-steamvr-service-on-frame) |
-| Bounded metadata-layer trial and post-exit recovery | Paused after service-control failures on Frame | Rollback reports configuration restored; later SteamVR/UI/passthrough work. Manual start/stop allowed; stop/start sequencing and exact failed command unresolved; no inspection report; [E41](#e41-frame-trial-report-and-service-control-failures), [E42](#e42-focused-service-window-and-restart-policy-on-frame) |
+| Bounded metadata-layer trial and post-exit recovery | Paused after service-control failures on Frame | Platform selector and Bash start/stop hooks identified; their bodies remain unreviewed. Rollback reports configuration restored; normal UI/passthrough work; no inspection report; [E43](#e43-steamvr-session-relationships-and-platform-hooks) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
 | Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; no source-identified built-in-camera frames have been received |
 | Stereo depth and world-space labels | Planned | Calibration, depth and pose/timebase alignment remain unresolved |
@@ -1347,6 +1347,47 @@ paths. It excludes command arguments, environment values and unrequested fields.
 All 24 cloud trial tests pass, including output exclusion and no activation for
 this mode. No device mutation or new camera trial was performed. Continue with
 [the read-only service topology report](on-device.md#inspect-the-service-relationships-without-restarting).
+
+### E43: SteamVR session relationships and platform hooks
+
+Source: user-supplied `--service-details` JSON, received 2026-10-17
+(America/New_York). The query succeeds with `activation_requested: false`.
+Exact execution time and checkout HEAD were not included. SteamVR remains
+active/running, result success, MainPID 19651, with no drop-ins.
+
+The unit is in
+`/user.slice/user-1000.slice/user@1000.service/session.slice/steamvr.service`,
+requires `gamescope-session.service`, `session.slice` and `basic.target`, and is
+part of `graphical-session.target`. It is ordered after the gamescope session
+service and before Steam, gamescope-session.target, steamvr-plasma and several
+camera/audio helper units. `Wants` includes `arcturus-camera-switch.service`.
+That relationship does not establish which camera is selected.
+
+These relationships have specific directions: `Before` is ordering, not stop
+propagation, and `PartOf` propagates the parent target's stop/restart to the
+service, not automatically the reverse. The report therefore does not prove
+that stopping SteamVR directly stops the entire graphical session. `UpheldBy`,
+`Upholds`, `PropagatesStopTo` and `StopPropagatedFrom` are empty;
+`StopWhenUnneeded=no`. Manual start/stop are permitted. Job timeout properties
+are infinity, while the service stop timeout is 20 seconds. These facts do not
+explain the original nonzero systemctl result by themselves.
+
+`ExecStartPre`, `ExecStart` and `ExecStop` use
+`/usr/share/deckard/select_steamvr.sh`; `ExecStartPost` and `ExecStopPost` use
+`/bin/bash`. Their arguments and hook bodies were deliberately omitted by the
+read-only report. This is a platform launcher with additional lifecycle hooks;
+the prior generated manager tests do not model those hook side effects.
+Nonzero hook results, target transitions and competing jobs remain possible
+explanations, not established causes. The old stderr cannot be reconstructed
+from these executable paths.
+
+Activation remains blocked. The next read-only input is the shipped unit's
+Exec* definitions and selector script, not another runtime test. The
+[source-reading procedure](on-device.md#read-the-platform-launcher-definitions)
+prints static vendor code without executing it, and omits unit environment/
+credential directives. Runtime environment and credential files are not read.
+No restart policy, capability setting, camera source or driver change is
+justified by this report alone. No new device mutation or camera access occurred.
 
 ## Maintaining the evidence
 

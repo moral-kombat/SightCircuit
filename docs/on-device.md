@@ -1076,6 +1076,44 @@ arguments and environment values are omitted. Share the JSON report. No
 rebuild is needed. The activation pause stays in place while the unit
 relationships/launcher behavior are reviewed.
 
+### Read the platform launcher definitions
+
+The service relationship report was received; see
+[E43](status.md#e43-steamvr-session-relationships-and-platform-hooks).
+SteamVR uses `/usr/share/deckard/select_steamvr.sh` for pre-start/start/stop,
+plus Bash start/stop post-hooks. Executable paths alone do not reveal what the
+hooks do. Read both shipped definitions in one pass, without executing them:
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+import re
+
+for name in ('/usr/lib/systemd/user/steamvr.service',
+             '/usr/share/deckard/select_steamvr.sh'):
+    print(f'\n--- {name} ---')
+    try:
+        text = Path(name).read_text()
+    except OSError as error:
+        print(error)
+        continue
+    if name.endswith('.service'):
+        continuation = False
+        for line in text.splitlines():
+            selected = continuation or re.match(r'^\s*(?:Exec[A-Za-z]*|Type)\s*=', line)
+            if selected:
+                print(line)
+            continuation = bool(selected) and line.rstrip().endswith('\\')
+    else:
+        print(text)
+PY
+```
+
+Share this output. The unit portion includes only Exec*/Type definitions and
+their continuation lines; environment/credential directives are omitted. The
+selector is read as static source, not run. No runtime environment or credential
+file is read. Preserve the working session while these hooks are reviewed.
+
 ### Check existing luma shared memory
 
 This is a separate diagnostic for an **already running** compatible provider.
