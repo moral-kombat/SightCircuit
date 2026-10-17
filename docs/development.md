@@ -594,7 +594,7 @@ python3 -m unittest discover -s tests -p test_capture_layer_trial.py -v
 ```
 
 The current cloud suites contain **10 watchdog, 14 provider/layer, 12 metadata
-diagnostic, 7 configuration/recovery and 21 trial tests**. These use generated files,
+diagnostic, 7 configuration/recovery and 23 trial tests**. These use generated files,
 local sockets and fake driver dispatch. Neither the actual layer nor the
 camera producer is loaded/run. The real binaries remain mode 0644 in
 `artifacts/capture-provider-reference/`; the report records helper, patch and
@@ -752,8 +752,8 @@ activation and restoration remain separate checkpoints.
 
 ### Controlled metadata-layer trial and recovery
 
-**Device activation is paused** following a restart and loss of console access;
-see [E40](status.md#e40-restart-and-console-access-loss-reported). The CLI rejects
+**Device activation is paused** following service-control failures on Frame;
+see [E41](status.md#e41-frame-trial-report-and-service-control-failures). The CLI rejects
 `--start-metadata-test` with `blocked`/exit 3 before runtime/file calls. It has no
 CLI bypass. Reporting, known-run recovery and read-only preflight remain usable.
 The following describes the quarantined implementation, not a current launch
@@ -791,11 +791,19 @@ without runtime calls. An ambiguous launch acknowledgment is `launch_unconfirmed
 with the attempted run path retained; inspect/recover that run before retrying.
 No image descriptors, pixels, inference or VR panel output are requested.
 
-Twenty-one generated-data tests exercise real temporary configuration and simulated
+Twenty-three generated-data tests exercise real temporary configuration and simulated
 systemd behavior. They do not establish actual user-manager execution; static
 unit syntax was verified in the cloud, and the real recovery rehearsal is
 mandatory on Frame before the trial. The [device procedure](on-device.md#run-the-bounded-metadata-layer-trial)
 contains opt-in, expected reports and manual recovery.
+
+Worker reports now include the failure phase; private worker state checkpoints
+the phase before each action. `ServiceCommandError` records operation and exit
+code, with at most 4 KiB of stderr for exact service start/stop/daemon-reload
+commands. Rollback records each command's phase separately. Command stdout and
+environment-query stderr are never attached; environment-query values are
+excluded from diagnostic reports. These diagnostic changes do not remove the
+activation pause or establish a fix for the device's service-control failure.
 
 ## Isolated luma reader and synthetic producer
 

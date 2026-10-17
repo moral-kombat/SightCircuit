@@ -21,7 +21,7 @@ layer has been deployed by Framejacker.
 | 3b | Device and remaining GPU resource ownership | Inspection build and nine synthetic cloud tests pass | Native ARM64 and actual driver execution pending; no activation; [E33](status.md#e33-gpu-resource-ownership-cloud-checks) |
 | 3c | Capture watchdog, provider metadata/lifetime and configuration recovery | Earlier v2 milestone passed all 28 tests on Frame ARM64 | Generated workers/fake dispatch only; no real layer activation or device restoration; [E35](status.md#e35-watchdog-provider-and-recovery-tests-on-frame) |
 | 3d | Producer synchronization and metadata-only inspection | Review complete; earlier v3 ARM64 build and all 24 generated-data tests passed on Frame | No image FDs retained/exported by the layer; original inactive bundle/service preflight received; changed tools and actual load remain; [review](#producer-synchronization-review-and-next-checkpoint), [E37](status.md#e37-metadata-only-provider-and-diagnostic-on-frame) |
-| 3e | Controlled metadata-layer trial and recovery | Paused after restart and loss of console access | Do not repeat activation; obtain saved reports and verify normal UI/passthrough through independent access; [E40](status.md#e40-restart-and-console-access-loss-reported) |
+| 3e | Controlled metadata-layer trial and recovery | Paused after service-control failures; UI/passthrough work | Rollback reports configuration restored; SteamVR later active/no drop-ins; no inspection report; obtain failure-window journal without another restart; [E41](status.md#e41-frame-trial-report-and-service-control-failures) |
 | 4 | Capture-only device trial | Planned | Ten seconds of fresh images from one identified source, correct orientation, clean exit and working normal passthrough |
 | 5 | Continuous live input in the existing display | Planned; needs input independent of our output | Reuse detector/display after a dedicated provider or supported overlay-excluded mirror mode is validated; current mirror includes the panel |
 | 6 | Color, built-in camera support and later geometry | Planned | Validate each source and color conversion separately; require calibration and stronger timing evidence before stereo depth or spatial labels |
@@ -253,12 +253,13 @@ metadata-diagnostic tests; see [E37](status.md#e37-metadata-only-provider-and-di
 
 Remaining work does not need another unchanged GPU query or initial import test:
 
-1. Restore independent terminal/SSH access and obtain the existing trial reports.
-   Clarify full reboot versus SteamVR restart and verify normal UI/passthrough.
-   Activation is paused; do not repeat the prior command.
-2. Diagnose the actual recovery outcome and provide a recovery/access procedure
-   that survives the affected session. The runner does not relaunch the console.
-   Reassess the device gate before another layer load; keep image access disabled.
+1. Read the focused 10:36 service-failure window from the existing journal.
+   The saved reports were received; uptime and user observations confirm a
+   SteamVR restart followed by working UI/passthrough. Do not repeat activation.
+2. Identify the failed service operation and adapt service control only after
+   that evidence. Configuration restoration is reported, but the restart command
+   failed and later service activation is unexplained. Require independent
+   access before reassessing the device gate; keep image access disabled.
 3. Establish a coordinated producer release/ready/return contract or design a
    copy within the compositor's existing synchronized access window. Validate
    ownership, layout, completion and host visibility before allowing pixel reads.
@@ -299,8 +300,10 @@ and service properties were received. A bounded trial is now implemented with
 post-exit recovery, plus loader fallback and diagnostic timing fixes. The
 changed tools were prepared for a [device trial](on-device.md#run-the-bounded-metadata-layer-trial),
 but the user then reported a restart without console recovery. Further
-activation is blocked; actual layer installation and file restoration require
-the saved reports before they can be claimed.
+activation is blocked. The saved report now confirms reported configuration
+restoration, followed by an unconfirmed service start; SteamVR is later active
+and UI/passthrough work. Actual layer loading and successful inspection remain
+unverified. Read the failure-window journal next; do not restart the experiment.
 The supervisor's capture flag returns `blocked` before launching a worker.
 Use the [updated native procedure](on-device.md#test-metadata-only-inspection-without-capture).
 

@@ -912,10 +912,11 @@ requires a fresh bundle before any activation.
 
 ### Run the bounded metadata-layer trial
 
-**Paused after a device restart and loss of console access; do not repeat the
+**Paused after service-control failures on Frame; do not repeat the
 trial.** Current `--start-metadata-test` returns `blocked`/exit 3 before any
 runtime or file action. Reporting, read-only preflight and known-run recovery
-remain available. See [E40](status.md#e40-restart-and-console-access-loss-reported).
+remain available. Normal UI/passthrough work; see
+[E41](status.md#e41-frame-trial-report-and-service-control-failures).
 The retained procedure below describes the earlier trial for investigation.
 
 The earlier experiment restarted SteamVR for the test and again for restoration.
@@ -938,7 +939,7 @@ python3 scripts/capture_layer_config.py --prepare artifacts/capture-layer-plan-v
 python3 scripts/capture_layer_trial.py --preflight artifacts/capture-layer-plan-v3-trial
 ```
 
-Current suites contain **14, 12 and 21 tests**, with no skips; the original
+Current suites contain **14, 12 and 23 tests**, with no skips; the original
 preparation expected `prepared_inactive_bundle`
 and `preflight_passed`. If the new directory already exists, preserve it and
 use a different new name throughout. Preflight requires matching current
@@ -1022,6 +1023,33 @@ unexpected descriptors and deadline failures exit 1. Cancellation exits
 `128 + signal`. Capture remains blocked until the
 [producer handoff](live-capture.md#producer-synchronization-review-and-next-checkpoint)
 or a synchronized compositor-owned copy is established.
+
+### Read the service failure window
+
+The saved reports are now received. Rollback reports configuration restoration,
+SteamVR is active with no drop-ins, and the user confirms working UI/passthrough.
+Do not run another trial or rollback to reproduce the error. The failed worker
+and rollback operation is not identified by the earlier generic error string;
+the supplied SteamVR tail starts after the failure window.
+
+On Frame, read the existing journal for 10:36:30–10:37:05 Eastern on 2026-10-17
+(14:36:30–14:37:05 UTC), plus current service policy. No restart, configuration
+change or image access is performed:
+
+```bash
+journalctl --user -u steamvr.service -u framejacker-metadata-trial.service \
+  --since '2026-10-17 14:36:30 UTC' --until '2026-10-17 14:37:05 UTC' \
+  --no-pager -o short-iso -n 200 \
+  --grep='(?i)fail|error|denied|refus|cancel|dependency|start|stop|job'
+systemctl --user show steamvr.service \
+  -p RefuseManualStart -p RefuseManualStop -p Restart -p RestartUSec \
+  -p NRestarts -p Result -p ExecMainStatus -p ActiveEnterTimestamp
+```
+
+Share this output. It does not expose the service environment or backup plan.
+If the journal has no matching entries, record that result; do not restart the
+experiment to generate more logs. The corrected runner adds phase and safe
+operation diagnostics for offline testing; it remains blocked for activation.
 
 ### Check existing luma shared memory
 
@@ -1223,11 +1251,14 @@ provider records metadata without retaining/exporting image FDs and blocks live
 reads. The earlier v3 ARM64 build and both suites (12 provider/layer tests and
 12 metadata-diagnostic tests) passed. The inactive bundle and active SteamVR
 service properties were received. A bounded metadata-only trial with independent
-systemd post-exit recovery is implemented and cloud-tested. New loader fallback
-and inspector timing fixes require a rebuild, the changed suites (14 provider,
-12 inspector, 20 trial tests), and a fresh bundle. The runner performs a real
-one-second systemd recovery rehearsal before requesting activation. No layer
-has been activated yet. Physical camera identity and scene freshness remain unverified.
+systemd post-exit recovery was prepared for a trial. The received d5892f4 report
+shows a passing dummy recovery rehearsal, followed by worker and rollback
+systemctl errors. Configuration restoration is reported; SteamVR was later
+active/no drop-ins, with working UI/passthrough. No inspection report was produced
+and actual layer loading is unverified. Activation is blocked while a focused
+read-only journal query diagnoses the service failure. Do not repeat the trial
+or rollback on the working headset. Current trial tests number 23 in cloud.
+Physical camera identity and scene freshness remain unverified.
 GPU device/resource ownership is implemented in --resource-fixes and has nine
 synthetic cloud tests passed, including 57 injected startup/resource errors.
 Its native ARM64 and actual driver execution remain untested; real capture

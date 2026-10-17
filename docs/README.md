@@ -30,6 +30,7 @@ owns the current capture work plan.
 | Test metadata inspection without image access | [Changed native v3 checks](on-device.md#test-metadata-only-inspection-without-capture) and [producer synchronization findings](live-capture.md#producer-synchronization-review-and-next-checkpoint) |
 | Prepare the next metadata-layer checkpoint | [Inactive bundle and service preflight](on-device.md#prepare-the-metadata-layer-trial) |
 | Run the bounded metadata-layer activation and recovery test | [Opt-in trial and result reports](on-device.md#run-the-bounded-metadata-layer-trial) |
+| Diagnose the paused trial without another restart | [Focused service-failure journal](on-device.md#read-the-service-failure-window) |
 | Understand or replace the recognition model | [Recognition architecture and model candidates](architecture.md#recognition-implementation-and-model-replacement) |
 | Inspect existing luma input or test the isolated reader | [Shared-memory procedure](on-device.md#check-existing-luma-shared-memory) and [controlled fixture](development.md#isolated-luma-reader-and-synthetic-producer) |
 | Set up cloud or desktop development | [Development setup](development.md) |

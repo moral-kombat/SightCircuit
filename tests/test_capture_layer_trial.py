@@ -228,7 +228,7 @@ class MetadataLayerTrialTests(unittest.TestCase):
         report = json.loads(output.getvalue())
         self.assertEqual(report["status"], "blocked")
         self.assertFalse(report["activation_requested"])
-        self.assertEqual(report["reason"], "device_restart_console_recovery_unverified")
+        self.assertEqual(report["reason"], "service_control_failure_unresolved")
         self.assertEqual(list(self.home.iterdir()), [])
 
     def test_successful_inspection_and_recovery_restore_exact_absence(self):
@@ -271,8 +271,50 @@ class MetadataLayerTrialTests(unittest.TestCase):
                 self.manager = Manager()
                 run = self.create()
                 self.manager.fail = phase
-                self.assertEqual(self.execute(run)["status"], "failed")
+                report = self.execute(run)
+                self.assertEqual(report["status"], "failed")
+                self.assertEqual(report["phase"], {"stop": "stopping_steamvr", "reload": "reloading_manager", "start": "starting_steamvr"}[phase])
                 self.assert_restored(run)
+
+    def test_service_errors_keep_operation_exit_and_bounded_stderr_without_stdout(self):
+        result = subprocess.CompletedProcess([], 1, "private stdout", "Job failed: access denied\n" + "x" * 5000)
+        with patch.object(trial.subprocess, "run", return_value=result), self.assertRaises(trial.ServiceCommandError) as caught:
+            trial.Systemd().action("start")
+        error = caught.exception
+        self.assertEqual(error.details["operation"], "start")
+        self.assertEqual(error.details["return_code"], 1)
+        self.assertEqual(len(error.details["stderr"]), 4096)
+        self.assertNotIn("private stdout", str(error.details))
+        run = self.create()
+        with patch.object(self.manager, "action", side_effect=error):
+            report = self.execute(run)
+        self.assertEqual(report["command_error"], error.details)
+        self.assertEqual(report["phase"], "stopping_steamvr")
+        self.assert_restored(run)
+        run = self.create()
+        self.execute(run)
+        action = self.manager.action
+        def fail_start(operation):
+            if operation == "start":
+                raise error
+            return action(operation)
+        with patch.object(self.manager, "action", side_effect=fail_start):
+            report = trial.rollback(run, self.manager)
+        self.assertTrue(report["configuration_restored"])
+        self.assertFalse(report["normal_service_started"])
+        self.assertEqual(report["command_errors"][0]["phase"], "starting_normal_steamvr")
+        self.assertEqual(report["command_errors"][0]["operation"], "start")
+        self.assert_restored(run)
+
+    def test_environment_query_failures_never_retain_environment_output(self):
+        result = subprocess.CompletedProcess([], 1, "SECRET=private-value", "private-error-value")
+        for args in (["systemctl", "--user", "show-environment"],
+                     ["systemctl", "--user", "show", trial.SERVICE, "--property=Environment", "--value"]):
+            with self.subTest(args=args), patch.object(trial.subprocess, "run", return_value=result), \
+                 self.assertRaises(trial.ServiceCommandError) as caught:
+                trial.command(args)
+            self.assertNotIn("stderr", caught.exception.details)
+            self.assertNotIn("private", str(caught.exception.details))
 
     def test_partial_installation_is_recovered_after_write_failure(self):
         run = self.create()

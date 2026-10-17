@@ -29,15 +29,29 @@ EXPECTED = {"LoadState": "loaded", "ActiveState": "active", "SubState": "running
 PROPERTIES = (*EXPECTED, "MainPID", "ControlGroup")
 FLAG_NAMES = {"FRAMEJACKER_CAPTURE_LAYER", "FRAMEJACKER_DISABLE_CAPTURE_LAYER"}
 RUNS = ROOT / "artifacts/metadata-trials"
-ACTIVATION_BLOCKED_REASON = "device_restart_console_recovery_unverified"
+ACTIVATION_BLOCKED_REASON = "service_control_failure_unresolved"
+
+
+class ServiceCommandError(ValueError):
+    def __init__(self, arguments, result):
+        operation = "launch_unit" if arguments[0] == "systemd-run" else "utility"
+        if arguments[:2] == ["systemctl", "--user"] and len(arguments) > 2:
+            operation = arguments[2]
+        self.details = {"program": arguments[0], "operation": operation, "return_code": result.returncode}
+        # Never retain stdout: show-environment/Environment queries can contain
+        # secrets. Keep bounded stderr only for our exact non-environment actions.
+        if (arguments == ["systemctl", "--user", "daemon-reload"] or
+                arguments in (["systemctl", "--user", "start", SERVICE],
+                              ["systemctl", "--user", "stop", SERVICE])):
+            self.details["stderr"] = result.stderr[:4096]
+        super().__init__(f"service_command_failed:{arguments[0]}:{operation}:{result.returncode}")
 
 
 def command(arguments, timeout=30):
-    # Never include service diagnostics/environment values in a public report.
     result = subprocess.run(arguments, stdin=subprocess.DEVNULL, capture_output=True,
                             text=True, timeout=timeout)
     if result.returncode:
-        raise ValueError("service_command_failed:" + arguments[0] + ":" + str(result.returncode))
+        raise ServiceCommandError(arguments, result)
     if len(result.stdout) > 256 * 1024 or len(result.stderr) > 64 * 1024:
         raise ValueError("service_output_limit")
     return result.stdout
@@ -219,18 +233,23 @@ def peer_is_compositor(native, service):
 def execute(run, manager, inspect=metadata.inspect, verify_peer=peer_is_compositor, wait_seconds=10):
     lock = locked_run(run)
     report = {"report_kind": "capture_metadata_trial", "schema_version": 1,
-              "status": "failed", "exit_code": 1, "image_data_accessed": False, "images_saved": False}
+              "status": "failed", "exit_code": 1, "image_data_accessed": False, "images_saved": False,
+              "phase": "preflight"}
     try:
         state, plan, home, runtime = load_state(run)
+        def mark_phase(value):
+            state["phase"] = report["phase"] = value
+            save(run, "state.json", state)
         check_targets(plan, runtime, home)
         service = manager.show()
         if any(service.get(key) != value for key, value in EXPECTED.items()):
             raise ValueError("steamvr_service_properties_changed")
         state["changes_started"] = True
-        save(run, "state.json", state)  # Arm rollback before any service/file mutation.
+        mark_phase("stopping_steamvr")  # Arm rollback before any service/file mutation.
         manager.action("stop")
         if not stopped(manager):
             raise ValueError("steamvr_stop_unconfirmed")
+        mark_phase("staging_layer")
         for name in config.TARGETS:
             if config.read_entry(home, name) != plan["before"][name]:
                 raise ValueError("trial_target_changed:" + name)
@@ -238,22 +257,30 @@ def execute(run, manager, inspect=metadata.inspect, verify_peer=peer_is_composit
         if config.read_entry(runtime, DROPIN) is not None:
             raise ValueError("trial_dropin_changed")
         config.write_entry(runtime, DROPIN, config.describe(ENABLE, 0o600))
+        mark_phase("reloading_manager")
         manager.reload()
+        mark_phase("starting_steamvr")
         manager.action("start")
+        mark_phase("waiting_for_provider")
         end = time.monotonic() + wait_seconds
         endpoint = runtime / "framejacker-camera-provider/camera.sock"
         while not endpoint.exists() and time.monotonic() < end:
             time.sleep(0.1)
+        mark_phase("inspecting_metadata")
         result = inspect(runtime=runtime, seconds=2)
         save(run, "inspection.json", result)
         if result.get("status") != "inspected" or result.get("exit_code") != 0:
             raise ValueError("metadata_inspection_failed")
+        mark_phase("verifying_peer")
         if not verify_peer(result["native"], manager.show()):
             raise ValueError("metadata_peer_not_service_compositor")
+        mark_phase("complete")
         report.update(status="inspected", exit_code=0, record_count=result["record_count"],
                       reviewed_profile_candidates=result["reviewed_profile_candidates"])
     except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         report["reason"] = str(error)
+        if isinstance(error, ServiceCommandError):
+            report["command_error"] = error.details
     finally:
         save(run, "trial.json", report)
         os.close(lock)
@@ -264,7 +291,12 @@ def rollback(run, manager):
     lock = locked_run(run)
     report = {"report_kind": "capture_metadata_rollback", "schema_version": 1,
               "status": "recovery_failed", "exit_code": 1, "configuration_restored": False,
-              "normal_service_started": False, "passthrough_observation_required": True}
+              "normal_service_started": False, "passthrough_observation_required": True,
+              "phase": "preflight"}
+    def record_error(errors, error):
+        errors.append(str(error))
+        if isinstance(error, ServiceCommandError):
+            report.setdefault("command_errors", []).append(dict(error.details, phase=report["phase"]))
     try:
         state, plan, home, runtime = load_state(run)
         if manager.worker_pid():
@@ -284,16 +316,18 @@ def rollback(run, manager):
             errors = []
             is_stopped = False
             try:
+                report["phase"] = "stopping_steamvr"
                 manager.action("stop")
                 is_stopped = stopped(manager)
                 if not is_stopped:
                     raise ValueError("steamvr_stop_unconfirmed")
             except (ValueError, OSError, subprocess.SubprocessError) as error:
-                errors.append(str(error))
+                record_error(errors, error)
             # Always remove only our exact enable drop-in, even if another
             # target was edited or a service stop failed. Preserve foreign edits.
             dropin_removed = False
             try:
+                report["phase"] = "removing_enable_dropin"
                 current = config.read_entry(runtime, DROPIN)
                 if current is not None:
                     if current != config.describe(ENABLE, 0o600):
@@ -301,19 +335,22 @@ def rollback(run, manager):
                     config.write_entry(runtime, DROPIN, None)
                 dropin_removed = True
             except (ValueError, OSError) as error:
-                errors.append(str(error))
+                record_error(errors, error)
             if is_stopped:
                 try:
+                    report["phase"] = "restoring_configuration"
                     config.restore(run, expected_home=home)
                     report["configuration_restored"] = True
                     endpoint = runtime / "framejacker-camera-provider/camera.sock"
                     if endpoint.exists() or endpoint.is_symlink():
                         config.recover_provider(runtime)
                 except (ValueError, OSError) as error:
-                    errors.append(str(error))
+                    record_error(errors, error)
             try:
+                report["phase"] = "reloading_manager"
                 manager.reload()
                 if is_stopped and dropin_removed:
+                    report["phase"] = "starting_normal_steamvr"
                     manager.action("start")
                     service = manager.show()
                     report["normal_service_started"] = (service.get("ActiveState") == "active" and
@@ -321,11 +358,11 @@ def rollback(run, manager):
                     if not report["normal_service_started"]:
                         raise ValueError("normal_service_start_unconfirmed")
             except (ValueError, OSError, subprocess.SubprocessError) as error:
-                errors.append(str(error))
+                record_error(errors, error)
             if errors:
                 report["errors"] = errors
             elif report["configuration_restored"] and report["normal_service_started"]:
-                report.update(status="restored", exit_code=0)
+                report.update(status="restored", phase="complete", exit_code=0)
     except (ValueError, OSError, KeyError, subprocess.SubprocessError) as error:
         report["reason"] = str(error)
     finally:
@@ -400,7 +437,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--preflight", type=Path, metavar="BUNDLE", help="Validate metadata-only build, inactive bundle and service without changes")
-    mode.add_argument("--start-metadata-test", type=Path, metavar="BUNDLE", help="Currently blocked following device restart/loss of console; reporting and known-run recovery remain available")
+    mode.add_argument("--start-metadata-test", type=Path, metavar="BUNDLE", help="Blocked while Frame service-control failures are investigated; reporting and known-run recovery remain available")
     mode.add_argument("--worker", type=Path, help=argparse.SUPPRESS)
     mode.add_argument("--rollback", type=Path, help="Recover a known trial after its worker has exited")
     mode.add_argument("--report-latest", action="store_true", help="Read the last trial and rollback reports without runtime calls")

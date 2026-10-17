@@ -31,7 +31,7 @@ unknown unless explicitly recorded below.
 | Capture watchdog, provider/layer lifecycle and exact recovery | Earlier v2 milestone passed all 28 generated-data tests on Frame ARM64 | Bounded worker, metadata/GPU provenance, registry changes, owned endpoint and conditional restoration; no real driver/layer execution or device restoration; [E35](#e35-watchdog-provider-and-recovery-tests-on-frame) |
 | Metadata-only provider and producer synchronization review | v3 ARM64 build and all 24 generated-data tests passed on Frame | Layer retains/exports no image FDs; no real layer activation or live camera access; controlled load/restoration remains next; [E36](#e36-metadata-only-provider-and-synchronization-review), [E37](#e37-metadata-only-provider-and-diagnostic-on-frame) |
 | Inactive v3 bundle and SteamVR service preflight | Frame report received | Bundle prepared without activation; active simple/control-group user service, 20-second stop timeout, no drop-ins; [E38](#e38-inactive-bundle-and-steamvr-service-on-frame) |
-| Bounded metadata-layer trial and post-exit recovery | Paused following restart and loss of console access | Activation blocked; device state and saved reports pending; full reboot versus SteamVR restart and actual restoration remain unknown; [E40](#e40-restart-and-console-access-loss-reported) |
+| Bounded metadata-layer trial and post-exit recovery | Paused after service-control failures on Frame | Rehearsal ran; rollback reports configuration restored, but service restart returned an error; later SteamVR active/no drop-ins and normal UI/passthrough confirmed; no inspection report; [E41](#e41-frame-trial-report-and-service-control-failures) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
 | Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; no source-identified built-in-camera frames have been received |
 | Stereo depth and world-space labels | Planned | Calibration, depth and pose/timebase alignment remain unresolved |
@@ -1255,6 +1255,53 @@ and verify normal UI/passthrough. Do not resume activation until the observed
 device state and recovery outcome are understood and independent access is
 established. No frame access, camera identity or live capture is demonstrated
 by the restart observation.
+
+### E41: Frame trial report and service-control failures
+
+Source: user-supplied saved report, filtered service status and bounded journals,
+collected **2026-10-17 10:49:52 -04:00** on Frame. Checkout HEAD is
+`d5892f4eae7f9e56ec1db3d70709c8279607ca89`; the later pause was not yet pulled.
+The user separately confirms normal headset UI and passthrough work, with only
+the console missing. Uptime at collection is 1 hour 39 minutes, predating the
+10:36 trial: the observation is a SteamVR restart, not an OS reboot during the
+trial. SSH access was not demonstrated; the user ran the collector locally.
+
+Trial directory is
+`/home/steamos/framejacker/artifacts/metadata-trials/trial-47df919b06aa4b30ae1dfc4f88aa411b`.
+The report and journal establish:
+
+- **10:36:36–10:36:37:** dummy recovery unit starts, reaches its one-second
+  runtime limit and runs the cleanup command successfully. Its systemd
+  `timeout` result is expected for the rehearsal; this does not prove the
+  separate SteamVR stop/start/recovery sequence works.
+- **10:36:38–10:36:42:** real worker starts, then exits with
+  `service_command_failed:systemctl:1`. It reports no image access/saving.
+  The aggregate has no `inspection` entry. This establishes no successful
+  metadata inspection and does not identify whether the layer loaded briefly.
+- **10:36:42–10:36:46:** the separate rollback command runs and reports
+  `configuration_restored: true`, `normal_service_started: false`, and one
+  `service_command_failed:systemctl:1`. Overall status remains `recovery_failed`.
+  Configuration restoration and confirmed normal-service startup are distinct.
+- **From 10:36:48:** the supplied SteamVR tail contains startup output. At
+  collection `steamvr.service` is active/running, result success, MainPID 19651,
+  with no drop-ins. How it became active after the reported error is unresolved.
+  The transient trial is collected (`not-found`, inactive, PID 0); the 10:49
+  missing-transient-file message follows status collection, not the 10:36 failure.
+
+The old runner suppressed systemctl stderr and omitted the failing operation
+and phase. The supplied SteamVR tail starts after the failure window, so it
+does not establish permission denial, start limits, job cancellation, an
+ExecStart failure or another specific cause. Avoid choosing a service-control
+fix without the focused journal. No new layer trial or rollback is needed
+while normal UI/passthrough are working.
+
+Activation remains blocked. Updated diagnostics record trial phases, structured
+operation/exit code, and at most 4 KiB of stderr for exact service start/stop
+or daemon-reload commands. They never retain command stdout or environment-query
+stderr. The 23 cloud trial tests pass, including phase attribution, service
+errors and environment-output exclusion; no Frame service operation was repeated.
+The [focused read-only diagnostic](on-device.md#read-the-service-failure-window)
+is the next step. Raw journals and unrelated user identifiers remain outside Git.
 
 ## Maintaining the evidence
 
