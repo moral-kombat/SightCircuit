@@ -21,7 +21,7 @@ layer has been deployed by Framejacker.
 | 3b | Device and remaining GPU resource ownership | Inspection build and nine synthetic cloud tests pass | Native ARM64 and actual driver execution pending; no activation; [E33](status.md#e33-gpu-resource-ownership-cloud-checks) |
 | 3c | Capture watchdog, provider metadata/lifetime and configuration recovery | Earlier v2 milestone passed all 28 tests on Frame ARM64 | Generated workers/fake dispatch only; no real layer activation or device restoration; [E35](status.md#e35-watchdog-provider-and-recovery-tests-on-frame) |
 | 3d | Producer synchronization and metadata-only inspection | Review complete; earlier v3 ARM64 build and all 24 generated-data tests passed on Frame | No image FDs retained/exported by the layer; original inactive bundle/service preflight received; changed tools and actual load remain; [review](#producer-synchronization-review-and-next-checkpoint), [E37](status.md#e37-metadata-only-provider-and-diagnostic-on-frame) |
-| 3e | Controlled metadata-layer trial and recovery | Paused after service-control failures; UI/passthrough work | Rollback reports configuration restored; SteamVR later active/no drop-ins; no inspection report; obtain failure-window journal without another restart; [E41](status.md#e41-frame-trial-report-and-service-control-failures) |
+| 3e | Controlled metadata-layer trial and recovery | Paused after service-control failures; UI/passthrough work | Unit/selector reviewed; startup, waiter and mandatory cleanup hooks need lifecycle coverage. Failed operation unresolved; no new restart; [E44](status.md#e44-platform-launcher-source-and-repeated-hook-diagnostic-fix) |
 | 4 | Capture-only device trial | Planned | Ten seconds of fresh images from one identified source, correct orientation, clean exit and working normal passthrough |
 | 5 | Continuous live input in the existing display | Planned; needs input independent of our output | Reuse detector/display after a dedicated provider or supported overlay-excluded mirror mode is validated; current mirror includes the panel |
 | 6 | Color, built-in camera support and later geometry | Planned | Validate each source and color conversion separately; require calibration and stronger timing evidence before stereo depth or spatial labels |
@@ -253,14 +253,15 @@ metadata-diagnostic tests; see [E37](status.md#e37-metadata-only-provider-and-di
 
 Remaining work does not need another unchanged GPU query or initial import test:
 
-1. Read the shipped unit's Exec* definitions and `select_steamvr.sh` source.
-   Service relationships are received: SteamVR belongs to the graphical session,
-   uses the platform selector and has Bash start/stop post-hooks. Their bodies
-   remain unreviewed. Do not repeat activation or rollback on the working headset.
-2. Identify hook side effects, controller sequencing and the failed operation
-   before adapting service control. Dependency ordering alone does not prove
-   stop propagation; `Restart=always` does not identify the later start's trigger.
-   Require independent access before reassessing the gate; keep image access disabled.
+1. Build the offline [platform lifecycle model](#steamvr-service-control-acceptance)
+   from the received unit/selector source. Startup is requested before the tracked
+   `vrcmd` waiter; required health-check/display hooks remain part of stop/start.
+   Do not repeat activation or rollback on the working headset.
+2. Resolve controller sequencing and recovery behavior before adapting service
+   control. The old command stderr/phase cannot be recovered from static source;
+   record the failed operation as unknown unless additional existing evidence
+   identifies it. Require independent access before reassessing the gate; keep
+   image access disabled.
 3. Establish a coordinated producer release/ready/return contract or design a
    copy within the compositor's existing synchronized access window. Validate
    ownership, layout, completion and host visibility before allowing pixel reads.
@@ -304,9 +305,44 @@ but the user then reported a restart without console recovery. Further
 activation is blocked. The saved report now confirms reported configuration
 restoration, followed by an unconfirmed service start; SteamVR is later active
 and UI/passthrough work. Actual layer loading and successful inspection remain
-unverified. Read the failure-window journal next; do not restart the experiment.
+unverified. The failure-window journal and unit/selector source are now received;
+continue with offline lifecycle coverage below, without another restart.
 The supervisor's capture flag returns `blocked` before launching a worker.
 Use the [updated native procedure](on-device.md#test-metadata-only-inspection-without-capture).
+
+### SteamVR service-control acceptance
+
+The next offline deliverable is a lifecycle model and recovery tests based on
+the [shipped unit and selector](status.md#e44-platform-launcher-source-and-repeated-hook-diagnostic-fix).
+The current fake manager switches directly between active and inactive states;
+it does not model the platform's hooks, asynchronous runtime shutdown or other
+jobs. The corrected hook inventory is diagnostic evidence, not that model.
+
+Before changing the quarantined runner, cover these cases using generated
+events and fake processes, without executing vendor hooks:
+
+- Keep the startup request, tracked waiter and compositor/provider readiness
+  distinct. A waiter PID or `ActiveState=active` alone cannot complete inspection
+  or establish normal passthrough recovery.
+- Model required pre-start and post-stop hook failures, ignored-failure Bash
+  hooks, a canceled service job and a client error followed by a later state
+  transition. Persist the operation, phase and bounded diagnostics before
+  recovery decides its next action; avoid competing retries.
+- Test delayed shutdown, an absent waiter with a remaining compositor, and
+  competing startup. Restore configuration only after a confirmed stop; if
+  that cannot be established within the deadline, report it and preserve the
+  known recovery plan rather than claim restoration.
+- Keep cleanup independent of the console and trial worker. Distinguish file
+  restoration, a successful normal-service start, endpoint/compositor readiness
+  and the user's passthrough check. Preserve mandatory platform hooks and the
+  configured service policy.
+
+Passing these offline cases permits review of a revised controller; it does
+not remove the activation block. Before a later device rehearsal, verify a
+working independent terminal/SSH route, define the exact recovery command and
+readiness checks, and retain command/job diagnostics. Do not require a working
+console app inside SteamVR to recover SteamVR. Never rerun the old trial just
+to obtain its missing stderr. Image access remains a separate blocked gate.
 
 ## Producer synchronization review and next checkpoint
 

@@ -939,7 +939,7 @@ python3 scripts/capture_layer_config.py --prepare artifacts/capture-layer-plan-v
 python3 scripts/capture_layer_trial.py --preflight artifacts/capture-layer-plan-v3-trial
 ```
 
-Current suites contain **14, 12 and 24 tests**, with no skips; the original
+Current suites contain **14, 12 and 26 tests**, with no skips; the original
 preparation expected `prepared_inactive_bundle`
 and `preflight_passed`. If the new directory already exists, preserve it and
 use a different new name throughout. Preflight requires matching current
@@ -1072,7 +1072,10 @@ python3 scripts/capture_layer_trial.py --service-details
 
 Expect `status: service_details`, exit 0, `activation_requested: false`, and
 service relationships plus executable paths for start/stop hooks. Command
-arguments and environment values are omitted. Share the JSON report. No
+arguments and environment values are omitted. The corrected inspector preserves
+all repeated hooks in order; the earlier E43 report contained only each field's
+last hook. Source collection has already supplied the full inventory, so there
+is no need to repeat this query just to continue the review. No
 rebuild is needed. The activation pause stays in place while the unit
 relationships/launcher behavior are reviewed.
 
@@ -1080,9 +1083,19 @@ relationships/launcher behavior are reviewed.
 
 The service relationship report was received; see
 [E43](status.md#e43-steamvr-session-relationships-and-platform-hooks).
-SteamVR uses `/usr/share/deckard/select_steamvr.sh` for pre-start/start/stop,
-plus Bash start/stop post-hooks. Executable paths alone do not reveal what the
-hooks do. Read both shipped definitions in one pass, without executing them:
+The initial relationship report identified the platform selector and Bash
+hooks, but omitted earlier repeated hooks. The following collector was used
+to read the shipped unit and selector without executing them.
+
+**Received and reviewed:** the user supplied this output; see
+[E44](status.md#e44-platform-launcher-source-and-repeated-hook-diagnostic-fix).
+Keep the command below as a reference, not another required collection step.
+The unit requests startup before tracking a waiter and runs health-check and
+display cleanup hooks on shutdown. Do not execute the selector as a probe: its
+fallback can change the selected SteamVR installation. No new Frame command
+or restart is required while the
+[offline lifecycle model](live-capture.md#steamvr-service-control-acceptance)
+is prepared.
 
 ```bash
 python3 - <<'PY'
@@ -1109,10 +1122,10 @@ for name in ('/usr/lib/systemd/user/steamvr.service',
 PY
 ```
 
-Share this output. The unit portion includes only Exec*/Type definitions and
+The unit portion includes only Exec*/Type definitions and
 their continuation lines; environment/credential directives are omitted. The
 selector is read as static source, not run. No runtime environment or credential
-file is read. Preserve the working session while these hooks are reviewed.
+file is read. No additional output from this collector is needed now.
 
 ### Check existing luma shared memory
 

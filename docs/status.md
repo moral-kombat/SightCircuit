@@ -31,7 +31,7 @@ unknown unless explicitly recorded below.
 | Capture watchdog, provider/layer lifecycle and exact recovery | Earlier v2 milestone passed all 28 generated-data tests on Frame ARM64 | Bounded worker, metadata/GPU provenance, registry changes, owned endpoint and conditional restoration; no real driver/layer execution or device restoration; [E35](#e35-watchdog-provider-and-recovery-tests-on-frame) |
 | Metadata-only provider and producer synchronization review | v3 ARM64 build and all 24 generated-data tests passed on Frame | Layer retains/exports no image FDs; no real layer activation or live camera access; controlled load/restoration remains next; [E36](#e36-metadata-only-provider-and-synchronization-review), [E37](#e37-metadata-only-provider-and-diagnostic-on-frame) |
 | Inactive v3 bundle and SteamVR service preflight | Frame report received | Bundle prepared without activation; active simple/control-group user service, 20-second stop timeout, no drop-ins; [E38](#e38-inactive-bundle-and-steamvr-service-on-frame) |
-| Bounded metadata-layer trial and post-exit recovery | Paused after service-control failures on Frame | Platform selector and Bash start/stop hooks identified; their bodies remain unreviewed. Rollback reports configuration restored; normal UI/passthrough work; no inspection report; [E43](#e43-steamvr-session-relationships-and-platform-hooks) |
+| Bounded metadata-layer trial and post-exit recovery | Paused after service-control failures on Frame | Unit/selector source reviewed: startup precedes the tracked waiter; health-check and display cleanup hooks need lifecycle coverage. Earlier diagnostic omitted repeated hooks; now corrected. Configuration restored, normal UI/passthrough work; failed operation unresolved; [E44](#e44-platform-launcher-source-and-repeated-hook-diagnostic-fix) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
 | Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; no source-identified built-in-camera frames have been received |
 | Stereo depth and world-space labels | Planned | Calibration, depth and pose/timebase alignment remain unresolved |
@@ -1374,20 +1374,78 @@ explain the original nonzero systemctl result by themselves.
 
 `ExecStartPre`, `ExecStart` and `ExecStop` use
 `/usr/share/deckard/select_steamvr.sh`; `ExecStartPost` and `ExecStopPost` use
-`/bin/bash`. Their arguments and hook bodies were deliberately omitted by the
-read-only report. This is a platform launcher with additional lifecycle hooks;
+`/bin/bash`. Arguments and hook bodies were deliberately omitted by the
+read-only report. A later source comparison found that the inspector also
+unintentionally dropped earlier entries in repeated Exec* properties; this
+report is therefore not a complete hook inventory. See the correction in
+[E44](#e44-platform-launcher-source-and-repeated-hook-diagnostic-fix).
+This is a platform launcher with additional lifecycle hooks;
 the prior generated manager tests do not model those hook side effects.
 Nonzero hook results, target transitions and competing jobs remain possible
 explanations, not established causes. The old stderr cannot be reconstructed
 from these executable paths.
 
-Activation remains blocked. The next read-only input is the shipped unit's
-Exec* definitions and selector script, not another runtime test. The
+Activation remained blocked. The next read-only input was the shipped unit's
+Exec* definitions and selector script, now received in E44. The
 [source-reading procedure](on-device.md#read-the-platform-launcher-definitions)
 prints static vendor code without executing it, and omits unit environment/
 credential directives. Runtime environment and credential files are not read.
 No restart policy, capability setting, camera source or driver change is
 justified by this report alone. No new device mutation or camera access occurred.
+
+### E44: Platform launcher source and repeated-hook diagnostic fix
+
+Source: user-supplied static Exec*/Type lines from
+`/usr/lib/systemd/user/steamvr.service` and the full
+`/usr/share/deckard/select_steamvr.sh` source, received 2026-10-17
+(America/New_York). Exact execution time and checkout HEAD were not included.
+The collector read these files without running the hooks or selector. This
+input contains no new runtime trial or camera result.
+
+The unit defines the following sequence. These are configured actions, not
+proof of their individual exit statuses during the failed trial:
+
+| Stage | Configured actions and implication |
+| --- | --- |
+| Pre-start | First-initialization script; three Bash helpers for cache/path/overlay preparation; health-check `--track-started`; selector with `vrstartup`. The three Bash helpers ignore failures through the unit's `-` prefix. The other pre-start hooks do not. |
+| Main process | Selector with `vrcmd --background --waitforquit`, under `Type=simple`. The service tracks a waiter after the startup request; its MainPID is not a compositor readiness check. |
+| Post-start | An ignored-failure Bash hook writes the charger runtime state. |
+| Stop | Selector with `vrstartup -shutdown`. The source establishes a shutdown request, not its completion behavior. |
+| Post-stop | Health-check `--track-stopped`, then `displays_turn_off_drm_master`, then an ignored-failure charger-state Bash hook. The first two hooks are not prefixed to ignore failure; their internal behavior remains unreviewed. |
+
+The selector uses `set -euo pipefail`, obtains the selected installation with
+`steamvr path --ignore-pending`, verifies the startup/tool files, changes to
+the tool directory and `exec`s it with the supplied arguments. If the selected
+installation is unavailable but `/opt/steamvr` exists, it changes and applies
+the selected SteamVR path before executing the fallback. Consequently the
+selector must not be run as a read-only probe. Although its final error message
+mentions rebooting into a different partition, the supplied script contains
+no reboot command; that branch prints errors and exits 1.
+
+The parser omission in E43 is now explained: `systemctl show` emits one line
+per Exec* array element, repeating the property name. Converting those lines
+directly to a dictionary kept only the last entry. This serialization is also
+visible in the [systemd v257 show implementation](https://github.com/systemd/systemd/blob/v257/src/systemctl/systemctl-show.c).
+That reference is not a Frame version measurement. The corrected diagnostic
+accumulates every executable path in order, including duplicate Bash paths,
+and reads only the leading record path, excluding `path=` text within command
+arguments. Unrecognized nonempty hook records are refused without echoing
+their content. The report shape and read-only query remain unchanged.
+
+All **26 cloud trial tests pass**, including the new repeated-hook/argument
+exclusion regression and unsupported-format refusal. The repeated-hook test
+failed against the previous parser before the fix. This does not establish
+on-device execution of the corrected diagnostic or successful service recovery.
+
+The original nonzero systemctl operation remains unknown because its stderr
+and phase were not retained. Static hook definitions alone cannot establish
+which hook ran or failed, who requested the later start, or whether the reported
+startup cgroup processes survived an earlier instance. No hook is bypassed and
+no restart policy, driver, camera selection or capability setting is changed.
+Keep activation paused. The next offline deliverable is a
+[platform lifecycle and recovery test model](live-capture.md#steamvr-service-control-acceptance),
+with independent access and explicit readiness evidence required before any
+later device rehearsal.
 
 ## Maintaining the evidence
 

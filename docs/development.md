@@ -594,7 +594,7 @@ python3 -m unittest discover -s tests -p test_capture_layer_trial.py -v
 ```
 
 The current cloud suites contain **10 watchdog, 14 provider/layer, 12 metadata
-diagnostic, 7 configuration/recovery and 24 trial tests**. These use generated files,
+diagnostic, 7 configuration/recovery and 26 trial tests**. These use generated files,
 local sockets and fake driver dispatch. Neither the actual layer nor the
 camera producer is loaded/run. The real binaries remain mode 0644 in
 `artifacts/capture-provider-reference/`; the report records helper, patch and
@@ -791,7 +791,7 @@ without runtime calls. An ambiguous launch acknowledgment is `launch_unconfirmed
 with the attempted run path retained; inspect/recover that run before retrying.
 No image descriptors, pixels, inference or VR panel output are requested.
 
-Twenty-four generated-data tests exercise real temporary configuration and simulated
+Twenty-six generated-data tests exercise real temporary configuration and simulated
 systemd behavior. They do not establish actual user-manager execution; static
 unit syntax was verified in the cloud, and the real recovery rehearsal is
 mandatory on Frame before the trial. The [device procedure](on-device.md#run-the-bounded-metadata-layer-trial)
@@ -807,9 +807,15 @@ activation pause or establish a fix for the device's service-control failure.
 
 `--service-details` makes a single read-only `systemctl show` query for selected
 status, dependency, stop-propagation and policy fields. Exec* properties are
-reduced to executable paths; command arguments, environment values and
-unrequested fields are not returned. The test verifies output exclusion and
-that this mode performs only the query, without activation or file changes.
+reduced to executable paths. Each repeated property line contributes one
+executable in order; duplicate paths are preserved. Only the leading record
+path is read, so `path=` text inside argv is excluded. Unrecognized nonempty
+hook records return `refused`/exit 1 with the property name, never their raw
+content. Command arguments, environment values and unrequested fields are
+not returned. Tests cover the shipped hook order, argument exclusion, format
+refusal and the single read-only query without activation or file changes.
+See [the platform source findings](status.md#e44-platform-launcher-source-and-repeated-hook-diagnostic-fix)
+and [required lifecycle coverage](live-capture.md#steamvr-service-control-acceptance).
 
 ## Isolated luma reader and synthetic producer
 

@@ -85,15 +85,24 @@ class Systemd:
         fields = (*SERVICE_DETAIL_PROPERTIES, *SERVICE_EXEC_PROPERTIES)
         text = command(["systemctl", "--user", "show", SERVICE,
                         *("--property=" + field for field in fields)], timeout=5)
-        raw = dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
         # Return only the allowlisted relationship/status fields. Exec* values
-        # contain argv and other data; retain their executable paths only.
-        result = {name: raw[name] for name in SERVICE_DETAIL_PROPERTIES if name in raw}
-        for name in SERVICE_EXEC_PROPERTIES:
-            if name in raw:
-                result[name] = {"executables": re.findall(r"\bpath=([^;{}]+)", raw[name]),
-                                "arguments_included": False}
-                result[name]["executables"] = [value.strip() for value in result[name]["executables"]]
+        # contain argv and other data; retain only the leading executable path.
+        # systemctl prints one line per Exec* array element, repeating its name.
+        result = {}
+        for line in text.splitlines():
+            name, separator, value = line.partition("=")
+            if not separator:
+                continue
+            if name in SERVICE_DETAIL_PROPERTIES:
+                result[name] = value
+            elif name in SERVICE_EXEC_PROPERTIES:
+                entry = result.setdefault(name, {"executables": [], "arguments_included": False})
+                if not value:
+                    continue
+                match = re.match(r"\{\s*path=([^;{}]+?)\s*;\s*argv\[\]=", value)
+                if not match:
+                    raise ValueError("service_exec_output_invalid:" + name)
+                entry["executables"].append(match.group(1).strip())
         return result
 
     def action(self, action):

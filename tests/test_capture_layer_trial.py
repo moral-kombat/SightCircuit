@@ -336,6 +336,49 @@ class MetadataLayerTrialTests(unittest.TestCase):
         self.assertEqual(run.call_count, 1)
         self.assertEqual(list(self.home.iterdir()), [])
 
+    def test_service_details_preserves_every_repeated_hook_without_argument_paths(self):
+        # systemctl prints each Exec* array element on a separate property line.
+        # Match the shipped Frame hook order, including repeated Bash commands.
+        hooks = {
+            "ExecStartPre": ["/usr/share/deckard/steamvr_first_init.sh",
+                             "/bin/bash", "/bin/bash", "/bin/bash",
+                             "/usr/share/deckard/steamvr-health-check",
+                             "/usr/share/deckard/select_steamvr.sh"],
+            "ExecStart": ["/usr/share/deckard/select_steamvr.sh"],
+            "ExecStartPost": ["/bin/bash"],
+            "ExecStop": ["/usr/share/deckard/select_steamvr.sh"],
+            "ExecStopPost": ["/usr/share/deckard/steamvr-health-check",
+                             "/usr/bin/displays_turn_off_drm_master", "/bin/bash"],
+        }
+        lines = ["Id=steamvr.service", "ExecCondition="]
+        for name, paths in hooks.items():
+            for path in paths:
+                lines.append(f"{name}={{ path={path} ; argv[]={path} private-argument "
+                             "; path=/private-argument-path ; { path=/private-fake-record ; "
+                             "argv[]=/private-nested-command } ; "
+                             "ignore_errors=yes ; start_time=[n/a] ; stop_time=[n/a] ; "
+                             "pid=0 ; code=(null) ; status=0 }")
+        lines.extend(["Environment=SECRET=private-environment", "Unrequested=private-field"])
+        with patch.object(trial, "command", return_value="\n".join(lines)) as query:
+            result = trial.Systemd().details()
+        self.assertEqual(result, {"Id": "steamvr.service",
+                                 "ExecCondition": {"executables": [], "arguments_included": False},
+                                 **{name: {"executables": paths, "arguments_included": False}
+                                    for name, paths in hooks.items()}})
+        self.assertNotIn("private", json.dumps(result))
+        query.assert_called_once()
+
+    def test_service_details_rejects_unrecognized_hook_output_without_echoing_it(self):
+        completed = subprocess.CompletedProcess([], 0, "ExecStop=private-unrecognized-record\n", "")
+        output = io.StringIO()
+        with patch.object(trial.subprocess, "run", return_value=completed), \
+             contextlib.redirect_stdout(output):
+            self.assertEqual(trial.main(["--service-details"]), 1)
+        report = json.loads(output.getvalue())
+        self.assertFalse(report["activation_requested"])
+        self.assertEqual(report["reason"], "service_exec_output_invalid:ExecStop")
+        self.assertNotIn("private", output.getvalue())
+
     def test_partial_installation_is_recovered_after_write_failure(self):
         run = self.create()
         write = config.write_entry

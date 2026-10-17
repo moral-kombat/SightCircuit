@@ -106,7 +106,10 @@ is implemented but **paused after service-control failures on Frame**.
 Saved reports show configuration restoration; SteamVR was later running with
 normal UI/passthrough. The failed service operation remains unidentified, and
 no successful metadata inspection was recorded. The runner does not relaunch
-the console application. Actual driver imports, camera identity and
+the console application. The [unit/selector review](docs/status.md#e44-platform-launcher-source-and-repeated-hook-diagnostic-fix)
+identified startup, waiter and cleanup stages; the hook inspector now preserves
+every repeated hook. Platform lifecycle/recovery tests are the next offline
+step before reassessing activation. Actual driver imports, camera identity and
 on-device restoration remain unvalidated. Bounded recognition and snapshots shown after
 capture remain useful. The model's class coverage and false positives need separate work.
 The [isolated shared-memory reader](docs/on-device.md#check-existing-luma-shared-memory)
