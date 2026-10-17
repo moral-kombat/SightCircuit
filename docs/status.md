@@ -25,8 +25,8 @@ unknown unless explicitly recorded below.
 | Pinned capture reference build | Cloud and Frame ARM64 compile/link checks passed | Unmodified upstream inspection artifacts only; no activation, runtime fixes still required; [E23](#e23-reference-build-and-controlled-reader-on-frame) |
 | Descriptor transport adaptation | Controlled cloud and Frame ARM64 checks passed | Adapted components compile/link on Frame and fixture reports seven groups passed; live callbacks and remaining provider work unverified; [E25](#e25-descriptor-transport-on-frame) |
 | Provider publication and loop controls | Controlled cloud and Frame tests passed | Exclusive private runtime file, ordered writer and bounded loop controls; all eight generated-data process tests passed on Frame; full GPU/provider lifecycle pending; [E27](#e27-publication-and-loop-controls-on-frame) |
-| Bounded Vulkan capability query | Implemented; controlled cloud tests passed; Frame result pending | Eleven fake-loader/process tests; no usable cloud driver; no camera or actual external-memory import; [E28](#e28-vulkan-capability-query-cloud-checks) |
-| Image import validation and ownership | Inspection adaptation built; ten synthetic cloud tests passed | Strict profile/capability/requirement checks, FD transfer, rollback and completion-gated retirement; no real GPU import or ARM64 result; [E29](#e29-validated-import-and-ownership-cloud-checks) |
+| Bounded Vulkan capability query | Frame-confirmed; queried requirements passed | Turnip Adreno 750, target NV12 modifier has two memory planes, dedicated DMA-BUF import supported; clean query and normal passthrough; no actual FD import; [E30](#e30-vulkan-capabilities-on-frame) |
+| Image import validation and ownership | ARM64 build and ten synthetic tests passed; cloud suite now eleven | FD/image ownership and failure paths validated with fake dispatch; added two-plane case cloud-only; real GPU import remains untested; [E31](#e31-import-build-and-synthetic-tests-on-frame), [E32](#e32-two-plane-import-fixture-cloud-checks) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
 | Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; no source-identified built-in-camera frames have been received |
 | Stereo depth and world-space labels | Planned | Calibration, depth and pose/timebase alignment remain unresolved |
@@ -799,10 +799,11 @@ An explicit query of the installed cloud Vulkan loader reported API 1.4.309,
 then `vkCreateInstance` returned `-9` (`VK_ERROR_INCOMPATIBLE_DRIVER`). It exited
 `1` without creating an instance and reported cleanup/reaping success, with no
 forced termination. This cloud environment supplies no usable driver for the
-query; Frame GPU capabilities remain unknown. No logical device, camera,
+query; Frame GPU capabilities were unknown at this point (subsequently reported in E30). No logical device, camera,
 external-memory import or capture configuration change was made.
 
-Use [the next device command](on-device.md#query-vulkan-capture-capabilities).
+The subsequent Frame query is recorded in E30; retain
+[the device command](on-device.md#query-vulkan-capture-capabilities) for a changed tool/runtime.
 A positive capability report would still leave real-buffer import and producer
 synchronization, resource cleanup and complete provider lifecycle unverified.
 
@@ -810,7 +811,8 @@ synchronization, resource cleanup and complete provider lifecycle unverified.
 
 Source: local x86_64 cloud execution on 2026-10-16 of the import worktree based
 on `b379ac7`. This work proceeded while the user was away from the Frame; E28's
-pending device query remains pending. The capture source pin is unchanged.
+device query was pending at this point (subsequently reported in E30).
+The capture source pin is unchanged.
 
 The new `--import-fixes` mode applies patches 0001–0003 to disposable source,
 compiles/links the adapted layer/producer, and records patch/helper hashes in
@@ -844,9 +846,106 @@ footprint, correct physical GPU/source selection, producer completion or ARM64
 execution. Device/bootstrap, host/downscaler/command resource ownership, a
 capture watchdog, registry/layer lifetime and restoration remain pending.
 No layer installation, camera access or actual external-memory import occurred.
-Continue the [offline work](live-capture.md#offline-provider-work-while-the-frame-is-unavailable);
-the [GPU query](on-device.md#query-vulkan-capture-capabilities) remains the next
-hardware-information check.
+Continue the [offline work](live-capture.md#offline-provider-work-while-the-frame-is-unavailable).
+The device checks planned at this point subsequently completed in E30 and E31.
+
+### E30: Vulkan capabilities on Frame
+
+Source: user-supplied ARM64 build/query reports and passthrough observation
+received 2026-10-16 (client date). Exact execution time, whole-checkout revision,
+OS and SteamVR versions were not supplied. Do not attach the earlier prerequisite
+report's versions as fresh runtime observations.
+
+The query built on `aarch64`, target `aarch64-unknown-linux-gnu`, with system
+headers. Source SHA-256 matches the published native query:
+`857937d1b98178c3b48c48a9dc327b09bcf4a051a1cd0ceace9f1cb27af63644`.
+Binary SHA-256 is
+`44298e12e8a464ff588b4e664d2331331352309d3256ff692d737b9f08c6b280`.
+The build did not load Vulkan or install a layer.
+
+The supervised query reported `queried`, exit `0`, elapsed **9.38 ms**, worker
+exit `0`, reaped, no forced termination, and `cleanup_ok: true`. Its instance was
+created and destroyed. The user explicitly confirms normal passthrough throughout
+and afterward. No logical device, camera, GPU allocation or external-memory
+import was started; `deployment_ready` remains false.
+
+| Observation | Reported value |
+| --- | --- |
+| Loader API | 1.3.296 |
+| Physical device | `Turnip Adreno (TM) 750`, integrated GPU |
+| Device API / driver version | 1.4.362 / raw `109060195` |
+| Vendor / device IDs | `20803` / `1124406273` |
+| Required extensions | All four present; none missing |
+| YCbCr conversion / cached host-visible memory | Supported / available |
+| Graphics queue | Family 0, one queue, flags `15`; family 1 flags `8` is not graphics-capable |
+| R8 linear blit and transfer image | Supported; maximum width/height 16,384 |
+| NV12 target modifier | `0x0500000000000001`, **two memory planes**, tiling features `9433089` |
+| External-image query | `VK_SUCCESS`; importable, DMA-BUF-compatible and dedicated-only |
+| External feature / compatible handle masks | `7` / `513` |
+| NV12 size / array-layer limits | Maximum width/height 16,384; maximum array layers 2,048 |
+| Aggregate queried requirements | `capability_checks_passed: true` |
+
+The loader API, physical-device API and earlier 1.4.309 development-header
+metadata describe different components. Driver stderr contains an environment
+option-override notice and Gamescope WSI application-info messages alongside
+successful query/cleanup. These are not evidence of a failed query or of a
+layer installed by Framejacker.
+
+These are advertised physical-device capabilities. The two-plane count does not
+identify the physical camera, prove actual buffer layouts or replace the
+per-buffer modifier/plane validation. No actual DMA-BUF import, original producer
+synchronization, image freshness, color or calibration was tested.
+
+### E31: Import build and synthetic tests on Frame
+
+Source: user-supplied full `--import-fixes` build report and unittest output
+received 2026-10-16 (client date). Exact device execution time, whole-checkout
+revision and fresh OS/SteamVR versions were not supplied. The build reports
+`aarch64`, target `aarch64-unknown-linux-gnu`, system Vulkan headers and
+`-l:libvulkan.so.1`; capture revision remains
+`ff6a2b29bc50c9497d66fd7ff07e00b61f9eb082`.
+
+The import helper and patch hashes match the published code at `b896d6e`:
+
+| Source | SHA-256 |
+| --- | --- |
+| `capture_import.hpp` | `12919f20b83f150c3ade05e07f1b921e70f6a07b9d9ba6eb07975192117507db` |
+| `0003-validated-image-import.patch` | `ad24fc2ba7d789760961ea819733df2a90978c090bf1d754f9bf53a7d5d99d74` |
+| Adapted `ptgrab.cpp` | `c17cd406220dca53ce1cdb25e439925b0109bfba071f070ab9ea586d5cfa2f00` |
+
+| Inspection artifact | Bytes | SHA-256 |
+| --- | --- | --- |
+| `reference-libVkLayer_mrhand.so` | 81,048 | `06ba2f08240141f20b0e6fff43156ba53ce06ae269eeeb5f9e7a9b5b5d4d22e4` |
+| `reference-ptgrab` | 151,440 | `da8661419c21fbdf26ecde60ecf0e1a0f026ec063f2fe9ee4549a413eba9c6bb` |
+
+The build reports no runtime initialization, capture or layer installation,
+non-executable inspection artifacts, and `deployment_ready: false`. It does
+not run the produced capture code. All **ten synthetic import tests passed in
+0.015 seconds**, with no skips. They exercise the same import/submission helper
+through fake function pointers and generated memfds; this confirms controlled
+ARM64 execution, not an actual GPU import. The subsequent two-plane fixture
+extension in E32 was not included in this user-supplied native run.
+
+### E32: Two-plane import fixture cloud checks
+
+Source: local x86_64 cloud execution on 2026-10-16 (client date), worktree based
+on `b896d6e`. After E30 advertised two memory planes for the target modifier,
+the fixture gained an explicit two-plane success case and a four-plane metadata
+mismatch rejection against that driver capability. The existing generic
+four-plane supported case remains. Offsets/pitches are synthetic and are not
+claimed to match actual Frame camera buffers.
+
+All **eleven import tests passed**, with no skips. The ten native fixture groups
+also passed address/undefined-behavior sanitizer checks. The import inspection
+build passed and the production import helper/patch remained unchanged; no
+Vulkan loader, GPU or camera was used by the fixture. The added eleventh test
+has not yet run on Frame. CI discovers it automatically; hosted results have
+not been checked.
+
+The GPU query and initial native suite are complete. Continue device/bootstrap
+and remaining resource ownership, the capture watchdog and registry/layer
+lifetime/restoration before a live camera trial. There is no need to repeat the
+unchanged device checks to continue that engineering work.
 
 ## Maintaining the evidence
 

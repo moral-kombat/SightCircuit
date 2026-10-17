@@ -419,6 +419,10 @@ They make no GPU or camera calls. Native tests explicitly skip if the query is
 unbuilt; the dedicated CI job builds it before running them. Hosted CI results
 are separate from local results. For the real Frame query, use
 [the supervised device command](on-device.md#query-vulkan-capture-capabilities).
+The first Frame query now passes on Turnip Adreno 750 with clean teardown and
+normal passthrough; see [E30](status.md#e30-vulkan-capabilities-on-frame). Its
+target modifier reports two memory planes; the generic fake-loader test's four
+planes are a separate synthetic case.
 
 ### Build and test image import ownership
 
@@ -481,17 +485,26 @@ image owners. They are confined to one worker thread. No unbounded idle wait
 is added, but a driver call itself can still hang: the capture supervisor
 remains to be implemented. This gate does not synchronize XRService's writes.
 
-Ten Python tests execute nine native fixture groups plus default/argument guards.
+Eleven Python tests execute ten native fixture groups plus default/argument guards.
 They cover malformed metadata before driver calls, unsupported modifier/memory
 planes, format/limits, requirement bounds, memory bit 31, FD transfer and cleanup
 order, failure injection at FD query/create/allocate/bind, move/vector ownership,
-batch rollback, pending-work deferral, and reset/submit/wait failures. The native
+batch rollback, pending-work deferral, and reset/submit/wait failures. An explicit
+two-plane modifier case matches the count advertised in the Frame capability
+report; its offsets/pitches are generated, not observed camera metadata. The
+generic four-plane supported case remains covered, and a four-plane record is
+rejected when the driver advertises two. The native
 fixture counts FDs before/after each group. Deferred resources in its fake
 backend are reclaimed by simulated process teardown, not described as graceful
 Vulkan cleanup. CI builds before running these tests; unbuilt native fixtures
 produce explicit skips elsewhere.
 
-Cloud compile/link and synthetic tests do not validate a real import. Device
+The original ten-test suite and import build also passed on Frame ARM64;
+the eleventh two-plane case has only been run in the cloud. The GPU query reports
+two modifier memory planes and dedicated-only imports on Turnip Adreno 750;
+see [E30](status.md#e30-vulkan-capabilities-on-frame) and
+[E31](status.md#e31-import-build-and-synthetic-tests-on-frame).
+Compile/link and synthetic tests do not validate a real import. Device
 selection/bootstrap, host/downscaler/command resource cleanup, capture watchdog,
 registry refresh and layer lifetime/restoration still need work. See the
 [offline work order](live-capture.md#offline-provider-work-while-the-frame-is-unavailable)
