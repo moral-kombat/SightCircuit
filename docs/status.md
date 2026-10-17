@@ -31,7 +31,7 @@ unknown unless explicitly recorded below.
 | Capture watchdog, provider/layer lifecycle and exact recovery | Earlier v2 milestone passed all 28 generated-data tests on Frame ARM64 | Bounded worker, metadata/GPU provenance, registry changes, owned endpoint and conditional restoration; no real driver/layer execution or device restoration; [E35](#e35-watchdog-provider-and-recovery-tests-on-frame) |
 | Metadata-only provider and producer synchronization review | v3 ARM64 build and all 24 generated-data tests passed on Frame | Layer retains/exports no image FDs; no real layer activation or live camera access; controlled load/restoration remains next; [E36](#e36-metadata-only-provider-and-synchronization-review), [E37](#e37-metadata-only-provider-and-diagnostic-on-frame) |
 | Inactive v3 bundle and SteamVR service preflight | Frame report received | Bundle prepared without activation; active simple/control-group user service, 20-second stop timeout, no drop-ins; [E38](#e38-inactive-bundle-and-steamvr-service-on-frame) |
-| Bounded metadata-layer trial and post-exit recovery | Implemented; cloud generated-data tests passed; device trial pending | Loader fallback gate fixed; fresh bundle required; actual systemd recovery rehearsal runs before activation; [E39](#e39-controlled-metadata-trial-and-loader-fallback-cloud-checks) |
+| Bounded metadata-layer trial and post-exit recovery | Paused following restart and loss of console access | Activation blocked; device state and saved reports pending; full reboot versus SteamVR restart and actual restoration remain unknown; [E40](#e40-restart-and-console-access-loss-reported) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
 | Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; no source-identified built-in-camera frames have been received |
 | Stereo depth and world-space labels | Planned | Calibration, depth and pose/timebase alignment remain unresolved |
@@ -1226,6 +1226,35 @@ cgroup, then restores configuration and starts SteamVR without its enable flag.
 No actual Frame activation, recovery, image access, source identity or new
 passthrough observation is established by these cloud checks. Hosted CI has not
 been checked. See the [device procedure](on-device.md#run-the-bounded-metadata-layer-trial).
+
+### E40: Restart and console access loss reported
+
+Source: user observation received 2026-10-17 (America/New_York), after the
+published trial command: “The device restarted and did not recover the console.”
+No command output, checkout revision, trial/inspection/rollback reports or
+current service state were supplied. Whether this was a full headset reboot
+or a SteamVR restart, whether passthrough/UI recovered, and whether SSH remains
+available are unknown. Do not infer failed or successful configuration
+restoration from console loss alone.
+
+The runner restarts SteamVR and restores its files/service; it contains no
+console-app relaunch. The prior instruction to read reports when the console
+returns did not establish an independent means of access. That operating
+assumption was insufficient for this trial. The cloud rehearsal/generated-data
+results remain distinct from device recovery or console continuity.
+
+Further `--start-metadata-test` calls are now blocked before any service query,
+rehearsal, state creation or activation. Known-run reporting/recovery and
+read-only preflight remain available. The updated trial suite passes 21 cloud
+tests, including the early activation guard; no device operation was repeated.
+The pause is effective on updated checkouts; it does not remotely stop a trial
+already scheduled by the earlier revision.
+
+Next obtain the existing reports through an independent terminal/SSH session
+and verify normal UI/passthrough. Do not resume activation until the observed
+device state and recovery outcome are understood and independent access is
+established. No frame access, camera identity or live capture is demonstrated
+by the restart observation.
 
 ## Maintaining the evidence
 

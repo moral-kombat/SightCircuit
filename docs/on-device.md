@@ -912,15 +912,20 @@ requires a fresh bundle before any activation.
 
 ### Run the bounded metadata-layer trial
 
-This is an opt-in metadata-layer test. **It restarts SteamVR for the test and
-again for restoration. The headset view/browser/console may disappear.** Save
-other work first. The trial runs in a separate user service and systemd runs
+**Paused after a device restart and loss of console access; do not repeat the
+trial.** Current `--start-metadata-test` returns `blocked`/exit 3 before any
+runtime or file action. Reporting, read-only preflight and known-run recovery
+remain available. See [E40](status.md#e40-restart-and-console-access-loss-reported).
+The retained procedure below describes the earlier trial for investigation.
+
+The earlier experiment restarted SteamVR for the test and again for restoration.
+The headset view/browser/console could disappear. The trial used a separate user service and systemd ran
 its post-exit recovery independently of the console. This is the first actual
 layer-load/restoration trial; the cloud has tested generated data, not this
 device operation. It requests no image data and runs no recognition or overlay.
 
-First build the changed tools, run their no-camera tests, and prepare a new
-inactive bundle. Preserve the earlier `capture-layer-plan-v3-new` bundle:
+The earlier preparation command is retained below for investigation; do not
+use it to resume activation. Preserve existing bundles:
 
 ```bash
 cd "$HOME/framejacker" &&
@@ -933,7 +938,8 @@ python3 scripts/capture_layer_config.py --prepare artifacts/capture-layer-plan-v
 python3 scripts/capture_layer_trial.py --preflight artifacts/capture-layer-plan-v3-trial
 ```
 
-Expect **14, 12 and 20 tests**, with no skips, then `prepared_inactive_bundle`
+Current suites contain **14, 12 and 21 tests**, with no skips; the original
+preparation expected `prepared_inactive_bundle`
 and `preflight_passed`. If the new directory already exists, preserve it and
 use a different new name throughout. Preflight requires matching current
 build/helper hashes, absent prior Framejacker active targets, no existing
@@ -942,7 +948,7 @@ with a 20-second stop timeout and no drop-ins. It refuses changed conditions
 without restarting anything. This trial does not support replacing an existing
 Framejacker installation.
 
-To start the actual bounded test:
+The earlier activation command is now blocked; it is retained for reference:
 
 ```bash
 python3 scripts/capture_layer_trial.py --start-metadata-test artifacts/capture-layer-plan-v3-trial
@@ -959,7 +965,8 @@ The normal path can finish sooner; allow **about three minutes** for timeout
 and recovery. A launch acknowledgment means scheduled, not completed. If it
 says `launch_unconfirmed`, inspect that run before attempting another launch.
 
-After the headset/console returns:
+Restoring SteamVR does not relaunch the terminal/console application. Open a
+terminal independently, or use SSH from another computer, then read reports:
 
 ```bash
 cd "$HOME/framejacker" &&
@@ -973,6 +980,18 @@ the service cgroup. Zero compatible candidates is still a metadata result,
 not camera access. `incomplete`/exit 3 means the final recovery report is absent;
 `failed`/exit 1 must not be treated as restoration success. Share the report
 and whether normal passthrough recovered. No images are saved.
+
+From another computer, read the same report without restarting or activating
+anything on Frame:
+
+```bash
+ssh steamos@<FRAME_IP> 'cd "$HOME/framejacker" && python3 scripts/capture_layer_trial.py --report-latest'
+```
+
+If SSH cannot connect, first establish whether the normal headset interface
+and passthrough work and whether the full boot sequence occurred. Console loss
+alone does not prove a headset reboot or failed configuration restoration.
+Do not restart the trial to recreate the symptom.
 
 If recovery fails, use the known `trial_directory` from the launch/result
 report. From a separate terminal/SSH session, stop any remaining trial first:

@@ -203,7 +203,8 @@ class MetadataLayerTrialTests(unittest.TestCase):
 
     def test_ambiguous_launch_reports_the_attempt_and_recovery_path(self):
         output = io.StringIO()
-        with patch.object(trial, "Systemd", return_value=self.manager), \
+        with patch.object(trial, "ACTIVATION_BLOCKED_REASON", None), \
+             patch.object(trial, "Systemd", return_value=self.manager), \
              patch.object(Path, "home", return_value=self.home), \
              patch.object(trial, "RUNS", self.root / "runs"), \
              patch.dict(os.environ, {"XDG_RUNTIME_DIR": str(self.runtime)}), \
@@ -216,6 +217,19 @@ class MetadataLayerTrialTests(unittest.TestCase):
         self.assertEqual(report["status"], "launch_unconfirmed")
         self.assertTrue(Path(report["trial_directory"]).is_dir())
         self.assertEqual(self.manager.calls, [])
+
+    def test_device_failure_pause_blocks_activation_before_runtime_or_file_calls(self):
+        output = io.StringIO()
+        with patch.object(trial, "Systemd", side_effect=AssertionError("must not query manager")), \
+             patch.object(trial, "create_run", side_effect=AssertionError("must not write files")), \
+             patch.object(trial, "check_recovery", side_effect=AssertionError("must not start rehearsal")), \
+             contextlib.redirect_stdout(output):
+            self.assertEqual(trial.main(["--start-metadata-test", str(self.bundle)]), 3)
+        report = json.loads(output.getvalue())
+        self.assertEqual(report["status"], "blocked")
+        self.assertFalse(report["activation_requested"])
+        self.assertEqual(report["reason"], "device_restart_console_recovery_unverified")
+        self.assertEqual(list(self.home.iterdir()), [])
 
     def test_successful_inspection_and_recovery_restore_exact_absence(self):
         run = self.create()

@@ -29,6 +29,7 @@ EXPECTED = {"LoadState": "loaded", "ActiveState": "active", "SubState": "running
 PROPERTIES = (*EXPECTED, "MainPID", "ControlGroup")
 FLAG_NAMES = {"FRAMEJACKER_CAPTURE_LAYER", "FRAMEJACKER_DISABLE_CAPTURE_LAYER"}
 RUNS = ROOT / "artifacts/metadata-trials"
+ACTIVATION_BLOCKED_REASON = "device_restart_console_recovery_unverified"
 
 
 def command(arguments, timeout=30):
@@ -399,7 +400,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--preflight", type=Path, metavar="BUNDLE", help="Validate metadata-only build, inactive bundle and service without changes")
-    mode.add_argument("--start-metadata-test", type=Path, metavar="BUNDLE", help="Temporarily load metadata layer and restart SteamVR; systemd restores it after exit")
+    mode.add_argument("--start-metadata-test", type=Path, metavar="BUNDLE", help="Currently blocked following device restart/loss of console; reporting and known-run recovery remain available")
     mode.add_argument("--worker", type=Path, help=argparse.SUPPRESS)
     mode.add_argument("--rollback", type=Path, help="Recover a known trial after its worker has exited")
     mode.add_argument("--report-latest", action="store_true", help="Read the last trial and rollback reports without runtime calls")
@@ -408,6 +409,11 @@ def main(argv=None):
     args = parser.parse_args(argv)
     report = {"report_kind": "capture_metadata_trial_launcher", "schema_version": 1,
               "status": "not_run", "exit_code": 3, "activation_requested": False}
+    if args.start_metadata_test and ACTIVATION_BLOCKED_REASON:
+        report.update(status="blocked", reason=ACTIVATION_BLOCKED_REASON,
+                      next_step="Read --report-latest from an independent terminal; do not repeat activation")
+        print(json.dumps(report, indent=2))
+        return report["exit_code"]
     try:
         manager = Systemd()
         if args.recovery_hold or args.recovery_complete:
