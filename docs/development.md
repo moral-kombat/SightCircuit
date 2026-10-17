@@ -590,11 +590,12 @@ python3 -m unittest discover -s tests -p test_capture_supervisor.py -v &&
 python3 -m unittest discover -s tests -p test_capture_provider.py -v &&
 python3 -m unittest discover -s tests -p test_capture_provider_check.py -v &&
 python3 -m unittest discover -s tests -p test_capture_layer_config.py -v &&
+python3 -m unittest discover -s tests -p test_capture_service_lifecycle.py -v &&
 python3 -m unittest discover -s tests -p test_capture_layer_trial.py -v
 ```
 
 The current cloud suites contain **10 watchdog, 14 provider/layer, 12 metadata
-diagnostic, 7 configuration/recovery and 26 trial tests**. These use generated files,
+diagnostic, 8 configuration/recovery, 9 service-observation and 48 trial tests**. These use generated files,
 local sockets and fake driver dispatch. Neither the actual layer nor the
 camera producer is loaded/run. The real binaries remain mode 0644 in
 `artifacts/capture-provider-reference/`; the report records helper, patch and
@@ -602,8 +603,9 @@ artifact hashes and `deployment_ready: false`. All earlier build modes remain
 available. The earlier v3 ARM64 build and both 12-test suites passed on Frame;
 see [E37](status.md#e37-metadata-only-provider-and-diagnostic-on-frame). The metadata inspector is
 a separate executable, linked without Vulkan; it is not the camera producer.
-The subsequent loader fallback/timing fixes and trial runner have not yet run
-on Frame; see [E39](status.md#e39-controlled-metadata-trial-and-loader-fallback-cloud-checks).
+The trial runner was later attempted on Frame and failed during service control.
+Its revised lifecycle controller and cgroup observations remain cloud-tested
+only; see [E45](status.md#e45-offline-platform-lifecycle-and-guarded-recovery).
 
 ### Worker containment and publication recovery
 
@@ -763,6 +765,8 @@ recommendation. The runner restores SteamVR but never relaunches a console app.
 `not_run`/exit 3. `--preflight BUNDLE` checks a fresh metadata-only build,
 matching bundle/checksums/home, absent prior Framejacker targets, no existing
 provider or enable flags, and the exact reported SteamVR service properties.
+It also requires an idle service job and a live compositor in the original
+unified cgroup, with a consistent invocation ID across baseline observations.
 It changes nothing. Existing configurations or differing service properties
 are refused rather than overwritten or guessed.
 
@@ -776,11 +780,16 @@ seconds for the endpoint, performs a two-second metadata inspection, and checks
 the peer's UID, executable and membership in the SteamVR service's cgroup.
 
 Systemd runs a **separate** `ExecStopPost` command after success, failure or
-termination. Recovery stops SteamVR, removes only the exact trial drop-in,
+termination. Recovery observes existing jobs before requesting any stop,
+removes only the exact trial drop-in,
 conditionally restores only recorded targets, recovers an owned stale provider
 endpoint if necessary, reloads the manager and starts the normal service.
 It preserves later edits, reports failures and refuses a living trial worker.
-Repeated successful recovery does not restart SteamVR again. The trial service
+An unchanged healthy configuration needs no restart if the worker never reached
+staging; restored files alone cannot prove that a loaded layer was unloaded.
+Repeated recovery of an
+already restored active service rechecks liveness without another stop/start.
+The trial service
 has `RuntimeMaxSec=60`, `TimeoutStopSec=60`, `Restart=no`; execution and recovery
 can take about three minutes on a timeout path. A failed service stop, manager
 failure or unkillable kernel task cannot be reported as successful restoration.
@@ -791,8 +800,11 @@ without runtime calls. An ambiguous launch acknowledgment is `launch_unconfirmed
 with the attempted run path retained; inspect/recover that run before retrying.
 No image descriptors, pixels, inference or VR panel output are requested.
 
-Twenty-six generated-data tests exercise real temporary configuration and simulated
-systemd behavior. They do not establish actual user-manager execution; static
+The 48 trial tests exercise real temporary configuration and generated platform
+hook/job events. A separate nine-test suite checks generated cgroup/proc files
+and virtual deadlines; eight configuration tests cover exact restoration and
+edits during a runtime guard. All 65 targeted tests pass in the cloud. They do
+not establish actual user-manager execution or vendor hook side effects; static
 unit syntax was verified in the cloud, and the real recovery rehearsal is
 mandatory on Frame before the trial. The [device procedure](on-device.md#run-the-bounded-metadata-layer-trial)
 contains opt-in, expected reports and manual recovery.
@@ -800,7 +812,7 @@ contains opt-in, expected reports and manual recovery.
 Worker reports now include the failure phase; private worker state checkpoints
 the phase before each action. `ServiceCommandError` records operation and exit
 code, with at most 4 KiB of stderr for exact service start/stop/daemon-reload
-commands. Rollback records each command's phase separately. Command stdout and
+commands, including bounded timeout diagnostics. Rollback records each command's phase separately. Command stdout and
 environment-query stderr are never attached; environment-query values are
 excluded from diagnostic reports. These diagnostic changes do not remove the
 activation pause or establish a fix for the device's service-control failure.
@@ -816,6 +828,47 @@ not returned. Tests cover the shipped hook order, argument exclusion, format
 refusal and the single read-only query without activation or file changes.
 See [the platform source findings](status.md#e44-platform-launcher-source-and-repeated-hook-diagnostic-fix)
 and [required lifecycle coverage](live-capture.md#steamvr-service-control-acceptance).
+
+[`capture_service_lifecycle.py`](../scripts/capture_service_lifecycle.py) queries
+no VR API. It observes the original cgroup's `cgroup.events`, including descendant
+population, and reads bounded cgroup process lists plus `/proc` executable,
+owner, state, start-time and membership metadata. Missing hierarchy/permission
+data is unknown, not an empty group. The implementation currently requires
+readable unified cgroups. `systemctl show --all` retains an explicitly empty
+`Job=` field, which is normalized to idle (`0`); an absent Job remains unknown.
+
+A transition submits at most one service command, then observes its result
+within 25 seconds, sharing a 55-second controller deadline. The command timeout
+is at most 20 seconds, leaving observation time within the existing 60-second
+systemd watchdogs. A successful stop requires no job, an inactive/failed unit,
+zero MainPID and an empty original cgroup across two observations. Startup
+requires active/running/success, an idle job, an invocation ID and a stable live
+compositor. Pending jobs are observed before recovery issues another command.
+Intent, phase, command outcome and changed observations are saved before the
+next recovery decision.
+
+The worker rechecks stop state before staging files; recovery rechecks it before
+each restored file, followed by another file-content check to preserve edits
+made during the observation. A competing controller can still act between
+observations and writes; these checks do not supply atomic exclusion against
+outside service controllers. Failed restoration never triggers an automatic
+normal-service start. A failed command followed by an observed transition may
+allow cleanup to proceed, but its error remains in the report and recovery
+exits 1. Configuration restoration, a confirmed start command and
+`normal_runtime_observed` are separate fields. If the unchanged service was
+already running, `normal_service_already_running` is true instead of claiming
+that recovery started it. Aggregate completion additionally requires runtime
+observation evidence; an older `restored` label alone is insufficient.
+
+`--runtime-status` performs only service/cgroup/proc reads and two liveness
+observations, with a 12-second controller budget. It needs no build or inactive
+bundle. `runtime_observed`/exit 0 establishes process liveness;
+`runtime_unconfirmed` or `refused` exits 1. It returns
+`rendering_readiness_verified: false` and requires a separate user passthrough
+check. It does not restart SteamVR, initialize OpenVR/Vulkan, connect to the
+provider or read images. The new mode is the next
+[read-only Frame check](on-device.md#check-runtime-liveness-without-restarting);
+passing it does not unblock activation.
 
 ## Isolated luma reader and synthetic producer
 

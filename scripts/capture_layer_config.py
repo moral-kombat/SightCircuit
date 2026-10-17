@@ -173,7 +173,7 @@ def load_plan(bundle):
     return plan
 
 
-def restore(bundle, *, expected_home=None):
+def restore(bundle, *, expected_home=None, before_change=None):
     plan = load_plan(bundle)
     home = Path(plan["home"])
     if home != Path(expected_home if expected_home is not None else Path.home()).absolute():
@@ -185,6 +185,8 @@ def restore(bundle, *, expected_home=None):
             raise ValueError("configuration_target_changed:" + name)
     for name in reversed(TARGETS):  # Remove/restore the manifest before the library.
         if current[name] != plan["before"][name]:
+            if before_change is not None:
+                before_change()
             # Recheck immediately before mutation to detect ordinary concurrent edits.
             if read_entry(home, name) != current[name]:
                 raise ValueError("configuration_target_changed:" + name)

@@ -934,18 +934,20 @@ git pull --ff-only &&
 bash scripts/build_capture_reference.sh --provider-fixes &&
 python3 -m unittest discover -s tests -p test_capture_provider.py -v &&
 python3 -m unittest discover -s tests -p test_capture_provider_check.py -v &&
+python3 -m unittest discover -s tests -p test_capture_service_lifecycle.py -v &&
 python3 -m unittest discover -s tests -p test_capture_layer_trial.py -v &&
 python3 scripts/capture_layer_config.py --prepare artifacts/capture-layer-plan-v3-trial &&
 python3 scripts/capture_layer_trial.py --preflight artifacts/capture-layer-plan-v3-trial
 ```
 
-Current suites contain **14, 12 and 26 tests**, with no skips; the original
+Current suites contain **14, 12, 9 and 48 tests**, with no skips; the original
 preparation expected `prepared_inactive_bundle`
 and `preflight_passed`. If the new directory already exists, preserve it and
 use a different new name throughout. Preflight requires matching current
 build/helper hashes, absent prior Framejacker active targets, no existing
 provider/enable flags, and the reported active simple/control-group service
-with a 20-second stop timeout and no drop-ins. It refuses changed conditions
+with a 20-second stop timeout and no drop-ins. The revised preflight also needs
+an idle job and a live compositor in the original unified cgroup. It refuses changed conditions
 without restarting anything. This trial does not support replacing an existing
 Framejacker installation.
 
@@ -976,7 +978,8 @@ python3 scripts/capture_layer_trial.py --report-latest
 
 Success is `status: completed`, with `trial.status: inspected`,
 `rollback.status: restored`, `configuration_restored: true` and
-`normal_service_started: true`. The metadata peer must be a `vrcompositor` in
+`normal_runtime_observed: true`, plus either a confirmed normal-service start
+or `normal_service_already_running: true`. The metadata peer must be a `vrcompositor` in
 the service cgroup. Zero compatible candidates is still a metadata result,
 not camera access. `incomplete`/exit 3 means the final recovery report is absent;
 `failed`/exit 1 must not be treated as restoration success. Share the report
@@ -1092,10 +1095,10 @@ to read the shipped unit and selector without executing them.
 Keep the command below as a reference, not another required collection step.
 The unit requests startup before tracking a waiter and runs health-check and
 display cleanup hooks on shutdown. Do not execute the selector as a probe: its
-fallback can change the selected SteamVR installation. No new Frame command
-or restart is required while the
+fallback can change the selected SteamVR installation. The
 [offline lifecycle model](live-capture.md#steamvr-service-control-acceptance)
-is prepared.
+is now implemented and cloud-tested. The next device step below reads runtime
+metadata without a restart.
 
 ```bash
 python3 - <<'PY'
@@ -1126,6 +1129,44 @@ The unit portion includes only Exec*/Type definitions and
 their continuation lines; environment/credential directives are omitted. The
 selector is read as static source, not run. No runtime environment or credential
 file is read. No additional output from this collector is needed now.
+
+### Check runtime liveness without restarting
+
+The [offline recovery work](status.md#e45-offline-platform-lifecycle-and-guarded-recovery)
+passes 65 targeted cloud tests. When back on Frame, validate the new observation
+path while leaving the working headset session running. No rebuild or inactive
+bundle is needed:
+
+```bash
+cd "$HOME/framejacker" &&
+git pull --ff-only &&
+python3 scripts/capture_layer_trial.py --runtime-status
+```
+
+Expect `status: runtime_observed`, exit 0, `activation_requested: false`,
+`normal_runtime_observed: true`, and `rendering_readiness_verified: false`.
+The runtime observation should show active/running/success, no pending job,
+a populated original cgroup and a live compositor identity. Share the JSON and
+whether normal passthrough remained working. A missing/unreadable cgroup or
+absent compositor returns `runtime_unconfirmed` or `refused`, exit 1; retain the
+report and do not restart the experiment to change the result.
+
+This mode reads only allowlisted service properties and cgroup/proc metadata.
+It performs no configuration writes, service start/stop/reload, OpenVR/Vulkan
+calls, provider connection, pixel read or image save. It checks process liveness,
+not actual rendering. A passing report does not unblock activation. Independent
+terminal/SSH access and a reviewed restoration/readiness procedure are still
+required before any later device rehearsal.
+
+The offline suites can also run on Frame without touching its VR runtime:
+
+```bash
+python3 -m unittest tests.test_capture_layer_trial tests.test_capture_service_lifecycle tests.test_capture_layer_config -v
+```
+
+Expect 65 tests. The configuration suite's generated-provider test requires the
+previously built `--provider-fixes` fixture; if absent, that test skips. Record
+the actual pass/skip totals. These tests do not validate real systemd jobs.
 
 ### Check existing luma shared memory
 

@@ -81,6 +81,17 @@ class LayerConfigurationTests(unittest.TestCase):
         self.assertEqual(modified.read_bytes(), b"later edit")
         self.assertEqual(config.read_entry(self.home, config.LIBRARY), plan["after"][config.LIBRARY])
 
+    def test_edits_during_a_runtime_guard_are_preserved(self):
+        plan = self.prepare()
+        self.install_fixture(plan)
+        modified = self.home / config.MANIFEST
+        def guard():
+            modified.write_bytes(b"edit during observation")
+        with self.assertRaisesRegex(ValueError, "target_changed"):
+            config.restore(self.bundle, expected_home=self.home, before_change=guard)
+        self.assertEqual(modified.read_bytes(), b"edit during observation")
+        self.assertEqual(config.read_entry(self.home, config.LIBRARY), plan["after"][config.LIBRARY])
+
     def test_symlink_hardlink_fifo_and_parent_symlink_are_refused(self):
         target = self.home / config.LIBRARY
         target.parent.mkdir(parents=True)

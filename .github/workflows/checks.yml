@@ -63,6 +63,7 @@ jobs:
           python3 -m unittest discover -s tests -p test_capture_provider.py -v
           python3 -m unittest discover -s tests -p test_capture_provider_check.py -v
           python3 -m unittest discover -s tests -p test_capture_layer_config.py -v
+          python3 -m unittest discover -s tests -p test_capture_service_lifecycle.py -v
           python3 -m unittest discover -s tests -p test_capture_layer_trial.py -v
       - name: Check inspection artifacts without executing them
         run: |

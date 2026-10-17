@@ -108,8 +108,11 @@ normal UI/passthrough. The failed service operation remains unidentified, and
 no successful metadata inspection was recorded. The runner does not relaunch
 the console application. The [unit/selector review](docs/status.md#e44-platform-launcher-source-and-repeated-hook-diagnostic-fix)
 identified startup, waiter and cleanup stages; the hook inspector now preserves
-every repeated hook. Platform lifecycle/recovery tests are the next offline
-step before reassessing activation. Actual driver imports, camera identity and
+every repeated hook. [Offline lifecycle/recovery checks](docs/status.md#e45-offline-platform-lifecycle-and-guarded-recovery)
+now pass 65 targeted tests, covering surviving processes, pending jobs and
+guarded restoration. The next device step is a
+[read-only runtime baseline](docs/on-device.md#check-runtime-liveness-without-restarting).
+Actual driver imports, camera identity and
 on-device restoration remain unvalidated. Bounded recognition and snapshots shown after
 capture remain useful. The model's class coverage and false positives need separate work.
 The [isolated shared-memory reader](docs/on-device.md#check-existing-luma-shared-memory)

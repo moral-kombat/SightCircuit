@@ -16,9 +16,21 @@ from scripts import capture_layer_trial as trial
 from scripts import capture_layer_config as config
 
 
+class Clock:
+    def __init__(self):
+        self.value = 0
+
+    def now(self):
+        return self.value
+
+    def sleep(self, seconds):
+        self.value += seconds
+
+
 class Manager:
     def __init__(self):
-        self.properties = dict(trial.EXPECTED, MainPID="123", ControlGroup="/user.slice/steamvr.service")
+        self.properties = dict(trial.EXPECTED, MainPID="123", ControlGroup="/user.slice/steamvr.service",
+                               Result="success", Job="0", InvocationID="1" * 32)
         self.calls = []
         self.flags = []
         self.pid = 0
@@ -26,6 +38,11 @@ class Manager:
 
     def show(self):
         return dict(self.properties)
+
+    def observe(self, group, timeout=5):
+        return {"service": {key: self.properties[key] for key in trial.lifecycle.FIELDS},
+                "group": group, "populated": self.properties["ActiveState"] not in ("inactive", "failed"),
+                "compositors": [{"pid": 789, "start_ticks": 100}] if self.properties["MainPID"] != "0" else []}
 
     def environment_flags(self):
         return self.flags
@@ -39,14 +56,65 @@ class Manager:
             self.fail = None
             raise ValueError("generated_service_failure:" + name)
 
-    def action(self, action):
+    def action(self, action, timeout=25):
         self.hit(action)
         self.properties.update(ActiveState="inactive" if action == "stop" else "active",
                                SubState="dead" if action == "stop" else "running",
                                MainPID="0" if action == "stop" else "456")
 
-    def reload(self):
+    def reload(self, timeout=5):
         self.hit("reload")
+
+
+class PlatformManager(Manager):
+    """Generated hook/state events, not an emulator or executable vendor code."""
+    START = (("first_init", False), ("cache", True), ("apply_path", True),
+             ("merge_overlays", True), ("health_started", False),
+             ("vrstartup", False), ("waiter", False), ("charger_running", True))
+    STOP = (("shutdown", False), ("health_stopped", False),
+            ("display_cleanup", False), ("charger_stopped", True))
+
+    def __init__(self, clock):
+        super().__init__()
+        self.clock = clock
+        self.populated, self.compositor = True, True
+        self.events, self.failed_hooks = [], set()
+        self.overrides, self.pending = {}, None
+        self.before_observe = None
+
+    def action(self, action, timeout=25):
+        self.hit(action)
+        self.properties.update(Job="22", ActiveState="activating" if action == "start" else "deactivating")
+        for name, ignored in self.START if action == "start" else self.STOP:
+            self.events.append((name, name not in self.failed_hooks, ignored))
+            if name in self.failed_hooks and not ignored:
+                self.failed_hooks.remove(name)
+                self.properties.update(ActiveState="failed", SubState="failed", MainPID="0", Job="0", Result="exit-code")
+                self.populated = self.compositor = False
+                raise trial.ServiceCommandError(["systemctl", "--user", action, trial.SERVICE],
+                    subprocess.CompletedProcess([], 1, "", "A required service hook failed"))
+            if name == "vrstartup":
+                self.populated = self.compositor = True
+            elif name == "shutdown":
+                self.populated = self.compositor = False
+        self.properties.update(ActiveState="active" if action == "start" else "inactive",
+                               SubState="running" if action == "start" else "dead",
+                               MainPID="456" if action == "start" else "0", Job="0", Result="success")
+        self.populated = self.compositor = action == "start"
+        if action == "start":
+            self.properties["InvocationID"] = f"{len(self.events):032x}"
+        callbacks = self.overrides.get(action, [])
+        if callbacks:
+            callbacks.pop(0)(self)
+
+    def observe(self, group, timeout=5):
+        if self.pending is not None:
+            self.pending(self)
+        if self.before_observe is not None:
+            self.before_observe(self)
+        return {"service": {key: self.properties[key] for key in trial.lifecycle.FIELDS},
+                "group": group, "populated": self.populated,
+                "compositors": [{"pid": 789, "start_ticks": 100}] if self.compositor else []}
 
 
 class MetadataLayerTrialTests(unittest.TestCase):
@@ -66,6 +134,11 @@ class MetadataLayerTrialTests(unittest.TestCase):
         self.patches = [patch.object(config, "SOURCE", self.source), patch.object(trial.metadata, "BINARY", self.inspector)]
         for item in self.patches:
             item.start()
+        self.clock = Clock()
+        controller = trial.lifecycle.Controller
+        self.controller_patch = patch.object(trial.lifecycle, "Controller", side_effect=lambda *args, **kwargs:
+            controller(*args, **kwargs, clock=self.clock.now, pause=self.clock.sleep))
+        self.controller_patch.start()
         def digest(path):
             return {"name": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "size_bytes": path.stat().st_size}
         self.build_report = {"provider_protocol_version": 3, "image_fd_export_enabled": False,
@@ -79,6 +152,7 @@ class MetadataLayerTrialTests(unittest.TestCase):
         self.manager = Manager()
 
     def tearDown(self):
+        self.controller_patch.stop()
         for item in reversed(self.patches):
             item.stop()
         self.temp.cleanup()
@@ -104,7 +178,8 @@ class MetadataLayerTrialTests(unittest.TestCase):
         report = trial.rollback(run, self.manager)
         self.assertEqual(report["status"], "restored", report)
         self.assertTrue(report["configuration_restored"])
-        self.assertTrue(report["normal_service_started"])
+        self.assertTrue(report["normal_service_started"] or report["normal_service_already_running"])
+        self.assertTrue(report["normal_runtime_observed"])
         for name in config.TARGETS:
             self.assertIsNone(config.read_entry(self.home, name))
         self.assertIsNone(config.read_entry(self.runtime, trial.DROPIN))
@@ -294,10 +369,10 @@ class MetadataLayerTrialTests(unittest.TestCase):
         run = self.create()
         self.execute(run)
         action = self.manager.action
-        def fail_start(operation):
+        def fail_start(operation, **kwargs):
             if operation == "start":
                 raise error
-            return action(operation)
+            return action(operation, **kwargs)
         with patch.object(self.manager, "action", side_effect=fail_start):
             report = trial.rollback(run, self.manager)
         self.assertTrue(report["configuration_restored"])
@@ -475,3 +550,305 @@ class MetadataLayerTrialTests(unittest.TestCase):
         for value in ("/tmp/has space", "/tmp/$HOME", "/tmp/%h", "/tmp/a/../b"):
             with self.assertRaises(ValueError):
                 trial.safe_path(value)
+
+    def platform_run(self):
+        self.manager = PlatformManager(self.clock)
+        return self.create()
+
+    def test_platform_ignored_hook_failures_preserve_order_and_allow_recovery(self):
+        run = self.platform_run()
+        self.manager.failed_hooks = {name for name, ignored in (*self.manager.START, *self.manager.STOP) if ignored}
+        self.assertEqual(self.execute(run)["status"], "inspected")
+        self.assert_restored(run)
+        expected = [name for sequence in (self.manager.STOP, self.manager.START) * 2 for name, _ in sequence]
+        self.assertEqual([name for name, _, _ in self.manager.events], expected)
+        self.assertTrue(any(not success and ignored for _, success, ignored in self.manager.events))
+
+    def test_platform_required_start_hook_failure_does_not_run_the_waiter(self):
+        run = self.platform_run()
+        self.manager.failed_hooks = {"health_started"}
+        report = self.execute(run)
+        self.assertEqual(report["phase"], "starting_steamvr")
+        self.assertEqual(report["command_error"]["operation"], "start")
+        self.assertNotIn("waiter", [name for name, _, _ in self.manager.events])
+        self.assert_restored(run)
+
+    def test_waiter_without_compositor_does_not_complete_inspection(self):
+        run = self.platform_run()
+        self.manager.overrides["start"] = [lambda manager: setattr(manager, "compositor", False)]
+        report = self.execute(run)
+        self.assertEqual(report["reason"], "normal_runtime_unconfirmed")
+        self.assertEqual(report["phase"], "starting_steamvr")
+        self.assertIsNone(config.read_entry(run, "inspection.json"))
+        self.assert_restored(run)
+
+    def test_delayed_compositor_is_observed_after_the_waiter_starts(self):
+        run = self.platform_run()
+        def delay(manager):
+            manager.compositor = False
+            ready = self.clock.now() + 0.4
+            def later(current):
+                if self.clock.now() >= ready:
+                    current.compositor, current.pending = True, None
+            manager.pending = later
+        self.manager.overrides["start"] = [delay]
+        self.assertEqual(self.execute(run)["status"], "inspected")
+        self.assertGreaterEqual(self.clock.now(), 0.5)
+        self.assert_restored(run)
+
+    def test_surviving_compositor_blocks_staging_and_restoration(self):
+        run = self.platform_run()
+        def survivor(manager):
+            manager.populated = manager.compositor = True
+        self.manager.overrides["stop"] = [survivor]
+        report = self.execute(run)
+        self.assertEqual(report["reason"], "steamvr_stop_unconfirmed")
+        self.assertEqual(list(self.home.iterdir()), [])
+        self.assert_restored(run)
+        run = self.create()
+        self.execute(run)
+        self.manager.overrides["stop"] = [survivor]
+        report = trial.rollback(run, self.manager)
+        self.assertFalse(report["configuration_restored"])
+        self.assertFalse(report["normal_service_started"])
+        self.assertEqual(config.read_entry(self.home, config.LIBRARY), self.plan["after"][config.LIBRARY])
+        self.assertIsNone(config.read_entry(self.runtime, trial.DROPIN))
+        self.assert_restored(run)
+
+    def test_canceled_stop_is_reconciled_without_a_second_stop_or_hidden_error(self):
+        run = self.platform_run()
+        self.execute(run)
+        def canceled(manager):
+            manager.properties.update(ActiveState="deactivating", SubState="stop", Job="33")
+            manager.populated = manager.compositor = True
+            ready = self.clock.now() + 0.3
+            def finish(current):
+                if self.clock.now() >= ready:
+                    current.properties.update(ActiveState="inactive", SubState="dead", MainPID="0", Job="0")
+                    current.populated = current.compositor = False
+                    current.pending = None
+            manager.pending = finish
+            raise trial.ServiceCommandError(["systemctl", "--user", "stop", trial.SERVICE],
+                subprocess.CompletedProcess([], 1, "", "Job canceled"))
+        self.manager.overrides["stop"] = [canceled]
+        calls = len(self.manager.calls)
+        report = trial.rollback(run, self.manager)
+        self.assertEqual(self.manager.calls[calls:], ["stop", "reload", "start"])
+        self.assertEqual(report["status"], "recovery_failed")
+        self.assertTrue(report["configuration_restored"])
+        self.assertTrue(report["normal_runtime_observed"])
+        self.assertEqual(report["command_errors"][0]["stderr"], "Job canceled")
+        calls = list(self.manager.calls)
+        again = trial.rollback(run, self.manager)
+        self.assertTrue(again["runtime_rechecked_without_restart"])
+        self.assertEqual(again["status"], "recovery_failed")
+        self.assertEqual(self.manager.calls, calls)
+
+    def test_required_post_stop_failure_is_retained_even_when_the_group_is_empty(self):
+        for name in ("health_stopped", "display_cleanup"):
+            with self.subTest(hook=name):
+                run = self.platform_run()
+                self.execute(run)
+                self.manager.failed_hooks = {name}
+                report = trial.rollback(run, self.manager)
+                self.assertEqual(report["status"], "recovery_failed")
+                self.assertTrue(report["configuration_restored"])
+                self.assertTrue(report["normal_runtime_observed"])
+                self.assertEqual(report["command_errors"][0]["operation"], "stop")
+
+    def test_competing_start_during_restore_preserves_configuration_and_does_not_retry(self):
+        run = self.platform_run()
+        self.execute(run)
+        observations = 0
+        def compete(manager):
+            nonlocal observations
+            observations += 1
+            if observations == 4:  # Initial observation, two empty observations, then competing startup.
+                manager.properties.update(ActiveState="activating", SubState="start-pre", Job="44")
+                manager.populated = True
+        self.manager.before_observe = compete
+        calls = len(self.manager.calls)
+        report = trial.rollback(run, self.manager)
+        self.assertFalse(report["configuration_restored"])
+        self.assertEqual(self.manager.calls[calls:], ["stop", "reload"])
+        for name in config.TARGETS:
+            self.assertEqual(config.read_entry(self.home, name), self.plan["after"][name])
+        self.assertIsNone(config.read_entry(self.runtime, trial.DROPIN))
+
+    def test_foreign_configuration_is_not_followed_by_an_automatic_start(self):
+        run = self.platform_run()
+        self.execute(run)
+        config.write_entry(self.home, config.MANIFEST, config.describe(b"foreign edit", 0o600))
+        calls = len(self.manager.calls)
+        report = trial.rollback(run, self.manager)
+        self.assertFalse(report["configuration_restored"])
+        self.assertEqual(self.manager.calls[calls:], ["stop", "reload"])
+        self.assertEqual(config.payload(config.read_entry(self.home, config.MANIFEST)), b"foreign edit")
+
+    def test_transition_intent_and_recovery_phase_are_saved_before_commands(self):
+        run = self.platform_run()
+        action = self.manager.action
+        def check(operation, **kwargs):
+            state = trial.read_json(run, "state.json")
+            history = state.get("recovery_service_control", state.get("service_control"))
+            self.assertEqual(history[-1]["operation"], operation)
+            self.assertEqual(history[-1]["command_status"], "requested")
+            return action(operation, **kwargs)
+        with patch.object(self.manager, "action", side_effect=check):
+            self.execute(run)
+            self.assert_restored(run)
+        self.assertEqual(trial.read_json(run, "state.json")["recovery_phase"], "starting_normal_steamvr")
+
+    def test_timeout_diagnostics_are_bounded_and_exclude_environment_queries(self):
+        error = subprocess.TimeoutExpired("hidden command", 0.2, output=b"private-stdout", stderr=b"timed out" * 1000)
+        for operation in ("stop", "show-environment"):
+            with patch.object(trial.subprocess, "run", side_effect=error), self.assertRaises(trial.ServiceCommandError) as caught:
+                trial.command(["systemctl", "--user", operation, *([trial.SERVICE] if operation == "stop" else [])])
+            details = caught.exception.details
+            self.assertTrue(details["timed_out"])
+            self.assertIsNone(details["return_code"])
+            self.assertNotIn("private-stdout", str(details))
+            if operation == "stop":
+                self.assertEqual(len(details["stderr"]), 4096)
+            else:
+                self.assertNotIn("stderr", details)
+
+    def test_read_only_runtime_status_has_no_configuration_or_service_actions(self):
+        output = io.StringIO()
+        with patch.object(trial, "Systemd", return_value=self.manager), contextlib.redirect_stdout(output):
+            self.assertEqual(trial.main(["--runtime-status"]), 0)
+        report = json.loads(output.getvalue())
+        self.assertEqual(report["status"], "runtime_observed")
+        self.assertTrue(report["normal_runtime_observed"])
+        self.assertFalse(report["rendering_readiness_verified"])
+        self.assertFalse(report["activation_requested"])
+        self.assertEqual(self.manager.calls, [])
+        self.assertEqual(list(self.home.iterdir()), [])
+        self.assertEqual(list(self.runtime.iterdir()), [])
+
+    def test_pending_baseline_job_or_changed_invocation_refuses_before_stop(self):
+        self.manager.properties["Job"] = "42"
+        with self.assertRaisesRegex(ValueError, "baseline_runtime_unconfirmed"):
+            self.create()
+        self.manager.properties["Job"] = "0"
+        run = self.create()
+        self.manager.properties["InvocationID"] = "f" * 32
+        report = self.execute(run)
+        self.assertEqual(report["reason"], "steamvr_service_properties_changed")
+        self.assertFalse(trial.read_json(run, "state.json")["changes_started"])
+        self.assertEqual(self.manager.calls, [])
+
+    def test_competing_start_between_restored_files_preserves_the_remaining_library(self):
+        run = self.platform_run()
+        self.execute(run)
+        write = config.write_entry
+        def intervene(root, name, entry):
+            result = write(root, name, entry)
+            if root == self.home and name == config.MANIFEST and entry is None:
+                self.manager.properties.update(ActiveState="activating", SubState="start-pre", Job="99")
+                self.manager.populated = True
+            return result
+        calls = len(self.manager.calls)
+        with patch.object(config, "write_entry", side_effect=intervene):
+            report = trial.rollback(run, self.manager)
+        self.assertFalse(report["configuration_restored"])
+        self.assertIsNone(config.read_entry(self.home, config.MANIFEST))
+        self.assertEqual(config.read_entry(self.home, config.LIBRARY), self.plan["after"][config.LIBRARY])
+        self.assertEqual(self.manager.calls[calls:], ["stop", "reload"])
+
+    def test_start_timeout_retains_liveness_evidence_without_claiming_a_successful_command(self):
+        run = self.platform_run()
+        self.execute(run)
+        def timeout_after_start(manager):
+            raise trial.ServiceCommandError(["systemctl", "--user", "start", trial.SERVICE],
+                subprocess.TimeoutExpired("systemctl", 20, stderr=b"timed out"))
+        self.manager.overrides["start"] = [timeout_after_start]
+        report = trial.rollback(run, self.manager)
+        self.assertEqual(report["status"], "recovery_failed")
+        self.assertTrue(report["configuration_restored"])
+        self.assertFalse(report["normal_service_started"])
+        self.assertTrue(report["normal_runtime_observed"])
+        self.assertTrue(report["command_errors"][0]["timed_out"])
+        calls = list(self.manager.calls)
+        self.assertTrue(trial.rollback(run, self.manager)["runtime_rechecked_without_restart"])
+        self.assertEqual(self.manager.calls, calls)
+
+    def test_lost_compositor_after_restoration_is_reported_without_restarting_a_healthy_service(self):
+        run = self.platform_run()
+        self.execute(run)
+        self.assert_restored(run)
+        self.manager.compositor = False
+        calls = list(self.manager.calls)
+        report = trial.rollback(run, self.manager)
+        self.assertFalse(report["normal_runtime_observed"])
+        self.assertTrue(report["runtime_rechecked_without_restart"])
+        self.assertEqual(report["status"], "recovery_failed")
+        self.assertEqual(self.manager.calls, calls)
+
+    def test_existing_shutdown_job_is_observed_without_a_competing_stop(self):
+        run = self.platform_run()
+        self.execute(run)
+        self.manager.properties.update(ActiveState="deactivating", SubState="stop", MainPID="0", Job="99")
+        ready = self.clock.now() + 0.3
+        def finish(manager):
+            if self.clock.now() >= ready:
+                manager.properties.update(ActiveState="inactive", SubState="dead", MainPID="0", Job="0")
+                manager.compositor = manager.populated = False
+                manager.pending = None
+        self.manager.pending = finish
+        calls = len(self.manager.calls)
+        report = trial.rollback(run, self.manager)
+        self.assertEqual(report["status"], "restored", report)
+        self.assertEqual(self.manager.calls[calls:], ["reload", "start"])
+        self.assertEqual(report["service_control"][0]["operation"], "observe_existing_job")
+
+    def test_failed_initial_stop_with_unchanged_healthy_configuration_needs_no_restart(self):
+        run = self.platform_run()
+        self.manager.fail = "stop"
+        self.assertEqual(self.execute(run)["status"], "failed")
+        calls = list(self.manager.calls)
+        report = trial.rollback(run, self.manager)
+        self.assertEqual(report["status"], "restored", report)
+        self.assertTrue(report["normal_service_already_running"])
+        self.assertFalse(report["normal_service_started"])
+        self.assertTrue(report["normal_runtime_observed"])
+        self.assertEqual(self.manager.calls, calls)
+
+    def test_unsettled_existing_job_preserves_files_without_any_stop_or_start_request(self):
+        run = self.platform_run()
+        self.execute(run)
+        self.manager.properties.update(ActiveState="activating", SubState="start-pre", Job="99")
+        calls = len(self.manager.calls)
+        report = trial.rollback(run, self.manager)
+        self.assertEqual(report["status"], "recovery_failed")
+        self.assertFalse(report["configuration_restored"])
+        self.assertEqual(self.manager.calls[calls:], ["reload"])
+        self.assertEqual(config.read_entry(self.home, config.LIBRARY), self.plan["after"][config.LIBRARY])
+        self.assertIsNone(config.read_entry(self.runtime, trial.DROPIN))
+
+    def test_explicit_empty_systemd_job_is_idle_but_missing_job_is_unknown(self):
+        for output, expected in (("MainPID=10\nJob=\n", "0"), ("MainPID=10\n", None), ("Job=12\n", "12")):
+            with self.subTest(output=output), patch.object(trial, "command", return_value=output) as query:
+                service = trial.Systemd().show()
+            self.assertEqual(service.get("Job"), expected)
+            self.assertIn("--all", query.call_args.args[0])
+
+    def test_latest_report_requires_runtime_evidence_before_claiming_completion(self):
+        run = self.create()
+        self.execute(run)
+        self.assert_restored(run)
+        report = trial.read_json(run, "rollback.json")
+        report.pop("normal_runtime_observed")
+        trial.save(run, "rollback.json", report)
+        self.assertEqual(trial.latest_report(run.parent)["status"], "failed")
+
+    def test_files_restored_externally_do_not_prove_the_loaded_layer_is_unloaded(self):
+        run = self.platform_run()
+        self.execute(run)
+        config.restore(run, expected_home=self.home)
+        config.write_entry(self.runtime, trial.DROPIN, None)
+        calls = len(self.manager.calls)
+        report = trial.rollback(run, self.manager)
+        self.assertEqual(report["status"], "restored", report)
+        self.assertFalse(report["normal_service_already_running"])
+        self.assertEqual(self.manager.calls[calls:], ["stop", "reload", "start"])

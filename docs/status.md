@@ -31,7 +31,7 @@ unknown unless explicitly recorded below.
 | Capture watchdog, provider/layer lifecycle and exact recovery | Earlier v2 milestone passed all 28 generated-data tests on Frame ARM64 | Bounded worker, metadata/GPU provenance, registry changes, owned endpoint and conditional restoration; no real driver/layer execution or device restoration; [E35](#e35-watchdog-provider-and-recovery-tests-on-frame) |
 | Metadata-only provider and producer synchronization review | v3 ARM64 build and all 24 generated-data tests passed on Frame | Layer retains/exports no image FDs; no real layer activation or live camera access; controlled load/restoration remains next; [E36](#e36-metadata-only-provider-and-synchronization-review), [E37](#e37-metadata-only-provider-and-diagnostic-on-frame) |
 | Inactive v3 bundle and SteamVR service preflight | Frame report received | Bundle prepared without activation; active simple/control-group user service, 20-second stop timeout, no drop-ins; [E38](#e38-inactive-bundle-and-steamvr-service-on-frame) |
-| Bounded metadata-layer trial and post-exit recovery | Paused after service-control failures on Frame | Unit/selector source reviewed: startup precedes the tracked waiter; health-check and display cleanup hooks need lifecycle coverage. Earlier diagnostic omitted repeated hooks; now corrected. Configuration restored, normal UI/passthrough work; failed operation unresolved; [E44](#e44-platform-launcher-source-and-repeated-hook-diagnostic-fix) |
+| Bounded metadata-layer trial and post-exit recovery | Activation paused; revised recovery cloud-tested | 65 targeted tests pass for hook/job failures, cgroup/process observations and guarded restoration. Read-only runtime baseline is next on Frame; visible recovery and original failed operation remain unverified; [E45](#e45-offline-platform-lifecycle-and-guarded-recovery) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
 | Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; no source-identified built-in-camera frames have been received |
 | Stereo depth and world-space labels | Planned | Calibration, depth and pose/timebase alignment remain unresolved |
@@ -1446,6 +1446,56 @@ Keep activation paused. The next offline deliverable is a
 [platform lifecycle and recovery test model](live-capture.md#steamvr-service-control-acceptance),
 with independent access and explicit readiness evidence required before any
 later device rehearsal.
+
+### E45: Offline platform lifecycle and guarded recovery
+
+Source: cloud implementation and targeted test execution on 2026-10-17.
+The Frame unit/selector facts in E44 informed generated events; no vendor hook,
+SteamVR user service or headset runtime was executed here. No new device report
+is claimed. The original failed operation is still unknown.
+
+All **65 targeted tests pass, with no skips**: 48 trial/controller tests, nine
+service-observation/deadline tests and eight configuration/recovery tests.
+The generated platform model covers required health-check/display-hook failures,
+ignored Bash-hook failures, delayed compositor startup, a surviving compositor
+after waiter exit, pending/canceled jobs, a client error followed by a completed
+transition, competing startup, and interruption/foreign-edit preservation.
+Generated cgroup/proc files test descendant population, executable/owner/state/
+start-time membership checks, missing metadata, wrong process groups and deadlines.
+The existing configuration fixture also uses an isolated synthetic provider;
+it does not start the real capture producer. CI configuration now includes the
+new service-observation suite; hosted CI execution was not checked.
+
+The controller observes existing jobs before requesting another stop and submits
+at most one command per transition. It preserves bounded command/timeout errors
+even if a later observation permits cleanup. Stop confirmation includes the
+original cgroup's descendant population, not just MainPID. Staging/restoration
+rechecks stop state, and each restored file is checked again after the runtime
+guard so an edit made during observation is preserved. Failed restoration is
+not followed by an automatic start. An unchanged healthy configuration requires
+no restart if the worker never reached staging. A new regression first failed
+against an overly broad shortcut: externally restoring files does not unload
+a layer in a running compositor. That shortcut is now limited to pre-staging
+trials. Another recovery invocation rechecks an already restored active
+service without new stop/start commands. A competing outside controller can
+still race between observations and writes; no atomic exclusion is claimed.
+
+Configuration restoration, a successful normal-service start command, an already
+running unchanged service, and stable compositor process liveness are separate
+report fields. A command error keeps recovery failed even when cleanup/runtime
+observations succeed. A process observation does not verify VR rendering or
+visible passthrough. Aggregate completion requires the new runtime evidence;
+older saved labels alone cannot supply it.
+
+The new `--runtime-status` mode reads service/cgroup/proc metadata without
+configuration writes, service actions, VR/Vulkan APIs, provider connections or
+image access. It is cloud-tested with generated observations. Native Frame
+cgroup/proc behavior and actual recovery remain unvalidated; the
+[next device check](on-device.md#check-runtime-liveness-without-restarting)
+is read-only and needs no rebuild. `--start-metadata-test` remains blocked
+before manager/file calls. Independent access, actual rendering/passthrough
+readiness and controlled restoration still need review before any later trial.
+Pixel access remains separately blocked on producer synchronization.
 
 ## Maintaining the evidence
 
