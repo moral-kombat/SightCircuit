@@ -173,6 +173,13 @@ and post-capture snapshots; continuous VR image output should use input before
 overlay composition or a supported exclusion mode verified on the device.
 No such alternate mirror mode is implemented or validated.
 
+The metadata-only layer trial runs outside the recognition application in a
+temporary systemd user service. A separate post-exit command restores its
+configuration and restarts normal SteamVR. It requests no image descriptors
+and does not feed inference or display; it validates provider metadata and
+device restoration before any synchronized camera-copy implementation. See the
+[trial lifecycle](development.md#controlled-metadata-layer-trial-and-recovery).
+
 The [public-probe result](status.md#e3-public-camera-probe) prevents treating
 OpenVR interface availability as evidence of frame access on the tested runtime.
 Community code provides an experimental Vulkan buffer-sharing reference rather

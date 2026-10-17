@@ -1,0 +1,457 @@
+"""Bounded metadata-only SteamVR trial, with systemd-owned post-exit recovery."""
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import subprocess
+import sys
+import time
+import uuid
+
+try:
+    from . import capture_layer_config as config, capture_provider_check as metadata
+except ImportError:
+    import capture_layer_config as config
+    import capture_provider_check as metadata
+
+ROOT = config.ROOT
+UNIT = "framejacker-metadata-trial.service"
+SERVICE = "steamvr.service"
+DROPIN = "systemd/user/steamvr.service.d/90-framejacker-metadata-trial.conf"
+ENABLE = b"[Service]\nEnvironment=FRAMEJACKER_CAPTURE_LAYER=1\n"
+EXPECTED = {"LoadState": "loaded", "ActiveState": "active", "SubState": "running",
+            "Type": "simple", "KillMode": "control-group", "TimeoutStopUSec": "20s",
+            "FragmentPath": "/usr/lib/systemd/user/steamvr.service", "DropInPaths": ""}
+PROPERTIES = (*EXPECTED, "MainPID", "ControlGroup")
+FLAG_NAMES = {"FRAMEJACKER_CAPTURE_LAYER", "FRAMEJACKER_DISABLE_CAPTURE_LAYER"}
+RUNS = ROOT / "artifacts/metadata-trials"
+
+
+def command(arguments, timeout=30):
+    # Never include service diagnostics/environment values in a public report.
+    result = subprocess.run(arguments, stdin=subprocess.DEVNULL, capture_output=True,
+                            text=True, timeout=timeout)
+    if result.returncode:
+        raise ValueError("service_command_failed:" + arguments[0] + ":" + str(result.returncode))
+    if len(result.stdout) > 256 * 1024 or len(result.stderr) > 64 * 1024:
+        raise ValueError("service_output_limit")
+    return result.stdout
+
+
+class Systemd:
+    def show(self):
+        text = command(["systemctl", "--user", "show", SERVICE,
+                        *("--property=" + field for field in PROPERTIES)], timeout=5)
+        return dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
+
+    def environment_flags(self):
+        # Values remain internal; expose only whether our two enable/disable
+        # names already exist in the user manager or service configuration.
+        manager = command(["systemctl", "--user", "show-environment"], timeout=5)
+        names = {line.split("=", 1)[0] for line in manager.splitlines()}
+        service = command(["systemctl", "--user", "show", SERVICE, "--property=Environment", "--value"], timeout=5)
+        import shlex
+        names.update(word.split("=", 1)[0] for word in shlex.split(service))
+        return sorted(names & FLAG_NAMES)
+
+    def action(self, action):
+        return command(["systemctl", "--user", action, SERVICE], timeout=25)
+
+    def reload(self):
+        return command(["systemctl", "--user", "daemon-reload"], timeout=5)
+
+    def worker_pid(self):
+        result = subprocess.run(["systemctl", "--user", "show", UNIT, "--property=MainPID", "--property=LoadState"],
+                                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5)
+        fields = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+        if result.returncode not in (0, 4) or fields.get("LoadState") not in ("loaded", "not-found"):
+            raise ValueError("trial_service_state_unavailable")
+        return int(fields.get("MainPID", "-1")) if fields.get("MainPID", "-1").isdigit() else -1
+
+
+def safe_path(path):
+    value = str(Path(path).absolute())
+    if not re.fullmatch(r"/[A-Za-z0-9._/-]+", value) or ".." in Path(value).parts:
+        raise ValueError("unsupported_trial_path")
+    return Path(value)
+
+
+def read_json(directory, name):
+    entry = config.read_entry(directory, name)
+    if entry is None:
+        raise ValueError("trial_file_missing:" + name)
+    return json.loads(config.payload(entry))
+
+
+def save(directory, name, value):
+    config.write_entry(directory, name, config.describe((json.dumps(value, indent=2) + "\n").encode(), 0o600))
+
+
+def verify_bundle(bundle, home):
+    plan = config.load_plan(bundle)
+    if (plan.get("home") != str(home) or plan.get("provider_protocol_version") != 3 or
+            plan.get("image_access_enabled") is not False or any(plan["before"].values())):
+        raise ValueError("trial_requires_v3_bundle_and_absent_prior_targets")
+    manifest = json.loads(config.payload(plan["after"][config.MANIFEST]))
+    layer = manifest.get("layer", {})
+    if (layer.get("implementation_version") != "3" or
+            layer.get("library_path") != str(home / config.LIBRARY) or
+            layer.get("enable_environment") != {"FRAMEJACKER_CAPTURE_LAYER": "1"} or
+            layer.get("disable_environment") != {"FRAMEJACKER_DISABLE_CAPTURE_LAYER": "1"}):
+        raise ValueError("trial_manifest_mismatch")
+    build = read_json(config.SOURCE.parent, "build-report.json")
+    if (build.get("provider_protocol_version") != 3 or build.get("image_fd_export_enabled") is not False or
+            build.get("layer_retains_image_fds") is not False or build.get("deployment_ready") is not False):
+        raise ValueError("metadata_only_build_required")
+    sources = {item["name"]: item for item in build["sources"]}
+    for name in ("capture_layer_impl.hpp", "capture_provider.hpp", "capture_layer_gate.hpp", "capture_provider_inspect.cpp"):
+        data = (ROOT / "tools" / name).read_bytes()
+        if name not in sources or hashlib.sha256(data).hexdigest() != sources[name]["sha256"]:
+            raise ValueError("provider_rebuild_required")
+    library = next(item for item in build["artifacts"] if item["name"] == config.SOURCE.name)
+    expected = plan["after"][config.LIBRARY]
+    if library["sha256"] != expected["sha256"] or config.read_entry(bundle, "libframejacker_capture.so") != expected:
+        raise ValueError("bundle_library_build_mismatch")
+    inspector = build["metadata_inspector"]
+    data = metadata.BINARY.read_bytes()
+    if hashlib.sha256(data).hexdigest() != inspector["sha256"] or not os.access(metadata.BINARY, os.X_OK):
+        raise ValueError("inspector_build_mismatch")
+    return plan
+
+
+def check_targets(plan, runtime, home, *, staged=False):
+    for name in config.TARGETS:
+        current = config.read_entry(home, name)
+        accepted = (plan["before"][name], plan["after"][name]) if staged else (plan["before"][name],)
+        if current not in accepted:
+            raise ValueError("trial_target_changed:" + name)
+    current = config.read_entry(runtime, DROPIN)
+    accepted = (None, config.describe(ENABLE, 0o600)) if staged else (None,)
+    if current not in accepted:
+        raise ValueError("trial_dropin_changed")
+
+
+def preflight(bundle, runtime, home, manager):
+    bundle, runtime, home = (safe_path(path) for path in (bundle, runtime, home))
+    fd = config.directory(runtime)
+    os.close(fd)
+    plan = verify_bundle(bundle, home)
+    check_targets(plan, runtime, home)
+    service = manager.show()
+    if any(service.get(key) != value for key, value in EXPECTED.items()) or int(service.get("MainPID", "0")) < 1:
+        raise ValueError("steamvr_service_properties_changed")
+    if not service.get("ControlGroup", "").startswith("/") or service["ControlGroup"] == "/":
+        raise ValueError("service_control_group_unavailable")
+    if manager.environment_flags():
+        raise ValueError("existing_layer_environment_flag")
+    endpoint = runtime / "framejacker-camera-provider/camera.sock"
+    if endpoint.exists() or endpoint.is_symlink():
+        raise ValueError("existing_provider_endpoint")
+    return plan, service
+
+
+def create_run(bundle, runtime, home, manager, parent=None):
+    plan, service = preflight(bundle, runtime, home, manager)
+    parent = parent or RUNS
+    parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    run = safe_path(parent / ("trial-" + uuid.uuid4().hex))
+    run.mkdir(mode=0o700)
+    # A private copy makes rollback independent of the original bundle.
+    save(run, "plan.json", plan)
+    save(run, "state.json", {"schema_version": 1, "home": str(home), "runtime": str(runtime),
+                             "unit": UNIT, "changes_started": False, "service_before": service})
+    return run
+
+
+def locked_run(run):
+    run = safe_path(run)
+    parent = config.directory(run)
+    try:
+        fd = os.open("lock", os.O_CREAT | os.O_RDWR | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=parent)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1 or info.st_mode & 0o077:
+                raise ValueError("invalid_trial_lock")
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except BaseException:
+            os.close(fd)
+            raise
+    finally:
+        os.close(parent)
+
+
+def load_state(run):
+    state = read_json(run, "state.json")
+    if state.get("schema_version") != 1 or state.get("unit") != UNIT or type(state.get("changes_started")) is not bool:
+        raise ValueError("invalid_trial_state")
+    home, runtime = safe_path(state["home"]), safe_path(state["runtime"])
+    plan = config.load_plan(run)
+    if plan["home"] != str(home) or plan.get("provider_protocol_version") != 3 or plan.get("image_access_enabled") is not False:
+        raise ValueError("trial_plan_mismatch")
+    return state, plan, home, runtime
+
+
+def stopped(manager):
+    state = manager.show()
+    return state.get("ActiveState") in ("inactive", "failed") and int(state.get("MainPID", "0")) == 0
+
+
+def peer_is_compositor(native, service):
+    pid = native.get("peer_pid")
+    if type(pid) is not int or pid < 1 or native.get("peer_uid") != os.geteuid():
+        return False
+    try:
+        executable = os.readlink(f"/proc/{pid}/exe")
+        cgroups = Path(f"/proc/{pid}/cgroup").read_text().splitlines()
+    except (OSError, ValueError):
+        return False
+    group = service.get("ControlGroup", "")
+    return (Path(executable).name == "vrcompositor" and group.startswith("/") and group != "/" and
+            any(line.partition("::")[2] == group or line.partition("::")[2].startswith(group + "/") for line in cgroups))
+
+
+def execute(run, manager, inspect=metadata.inspect, verify_peer=peer_is_compositor, wait_seconds=10):
+    lock = locked_run(run)
+    report = {"report_kind": "capture_metadata_trial", "schema_version": 1,
+              "status": "failed", "exit_code": 1, "image_data_accessed": False, "images_saved": False}
+    try:
+        state, plan, home, runtime = load_state(run)
+        check_targets(plan, runtime, home)
+        service = manager.show()
+        if any(service.get(key) != value for key, value in EXPECTED.items()):
+            raise ValueError("steamvr_service_properties_changed")
+        state["changes_started"] = True
+        save(run, "state.json", state)  # Arm rollback before any service/file mutation.
+        manager.action("stop")
+        if not stopped(manager):
+            raise ValueError("steamvr_stop_unconfirmed")
+        for name in config.TARGETS:
+            if config.read_entry(home, name) != plan["before"][name]:
+                raise ValueError("trial_target_changed:" + name)
+            config.write_entry(home, name, plan["after"][name])
+        if config.read_entry(runtime, DROPIN) is not None:
+            raise ValueError("trial_dropin_changed")
+        config.write_entry(runtime, DROPIN, config.describe(ENABLE, 0o600))
+        manager.reload()
+        manager.action("start")
+        end = time.monotonic() + wait_seconds
+        endpoint = runtime / "framejacker-camera-provider/camera.sock"
+        while not endpoint.exists() and time.monotonic() < end:
+            time.sleep(0.1)
+        result = inspect(runtime=runtime, seconds=2)
+        save(run, "inspection.json", result)
+        if result.get("status") != "inspected" or result.get("exit_code") != 0:
+            raise ValueError("metadata_inspection_failed")
+        if not verify_peer(result["native"], manager.show()):
+            raise ValueError("metadata_peer_not_service_compositor")
+        report.update(status="inspected", exit_code=0, record_count=result["record_count"],
+                      reviewed_profile_candidates=result["reviewed_profile_candidates"])
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+        report["reason"] = str(error)
+    finally:
+        save(run, "trial.json", report)
+        os.close(lock)
+    return report
+
+
+def rollback(run, manager):
+    lock = locked_run(run)
+    report = {"report_kind": "capture_metadata_rollback", "schema_version": 1,
+              "status": "recovery_failed", "exit_code": 1, "configuration_restored": False,
+              "normal_service_started": False, "passthrough_observation_required": True}
+    try:
+        state, plan, home, runtime = load_state(run)
+        if manager.worker_pid():
+            raise ValueError("trial_worker_still_running")
+        if config.read_entry(run, "rollback.json") is not None:
+            previous = read_json(run, "rollback.json")
+            if (previous.get("status") == "restored" and
+                    all(config.read_entry(home, name) == plan["before"][name] for name in config.TARGETS) and
+                    config.read_entry(runtime, DROPIN) is None):
+                service = manager.show()
+                if all(service.get(key) == value for key, value in EXPECTED.items()):
+                    report = previous
+                    return report
+        if not state["changes_started"]:
+            report.update(status="no_changes", exit_code=0, configuration_restored=True)
+        else:
+            errors = []
+            is_stopped = False
+            try:
+                manager.action("stop")
+                is_stopped = stopped(manager)
+                if not is_stopped:
+                    raise ValueError("steamvr_stop_unconfirmed")
+            except (ValueError, OSError, subprocess.SubprocessError) as error:
+                errors.append(str(error))
+            # Always remove only our exact enable drop-in, even if another
+            # target was edited or a service stop failed. Preserve foreign edits.
+            dropin_removed = False
+            try:
+                current = config.read_entry(runtime, DROPIN)
+                if current is not None:
+                    if current != config.describe(ENABLE, 0o600):
+                        raise ValueError("trial_dropin_changed")
+                    config.write_entry(runtime, DROPIN, None)
+                dropin_removed = True
+            except (ValueError, OSError) as error:
+                errors.append(str(error))
+            if is_stopped:
+                try:
+                    config.restore(run, expected_home=home)
+                    report["configuration_restored"] = True
+                    endpoint = runtime / "framejacker-camera-provider/camera.sock"
+                    if endpoint.exists() or endpoint.is_symlink():
+                        config.recover_provider(runtime)
+                except (ValueError, OSError) as error:
+                    errors.append(str(error))
+            try:
+                manager.reload()
+                if is_stopped and dropin_removed:
+                    manager.action("start")
+                    service = manager.show()
+                    report["normal_service_started"] = (service.get("ActiveState") == "active" and
+                                                         int(service.get("MainPID", "0")) > 0)
+                    if not report["normal_service_started"]:
+                        raise ValueError("normal_service_start_unconfirmed")
+            except (ValueError, OSError, subprocess.SubprocessError) as error:
+                errors.append(str(error))
+            if errors:
+                report["errors"] = errors
+            elif report["configuration_restored"] and report["normal_service_started"]:
+                report.update(status="restored", exit_code=0)
+    except (ValueError, OSError, KeyError, subprocess.SubprocessError) as error:
+        report["reason"] = str(error)
+    finally:
+        save(run, "rollback.json", report)
+        os.close(lock)
+    return report
+
+
+def launch_command(run):
+    python, script = safe_path(sys.executable), safe_path(Path(__file__))
+    cleanup = f"{python} {script} --rollback {safe_path(run)}"
+    return ["systemd-run", "--user", "--collect", "--no-ask-password", "--unit=" + UNIT,
+            "--property=Type=exec", "--property=RuntimeMaxSec=60", "--property=TimeoutStopSec=60",
+            "--property=Restart=no", "--property=UMask=0077", "--property=ExecStopPost=" + cleanup,
+            str(python), str(script), "--worker", str(run)]
+
+
+def check_recovery(parent=RUNS, runner=command, budget=8):
+    """Prove this manager runs ExecStopPost after a real one-second timeout."""
+    parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path = safe_path(parent / ("recovery-" + uuid.uuid4().hex))
+    path.mkdir(mode=0o700)
+    python, script = safe_path(sys.executable), safe_path(Path(__file__))
+    unit = "framejacker-metadata-recovery-" + path.name[9:] + ".service"
+    cleanup = f"{python} {script} --recovery-complete {path}"
+    runner(["systemd-run", "--user", "--collect", "--no-ask-password", "--unit=" + unit,
+            "--property=Type=exec", "--property=RuntimeMaxSec=1", "--property=TimeoutStopSec=2",
+            "--property=Restart=no", "--property=UMask=0077", "--property=ExecStopPost=" + cleanup,
+            str(python), str(script), "--recovery-hold", str(path)], timeout=5)
+    end = time.monotonic() + budget
+    while time.monotonic() < end:
+        if config.read_entry(path, "cleanup.json") is not None:
+            result = read_json(path, "cleanup.json")
+            if (result.get("service_result") == "timeout" and
+                    config.read_entry(path, "started.json") is not None):
+                return {"status": "passed", "service_result": "timeout", "steamvr_changed": False}
+            break
+        time.sleep(0.05)
+    try:
+        runner(["systemctl", "--user", "stop", unit], timeout=5)
+    finally:
+        raise ValueError("systemd_post_exit_recovery_check_failed")
+
+
+def latest_report(parent=RUNS):
+    if not parent.exists():
+        raise ValueError("no_metadata_trial")
+    candidates = []
+    for path in parent.iterdir():
+        if re.fullmatch(r"trial-[0-9a-f]{32}", path.name):
+            fd = config.directory(path)
+            try:
+                candidates.append((os.fstat(fd).st_mtime_ns, path))
+            finally:
+                os.close(fd)
+    if not candidates:
+        raise ValueError("no_metadata_trial")
+    run = max(candidates)[1]
+    report = {"report_kind": "capture_metadata_trial_result", "schema_version": 1,
+              "trial_directory": str(run), "status": "incomplete", "exit_code": 3,
+              "images_saved": False, "passthrough_observation_required": True}
+    for name in ("trial", "inspection", "rollback"):
+        if config.read_entry(run, name + ".json") is not None:
+            report[name] = read_json(run, name + ".json")
+    if "rollback" in report:
+        success = report["rollback"].get("status") == "restored" and report.get("trial", {}).get("status") == "inspected"
+        report.update(status="completed" if success else "failed", exit_code=0 if success else 1)
+    return report
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--preflight", type=Path, metavar="BUNDLE", help="Validate metadata-only build, inactive bundle and service without changes")
+    mode.add_argument("--start-metadata-test", type=Path, metavar="BUNDLE", help="Temporarily load metadata layer and restart SteamVR; systemd restores it after exit")
+    mode.add_argument("--worker", type=Path, help=argparse.SUPPRESS)
+    mode.add_argument("--rollback", type=Path, help="Recover a known trial after its worker has exited")
+    mode.add_argument("--report-latest", action="store_true", help="Read the last trial and rollback reports without runtime calls")
+    mode.add_argument("--recovery-hold", type=Path, help=argparse.SUPPRESS)
+    mode.add_argument("--recovery-complete", type=Path, help=argparse.SUPPRESS)
+    args = parser.parse_args(argv)
+    report = {"report_kind": "capture_metadata_trial_launcher", "schema_version": 1,
+              "status": "not_run", "exit_code": 3, "activation_requested": False}
+    try:
+        manager = Systemd()
+        if args.recovery_hold or args.recovery_complete:
+            if not os.environ.get("INVOCATION_ID"):
+                raise ValueError("recovery_check_requires_systemd")
+            if args.recovery_hold:
+                save(safe_path(args.recovery_hold), "started.json", {"started": True})
+                time.sleep(60)  # The rehearsal unit must terminate this after one second.
+                raise ValueError("recovery_check_did_not_time_out")
+            save(safe_path(args.recovery_complete), "cleanup.json", {"service_result": os.environ.get("SERVICE_RESULT")})
+            report.update(status="recovery_check_cleanup", exit_code=0)
+        elif args.report_latest:
+            report = latest_report()
+        elif args.worker:
+            if not os.environ.get("INVOCATION_ID") or manager.worker_pid() != os.getpid():
+                raise ValueError("worker_requires_own_systemd_service")
+            report = execute(args.worker, manager)
+        elif args.rollback:
+            report = rollback(args.rollback, manager)
+        elif args.preflight or args.start_metadata_test:
+            runtime = Path(os.environ.get("XDG_RUNTIME_DIR", "/missing-runtime"))
+            home = Path.home().absolute()
+            bundle = args.preflight or args.start_metadata_test
+            if args.preflight:
+                _, service = preflight(bundle, runtime, home, manager)
+                report.update(status="preflight_passed", exit_code=0, service=service)
+            else:
+                preflight(bundle, runtime, home, manager)
+                recovery_check = check_recovery()
+                run = create_run(bundle, runtime, home, manager)
+                save(run, "recovery-check.json", recovery_check)
+                report.update(activation_requested=True, trial_directory=str(run), unit=UNIT)
+                command(launch_command(run), timeout=10)
+                report.update(status="scheduled", exit_code=0, activation_requested=True,
+                              trial_directory=str(run), unit=UNIT,
+                              worker_maximum_seconds=60, stop_phase_timeout_seconds=60,
+                              recovery_check=recovery_check,
+                              recovery="systemd ExecStopPost; inspect rollback.json afterward")
+    except (ValueError, OSError, KeyError, StopIteration, subprocess.SubprocessError) as error:
+        report.update(status="launch_unconfirmed" if report.get("activation_requested") else "refused",
+                      exit_code=1, reason=str(error))
+    print(json.dumps(report, indent=2))
+    return report["exit_code"]
+
+
+if __name__ == "__main__":
+    sys.exit(main())

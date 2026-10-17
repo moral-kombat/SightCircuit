@@ -20,7 +20,8 @@ layer has been deployed by Framejacker.
 | 3a | Validated image import and ownership | ARM64 build and ten synthetic tests passed; two-plane coverage added in cloud | Actual camera DMA-BUF import remains untested; [E31](status.md#e31-import-build-and-synthetic-tests-on-frame), [E32](status.md#e32-two-plane-import-fixture-cloud-checks) |
 | 3b | Device and remaining GPU resource ownership | Inspection build and nine synthetic cloud tests pass | Native ARM64 and actual driver execution pending; no activation; [E33](status.md#e33-gpu-resource-ownership-cloud-checks) |
 | 3c | Capture watchdog, provider metadata/lifetime and configuration recovery | Earlier v2 milestone passed all 28 tests on Frame ARM64 | Generated workers/fake dispatch only; no real layer activation or device restoration; [E35](status.md#e35-watchdog-provider-and-recovery-tests-on-frame) |
-| 3d | Producer synchronization and metadata-only inspection | Review complete; v3 ARM64 build and all 24 generated-data tests passed on Frame | No image FDs retained/exported by the layer; inactive bundle, service preflight and controlled metadata-layer load remain; [review](#producer-synchronization-review-and-next-checkpoint), [E37](status.md#e37-metadata-only-provider-and-diagnostic-on-frame) |
+| 3d | Producer synchronization and metadata-only inspection | Review complete; earlier v3 ARM64 build and all 24 generated-data tests passed on Frame | No image FDs retained/exported by the layer; original inactive bundle/service preflight received; changed tools and actual load remain; [review](#producer-synchronization-review-and-next-checkpoint), [E37](status.md#e37-metadata-only-provider-and-diagnostic-on-frame) |
+| 3e | Controlled metadata-layer trial and recovery | Inactive bundle/service properties received; runner, loader fallback fix and timing correction cloud-tested | Build the changed tools, prepare a fresh bundle and run the bounded metadata-only trial; actual activation/restoration pending; [E38](status.md#e38-inactive-bundle-and-steamvr-service-on-frame), [E39](status.md#e39-controlled-metadata-trial-and-loader-fallback-cloud-checks) |
 | 4 | Capture-only device trial | Planned | Ten seconds of fresh images from one identified source, correct orientation, clean exit and working normal passthrough |
 | 5 | Continuous live input in the existing display | Planned; needs input independent of our output | Reuse detector/display after a dedicated provider or supported overlay-excluded mirror mode is validated; current mirror includes the panel |
 | 6 | Color, built-in camera support and later geometry | Planned | Validate each source and color conversion separately; require calibration and stronger timing evidence before stereo depth or spatial labels |
@@ -252,11 +253,13 @@ metadata-diagnostic tests; see [E37](status.md#e37-metadata-only-provider-and-di
 
 Remaining work does not need another unchanged GPU query or initial import test:
 
-1. Prepare a new inactive v3 bundle against that Frame's exact configuration.
-   Native v3 build and both changed suites are complete; no unchanged rerun needed.
-2. Prepare a bounded metadata-only layer-load/restoration procedure from the
-   actual SteamVR service details. Keep image access disabled. Verify the
-   observed profile, process identity, registry stability and restoration.
+1. Build the changed tools and run the native provider/inspector/trial suites.
+   The earlier v3 tests passed; the new loader fallback fix and timing correction
+   change the sources, so prepare a fresh bundle and preserve the earlier one.
+2. Use the implemented bounded metadata-layer trial based on the received
+   service properties. Its systemd recovery rehearsal must pass before activation.
+   Verify observed metadata, peer identity, registry stability, restoration and
+   normal passthrough. Keep image access disabled.
 3. Establish a coordinated producer release/ready/return contract or design a
    copy within the compositor's existing synchronized access window. Validate
    ownership, layout, completion and host visibility before allowing pixel reads.
@@ -292,8 +295,11 @@ implementation milestone is complete in the cloud.
 
 The original synchronization/FOREIGN ownership review is complete; it found a
 missing producer handoff. The earlier no-camera milestone also passed on Frame.
-Native v3 validation also passed all 24 tests on Frame. Next prepare the inactive
-bundle and service-aware metadata-layer load/restoration procedure. No layer has been installed.
+Earlier native v3 validation passed all 24 tests on Frame. The inactive bundle
+and service properties were received. A bounded trial is now implemented with
+post-exit recovery, plus loader fallback and diagnostic timing fixes. Build the
+changed tools and a fresh bundle before using the
+[device trial](on-device.md#run-the-bounded-metadata-layer-trial). No layer has been installed.
 The supervisor's capture flag returns `blocked` before launching a worker.
 Use the [updated native procedure](on-device.md#test-metadata-only-inspection-without-capture).
 
@@ -339,8 +345,8 @@ synchronization, valid layout, ownership and reuse rules. The alternative is to
 copy into our own allocation during a demonstrated synchronized compositor
 access window, then publish only that owned copy. Do not add independent GPU
 reads until one path is justified and tested. Metadata observation is the next
-small device checkpoint; installation and compositor restart still need an
-exact service-aware rollback procedure.
+small device checkpoint. The service-aware trial/recovery procedure is now
+implemented and cloud-tested; actual Frame activation remains untested.
 
 [vk-external-sharing]: https://github.com/KhronosGroup/Vulkan-Docs/blob/v1.4.309/chapters/resources.adoc#resources-external-sharing
 [vk-ownership]: https://github.com/KhronosGroup/Vulkan-Docs/blob/v1.4.309/chapters/synchronization.adoc#synchronization-queue-transfers

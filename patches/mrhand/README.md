@@ -65,7 +65,9 @@ Both capture binaries remain non-executable inspection artifacts. Actual GPU
 execution, original producer synchronization/FOREIGN ownership, physical camera
 identity and on-device load/restoration remain unvalidated. The watchdog and
 provider/recovery prerequisites passed their earlier 28-test v2 milestone on
-Frame ARM64. The v3 build and its 24 provider/diagnostic tests also passed on
-Frame ARM64; real layer activation remains untested. Follow the
+Frame ARM64. The earlier v3 build and its 24 provider/diagnostic tests also passed
+on Frame ARM64. The later device-creation gate enforces opt-in even after legacy
+loader fallback; those changes and the systemd trial/recovery runner remain
+cloud-tested. Real layer activation remains untested. Follow the
 [active capture plan](../../docs/live-capture.md#current-work-order) and
 [provider development procedure](../../docs/development.md#capture-watchdog-provider-lifecycle-and-restoration-preparation).

@@ -132,6 +132,27 @@ static void gating(const std::string &runtime) {
     unlink(path.c_str()); require(symlink("/dev/null", path.c_str()) == 0);
     require(!framejacker::layer_gate::claim(runtime)); require(std::filesystem::is_symlink(path));
 }
+static void negotiation_fallback(const std::string &runtime, bool exhausted) {
+    if (exhausted) {
+        require(framejacker::layer_gate::claim(runtime));
+        require(framejacker::layer_gate::claim(runtime));
+    }
+    VkNegotiateLayerInterface info{}; info.loaderLayerInterfaceVersion = 2;
+    require(mrhand_NegotiateLoaderLayerInterfaceVersion(&info) == VK_ERROR_INITIALIZATION_FAILED);
+    // Emulate the loader's legacy fallback after failed negotiation.
+    require(mrhand_GetInstanceProcAddr(VK_NULL_HANDLE, "vkCreateInstance") != nullptr);
+    auto instance = start_instance(); auto device = start_device();
+    require(l::device(device)->token == 0);
+    import(device);
+    require(!std::filesystem::exists(runtime + "/framejacker-camera-provider"));
+    l::DestroyImage(device, reinterpret_cast<VkImage>(10), nullptr);
+    l::FreeMemory(device, reinterpret_cast<VkDeviceMemory>(20), nullptr);
+    l::DestroyDevice(device, nullptr); l::DestroyInstance(instance, nullptr);
+    require(created == destroyed && images == 0 && allocations == 0);
+    require(l::devices.empty() && l::instances.empty());
+    require(!std::filesystem::exists(runtime + "/framejacker-camera-provider"));
+    if (!exhausted) require(std::filesystem::is_empty(runtime));
+}
 int main(int argc, char **argv) {
     if (argc == 1) { std::cout << "{\"status\":\"not_run\",\"exit_code\":3}\n"; return 3; }
     if (argc != 3 || std::string(argv[1]) != "--case") return 64;
@@ -140,9 +161,14 @@ int main(int argc, char **argv) {
     int code = 0;
     try {
         std::string selected = argv[2];
+        if (selected == "lifecycle" || selected == "failures" || selected == "guard_fallback")
+            setenv("FRAMEJACKER_CAPTURE_LAYER", "1", 1);
+        else unsetenv("FRAMEJACKER_CAPTURE_LAYER");
         if (selected == "lifecycle") lifecycle(runtime);
         else if (selected == "failures") failures();
         else if (selected == "gating") gating(runtime);
+        else if (selected == "fallback") negotiation_fallback(runtime, false);
+        else if (selected == "guard_fallback") negotiation_fallback(runtime, true);
         else code = 64;
         if (!code) std::cout << "{\"report_kind\":\"capture_layer_fixture\",\"schema_version\":1,\"status\":\"passed\",\"tests_run\":1,\"runtime_initialized\":false,\"capture_started\":false}\n";
     } catch (const std::exception &error) { std::cerr << error.what() << '\n'; code = 1; }

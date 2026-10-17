@@ -180,6 +180,10 @@ static VKAPI_ATTR VkResult VKAPI_CALL CreateDevice(VkPhysicalDevice physical, co
     try {
         std::lock_guard<std::mutex> lock(maps_mutex); devices.emplace(*out, current);
     } catch (...) { current->DestroyDevice(*out, allocator); return VK_ERROR_OUT_OF_HOST_MEMORY; }
+    // A rejected negotiation may fall back to manifest-named legacy entry
+    // points. Enforce the decision here too; forward calls without observing
+    // resources or starting a server when this process is not opted in.
+    if (!framejacker::layer_gate::allowed()) return result;
     record([&] {
         const auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(gipa(parent_handle, "vkGetPhysicalDeviceProperties2"));
         if (!properties) throw transport::Error("provider_device_uuid_unavailable");
@@ -201,7 +205,7 @@ static VKAPI_ATTR void VKAPI_CALL DestroyDevice(VkDevice handle, const VkAllocat
         if (found == devices.end()) return;
         current = found->second; devices.erase(found); last = devices.empty(); }
       if (current->token) record([&] { registry().remove_device(current->token); });
-      if (last) record([&] { if (!server().stop()) registry().invalidate(); }); }
+      if (last && current->token) record([&] { if (!server().stop()) registry().invalidate(); }); }
     current->DestroyDevice(handle, allocator);
 }
 static PFN_vkVoidFunction hook(const char *name) {

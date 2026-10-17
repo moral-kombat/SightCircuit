@@ -100,9 +100,11 @@ The [producer synchronization review](docs/live-capture.md#producer-synchronizat
 found no coordinated handoff for original camera buffers. The latest v3 layer
 therefore records metadata without retaining/exporting image FDs, and live reads
 remain blocked. The [metadata-only native checks](docs/on-device.md#test-metadata-only-inspection-without-capture)
-now pass all 24 tests on Frame ARM64. Next prepare an inactive v3 bundle and a
-controlled metadata-layer load/restoration procedure. An inactive
-configuration bundle can be prepared without installation. Actual driver imports, camera identity and
+passed all 24 tests on Frame ARM64, and inactive preparation/service properties
+were received. The [controlled metadata-layer trial](docs/on-device.md#run-the-bounded-metadata-layer-trial)
+is now implemented with systemd post-exit recovery. Build the subsequent loader
+fallback/timing fixes and a fresh bundle before the first activation; those
+changes remain cloud-tested. Actual driver imports, camera identity and
 on-device restoration remain unvalidated. Bounded recognition and snapshots shown after
 capture remain useful. The model's class coverage and false positives need separate work.
 The [isolated shared-memory reader](docs/on-device.md#check-existing-luma-shared-memory)

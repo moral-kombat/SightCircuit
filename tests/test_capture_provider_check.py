@@ -81,6 +81,7 @@ class ProviderMetadataTests(unittest.TestCase):
         self.assertEqual(native["peer_pid"], peer.pid)
         self.assertEqual(native["reviewed_profile_candidates"], 1)
         self.assertGreaterEqual(native["registry_checks"], 2)
+        self.assertLessEqual(native["registry_checks"], 12)
         entry = native["records"][0]
         self.assertEqual((entry["width"], entry["height"], entry["plane_count"]), (2464, 2464, 2))
         self.assertEqual(len(entry["planes"]), 2)
@@ -96,6 +97,7 @@ class ProviderMetadataTests(unittest.TestCase):
             self.assertEqual(report["status"], "inspected", report)
             self.assertEqual(report["reviewed_profile_candidates"], 0)
             self.assertEqual(report["record_count"], 0 if mode == "empty" else 1)
+            self.assertLessEqual(report["native"]["registry_checks"], 12)
             if mode == "unsupported":
                 self.assertEqual(report["native"]["records"][0]["profile_rejection_reason"],
                                  "provider_unsupported_exporter_metadata")

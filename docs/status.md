@@ -30,6 +30,8 @@ unknown unless explicitly recorded below.
 | Device and remaining GPU resource ownership | Inspection adaptation built; nine synthetic cloud tests passed | Startup/child lifetimes, private allocations, imported-image device retention and 57 injected failures; actual driver and ARM64 execution pending; [E33](#e33-gpu-resource-ownership-cloud-checks) |
 | Capture watchdog, provider/layer lifecycle and exact recovery | Earlier v2 milestone passed all 28 generated-data tests on Frame ARM64 | Bounded worker, metadata/GPU provenance, registry changes, owned endpoint and conditional restoration; no real driver/layer execution or device restoration; [E35](#e35-watchdog-provider-and-recovery-tests-on-frame) |
 | Metadata-only provider and producer synchronization review | v3 ARM64 build and all 24 generated-data tests passed on Frame | Layer retains/exports no image FDs; no real layer activation or live camera access; controlled load/restoration remains next; [E36](#e36-metadata-only-provider-and-synchronization-review), [E37](#e37-metadata-only-provider-and-diagnostic-on-frame) |
+| Inactive v3 bundle and SteamVR service preflight | Frame report received | Bundle prepared without activation; active simple/control-group user service, 20-second stop timeout, no drop-ins; [E38](#e38-inactive-bundle-and-steamvr-service-on-frame) |
+| Bounded metadata-layer trial and post-exit recovery | Implemented; cloud generated-data tests passed; device trial pending | Loader fallback gate fixed; fresh bundle required; actual systemd recovery rehearsal runs before activation; [E39](#e39-controlled-metadata-trial-and-loader-fallback-cloud-checks) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
 | Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; no source-identified built-in-camera frames have been received |
 | Stereo depth and world-space labels | Planned | Calibration, depth and pose/timebase alignment remain unresolved |
@@ -1162,6 +1164,68 @@ rerun in this batch. The next preparation is an inactive v3 bundle and the
 actual SteamVR service properties, followed by an independently recoverable
 metadata-layer trial. Live image reads remain blocked pending a producer
 handoff or synchronized compositor-owned copy.
+
+### E38: Inactive bundle and SteamVR service on Frame
+
+Source: user-supplied `capture_layer_configuration` report and filtered
+`systemctl --user show steamvr.service` output, received 2026-10-17
+(America/New_York). Exact execution time and checkout/runtime versions were not
+included. Bundle `/home/steamos/framejacker/artifacts/capture-layer-plan-v3-new`
+was prepared successfully, with activation/restart both false. Its contents
+were not uploaded; no layer load or restoration is established by this report.
+
+The service is loaded, active/running, `Type=simple`, `KillMode=control-group`,
+`TimeoutStopUSec=20s`, `MainPID=2517`, with fragment
+`/usr/lib/systemd/user/steamvr.service` and no drop-ins. The PID is an observation,
+not a value to reuse. ExecStart, environment values, current ControlGroup and
+systemd version were not supplied. The new runner queries current properties
+directly before acting and preserves environment values internally.
+
+The prepared bundle precedes the loader-fallback fix below. Keep it unchanged;
+the first trial requires a newly built library and a fresh inactive bundle.
+
+### E39: Controlled metadata trial and loader fallback cloud checks
+
+Source: local Linux x86_64 cloud development, based on `6aa4fa0`. Review of
+[Vulkan-Loader v1.3.296](https://github.com/KhronosGroup/Vulkan-Loader/blob/v1.3.296/loader/loader.c)
+and [v1.4.309](https://github.com/KhronosGroup/Vulkan-Loader/blob/v1.4.309/loader/loader.c)
+found that failed negotiation can fall back to the manifest's legacy entry
+points. This could bypass the earlier negotiation-only gate. These are upstream
+reference versions, not proof of the Frame vendor loader's exact implementation.
+The layer now enforces the cached opt-in/crash-guard decision at device creation
+too. A denied process forwards driver calls without resource observation or a
+provider endpoint; successful runtime calls retain their downstream result.
+
+Two new actual-hook fixture cases exercise that fallback for a disallowed
+process and an exhausted crash guard. Existing enabled hook cases now execute
+from a real copied `vrcompositor` basename to exercise the production gate.
+The provider suite has 14 tests. Five layer cases pass address/undefined-behavior
+sanitizer checks with fake downstream calls. No real layer is loaded.
+
+The broader regression also exposed a fractional-millisecond rounding bug in
+the inspector's final wait. An empty synthetic registry produced 291 and 224
+checks in separate one-second runs, exceeding the wrapper's 128-check bound.
+Sleeping until the actual deadline removes that busy loop; the native tests
+now bound one-second observations to at most 12 checks.
+
+The new [trial runner](../scripts/capture_layer_trial.py) has 20 generated-data
+tests covering exact service/build preflight, independent service construction,
+post-exit recovery rehearsal, partial writes, service/inspection failures,
+interrupted execution, peer identity, later edits, repeat recovery, locks and
+ambiguous launch acknowledgment. They use real temporary files and a simulated
+service manager, not a real compositor. The complete capture regression passed
+102 tests without skips. Static systemd unit verification passed; live user-unit
+execution is unavailable in the cloud. The runner therefore performs a real
+one-second timeout/cleanup rehearsal on Frame before requesting activation.
+
+The trial uses a temporary runtime drop-in scoped to `steamvr.service`, a
+60-second worker budget, no automatic restart of the trial unit, and a separate
+systemd `ExecStopPost` recovery command with 60-second stop-phase timeouts.
+It requests metadata only, verifies the peer is a `vrcompositor` in the service
+cgroup, then restores configuration and starts SteamVR without its enable flag.
+No actual Frame activation, recovery, image access, source identity or new
+passthrough observation is established by these cloud checks. Hosted CI has not
+been checked. See the [device procedure](on-device.md#run-the-bounded-metadata-layer-trial).
 
 ## Maintaining the evidence
 

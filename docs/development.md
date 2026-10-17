@@ -589,18 +589,21 @@ bash scripts/build_capture_reference.sh --provider-fixes &&
 python3 -m unittest discover -s tests -p test_capture_supervisor.py -v &&
 python3 -m unittest discover -s tests -p test_capture_provider.py -v &&
 python3 -m unittest discover -s tests -p test_capture_provider_check.py -v &&
-python3 -m unittest discover -s tests -p test_capture_layer_config.py -v
+python3 -m unittest discover -s tests -p test_capture_layer_config.py -v &&
+python3 -m unittest discover -s tests -p test_capture_layer_trial.py -v
 ```
 
-The current cloud suites contain **10 watchdog, 12 provider/layer, 12 metadata
-diagnostic and 7 configuration/recovery tests**. These use generated files,
+The current cloud suites contain **10 watchdog, 14 provider/layer, 12 metadata
+diagnostic, 7 configuration/recovery and 20 trial tests**. These use generated files,
 local sockets and fake driver dispatch. Neither the actual layer nor the
 camera producer is loaded/run. The real binaries remain mode 0644 in
 `artifacts/capture-provider-reference/`; the report records helper, patch and
 artifact hashes and `deployment_ready: false`. All earlier build modes remain
-available. The v3 ARM64 build and both changed 12-test suites now pass on Frame;
+available. The earlier v3 ARM64 build and both 12-test suites passed on Frame;
 see [E37](status.md#e37-metadata-only-provider-and-diagnostic-on-frame). The metadata inspector is
 a separate executable, linked without Vulkan; it is not the camera producer.
+The subsequent loader fallback/timing fixes and trial runner have not yet run
+on Frame; see [E39](status.md#e39-controlled-metadata-trial-and-loader-fallback-cloud-checks).
 
 ### Worker containment and publication recovery
 
@@ -691,7 +694,10 @@ are preserved. Server shutdown interrupts an idle client; there is no detached
 thread. The opt-in gate permits only `vrcompositor` with
 `FRAMEJACKER_CAPTURE_LAYER=1`, and allows at most two accepted starts in 120
 seconds using locked private runtime state. Other processes/default invocation
-are rejected; the setting must not be enabled globally.
+cannot start a provider; the setting must not be enabled globally. The gate is
+enforced at device creation as well as negotiation, because the loader can
+fall back to legacy entry points after a negotiation failure. Denied processes
+forward calls without observing resources or creating a runtime endpoint.
 
 ### Inactive configuration bundle
 
@@ -743,6 +749,46 @@ death and the blocked capture CLI. Build with `--provider-fixes`, then run
 generate their own peers in private temporary directories; no real provider
 or layer is needed. Native v3 execution passed on Frame; controlled layer
 activation and restoration remain separate checkpoints.
+
+### Controlled metadata-layer trial and recovery
+
+[`capture_layer_trial.py`](../scripts/capture_layer_trial.py) defaults to
+`not_run`/exit 3. `--preflight BUNDLE` checks a fresh metadata-only build,
+matching bundle/checksums/home, absent prior Framejacker targets, no existing
+provider or enable flags, and the exact reported SteamVR service properties.
+It changes nothing. Existing configurations or differing service properties
+are refused rather than overwritten or guessed.
+
+`--start-metadata-test BUNDLE` first runs a one-second dummy user unit, requiring
+both its started marker and systemd's timeout/`ExecStopPost` completion marker.
+The dummy never touches SteamVR. Only then does it launch an independent
+transient trial service. The worker arms a private rollback plan before stopping
+SteamVR, stages the metadata-only library/manifest plus a runtime service-scoped
+enable drop-in, reloads the manager and starts SteamVR. It waits at most ten
+seconds for the endpoint, performs a two-second metadata inspection, and checks
+the peer's UID, executable and membership in the SteamVR service's cgroup.
+
+Systemd runs a **separate** `ExecStopPost` command after success, failure or
+termination. Recovery stops SteamVR, removes only the exact trial drop-in,
+conditionally restores only recorded targets, recovers an owned stale provider
+endpoint if necessary, reloads the manager and starts the normal service.
+It preserves later edits, reports failures and refuses a living trial worker.
+Repeated successful recovery does not restart SteamVR again. The trial service
+has `RuntimeMaxSec=60`, `TimeoutStopSec=60`, `Restart=no`; execution and recovery
+can take about three minutes on a timeout path. A failed service stop, manager
+failure or unkillable kernel task cannot be reported as successful restoration.
+
+State, metadata and final reports live in ignored private
+`artifacts/metadata-trials/trial-*/` directories. `--report-latest` reads them
+without runtime calls. An ambiguous launch acknowledgment is `launch_unconfirmed`,
+with the attempted run path retained; inspect/recover that run before retrying.
+No image descriptors, pixels, inference or VR panel output are requested.
+
+Twenty generated-data tests exercise real temporary configuration and simulated
+systemd behavior. They do not establish actual user-manager execution; static
+unit syntax was verified in the cloud, and the real recovery rehearsal is
+mandatory on Frame before the trial. The [device procedure](on-device.md#run-the-bounded-metadata-layer-trial)
+contains opt-in, expected reports and manual recovery.
 
 ## Isolated luma reader and synthetic producer
 

@@ -2,6 +2,8 @@
 import json
 from pathlib import Path
 import subprocess
+import shutil
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -11,8 +13,16 @@ BUILD = ROOT / "artifacts/capture-provider-reference"
 @unittest.skipUnless((BUILD / "framejacker-provider-fixture").is_file(), "build --provider-fixes first")
 class ProviderTests(unittest.TestCase):
     def run_case(self, name, binary="provider"):
-        result = subprocess.run([str(BUILD / f"framejacker-{binary}-fixture"), "--case", name],
-                                capture_output=True, text=True, timeout=3)
+        with tempfile.TemporaryDirectory(prefix="fj-layer-executable-") as temporary:
+            executable = BUILD / f"framejacker-{binary}-fixture"
+            if binary == "layer" and name in ("lifecycle", "failures", "guard_fallback"):
+                # /proc/self/exe resolves symlinks; use an actual copy so the
+                # real production basename gate is exercised by these cases.
+                copied = Path(temporary) / "vrcompositor"
+                shutil.copy2(executable, copied)
+                executable = copied
+            result = subprocess.run([str(executable), "--case", name],
+                                    capture_output=True, text=True, timeout=3)
         self.assertEqual(result.returncode, 0, result.stderr)
         report = json.loads(result.stdout)
         self.assertEqual(report["status"], "passed")
@@ -32,3 +42,5 @@ class ProviderTests(unittest.TestCase):
     def test_actual_hooks_and_same_dispatch_table_devices(self): self.run_case("lifecycle", "layer")
     def test_failed_driver_calls_and_missing_dispatch(self): self.run_case("failures", "layer")
     def test_opt_in_and_crash_loop_guard(self): self.run_case("gating", "layer")
+    def test_legacy_loader_fallback_cannot_bypass_process_opt_in(self): self.run_case("fallback", "layer")
+    def test_legacy_loader_fallback_cannot_bypass_exhausted_guard(self): self.run_case("guard_fallback", "layer")

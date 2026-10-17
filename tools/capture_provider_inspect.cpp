@@ -136,8 +136,9 @@ int main(int argc, char **argv) {
             do {
                 lease.check(); ++report.checks;
                 if (t::Clock::now() >= end) break;
-                std::this_thread::sleep_for(std::min(std::chrono::milliseconds(100),
-                    std::chrono::duration_cast<std::chrono::milliseconds>(end - t::Clock::now())));
+                // Keep the final fractional millisecond: rounding it to zero
+                // can busy-poll and exceed the bounded report check count.
+                std::this_thread::sleep_until(std::min(end, t::Clock::now() + std::chrono::milliseconds(100)));
             } while (true);
             report.registry_unchanged = true;
         } // Close the metadata connection before reporting completion.

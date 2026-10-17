@@ -904,12 +904,88 @@ the directory already exists, preserve it and use another new bundle name.
 Keep any earlier v2 bundle unchanged. Share the preparation report and service
 properties; keep the bundle's backups local.
 
-Preparation writes only the inactive artifact bundle. The service query reads
-status and paths without displaying environment values. Neither command
-installs a layer or restarts SteamVR. Loading even a metadata-only layer affects the
-compositor process; installation/restart commands are not prepared yet. Exact
-restoration must run independently of any browser/console lost during restart,
-and restoring files alone cannot unload the layer.
+The inactive bundle and service properties were received; see
+[E38](status.md#e38-inactive-bundle-and-steamvr-service-on-frame). Preparation
+writes only the bundle and the service query changes nothing. Keep that bundle
+unchanged. The next procedure builds the later loader fallback/timing fixes and
+requires a fresh bundle before any activation.
+
+### Run the bounded metadata-layer trial
+
+This is an opt-in metadata-layer test. **It restarts SteamVR for the test and
+again for restoration. The headset view/browser/console may disappear.** Save
+other work first. The trial runs in a separate user service and systemd runs
+its post-exit recovery independently of the console. This is the first actual
+layer-load/restoration trial; the cloud has tested generated data, not this
+device operation. It requests no image data and runs no recognition or overlay.
+
+First build the changed tools, run their no-camera tests, and prepare a new
+inactive bundle. Preserve the earlier `capture-layer-plan-v3-new` bundle:
+
+```bash
+cd "$HOME/framejacker" &&
+git pull --ff-only &&
+bash scripts/build_capture_reference.sh --provider-fixes &&
+python3 -m unittest discover -s tests -p test_capture_provider.py -v &&
+python3 -m unittest discover -s tests -p test_capture_provider_check.py -v &&
+python3 -m unittest discover -s tests -p test_capture_layer_trial.py -v &&
+python3 scripts/capture_layer_config.py --prepare artifacts/capture-layer-plan-v3-trial &&
+python3 scripts/capture_layer_trial.py --preflight artifacts/capture-layer-plan-v3-trial
+```
+
+Expect **14, 12 and 20 tests**, with no skips, then `prepared_inactive_bundle`
+and `preflight_passed`. If the new directory already exists, preserve it and
+use a different new name throughout. Preflight requires matching current
+build/helper hashes, absent prior Framejacker active targets, no existing
+provider/enable flags, and the reported active simple/control-group service
+with a 20-second stop timeout and no drop-ins. It refuses changed conditions
+without restarting anything. This trial does not support replacing an existing
+Framejacker installation.
+
+To start the actual bounded test:
+
+```bash
+python3 scripts/capture_layer_trial.py --start-metadata-test artifacts/capture-layer-plan-v3-trial
+```
+
+Before touching SteamVR, the launcher runs a dummy one-second timeout to verify
+this Frame's systemd executes the cleanup command. Failure refuses activation.
+After a passing rehearsal it schedules `framejacker-metadata-trial.service`,
+which stages only the metadata layer and a temporary runtime drop-in scoped
+to `steamvr.service`. It waits for the provider and inspects metadata for two
+seconds. Systemd's separate `ExecStopPost` then stops SteamVR, restores the
+recorded targets, removes its exact enable drop-in, and starts normal SteamVR.
+The normal path can finish sooner; allow **about three minutes** for timeout
+and recovery. A launch acknowledgment means scheduled, not completed. If it
+says `launch_unconfirmed`, inspect that run before attempting another launch.
+
+After the headset/console returns:
+
+```bash
+cd "$HOME/framejacker" &&
+python3 scripts/capture_layer_trial.py --report-latest
+```
+
+Success is `status: completed`, with `trial.status: inspected`,
+`rollback.status: restored`, `configuration_restored: true` and
+`normal_service_started: true`. The metadata peer must be a `vrcompositor` in
+the service cgroup. Zero compatible candidates is still a metadata result,
+not camera access. `incomplete`/exit 3 means the final recovery report is absent;
+`failed`/exit 1 must not be treated as restoration success. Share the report
+and whether normal passthrough recovered. No images are saved.
+
+If recovery fails, use the known `trial_directory` from the launch/result
+report. From a separate terminal/SSH session, stop any remaining trial first:
+
+```bash
+systemctl --user stop framejacker-metadata-trial.service
+```
+
+Then use `python3 scripts/capture_layer_trial.py --rollback /exact/trial-directory`,
+substituting that recorded path. It refuses a living worker and preserves
+foreign/later edits; it never guesses paths from a wildcard. Keep the report if
+it refuses or normal SteamVR does not start. A failed manager/service stop
+cannot guarantee restoration. Backups stay local in ignored private artifacts.
 
 For a **future already running v3 metadata provider**, the diagnostic command is:
 
@@ -1125,11 +1201,14 @@ imports remain unverified. Both original device checks are complete. The v2
 watchdog/provider/recovery milestone also passed all 28 tests on Frame ARM64.
 Producer synchronization review found no coordinated handoff, so the latest v3
 provider records metadata without retaining/exporting image FDs and blocks live
-reads. The v3 ARM64 build and both changed suites (12 provider/layer tests and
-12 metadata-diagnostic tests) passed with no skips. Next prepare a new inactive
-v3 bundle and collect the SteamVR service properties.
-A controlled metadata-layer load/restoration procedure is still needed; no layer
-has been activated. Physical camera identity and scene freshness remain unverified.
+reads. The earlier v3 ARM64 build and both suites (12 provider/layer tests and
+12 metadata-diagnostic tests) passed. The inactive bundle and active SteamVR
+service properties were received. A bounded metadata-only trial with independent
+systemd post-exit recovery is implemented and cloud-tested. New loader fallback
+and inspector timing fixes require a rebuild, the changed suites (14 provider,
+12 inspector, 20 trial tests), and a fresh bundle. The runner performs a real
+one-second systemd recovery rehearsal before requesting activation. No layer
+has been activated yet. Physical camera identity and scene freshness remain unverified.
 GPU device/resource ownership is implemented in --resource-fixes and has nine
 synthetic cloud tests passed, including 57 injected startup/resource errors.
 Its native ARM64 and actual driver execution remain untested; real capture
