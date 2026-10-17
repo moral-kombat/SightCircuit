@@ -644,8 +644,10 @@ capture binary is run and no layer configuration is created by this procedure.
 This adaptation replaces the producer's shared-memory writer and adds bounded
 loop controls. All eight tests passed on cloud x86_64 and on Frame in 1.562
 seconds; see [E27](status.md#e27-publication-and-loop-controls-on-frame).
-Retain this procedure for changed code/runtime; the next check is the GPU query
-below. In the existing Frame checkout, run:
+Retain this procedure for changed code/runtime. The GPU query and original
+import suite below have also passed; remaining engineering tasks are in the
+[active plan](live-capture.md#offline-provider-work-while-the-frame-is-unavailable).
+In the existing Frame checkout, run:
 
 ```bash
 cd "$HOME/framejacker" &&
@@ -680,8 +682,11 @@ enable marker is generated, and no capture binary is run by these commands.
 
 ### Query Vulkan capture capabilities
 
-This is the next device check. It queries the GPU requirements of the reviewed
-Arcturus import path, using only the compiler and standard-library Python:
+This check passed on Frame: Turnip Adreno 750 advertises the required import
+capabilities, and the user reports normal passthrough throughout and afterward.
+See [E30](status.md#e30-vulkan-capabilities-on-frame). Keep this procedure for a
+changed tool/runtime; repeating it unchanged is not the next task. It queries
+the GPU requirements of the reviewed Arcturus import path:
 
 ```bash
 cd "$HOME/framejacker" &&
@@ -724,18 +729,27 @@ not confirmed. Instance creation is `null` when no complete worker report exists
 Ctrl+C/SIGTERM yields `cancelled` and exit `128 + signal`. Invalid Python options
 exit `2`. On success, the instance is destroyed before the report is emitted.
 
+The Frame's loader API reports 1.3.296 and its physical-device API 1.4.362;
+these differ from the earlier 1.4.309 development-header/pkg-config metadata.
+The NV12 modifier reports two memory planes and dedicated-only DMA-BUF import.
+Gamescope WSI/application-info and option-override messages appeared on stderr
+alongside successful exit/cleanup; no passthrough change was reported.
+
 The cloud has no usable Vulkan driver (`VK_ERROR_INCOMPATIBLE_DRIVER`); its
-fake-loader tests validate dispatch and failure containment, not Frame support.
-Even a positive Frame capability result leaves actual FD import, producer
+fake-loader tests validate dispatch and failure containment. The positive Frame
+capability result still leaves actual FD import, producer
 completion, camera identity, resource lifetime and layer restoration unverified.
 Follow the [active provider work order](live-capture.md#next-provider-step-query-gpu-capabilities)
 before any camera trial.
 
 ### Test import ownership without capture
 
-This optional native check can wait until you are back on Frame. The same tests
-run in the cloud without headset access; the GPU capability query above remains
-the next hardware-information check. To validate the new import helper on ARM64:
+The ARM64 build and original ten-test suite passed in 0.015 seconds with no
+skips; see [E31](status.md#e31-import-build-and-synthetic-tests-on-frame). The
+current suite adds one synthetic test for the two-memory-plane count advertised
+by the real GPU. It passes in the cloud and has not yet been rerun on Frame.
+Keep this procedure for changed code/runtime or batch it with a later native
+validation milestone; there is no need to repeat the original checks unchanged:
 
 ```bash
 cd "$HOME/framejacker" &&
@@ -744,8 +758,8 @@ bash scripts/build_capture_reference.sh --import-fixes &&
 python3 -m unittest discover -s tests -p test_capture_import.py -v
 ```
 
-Expect ten tests with no skips. The build applies three patches to a disposable
-copy and keeps the real capture binaries non-executable. Its original fixture
+Expect eleven tests with no skips for the updated suite. The build applies three
+patches to a disposable copy and keeps the real capture binaries non-executable. Its original fixture
 uses generated `memfd` data and fake Vulkan function pointers; it neither loads
 Vulkan nor connects to a provider. It checks metadata rejection, allocation/FD
 ownership, rollback, move operations and completion-gated cleanup. No camera,
@@ -944,10 +958,14 @@ The pinned reference compiled/linked on aarch64 with system Vulkan headers; all
 14 synthetic reader tests passed in 7.204 seconds. The descriptor transport
 adaptation also passed seven fixture groups on ARM64. The publication build
 completed and all eight generated-data tests passed in 1.562 seconds on Frame.
-The validated-import inspection adaptation compiles in the cloud and passes ten
-synthetic tests, including FD/image ownership, rollback and queue completion
-gating. Actual imports and ARM64 execution of this adaptation are unverified.
-Next hardware check remains the bounded Vulkan capability query. Continue
+The bounded Vulkan query passed on Turnip Adreno 750: required extensions,
+graphics family 0, cached host memory, R8 blits and dedicated DMA-BUF imports are
+advertised, with two memory planes for the NV12 modifier. Loader API is 1.3.296;
+device API is 1.4.362. Normal passthrough stayed working during and after it.
+The validated-import inspection adaptation compiled on aarch64 and passed all
+ten original synthetic tests in 0.015 seconds. A new two-plane fixture test now
+passes in the cloud; that eleventh test has not run on Frame. Actual camera
+imports remain unverified. Both original device checks are complete. Continue
 offline with device/other GPU resource cleanup, the capture watchdog,
 registry refresh, layer lifetime and exact
 restoration before deployment. Physical camera identity and scene freshness remain unverified.
@@ -968,11 +986,16 @@ Record new results in docs/status.md, including unknown dates/versions explicitl
 
 1. Record the exact checkout revision, SteamOS/SteamVR versions and the selected
    physical camera. Confirm normal vendor preview, passthrough and tracking.
-2. Run the existing [bounded GPU query](#query-vulkan-capture-capabilities).
-   Record device/API/extensions, modifier memory planes, R8 support and host-memory
-   capabilities. This does not install a layer or open camera buffers.
-3. On ARM64, rebuild the inspection adaptation and run the resource/lifecycle
-   suites in [development](development.md#validate-gpu-and-provider-lifetime-offline).
+2. Reuse the recorded successful [GPU query](status.md#e30-vulkan-capabilities-on-frame)
+   and [original ten ARM64 import checks](status.md#e31-import-build-and-synthetic-tests-on-frame).
+   Repeat the query only if the GPU tool, driver/runtime or device configuration
+   has changed. The known target modifier advertises two memory planes.
+3. Build the reconciled inspection adaptation on ARM64. Run the **new two-plane
+   import test** (`python3 -m unittest discover -s tests -p test_capture_import.py -k two_plane -v`)
+   and the host/resource/lifecycle/watchdog suites documented in
+   [development](development.md#validate-gpu-and-provider-lifetime-offline).
+   The original ten import tests need rerunning only for relevant code/runtime
+   changes or to establish a deliberately chosen full regression baseline.
    Run `python3 scripts/capture_watchdog.py --check-worker`; expect exit **3** and
    `exporter_synchronization_unavailable`, with no runtime/capture initialization.
    Stop if it reports anything else. Never chmod/run the inspection capture files.

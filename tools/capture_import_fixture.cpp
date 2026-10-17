@@ -19,14 +19,15 @@ static size_t descriptors_open() {
     closedir(directory);
     return count;
 }
-static MrhandBufInfo metadata() {
+static MrhandBufInfo metadata(uint32_t plane_count = 4) {
+    require(plane_count >= 1 && plane_count <= MRHAND_MAX_PLANES);
     MrhandBufInfo info{};
     info.magic = MRHAND_MAGIC; info.id = 9; info.generation = 7;
     info.size = 1 << 24; info.hasImage = 1;
     info.format = ci::camera_format; info.width = info.height = 2464; info.arrayLayers = 1;
     info.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
     info.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT; info.usage = ci::import_usage;
-    info.hasModifier = 1; info.modifier = ci::camera_modifier; info.planeCount = 4;
+    info.hasModifier = 1; info.modifier = ci::camera_modifier; info.planeCount = plane_count;
     for (uint32_t i = 0; i < info.planeCount; ++i) {
         info.planeOffset[i] = i * 4096; info.planeRowPitch[i] = 256;
     }
@@ -321,6 +322,24 @@ static void driver_failures() {
             require(fcntl(fake.last_duplicate, F_GETFD) == -1 && errno == EBADF);
         }
 }
+static void two_plane_layout() {
+    // The Frame's Turnip capability query advertised two memory planes. This
+    // generated layout exercises that count; its offsets/pitches are not camera data.
+    Fake fake;
+    fake.memory_planes = 2;
+    auto fd = payload();
+    auto info = metadata(2);
+    require(!info.planeOffset[2] && !info.planeRowPitch[2] && !info.planeOffset[3] && !info.planeRowPitch[3]);
+    auto image = ci::import_image(fake.context, info, fd.get());
+    require(image.image() && image.memory() && fake.last_memory_type == 3);
+    require(image.close() && fake.empty());
+    readable(fd.get());
+    // Four is still a valid synthetic modifier case, but not the count this GPU reported.
+    rejects("import_modifier_or_plane_count_unsupported", [&] {
+        ci::import_image(fake.context, metadata(4), fd.get());
+    });
+    require(fake.empty()); readable(fd.get());
+}
 static void moves_and_batch_rollback() {
     Fake fake;
     auto fd = payload();
@@ -412,6 +431,7 @@ int main(int argc, char **argv) {
         {"failures", driver_failures}, {"moves", moves_and_batch_rollback},
         {"pending", pending_work_defers_cleanup}, {"context", context_and_memory_bounds},
         {"submission", submission_completion},
+        {"two_planes", two_plane_layout},
     };
     bool all = argc == 2 && !strcmp(argv[1], "--self-test");
     bool one = argc == 3 && !strcmp(argv[1], "--case");

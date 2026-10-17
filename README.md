@@ -85,13 +85,15 @@ confirmed that this mirror captures our VR output. Arcturus is connected; its
 selection for passthrough is unknown. The Frame reports GCC 15 and Vulkan 1.4.309
 development files. The reference build and all 14 synthetic reader tests passed
 on Frame ARM64. The transport adaptation passed seven fixture groups and the
-publisher/control suite passed all eight tests on Frame. Next run the bounded
+publisher/control suite passed all eight tests on Frame. The bounded
 [Vulkan capability query](docs/on-device.md#query-vulkan-capture-capabilities)
-when back on the headset. Offline work can continue meanwhile: the
+also passed on Turnip Adreno 750, reporting two memory planes for the target
+NV12 modifier, with normal passthrough throughout and afterward. The
 [validated import adaptation](docs/development.md#build-and-test-image-import-ownership)
-now checks the reviewed buffer profile and owns imported images/FDs, with ten
-synthetic tests passed in the cloud. Finish the remaining GPU/provider lifecycle
-work for input independent of our output before
+compiled on ARM64 and passed ten synthetic tests on Frame. The cloud suite now
+also covers the two-plane case explicitly. GPU resource cleanup, the watchdog
+and provider lifecycle safeguards are implemented locally and await ARM64
+validation. Exporter synchronization remains required before
 continuous VR image display. Bounded recognition and snapshots shown after
 capture remain useful. The model's class coverage and false positives need separate work.
 The [isolated shared-memory reader](docs/on-device.md#check-existing-luma-shared-memory)

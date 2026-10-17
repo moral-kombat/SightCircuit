@@ -55,6 +55,9 @@ class CaptureImportTests(unittest.TestCase):
     def test_submission_reset_submit_and_wait_failures_gate_cleanup(self):
         self.run_case("submission")
 
+    def test_two_plane_modifier_path_and_four_plane_metadata_mismatch(self):
+        self.run_case("two_planes")
+
 
 if __name__ == "__main__":
     unittest.main()

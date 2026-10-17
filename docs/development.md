@@ -419,6 +419,10 @@ They make no GPU or camera calls. Native tests explicitly skip if the query is
 unbuilt; the dedicated CI job builds it before running them. Hosted CI results
 are separate from local results. For the real Frame query, use
 [the supervised device command](on-device.md#query-vulkan-capture-capabilities).
+The first Frame query now passes on Turnip Adreno 750 with clean teardown and
+normal passthrough; see [E30](status.md#e30-vulkan-capabilities-on-frame). Its
+target modifier reports two memory planes; the generic fake-loader test's four
+planes are a separate synthetic case.
 
 ### Build and test image import ownership
 
@@ -481,19 +485,29 @@ image owners. They are confined to one worker thread. No unbounded idle wait
 is added, but a driver call itself can still hang: the capture supervisor
 remains to be implemented. This gate does not synchronize XRService's writes.
 
-Ten Python tests execute nine native fixture groups plus default/argument guards.
+Eleven Python tests execute ten native fixture groups plus default/argument guards.
 They cover malformed metadata before driver calls, unsupported modifier/memory
 planes, format/limits, requirement bounds, memory bit 31, FD transfer and cleanup
 order, failure injection at FD query/create/allocate/bind, move/vector ownership,
-batch rollback, pending-work deferral, and reset/submit/wait failures. The native
+batch rollback, pending-work deferral, and reset/submit/wait failures. An explicit
+two-plane modifier case matches the count advertised in the Frame capability
+report; its offsets/pitches are generated, not observed camera metadata. The
+generic four-plane supported case remains covered, and a four-plane record is
+rejected when the driver advertises two. The native
 fixture counts FDs before/after each group. Deferred resources in its fake
 backend are reclaimed by simulated process teardown, not described as graceful
 Vulkan cleanup. CI builds before running these tests; unbuilt native fixtures
 produce explicit skips elsewhere.
 
-Cloud compile/link and synthetic tests do not validate a real import. Device
-selection/bootstrap, host/downscaler/command resource cleanup, capture watchdog,
-registry refresh and layer lifetime/restoration still need work. See the
+The original ten-test suite and import build also passed on Frame ARM64;
+the eleventh two-plane case has only been run in the cloud. The GPU query reports
+two modifier memory planes and dedicated-only imports on Turnip Adreno 750;
+see [E30](status.md#e30-vulkan-capabilities-on-frame) and
+[E31](status.md#e31-import-build-and-synthetic-tests-on-frame).
+Compile/link and synthetic tests do not validate a real import. Device
+selection/bootstrap, host/downscaler/command ownership, the watchdog and provider
+lifecycle are implemented in the subsequent offline adaptations below. Their
+ARM64 validation, exporter synchronization and deployment restoration remain open. See the
 [offline work order](live-capture.md#offline-provider-work-while-the-frame-is-unavailable)
 and [optional native fixture procedure](on-device.md#test-import-ownership-without-capture).
 
@@ -699,6 +713,26 @@ read while XRService may write. A stable probe strip does not prove completion,
 and our queue's fence only covers our submissions. The native capture gate remains
 unconditional until a supported frame-sharing contract or explicit exporter
 cooperation supplies the necessary synchronization and ownership evidence. Frame
-capability results and native ARM64 tests are the next validation inputs, not
-permission to remove this gate. No layer manifest/activation or restoration script
+capability results and the original ten ARM64 import checks are already recorded.
+The added two-plane test and new host/resource/lifecycle/watchdog suites still
+need ARM64 execution; none grants permission to remove this gate. No layer manifest/activation or restoration script
 is supplied by these offline changes.
+
+## Reuse the reconciled safeguards
+
+The local `codex/reconcile-1334d21` branch combines upstream
+`1334d218b395fb6ec30545d6f51be366c972c6a7` with the preserved safeguards commits
+`3bcf804ac64c91e9040c7776d8f328cfdeeb5677` and
+`131c1c7bd8ef2558e4876dab6d320c3a2ef708e7`. Upstream's production import helper
+and patches 1–3 are unchanged; its two-plane fixture/test is retained. Our
+patches 4–8, ownership helpers, watchdog, provider tests and source-sync gate are
+retained. Reuse these changes rather than implementing another cleanup/watchdog
+or provider-lifecycle branch from scratch.
+
+The coding session can fetch the supplied local reconciliation bundle into a new
+review branch (the bundle requires upstream commit `1334d21`), compare against
+its own current main, and run the capture-focused suite before choosing an
+integration strategy. If main has advanced, reconcile that new delta first.
+Do not blindly replay both preserved commits over an already reconciled branch.
+The original branch, individual patches and recovery bundle remain available;
+no remote branch/main update is part of this handoff.
