@@ -110,8 +110,11 @@ the console application. The [unit/selector review](docs/status.md#e44-platform-
 identified startup, waiter and cleanup stages; the hook inspector now preserves
 every repeated hook. [Offline lifecycle/recovery checks](docs/status.md#e45-offline-platform-lifecycle-and-guarded-recovery)
 now pass 65 targeted tests, covering surviving processes, pending jobs and
-guarded restoration. The next device step is a
-[read-only runtime baseline](docs/on-device.md#check-runtime-liveness-without-restarting).
+guarded restoration. The
+[read-only runtime baseline](docs/status.md#e46-read-only-runtime-baseline-on-frame)
+now passes on Frame, confirming service/cgroup/compositor liveness with normal
+passthrough reported during/after. Independent SSH access and actual recovery
+remain to be verified before another trial.
 Actual driver imports, camera identity and
 on-device restoration remain unvalidated. Bounded recognition and snapshots shown after
 capture remain useful. The model's class coverage and false positives need separate work.

@@ -1133,9 +1133,11 @@ file is read. No additional output from this collector is needed now.
 ### Check runtime liveness without restarting
 
 The [offline recovery work](status.md#e45-offline-platform-lifecycle-and-guarded-recovery)
-passes 65 targeted cloud tests. When back on Frame, validate the new observation
-path while leaving the working headset session running. No rebuild or inactive
-bundle is needed:
+passes 65 targeted cloud tests. **Frame result received:** the runtime observation
+passes with an active/idle service and a live compositor in its original cgroup;
+see [E46](status.md#e46-read-only-runtime-baseline-on-frame). Do not repeat this
+successful check just to continue the review. The command remains available as
+a read-only reference, without a rebuild or inactive bundle:
 
 ```bash
 cd "$HOME/framejacker" &&
@@ -1146,8 +1148,9 @@ python3 scripts/capture_layer_trial.py --runtime-status
 Expect `status: runtime_observed`, exit 0, `activation_requested: false`,
 `normal_runtime_observed: true`, and `rendering_readiness_verified: false`.
 The runtime observation should show active/running/success, no pending job,
-a populated original cgroup and a live compositor identity. Share the JSON and
-whether normal passthrough remained working. A missing/unreadable cgroup or
+a populated original cgroup and a live compositor identity. The JSON is received,
+and the user confirms normal passthrough during/after. Independent SSH access
+is not verified. A missing/unreadable cgroup or
 absent compositor returns `runtime_unconfirmed` or `refused`, exit 1; retain the
 report and do not restart the experiment to change the result.
 
@@ -1167,6 +1170,26 @@ python3 -m unittest tests.test_capture_layer_trial tests.test_capture_service_li
 Expect 65 tests. The configuration suite's generated-provider test requires the
 previously built `--provider-fixes` fixture; if absent, that test skips. Record
 the actual pass/skip totals. These tests do not validate real systemd jobs.
+
+### Verify independent SSH access
+
+The runtime baseline and normal passthrough are confirmed. Before planning a
+service-control rehearsal, verify access that does not depend on the headset's
+VR console. On **another computer on the same network**, run:
+
+```bash
+ssh -o ConnectTimeout=10 steamos@<FRAME_IP> 'hostname && id -un'
+```
+
+Expect the Frame hostname (`frame`) and account name (`steamos`). If prompted
+for a password, use the Frame account's password. This command reads host/user
+information only; it does not restart SteamVR, enable a layer or access the
+camera. Run it from the other computer, not from the Frame console itself.
+
+Share the output or connection error. If it fails, preserve the working
+headset session and diagnose remote access before any trial. Once access is
+verified, review the bounded recovery procedure before reassessing activation;
+the access check alone does not validate service restoration.
 
 ### Check existing luma shared memory
 

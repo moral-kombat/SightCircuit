@@ -31,7 +31,7 @@ unknown unless explicitly recorded below.
 | Capture watchdog, provider/layer lifecycle and exact recovery | Earlier v2 milestone passed all 28 generated-data tests on Frame ARM64 | Bounded worker, metadata/GPU provenance, registry changes, owned endpoint and conditional restoration; no real driver/layer execution or device restoration; [E35](#e35-watchdog-provider-and-recovery-tests-on-frame) |
 | Metadata-only provider and producer synchronization review | v3 ARM64 build and all 24 generated-data tests passed on Frame | Layer retains/exports no image FDs; no real layer activation or live camera access; controlled load/restoration remains next; [E36](#e36-metadata-only-provider-and-synchronization-review), [E37](#e37-metadata-only-provider-and-diagnostic-on-frame) |
 | Inactive v3 bundle and SteamVR service preflight | Frame report received | Bundle prepared without activation; active simple/control-group user service, 20-second stop timeout, no drop-ins; [E38](#e38-inactive-bundle-and-steamvr-service-on-frame) |
-| Bounded metadata-layer trial and post-exit recovery | Activation paused; revised recovery cloud-tested | 65 targeted tests pass for hook/job failures, cgroup/process observations and guarded restoration. Read-only runtime baseline is next on Frame; visible recovery and original failed operation remain unverified; [E45](#e45-offline-platform-lifecycle-and-guarded-recovery) |
+| Bounded metadata-layer trial and post-exit recovery | Activation paused; runtime observation passed on Frame | Service/cgroup/compositor liveness check succeeds; user confirms working passthrough during/after. Revised controller has 65 targeted cloud tests; independent SSH and actual recovery remain unverified; [E46](#e46-read-only-runtime-baseline-on-frame) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
 | Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; no source-identified built-in-camera frames have been received |
 | Stereo depth and world-space labels | Planned | Calibration, depth and pose/timebase alignment remain unresolved |
@@ -1496,6 +1496,44 @@ is read-only and needs no rebuild. `--start-metadata-test` remains blocked
 before manager/file calls. Independent access, actual rendering/passthrough
 readiness and controlled restoration still need review before any later trial.
 Pixel access remains separately blocked on producer synchronization.
+
+### E46: Read-only runtime baseline on Frame
+
+Source: user-supplied `--runtime-status` JSON, received 2026-10-17
+(America/New_York). Exact execution time and checkout HEAD were not included.
+This is the first received Frame execution result for the new service/cgroup/
+proc observation path. It reports `runtime_observed`, exit 0, with
+`activation_requested: false`.
+
+| Observation | Reported value |
+| --- | --- |
+| Service state | Active/running, result success |
+| MainPID | 40413 |
+| Pending job | `0` (idle) |
+| Invocation ID | `7de7425ca53a4ffdbb773ba755d37a8e` |
+| Service cgroup | `/user.slice/user-1000.slice/user@1000.service/session.slice/steamvr.service` |
+| Original cgroup populated | True |
+| Live compositor | PID 40293, start ticks 1292599 |
+| Runtime liveness observed | True |
+| Rendering readiness verified | False |
+
+The successful mode requires two consistent liveness observations. The distinct
+waiter and compositor PIDs agree with the launcher architecture reviewed in
+E44; they are not evidence that either process is newly started by Framejacker.
+The result validates reading the actual Frame service, original unified cgroup
+and live compositor metadata. It does not establish the 65 generated tests ran
+on Frame, a successful stop/start or restoration, a loaded capture layer,
+provider inspection, camera selection, frame access or visible passthrough.
+
+The report explicitly requires a separate passthrough observation. In the
+follow-up, the user confirms normal passthrough worked during/after the check
+and states that SSH is not verified. This supplies the human observation for
+the baseline; the probe's rendering-readiness flag remains false and service
+recovery has not been tested. Keep the current service running. The next
+prerequisite is [independent inbound SSH access](on-device.md#verify-independent-ssh-access).
+Activation remains blocked while access and the recovery procedure are
+reviewed. Do not repeat the successful baseline to manufacture additional
+evidence. The original failed service operation remains unknown.
 
 ## Maintaining the evidence
 

@@ -21,7 +21,7 @@ layer has been deployed by Framejacker.
 | 3b | Device and remaining GPU resource ownership | Inspection build and nine synthetic cloud tests pass | Native ARM64 and actual driver execution pending; no activation; [E33](status.md#e33-gpu-resource-ownership-cloud-checks) |
 | 3c | Capture watchdog, provider metadata/lifetime and configuration recovery | Earlier v2 milestone passed all 28 tests on Frame ARM64 | Generated workers/fake dispatch only; no real layer activation or device restoration; [E35](status.md#e35-watchdog-provider-and-recovery-tests-on-frame) |
 | 3d | Producer synchronization and metadata-only inspection | Review complete; earlier v3 ARM64 build and all 24 generated-data tests passed on Frame | No image FDs retained/exported by the layer; original inactive bundle/service preflight received; changed tools and actual load remain; [review](#producer-synchronization-review-and-next-checkpoint), [E37](status.md#e37-metadata-only-provider-and-diagnostic-on-frame) |
-| 3e | Controlled metadata-layer trial and recovery | Activation paused; offline lifecycle/controller checks pass | 65 targeted cloud tests cover hook/job failures, cgroup observations and guarded recovery. Next device check is read-only runtime liveness; original failed operation unresolved; [E45](status.md#e45-offline-platform-lifecycle-and-guarded-recovery) |
+| 3e | Controlled metadata-layer trial and recovery | Activation paused; runtime baseline passed on Frame | Service/cgroup/compositor observation works with normal passthrough reported; 65 targeted cloud tests pass. Verify independent SSH before planning actual recovery; original failed operation unresolved; [E46](status.md#e46-read-only-runtime-baseline-on-frame) |
 | 4 | Capture-only device trial | Planned | Ten seconds of fresh images from one identified source, correct orientation, clean exit and working normal passthrough |
 | 5 | Continuous live input in the existing display | Planned; needs input independent of our output | Reuse detector/display after a dedicated provider or supported overlay-excluded mirror mode is validated; current mirror includes the panel |
 | 6 | Color, built-in camera support and later geometry | Planned | Validate each source and color conversion separately; require calibration and stronger timing evidence before stereo depth or spatial labels |
@@ -253,12 +253,13 @@ metadata-diagnostic tests; see [E37](status.md#e37-metadata-only-provider-and-di
 
 Remaining work does not need another unchanged GPU query or initial import test:
 
-1. Run the [read-only runtime baseline](on-device.md#check-runtime-liveness-without-restarting)
-   when back on Frame. The offline lifecycle model and revised controller now
-   pass the targeted cloud tests. Validate the real cgroup/proc observations
-   without activation, rollback or a restart on the working headset.
-2. Review that baseline and verify independent terminal/SSH access before
-   reassessing service control. The old command stderr/phase cannot be recovered from static source;
+1. Verify [independent SSH access](on-device.md#verify-independent-ssh-access).
+   The [Frame runtime baseline](status.md#e46-read-only-runtime-baseline-on-frame)
+   and normal passthrough during/after are confirmed. No repetition of the
+   baseline or new restart is needed for this access check.
+2. Review the independent recovery procedure before reassessing service control.
+   Actual service stop/start and recovery need a separate checkpoint; process
+   liveness does not establish rendering readiness. The old command stderr/phase cannot be recovered from static source;
    record the failed operation as unknown unless additional existing evidence
    identifies it. Require independent access before reassessing the gate; keep
    image access disabled.
@@ -306,8 +307,9 @@ activation is blocked. The saved report now confirms reported configuration
 restoration, followed by an unconfirmed service start; SteamVR is later active
 and UI/passthrough work. Actual layer loading and successful inspection remain
 unverified. The failure-window journal and unit/selector source are now received.
-The offline lifecycle work below passes its targeted checks; the next device
-step is a read-only runtime baseline, without another restart.
+The offline lifecycle work below passes its targeted checks, and its read-only
+runtime observation now passes on Frame. Independent access and actual recovery
+remain separate checkpoints.
 The supervisor's capture flag returns `blocked` before launching a worker.
 Use the [updated native procedure](on-device.md#test-metadata-only-inspection-without-capture).
 
@@ -340,10 +342,10 @@ process metadata and real temporary configuration, without executing vendor hook
   and the user's passthrough check. Preserve mandatory platform hooks and the
   configured service policy.
 
-Passing these offline cases does not remove the activation block. Next, validate
-the [read-only runtime observations](on-device.md#check-runtime-liveness-without-restarting)
-on Frame. These establish compositor process liveness, not rendering readiness
-or live camera access. Before a later device rehearsal, verify a
+Passing these offline cases does not remove the activation block. The
+[read-only runtime observations](status.md#e46-read-only-runtime-baseline-on-frame)
+now pass on Frame. These establish compositor process liveness, not rendering
+readiness or live camera access. Before a later device rehearsal, verify a
 working independent terminal/SSH route, define the exact recovery command and
 readiness checks, and retain command/job diagnostics. Do not require a working
 console app inside SteamVR to recover SteamVR. Never rerun the old trial just

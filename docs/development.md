@@ -604,8 +604,9 @@ available. The earlier v3 ARM64 build and both 12-test suites passed on Frame;
 see [E37](status.md#e37-metadata-only-provider-and-diagnostic-on-frame). The metadata inspector is
 a separate executable, linked without Vulkan; it is not the camera producer.
 The trial runner was later attempted on Frame and failed during service control.
-Its revised lifecycle controller and cgroup observations remain cloud-tested
-only; see [E45](status.md#e45-offline-platform-lifecycle-and-guarded-recovery).
+Its revised lifecycle controller remains cloud-tested; the read-only cgroup/
+compositor observation now passes on Frame. Actual service transitions remain
+unvalidated; see [E46](status.md#e46-read-only-runtime-baseline-on-frame).
 
 ### Worker containment and publication recovery
 
@@ -866,9 +867,10 @@ bundle. `runtime_observed`/exit 0 establishes process liveness;
 `runtime_unconfirmed` or `refused` exits 1. It returns
 `rendering_readiness_verified: false` and requires a separate user passthrough
 check. It does not restart SteamVR, initialize OpenVR/Vulkan, connect to the
-provider or read images. The new mode is the next
-[read-only Frame check](on-device.md#check-runtime-liveness-without-restarting);
-passing it does not unblock activation.
+provider or read images. The
+[read-only Frame check](status.md#e46-read-only-runtime-baseline-on-frame)
+now passes on-device; passing it does not unblock activation or validate the
+new controller's actual service transitions.
 
 ## Isolated luma reader and synthetic producer
 
