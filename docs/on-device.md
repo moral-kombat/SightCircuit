@@ -414,6 +414,12 @@ own output are understood; follow the [active plan](live-capture.md#current-work
 
 ### Run bounded recognition from the mirror
 
+The [recorded-input POC](status.md#e47-recorded-recognition-and-vr-panel-poc-on-frame)
+has now completed with visible VR labels and clean shutdown. This bounded live
+run is the next demo stage. Aim at a supported object such as a chair or TV,
+keeping it visible through the final seconds: the saved preview is the last
+processed image, while `labels_seen` aggregates the entire run.
+
 This Frame trial passed its first execution/cleanup check at 4.993 processed
 fps, and the user reports normal passthrough; see
 [the device result](status.md#e17-bounded-mirror-recognition-on-frame). It combines
@@ -428,10 +434,12 @@ passthrough working before starting:
   set -e
   cd "$HOME/framejacker"
   git pull --ff-only
+  mkdir -p artifacts/poc
+  framejacker_demo_dir="$(mktemp -d "$PWD/artifacts/poc/live-XXXXXX")"
   .venv-replay/bin/python scripts/mirror_recognize.py --capture \
     --device /dev/video99 --seconds 10 --max-fps 5 \
-    --preview artifacts/mirror-check/live-detections.png
-  xdg-open "file://$HOME/framejacker/artifacts/mirror-check/live-detections.png"
+    --preview "$framejacker_demo_dir/detections.png"
+  xdg-open "file://$framejacker_demo_dir/detections.png"
 )
 ```
 
@@ -447,8 +455,8 @@ No flags means sysfs-only discovery, without loading the detector or opening a
 device. Without `--preview`, no image is saved. The explicit final PNG above
 is a copy of the last processed image with annotations, fitted within 640 × 640,
 encoded after source closure and published after normal worker shutdown. It is
-not a screenshot of a live window. Existing destinations are preserved; choose
-a new `.png` name for another trial. It retains the source's RGB/BGR channels;
+not a screenshot of a live window. Each run above creates a private output
+directory, preserving earlier images. It retains the source's RGB/BGR channels;
 actual camera color/HDR fidelity remains unverified.
 
 The JSON has `report_kind: steamvr_mirror_recognition`; successful processing

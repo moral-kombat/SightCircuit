@@ -12,7 +12,7 @@ Start with the [documentation index](docs/README.md) for task-based navigation.
 
 | Area | Current summary |
 | --- | --- |
-| Recorded-video decoding, replay and VR panel | Confirmed working by the user on Frame, including controls and head-relative placement |
+| Recorded-video decoding, replay and VR panel | Latest POC processes/presents 576 frames and submits 576 VR images with clean shutdown; user confirms visible labels and normal passthrough; [result](docs/status.md#e47-recorded-recognition-and-vr-panel-poc-on-frame) |
 | Live input in the recognition application | Bounded mirror recognition confirmed at 4.993 processed fps with normal passthrough; the mirror also captures our VR panel, so continuous VR image output needs an independent input |
 | Detection quality, color and performance | The saved room image ran on Frame, but a rug was mislabeled sofa; the 20-class demo has no rug class; systematic quality/performance evaluation pending |
 | Stereo depth, world-space labels and Gaussian splats | Future work; splat reconstruction is a separate recorded-data experiment |

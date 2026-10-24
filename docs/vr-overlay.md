@@ -3,6 +3,10 @@
 Use this guide to build, launch, position and stop the optional replay panel.
 [Status and evidence](status.md#e6-window-and-vr-panel) records the user's device
 confirmations and unmeasured detection, readability, color and performance limits.
+The latest [recorded-input POC](status.md#e47-recorded-recognition-and-vr-panel-poc-on-frame)
+processed/presented 576 frames and submitted all 576 VR images, with clean
+shutdown. The user confirms visible labels and normal passthrough during/after.
+Label accuracy, measured latency/rate and live input remain separate checks.
 The panel presents a selected recording; live input follows the separate
 [capture plan](live-capture.md).
 

@@ -1,6 +1,6 @@
 # Project status and evidence
 
-Documentation review: 2026-10-17. This is the authoritative record of current
+Documentation review: 2026-10-24. This is the authoritative record of current
 capability and validation evidence. The review date is not a new device-test
 date. Detailed test dates, installed code revisions and SteamVR versions are
 unknown unless explicitly recorded below.
@@ -13,8 +13,8 @@ unknown unless explicitly recorded below.
 | Read-only device and recording inspection | Device-confirmed | Inventory and MP4 header reports supplied by the user; device presence does not prove capture; [E1](#e1-frame-inventory), [E4](#e4-recordings-and-container-metadata) |
 | Vendor Arcturus app live preview and recording | Device-confirmed | User reports the vendor app works; it does not supply frames to Framejacker; [E2](#e2-vendor-app) |
 | Selected-track HEVC decoding and RGB conversion | Device-confirmed | Three frames decoded from video ordinal 0; not full-file or stereo validation; [E5](#e5-selected-track-decode) |
-| Annotated Qt replay window | Device-confirmed | User confirms visible playback; controlled offscreen tests exercise detection and frame association; [E6](#e6-window-and-vr-panel), [E7](#e7-cloud-validation) |
-| Native head-relative VR replay panel | Device-confirmed | Timed test panel, replay, controls and following head movement reported working; detailed performance unmeasured; [E6](#e6-window-and-vr-panel) |
+| Annotated Qt replay window | Device-confirmed | Latest run presents/processes 576 frames and reports four labels; label accuracy remains unevaluated; [E47](#e47-recorded-recognition-and-vr-panel-poc-on-frame) |
+| Native head-relative VR replay panel | Device-confirmed, including latest POC | User confirms visible panel/labels and normal passthrough; 576 images submitted with clean shutdown and no forced termination; [E47](#e47-recorded-recognition-and-vr-panel-poc-on-frame) |
 | Public OpenVR tracked-camera probe | Device-confirmed failure | No frames and observed passthrough interruption; do not repeat the unchanged test; [E3](#e3-public-camera-probe) |
 | Continuous live input in the Qt/VR application | Planned; current mirror includes our panel | The timed VR panel appeared in the saved mirror image; use input independent of our output before continuous VR image display; [E18](#e18-vr-panel-included-in-mirror-input) |
 | Recognition on the saved room still | Frame execution confirmed; false positive | One image processed and annotated; user identifies the `sofa`-labeled item as a rug; [E15](#e15-saved-room-recognition-and-rug-false-positive) |
@@ -1534,6 +1534,49 @@ prerequisite is [independent inbound SSH access](on-device.md#verify-independent
 Activation remains blocked while access and the recovery procedure are
 reviewed. Do not repeat the successful baseline to manufacture additional
 evidence. The original failed service operation remains unknown.
+
+### E47: Recorded recognition and VR panel POC on Frame
+
+Source: user-supplied replay/overlay JSON and follow-up observation, received
+2026-10-24 (America/New_York). Exact execution time, recording path, checkout
+revision and SteamVR version were not included. The report selects video-track
+ordinal 0 / container-stream index 0 and exits with replay status `closed`.
+
+| Observation | Reported value |
+| --- | --- |
+| Frames processed / presented | 576 / 576 |
+| Labels seen across the run | `chair`, `person`, `sofa`, `tvmonitor` |
+| Qt platform | `xcb` |
+| Overlay images sent / received / submitted | 576 / 576 / 576 |
+| Overlay settings messages, including heartbeats | 95 |
+| Native runtime initialized / validation-only mode | True / false |
+| Native exit / cleanup | 0 / `cleanup_ok: true` |
+| Forced termination / images saved | False / false |
+
+The user confirms the recording and detection labels were visible in the
+head-following VR panel, and normal passthrough worked during/after playback.
+This demonstrates the recorded-input recognition/display POC with a real
+OpenVR overlay and clean shutdown. API submission counts do not prove optical
+presentation of every frame, and no duration, measured frame rate or latency
+was supplied. Settings messages include heartbeats, not necessarily user edits.
+
+The labels aggregate the run; their presence does not establish correct object
+identity, box placement or per-frame accuracy. The known rug/sofa false positive
+remains relevant. This run does not demonstrate continuous live input, an
+Arcturus-selected passthrough source, HDR/stereo fidelity, world-space labels,
+dedicated camera capture or capture-layer restoration. The report's generic
+scope text remains conservative; the follow-up supplies visual confirmation
+for this particular replay panel.
+
+Cloud preparation on the same review date passes **17 replay/overlay tests**
+and **11 bounded mirror-recognition tests**, with no skips. Those use generated
+clips, offscreen rendering, native validation transport and synthetic mirror
+sources; they are separate from this Frame result. No physical mirror/camera
+is available in the cloud. The next POC stage is
+[ten-second mirror recognition](on-device.md#run-bounded-recognition-from-the-mirror)
+with replay/result windows closed and the saved preview displayed after source
+closure. Dedicated capture activation remains paused; independent SSH and
+actual service recovery are still unverified.
 
 ## Maintaining the evidence
 
