@@ -415,8 +415,12 @@ own output are understood; follow the [active plan](live-capture.md#current-work
 ### Run bounded recognition from the mirror
 
 The [recorded-input POC](status.md#e47-recorded-recognition-and-vr-panel-poc-on-frame)
-has now completed with visible VR labels and clean shutdown. This bounded live
-run is the next demo stage. Aim at a supported object such as a chair or TV,
+has now completed with visible VR labels and clean shutdown. The
+[bounded live POC](status.md#e48-live-mirror-recognition-poc-and-matching-preview)
+also completed: 100 reads, 51 processed frames, clean shutdown and a preview
+whose labels/boxes the user confirms match objects, with normal passthrough and
+tracking during/after. The command below remains
+available for another demonstration. Aim at a supported object such as a chair or TV,
 keeping it visible through the final seconds: the saved preview is the last
 processed image, while `labels_seen` aggregates the entire run.
 
@@ -487,6 +491,9 @@ the final PNG corresponds only to `last_result`, so it can correctly have no
 boxes even when the aggregate is nonempty.
 The user confirmed that both a chair and a TV/monitor were in view during this
 run; their intermediate boxes were not retained, so localization remains unverified.
+The later [E48 result](status.md#e48-live-mirror-recognition-poc-and-matching-preview)
+contains a final person detection and user-confirmed matching preview boxes.
+That sampled observation does not validate all intermediate boxes or class accuracy.
 This initial check measures capture/inference interaction without introducing
 our result into its own input. A future live window/VR panel still requires a
 display-feedback check. [Cloud evidence](status.md#e16-bounded-mirror-recognition-cloud-checks)

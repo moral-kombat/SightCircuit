@@ -12,7 +12,7 @@ layer has been deployed by Framejacker.
 | --- | --- | --- | --- |
 | 1 | Bounded diagnostic for an existing SteamVR mirror | Complete for the tested view: room capture works; VR panel is included | Keep for bounded/no-display recognition and post-capture snapshots; physical source/timing unresolved; [evidence](status.md#e18-vr-panel-included-in-mirror-input) |
 | 1a | Recognition on the saved mirror still | Frame execution confirmed; rug incorrectly labeled sofa | Keep execution success separate from classification quality; [evidence](status.md#e15-saved-room-recognition-and-rug-false-positive) |
-| 1b | Bounded recognition from mirror frames | Frame execution confirmed: 4.993 processed fps and normal passthrough | 100 reads, 51 processed, clean shutdown; user confirms chair/TV present, localization and broader accuracy unverified; [evidence](status.md#e17-bounded-mirror-recognition-on-frame) |
+| 1b | Bounded recognition from mirror frames | Latest Frame POC execution and inspected preview localization confirmed | 100 reads, 51 processed at 4.993 fps, 40.065 ms mean inference and clean shutdown; user confirms matching labels/boxes and normal passthrough/tracking during/after. Broader accuracy and continuous output remain separate; [E48](status.md#e48-live-mirror-recognition-poc-and-matching-preview) |
 | 1c | Check capture of our own display | Confirmed: the VR panel appears in captured output | Current composited mirror does not exclude our output; no continuous live-image panel from this source; [E18](status.md#e18-vr-panel-included-in-mirror-input) |
 | 1d | Detector quality and class coverage | Needs evaluation | Include the rug false positive; select supported target classes and evaluate correct labels, boxes and misses before claiming useful accuracy |
 | 2 | Isolated shared-memory reader and controlled producer | Controlled x86_64 and Frame ARM64 checks passed; real provider unverified | All 14 native/supervisor tests pass on Frame; upstream writer ordering and original GPU completion remain unresolved; [E23](status.md#e23-reference-build-and-controlled-reader-on-frame) |
@@ -31,6 +31,13 @@ dependency on mirror availability. If it is absent, unsuitable or includes our
 output, record the limit and continue the dedicated-camera work. Existing
 replay remains the application baseline. Record any new detection/readability
 measurements in status alongside capture results.
+
+Both bounded POC stages now have device and visual results: recorded recognition
+in the head-relative panel ([E47](status.md#e47-recorded-recognition-and-vr-panel-poc-on-frame))
+and mirror recognition with a matching post-capture preview
+([E48](status.md#e48-live-mirror-recognition-poc-and-matching-preview)). Continuous
+live VR output still requires input independent of our output; these separate
+demos do not remove the dedicated-capture activation/synchronization gates.
 
 Seek a supported Arcturus/Valve frame-sharing API alongside these experiments
 and prefer it if available. The [vendor questions](#vendor-interface-questions)

@@ -18,7 +18,7 @@ unknown unless explicitly recorded below.
 | Public OpenVR tracked-camera probe | Device-confirmed failure | No frames and observed passthrough interruption; do not repeat the unchanged test; [E3](#e3-public-camera-probe) |
 | Continuous live input in the Qt/VR application | Planned; current mirror includes our panel | The timed VR panel appeared in the saved mirror image; use input independent of our output before continuous VR image display; [E18](#e18-vr-panel-included-in-mirror-input) |
 | Recognition on the saved room still | Frame execution confirmed; false positive | One image processed and annotated; user identifies the `sofa`-labeled item as a rug; [E15](#e15-saved-room-recognition-and-rug-false-positive) |
-| Bounded mirror recognition | Frame-confirmed execution | 100 captured / 51 processed reads, 4.993 processed fps, 42.044 ms mean inference and clean shutdown; user reports normal passthrough; label accuracy and live display remain separate; [E17](#e17-bounded-mirror-recognition-on-frame) |
+| Bounded mirror recognition | Frame POC execution and sampled preview localization confirmed | Latest run: 100 captured / 51 processed reads, 4.993 processed fps, 40.065 ms mean inference, clean shutdown; user confirms matching preview labels/boxes and normal passthrough/tracking during/after; broader accuracy and continuous display remain separate; [E48](#e48-live-mirror-recognition-poc-and-matching-preview) |
 | Existing-mirror diagnostic | Frame capture confirmed; VR panel included in input | Physical-room preview and bounded inference work, but this composited view includes our overlay; physical camera identity/timing remain unknown; [E14](#e14-physical-room-visible-in-the-mirror-preview), [E18](#e18-vr-panel-included-in-mirror-input) |
 | Dedicated-camera shared-memory reader | Controlled x86_64 and Frame ARM64 tests passed | All 14 reader/supervisor tests pass on Frame; actual provider and upstream writer ordering remain unverified; [E23](#e23-reference-build-and-controlled-reader-on-frame) |
 | Native capture prerequisite report | Frame report received | aarch64 SteamOS 0.5.6, GCC 15.1.1 and Vulkan 1.4.309 development metadata/headers; no capture configuration at checked paths; [E21](#e21-capture-prerequisites-on-frame) |
@@ -1577,6 +1577,56 @@ is available in the cloud. The next POC stage is
 with replay/result windows closed and the saved preview displayed after source
 closure. Dedicated capture activation remains paused; independent SSH and
 actual service recovery are still unverified.
+
+### E48: Live mirror recognition POC and matching preview
+
+Source: user-supplied terminal output and observation, received 2026-10-24
+(America/New_York). The command runs the ten-second bounded mirror recognizer
+against `/dev/video99` with a five-processing-fps cap and a new explicit preview
+path. Git reports already up to date; an exact checkout SHA, execution timestamp
+and current SteamVR version were not printed.
+
+| Observation | Reported value |
+| --- | --- |
+| Recognition result / worker exit | `recognized` / 0 |
+| Capture reads / processed frames | 100 / 51 |
+| Capture / processing rates | 10.0 / 4.993 Hz, both capped |
+| Mean / maximum inference | 40.065 / 67.953 ms |
+| Labels aggregated across the run | `chair`, `person`, `tvmonitor` |
+| Final image detection | `person`, score 0.88155; box `[536, 290, 692, 405]` in 960 × 540 input coordinates |
+| Maximum processing-start observation age | 102.107 ms |
+| Replaced pending inputs / stale inputs skipped | 49 / 0 |
+| Read errors | Zero short, would-block and interrupted reads |
+| Source format | 1920 × 1080 RGB3, stride 5760, virtual SteamVR v4l2loopback node |
+| Saved preview | 640 × 360 PNG, published after source/worker closure |
+| Recognizer / source cleanup | Both true |
+| Forced termination / live display / overlay | All false |
+
+The user states: “The labels and boxes did match the objects.” This supplies
+visual correspondence for the inspected preview, whose final report contains
+one person detection. It does not validate every intermediate detection of
+chair/person/tvmonitor or establish systematic accuracy. The score is not a
+calibrated probability. The known rug-as-sofa false positive from E15 remains
+part of the model-quality record.
+
+The run demonstrates bounded composited-mirror input, recognition and a correctly
+annotated post-capture preview. Together with E47, both POC stages now have
+device execution and visual observations: recorded recognition in a VR panel,
+and bounded live recognition with a saved result. They are separate paths;
+this run starts no live result window or overlay. The reported inference time
+is model compute time, not end-to-end camera/display latency, and the local
+reader ages are not camera exposure timestamps. Physical camera identity,
+fresh camera frames, color fidelity and continuous VR output remain unverified.
+
+The source opens read-only through the existing virtual mirror path; this run
+does not activate the dedicated layer or change SteamVR/camera selection.
+In the follow-up, the user confirms normal passthrough and head tracking during
+and after this particular live run. This supplies the operating observation
+alongside successful capture/inference and sampled box correspondence.
+Browser diagnostics appear around preview opening, separately from
+the successful recognizer exit/cleanup report; they do not identify a capture
+or model failure. Dedicated capture activation remains paused pending its
+separate access, recovery and synchronization work.
 
 ## Maintaining the evidence
 

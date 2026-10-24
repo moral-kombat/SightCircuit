@@ -13,8 +13,8 @@ Start with the [documentation index](docs/README.md) for task-based navigation.
 | Area | Current summary |
 | --- | --- |
 | Recorded-video decoding, replay and VR panel | Latest POC processes/presents 576 frames and submits 576 VR images with clean shutdown; user confirms visible labels and normal passthrough; [result](docs/status.md#e47-recorded-recognition-and-vr-panel-poc-on-frame) |
-| Live input in the recognition application | Bounded mirror recognition confirmed at 4.993 processed fps with normal passthrough; the mirror also captures our VR panel, so continuous VR image output needs an independent input |
-| Detection quality, color and performance | The saved room image ran on Frame, but a rug was mislabeled sofa; the 20-class demo has no rug class; systematic quality/performance evaluation pending |
+| Live input in the recognition application | Latest bounded POC reads 100 frames, processes 51 at 4.993 fps and saves an annotated preview; user confirms matching labels/boxes; [result](docs/status.md#e48-live-mirror-recognition-poc-and-matching-preview). Continuous VR image output needs input independent of our panel |
+| Detection quality, color and performance | Latest preview labels/boxes match the viewed objects; an earlier rug was mislabeled sofa, and the 20-class model has no rug class. Broader accuracy, color and latency evaluation pending |
 | Stereo depth, world-space labels and Gaussian splats | Future work; splat reconstruction is a separate recorded-data experiment |
 
 See [status and evidence](docs/status.md) for the complete matrix, device
@@ -79,7 +79,10 @@ implemented and has delivered 1920 × 1080 RGB3 frames on Frame at the diagnosti
 10 reads/second limit. The user confirms its saved grayscale preview shows the
 room. Recognition on that still completed but mislabeled a rug as sofa. The
 [bounded mirror recognizer](docs/on-device.md#run-bounded-recognition-from-the-mirror)
-then processed 51 reads at 4.993 fps, with clean shutdown and normal passthrough.
+initially processed 51 reads at 4.993 fps, with clean shutdown and normal passthrough.
+The latest [live POC](docs/status.md#e48-live-mirror-recognition-poc-and-matching-preview)
+again processes 51 reads at that cap, with 40.065 ms mean inference; the user
+confirms matching preview labels/boxes and normal passthrough/tracking during/after.
 The [fixed-panel check](docs/on-device.md#check-whether-the-vr-panel-appears-in-mirror-input)
 confirmed that this mirror captures our VR output. Arcturus is connected; its
 selection for passthrough is unknown. The Frame reports GCC 15 and Vulkan 1.4.309
