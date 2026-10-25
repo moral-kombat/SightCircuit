@@ -7,7 +7,8 @@
 # Stages (default: all except `overlay` and `window-mirror`, which need you in the headset):
 #   setup regression pacing overlay mirror stills evaluate window-mirror
 # Environment: DEVICE (default /dev/video99), RECORDING (default newest recording),
-#   SKIP_UPDATE=1 (do not git pull), YES=1 (no prompts; observations recorded as "unanswered").
+#   SKIP_UPDATE=1 (do not git pull), YES=1 (no prompts; observations recorded as "unanswered"),
+#   STEP_TIMEOUT=300 (seconds of wall-clock per command; exit 124 = timed out).
 #
 # Everything is bounded and read-only toward SteamVR: no layers, no restarts, no probe.
 # Results go to artifacts/frame-session/<timestamp>/ with summary.md ready to paste
@@ -24,7 +25,7 @@ mkdir -p "$out" evaluation/local
 summary="$out/summary.md"
 declare -A results
 
-say() { printf '\n== %s\n' "$*"; }
+say() { printf '\n== %s\n' "$*" >&2; }  # stderr, so stdout redirects capture only command output
 note() { printf '%s\n' "$*" >> "$summary"; }
 ask() { # ask "question" -> records answer
   local answer="unanswered"
@@ -32,13 +33,23 @@ ask() { # ask "question" -> records answer
   note "- $1 **${answer:-unanswered}**"
 }
 confirm() { [ -n "${YES:-}" ] || { read -r -p "$1 [Enter to continue, s to skip] " reply; [ "$reply" != s ]; }; }
+# Wall-clock limit per command (seconds); exit 124 means it timed out.
+limit="${STEP_TIMEOUT:-300}"
 run() { # run name command... -> records exit code, keeps going on failure
   local name="$1"; shift
   say "$name"
-  "$@"; local code=$?
+  timeout --foreground -k 10 "$limit" "$@"; local code=$?
   results[$name]=$code
-  note "- \`$name\`: exit $code"
+  note "- \`$name\`: exit $code$([ "$code" = 124 ] && echo ' (timed out)')"
   return 0
+}
+finish() {
+  local failed=0 name
+  for name in "${!results[@]}"; do [ "${results[$name]}" = 0 ] || failed=1; done
+  note; note "Outcome: $([ $failed = 0 ] && echo 'all commands exited 0' || echo 'some commands failed (see exit codes)')."
+  say "Summary: $summary"
+  cat "$summary"
+  exit $failed
 }
 open_image() { command -v xdg-open >/dev/null && [ -z "${YES:-}" ] && xdg-open "file://$1" >/dev/null 2>&1 || true; }
 
@@ -56,6 +67,10 @@ recording_args=()
 stage_setup() {
   if [ -z "${SKIP_UPDATE:-}" ]; then run git-pull git pull --ff-only; fi
   run setup-window bash scripts/setup_window.sh
+  if [ "${results[setup-window]}" != 0 ]; then
+    note "- Setup failed; later stages need its environment, so the session stops here."
+    finish
+  fi
   run build-overlay-bridge bash scripts/build_overlay_bridge.sh
 }
 
@@ -68,9 +83,9 @@ stage_regression() {
 stage_pacing() {
   note; note "## Realtime replay pacing"
   run replay-realtime env QT_QPA_PLATFORM=offscreen "$py" scripts/replay_window.py "${recording_args[@]}" \
-    --realtime --max-frames 100 --report "$out/replay-realtime.json"
+    --realtime --max-frames 200 --report "$out/replay-realtime.json"
   run replay-unpaced env QT_QPA_PLATFORM=offscreen "$py" scripts/replay_window.py "${recording_args[@]}" \
-    --max-frames 100 --report "$out/replay-unpaced.json"
+    --max-frames 200 --report "$out/replay-unpaced.json"
   "$py" - "$out" <<'PY' >> "$summary"
 import json, sys
 from pathlib import Path
@@ -115,9 +130,9 @@ stage_stills() {
     read -r -p "Labels that must NOT be reported (e.g. couch): " absent
     local file="evaluation/local/$id-$stamp.png"
     confirm "Aim at '$id' and hold for 5 s." || continue
-    "$py" scripts/mirror_recognize.py --capture --device "$device" --seconds 5 --detector yolox-nano \
-      --still "$file" > "$out/still-$id.json"
-    code=$?
+    timeout --foreground -k 10 "$limit" "$py" scripts/mirror_recognize.py --capture --device "$device" \
+      --seconds 5 --detector yolox-nano --still "$file" > "$out/still-$id.json"
+    local code=$?
     results[still-$id]=$code
     if [ "$code" = 0 ] && [ -f "$file" ]; then
       "$py" scripts/frame_session_manifest.py --manifest evaluation/local/frame.json --id "$id-$stamp" \
@@ -139,13 +154,15 @@ stage_evaluate() {
 stage_window_mirror() {
   note; note "## Does the desktop window appear in the SteamVR mirror? (E18 analogue)"
   confirm "A replay window opens for ~15 s; keep it in the headset view while a mirror capture runs." || return 0
-  "$py" scripts/replay_window.py "${recording_args[@]}" --realtime --max-frames 150 \
-    --report "$out/window-replay.json" > /dev/null 2>&1 &
+  timeout --foreground -k 10 "$limit" "$py" scripts/replay_window.py "${recording_args[@]}" --realtime \
+    --max-frames 150 --report "$out/window-replay.json" > /dev/null 2>&1 &
   local pid=$!
   sleep 4
   run mirror-check python3 scripts/mirror_check.py --capture --device "$device" --seconds 5 \
     --preview "$out/window-in-mirror.png"
-  wait "$pid"
+  wait "$pid"; local replay_code=$?
+  results[window-replay]=$replay_code
+  note "- \`window-replay\`: exit $replay_code"
   open_image "$out/window-in-mirror.png"
   ask "Does window-in-mirror.png show the desktop replay window? (y/n)"
   ask "Was passthrough/tracking normal during and after? (y/n/notes)"
@@ -160,10 +177,4 @@ for stage in "${stages[@]}"; do
     *) echo "Unknown stage: $stage" >&2; exit 2 ;;
   esac
 done
-
-failed=0
-for name in "${!results[@]}"; do [ "${results[$name]}" = 0 ] || failed=1; done
-note; note "Outcome: $([ $failed = 0 ] && echo 'all commands exited 0' || echo 'some commands failed (see exit codes)')."
-say "Summary: $summary"
-cat "$summary"
-exit $failed
+finish
