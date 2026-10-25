@@ -283,6 +283,7 @@ def main(argv=None):
                       frames_processed=worker.frames_processed, labels_seen=sorted(labels_seen),
                       detector=describe(worker.pipeline.detector),
                       realtime=args.realtime, frames_dropped=worker.source.frames_dropped,
+                      resyncs=worker.source.resyncs,
                       processed_fps=round(worker.frames_processed / max(worker.pipeline.stats.elapsed_s, 1e-9), 3),
                       mean_processing_ms=round(worker.pipeline.stats.mean_processing_ms, 3),
                       max_input_age_ms=round(worker.pipeline.stats.max_input_age_ms, 3),

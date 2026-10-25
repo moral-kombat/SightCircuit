@@ -40,14 +40,17 @@ class ReplaySource:
     With ``realtime`` the source follows media time: frames that arrive more than
     ``max_lateness`` seconds behind schedule (because processing was slower than the
     recording) are dropped and counted in ``frames_dropped``, and early frames wait.
-    Without it every frame is emitted, as before.
+    If nothing has been emitted for ``max_stall`` seconds (decoding itself is slower
+    than real time) the next frame is emitted and the schedule resyncs to it, counted
+    in ``resyncs``. Without ``realtime`` every frame is emitted, as before.
     """
 
-    def __init__(self, path, ordinal, realtime=False, max_lateness=0.1, clock=None):
+    def __init__(self, path, ordinal, realtime=False, max_lateness=0.1, clock=None, max_stall=1.0):
         self.path, self.ordinal = path, ordinal
-        self.realtime, self.max_lateness = realtime, max_lateness
+        self.realtime, self.max_lateness, self.max_stall = realtime, max_lateness, max_stall
         self.clock = clock or PlaybackClock()
         self.frames_dropped = 0
+        self.resyncs = 0
         self.playing, self.restart = threading.Event(), threading.Event()
         self.looping, self.at_end = threading.Event(), threading.Event()
         self.playing.set()
@@ -64,6 +67,7 @@ class ReplaySource:
             self.at_end.clear()
             pass_frames = 0
             was_playing = False
+            last_emit = self.clock.now()
             self.clock.rebase()
             with av.open(str(self.path), mode="r") as container:
                 videos = list(container.streams.video)
@@ -92,9 +96,15 @@ class ReplaySource:
                         if lateness < -0.002 and stop.wait(-lateness):
                             return
                         if lateness > self.max_lateness:
-                            self.frames_dropped += 1
-                            continue
+                            # Decoding slower than real time would otherwise drop every frame forever.
+                            if self.clock.now() - last_emit < self.max_stall:
+                                self.frames_dropped += 1
+                                continue
+                            self.resyncs += 1
+                            self.clock.rebase()
+                            self.clock.lateness(media_time)
                     was_playing = True
+                    last_emit = self.clock.now()
                     width, height = processing_size(decoded.width, decoded.height)
                     image = decoded.reformat(width=width, height=height, format="bgr24").to_ndarray()
                     pass_frames += 1
