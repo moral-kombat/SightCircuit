@@ -182,7 +182,9 @@ own file and generate the status matrix, and state each caveat once.
   supervision and output publication. `smoke_check.py` uses the shared
   detector, and detection is separate from annotation. The V4L2 mirror module,
   the overlay client's own pending-frame holder and the capture supervisor's
-  process handling are not yet consolidated.
+  process handling are not yet consolidated. `framejacker/sources/mirror.py`
+  currently adapts callback-based acquisition to `Frame`; the V4L2 read loop
+  remains in the scripts.
 - Item 3, implemented in the cloud: YOLOX-Nano (ONNX Runtime, OpenCV DNN
   fallback) behind the `Detector` interface with letterbox input; `--detector`
   in replay and mirror recognition; `--still` captures unannotated evaluation
@@ -194,47 +196,53 @@ own file and generate the status matrix, and state each caveat once.
 - Cloud evidence: [E49](status.md#e49-shared-pipeline-and-package-refactor-cloud-checks),
   [E50](status.md#e50-candidate-detector-and-evaluation-harness-cloud-checks).
 
-- Replay pacing (item 4), cloud-only: `ReplaySource(realtime=True)` /
-  `replay_window.py --realtime` follow media time and drop late frames;
-  end-to-end figures appear in the summary. Unmeasured on Frame; see the
-  [morning checklist](morning-checklist.md). Pushes to branches now run CI only
-  through pull requests (`push` limited to `main`).
+- Replay pacing (item 4): `ReplaySource(realtime=True)` /
+  `replay_window.py --realtime` follow media time, drop late frames and resync
+  after a stall. Frame measurements in [E51](status.md#e51-media-time-replay-pacing-unit-tested-only)
+  and [E53](status.md#e53-unattended-replay-regression-and-pacing-rerun) show
+  this large recording is decode-bound: 200 frames processed at 0.969 fps,
+  with 2,532 dropped and 199 resyncs. Pacing is implemented and device-tested,
+  but real-time playback is not achieved on this file.
+- Branch CI runs through pull requests (`push` is limited to `main`). All
+  checks passed on code commit `b8d2283`; the later documentation-only commit
+  `769eedf` did not trigger checks.
 
 ## Next steps
 
-State at handoff (2026-10-25): items 1–3 are on branch
-`claude/peaceful-fermi-8m3bu6` in [pull request #1](https://github.com/moral-kombat/framejacker/pull/1),
-head `ce733dd`, with all x86_64 and ARM64 CI green and no review threads. The
-PR description predates item 3 and the CI fixes; update it before merging.
+State at handoff (2026-10-25): the current work is on branch
+`overnight/pacing-and-live-prep` in [pull request #2](https://github.com/moral-kombat/framejacker/pull/2),
+head `769eedf`. The code-bearing commit `b8d2283` passed lint and x86_64/ARM64
+checks (ARM64 smoke skipped); the final docs-only commit did not trigger CI.
+The Frame checkout is synced to the branch. See E52/E53 for device-command
+evidence and limitations.
 
 ### Needs the headset
 
-1. Re-run `bash scripts/setup_window.sh` on Frame (adds ONNX Runtime and the
-   YOLOX model).
-2. Confirm the refactor on device ([E49](status.md#e49-shared-pipeline-and-package-refactor-cloud-checks)
-   is cloud-only): replay window with `--overlay`, then bounded mirror
-   recognition with the default detector, as in E47/E48.
-3. Run the [detector comparison](on-device.md#compare-detectors-on-frame-stills):
+1. Review the bounded mirror preview and report from E52 against what was
+   actually in view, and confirm passthrough/tracking remained normal. The
+   unattended run's software label is not scene verification.
+2. Run the [detector comparison](on-device.md#compare-detectors-on-frame-stills):
    capture stills with `--still` (including the rug), describe them in
    `evaluation/local/frame.json`, run `evaluate_detectors.py`, and record the
    result and Frame timing as a new status entry. Choose the default detector
-   from that, not from the outdoor seed set.
+   from that, not from the outdoor seed set. E53 confirms that no local Frame
+   manifest is currently available.
+3. With someone wearing the headset, run the overlay and window-mirror stages
+   and record whether the panel/window appears and whether passthrough and
+   tracking remain normal. These visual checks cannot be established by
+   unattended command output.
 
 ### Engineering, in order
 
-4. **Replay pacing (item 4).** Pace `ReplaySource` by media time (`pts`) and
-   drop frames instead of processing every frame; run replay in the pipeline's
-   `latest_only` mode. Report duration, processed fps and end-to-end latency
-   (`Frame.observed_ns` to presentation).
-5. **Live input in the Qt window (item 5).** First test on Frame whether the
+4. **Live input in the Qt window (item 5).** First test on Frame whether the
    desktop window appears in the SteamVR mirror, as the VR panel did (E18). If
    not, feed `MirrorSource` continuously into the replay window's sinks.
    Keep the capture-provider track frozen: collapse `patches/mrhand/` into one
    patch or a fork, and drop historical `build_capture_reference.sh` modes from CI.
-6. **Rug coverage.** Neither model has a rug class. If rugs matter, evaluate an
+5. **Rug coverage.** Neither model has a rug class. If rugs matter, evaluate an
    open-vocabulary model offline or fine-tune a small detector on labelled
    Frame stills; keep both baselines in the evaluation.
-7. **Documentation weight (item 6).** One-screen README; per-entry evidence
+6. **Documentation weight (item 6).** One-screen README; per-entry evidence
    files or raw JSON reports instead of the 1,600-line status page.
 
 ### Remaining from items 1–3
