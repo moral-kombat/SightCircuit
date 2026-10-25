@@ -9,16 +9,16 @@ import stat
 import struct
 import zlib
 
+from framejacker.errors import FramejackerError
+
 
 MAX_BUFFER_BYTES = 64 * 1024 * 1024
 MAX_PIXELS = 16 * 1024 * 1024
 CAP_CAPTURE, CAP_READWRITE, CAP_DEVICE_CAPS = 1, 0x01000000, 0x80000000
 
 
-class MirrorError(Exception):
-    def __init__(self, reason, message):
-        super().__init__(message)
-        self.reason = reason
+class MirrorError(FramejackerError):
+    pass
 
 
 class Capability(ctypes.Structure):

@@ -1,0 +1,262 @@
+name: Development check jobs
+
+# Shared by checks.yml (x86_64) and arm64.yml (the headset's architecture).
+on:
+  workflow_call:
+    inputs:
+      runner:
+        required: true
+        type: string
+      smoke:
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  capture-supervisor:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the native exec boundary without starting capture
+        run: bash scripts/build_capture_supervisor.sh
+      - name: Verify hung workers, signals, parent death and owned publication recovery
+        run: python3 -m unittest discover -s tests -p test_capture_supervisor.py -v
+
+  capture-gpu-check:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build capability query without loading Vulkan
+        run: bash scripts/build_capture_gpu_check.sh
+      - name: Verify dispatch, capability limits and process containment with a fake loader
+        run: python3 -m unittest discover -s tests -p test_capture_gpu_check.py -v
+
+  capture-reference:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the Linux Vulkan loader for linking
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libvulkan1
+      - name: Build the pinned reference without activation
+        run: bash scripts/build_capture_reference.sh
+      - name: Build transport-only adaptation and test synthetic sockets
+        run: |
+          bash scripts/build_capture_reference.sh --transport-fixes
+          artifacts/capture-transport-reference/framejacker-transport-fixture --self-test
+      - name: Build publication adaptation and verify generated frames and shutdown
+        run: |
+          bash scripts/build_capture_reference.sh --publication-fixes
+          bash scripts/build_shm_reader.sh
+          python3 -m unittest discover -s tests -p test_capture_publication.py -v
+      - name: Build validated-import adaptation and test fake Vulkan ownership
+        run: |
+          bash scripts/build_capture_reference.sh --import-fixes
+          python3 -m unittest discover -s tests -p test_capture_import.py -v
+      - name: Build GPU resource adaptation and verify synthetic lifecycle failures
+        run: |
+          bash scripts/build_capture_reference.sh --resource-fixes
+          python3 -m unittest discover -s tests -p test_capture_gpu_resources.py -v
+      - name: Build metadata-only provider and verify hooks, inspection and restoration
+        run: |
+          bash scripts/build_capture_reference.sh --provider-fixes
+          python3 -m unittest discover -s tests -p test_capture_provider.py -v
+          python3 -m unittest discover -s tests -p test_capture_provider_check.py -v
+          python3 -m unittest discover -s tests -p test_capture_layer_config.py -v
+          python3 -m unittest discover -s tests -p test_capture_service_lifecycle.py -v
+          python3 -m unittest discover -s tests -p test_capture_layer_trial.py -v
+      - name: Check inspection artifacts without executing them
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          for directory, status, adapted in (('capture-reference', 'built_reference', False),
+                                             ('capture-transport-reference', 'built_transport_reference', True),
+                                             ('capture-publication-reference', 'built_publication_reference', True),
+                                             ('capture-import-reference', 'built_import_reference', True),
+                                             ('capture-resources-reference', 'built_resources_reference', True),
+                                             ('capture-provider-reference', 'built_provider_reference', True)):
+              root = Path('artifacts') / directory
+              report = json.loads((root / 'build-report.json').read_text())
+              assert report['status'] == status
+              assert report['upstream_sources_modified'] is adapted
+              for field in ('runtime_initialized', 'capture_started',
+                            'layer_installation_performed', 'deployment_ready'):
+                  assert report[field] is False, field
+              assert len(report['artifacts']) == 2
+              for item in report['artifacts']:
+                  path = root / item['name']
+                  data = path.read_bytes()
+                  assert data[:4] == b'\x7fELF'
+                  assert not path.stat().st_mode & 0o111
+                  assert len(data) == item['size_bytes']
+                  assert hashlib.sha256(data).hexdigest() == item['sha256']
+              if directory == 'capture-provider-reference':
+                  assert report['provider_protocol_version'] == 3
+                  assert report['image_fd_export_enabled'] is False
+                  assert report['layer_retains_image_fds'] is False
+                  item = report['metadata_inspector']
+                  path = root / item['name']
+                  assert path.stat().st_mode & 0o111
+                  assert path.stat().st_size == item['size_bytes']
+                  assert hashlib.sha256(path.read_bytes()).hexdigest() == item['sha256']
+          print('Reference binaries built and verified without loading or running them.')
+          PY
+
+  shm-reader:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build standalone shared-memory tools
+        run: bash scripts/build_shm_reader.sh
+      - name: Verify controlled publications and bounded reader failures
+        run: python -m unittest discover -s tests -p test_shm_capture_check.py -v
+
+  mirror-check:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify mirror discovery, Linux ABI, bounded workers and preview handling
+        run: python -m unittest discover -s tests -p test_mirror_check.py -v
+
+  smoke:
+    # requirements-dev.txt is the x86_64 cloud/desktop environment.
+    if: inputs.smoke
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Qt's EGL/X11 runtime libraries (absent from the runner image)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
+      - name: Install setup tool
+        run: python -m pip install uv==0.12.23
+      - name: Check shell syntax
+        run: bash -n scripts/setup.sh
+      - name: Validate dependency-free recording inspection
+        run: python -m unittest discover -s tests -v
+      - name: Install dependencies and verified fixtures
+        run: bash scripts/setup.sh
+      - name: Validate decoding, inference and offscreen rendering
+        run: .venv/bin/python scripts/smoke_check.py
+
+  replay-decode:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Set up isolated file decoder
+        run: bash scripts/setup_replay.sh
+      - name: Verify fragmented HEVC replay and track selection
+        run: .venv-replay/bin/python -m unittest discover -s tests -v
+
+  replay-window:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Qt's EGL/X11 runtime libraries (absent from the runner image)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
+      - name: Set up annotated file replay
+        run: bash scripts/setup_window.sh
+      - name: Build native overlay transport for validation tests
+        run: bash scripts/build_overlay_bridge.sh
+      - name: Verify replay, offscreen presentation and bounded mirror recognition
+        run: .venv-replay/bin/python -m unittest discover -s tests -v
+      - name: Compare detectors on the seed evaluation set (runner CPU, not Frame)
+        run: .venv-replay/bin/python scripts/evaluate_detectors.py --fetch --report evaluation-report.json > /dev/null
+
+  overlay-bridge:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the native overlay bridge
+        run: bash scripts/build_overlay_bridge.sh
+      - name: Check native source and shell syntax
+        run: |
+          bash -n scripts/build_openvr_tool.sh scripts/build_overlay_bridge.sh
+          g++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -I.cache/openvr/headers -I.cache/openvr/src -fsyntax-only tools/overlay_bridge.cpp
+      - name: Verify protocol and runtime failure handling without a headset
+        run: python3 -m unittest discover -s tests -p test_overlay_bridge.py -v
+
+  camera-probe:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the native OpenVR camera probe
+        run: bash scripts/build_camera_probe.sh
+      - name: Verify runtime opt-in and missing-runtime diagnostics
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          import tempfile
+          from pathlib import Path
+
+          binary = 'artifacts/camera-probe/framejacker-camera-probe'
+          opt_in = '--allow-passthrough-interruption'
+          with tempfile.TemporaryDirectory() as temporary:
+              env = dict(os.environ, VR_PATHREG_OVERRIDE=str(Path(temporary) / 'missing.vrpath'))
+              for arguments, expected_status, expected_exit in (
+                  ([], 'not_run', 3),
+                  (['--unknown'], 'invalid_arguments', 64),
+                  ([opt_in, '--unknown'], 'invalid_arguments', 64),
+                  ([opt_in, opt_in], 'invalid_arguments', 64),
+                  (['--help', opt_in], 'invalid_arguments', 64),
+              ):
+                  result = subprocess.run([binary, *arguments], env=env,
+                                          capture_output=True, text=True, timeout=10)
+                  report = json.loads(result.stdout)
+                  assert result.returncode == report['exit_code'] == expected_exit
+                  assert report['status'] == expected_status
+                  assert report['initialization']['status'] == 'not_attempted'
+                  assert report['required_argument'] == opt_in
+                  assert not result.stderr, result.stderr
+
+              help_result = subprocess.run([binary, '--help'], env=env,
+                                           capture_output=True, text=True, timeout=10)
+              assert help_result.returncode == 0
+              assert opt_in in help_result.stdout and not help_result.stderr
+
+              result = subprocess.run([binary, opt_in], env=env,
+                                      capture_output=True, text=True, timeout=10)
+              report = json.loads(result.stdout)
+              assert result.returncode == report['exit_code'] == 1
+              assert report['status'] == 'initialization_failed'
+              assert report['initialization']['error_name'] == 'VRInitError_Init_PathRegistryNotFound'
+              assert 'Warning:' in result.stderr
+          print('Default/invalid invocations do not initialize OpenVR; explicit opt-in preserves runtime diagnostics.')
+          PY

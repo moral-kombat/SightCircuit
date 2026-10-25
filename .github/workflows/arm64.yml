@@ -1,0 +1,18 @@
+name: ARM64 checks
+
+# Steam Frame is ARM64. These run the same synthetic native and Python suites
+# that were previously repeated by hand on the headset; they do not replace
+# device validation of drivers, SteamVR or cameras.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  arm64:
+    uses: ./.github/workflows/check-jobs.yml
+    with:
+      runner: ubuntu-24.04-arm

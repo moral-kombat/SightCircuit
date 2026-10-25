@@ -1,25 +1,25 @@
 """Bounded CPU recognition from a verified SteamVR mirror, without live display."""
 import argparse
-import ctypes
-from dataclasses import dataclass
 import json
 import math
-import os
 from pathlib import Path
 import signal
 import sys
-import tempfile
-import threading
 import time
 
-if __package__:
-    from . import mirror_check as check
-    from .demo_detector import DemoDetector
-    from .mirror_capture import MirrorError, discover, select_candidate
-else:
-    import mirror_check as check
-    from demo_detector import DemoDetector
-    from mirror_capture import MirrorError, discover, select_candidate
+if not __package__:  # Run as a file: import this checkout's packages without installation.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from framejacker.convert import to_bgr
+from framejacker.detection import DEFAULT_DETECTOR, DETECTORS, create_detector, describe
+from framejacker.errors import FramejackerError
+from framejacker.pipeline import Pipeline
+from framejacker.runtime import output, process
+from framejacker.runtime.process import StopRequested, run_bounded
+from framejacker.sources.mirror import MirrorSource
+from scripts import mirror_check as check
+from scripts.mirror_capture import discover, select_candidate
+
+MAXIMUM_INPUT_AGE_MS = 1000
 
 
 def new_report():
@@ -27,218 +27,156 @@ def new_report():
             "status": "not_started", "cleanup_ok": True, "images_saved": False,
             "frames_processed": 0, "labels_seen": [], "stale_inputs_skipped": 0,
             "display_started": False, "overlay_requested": False,
-            "maximum_pending_frames": 1, "maximum_input_observation_age_ms": 1000,
+            "maximum_pending_frames": 1, "maximum_input_observation_age_ms": MAXIMUM_INPUT_AGE_MS,
             "physical_camera_identity": "unverified", "camera_timestamps_available": False,
             "confidence_is_calibrated_probability": False,
             "scope": "Composited mirror recognition; source identity, camera freshness and display feedback unverified"}
 
 
-@dataclass(frozen=True)
-class ObservedFrame:
-    data: bytes
-    format: dict
-    read_sequence: int
-    observed_ns: int
+class RecognitionRecorder:
+    """Pipeline sink: last result, optional preview image and one progress report per second."""
 
+    def __init__(self, report, stats, source, progress, want_preview):
+        self.report, self.stats, self.source = report, stats, source
+        self.progress, self.want_preview = progress, want_preview
+        self.image = self.last = None
+        self.next_progress = time.monotonic() + 1
 
-class LatestFrame:
-    """One pending owned read; slower inference replaces old input, never queues it."""
-    def __init__(self):
-        self.condition = threading.Condition()
-        self.pending = None
-        self.replaced = 0
-        self.done = threading.Event()
-        self.report = {}
-
-    def publish(self, data, fmt, number, observed_ns):
-        with self.condition:
-            if self.pending is not None:
-                self.replaced += 1
-            self.pending = ObservedFrame(data, dict(fmt), number, observed_ns)
-            self.condition.notify()
-
-    def take(self, timeout=0.05):
-        with self.condition:
-            if self.pending is None and not self.done.is_set():
-                self.condition.wait(timeout)
-            result, self.pending = self.pending, None
-            return result
-
-    def update(self, report):
-        with self.condition:
-            self.report = report.copy()
-
-    def snapshot(self):
-        with self.condition:
-            return self.report.copy(), self.replaced
-
-
-def to_bgr(frame):
-    import cv2
-    import numpy as np
-
-    fmt = frame.format
-    if fmt["fourcc"] not in ("RGB3", "BGR3"):
-        raise MirrorError("unsupported_recognition_format", "Recognition currently accepts RGB3/BGR3 only; no format change requested")
-    if len(frame.data) < fmt["minimum_buffer_bytes"]:
-        raise MirrorError("short_frame", "Incomplete mirror image")
-    image = np.ndarray((fmt["height"], fmt["width"], 3), dtype=np.uint8,
-                       buffer=frame.data, strides=(fmt["stride_bytes"], 3, 1))
-    ratio = min(1.0, 960 / max(image.shape[:2]))
-    if ratio < 1:
-        image = cv2.resize(image, (max(1, round(fmt["width"] * ratio)),
-                                   max(1, round(fmt["height"] * ratio))), interpolation=cv2.INTER_AREA)
-    return cv2.cvtColor(image, cv2.COLOR_RGB2BGR) if fmt["fourcc"] == "RGB3" else image.copy()
+    def submit(self, processed):
+        frame, image = processed.frame, processed.image
+        self.report["frames_processed"] = self.stats.frames_processed
+        self.report["last_result"] = {
+            "read_sequence": frame.sequence, "observation_time_ns": frame.observed_ns,
+            "processing_started_age_ms": round(processed.input_age_ms, 3),
+            "inference_ms": round(processed.result.inference_ms, 3),
+            "labels": processed.labels,
+            "detections": [detection.as_dict() for detection in processed.result.detections[:20]],
+            "width": image.shape[1], "height": image.shape[0],
+            "box_coordinate_space": "resized_mirror_pixels"}
+        if self.want_preview:
+            self.image, self.last = image, processed
+        if time.monotonic() >= self.next_progress:
+            self.report.update(labels_seen=sorted(self.stats.labels_seen), capture=self.source.report)
+            self.progress(self.report.copy())
+            self.next_progress = time.monotonic() + 1
 
 
 def recognize(candidate, seconds, stop, progress=lambda report: None, want_preview=False,
-              *, max_fps=5, threshold=0.5, backend_factory=None, detector_factory=None):
+              *, max_fps=5, threshold=0.5, detector=DEFAULT_DETECTOR, backend_factory=None, detector_factory=None):
+    """Run bounded recognition; return the report and, on success, final images.
+
+    Images are ``{"preview": annotated, "still": unannotated detector input}``
+    for the last processed frame when ``want_preview`` is set, otherwise None.
+    """
     report = new_report()
     report.update(candidate=candidate, phase="loading_detector", maximum_processing_fps=max_fps,
                   threshold=threshold, seconds_requested=seconds)
     progress(report.copy())
-    latest = LatestFrame()
-    thread = None
-    last_image = None
-    started = None
-    total_inference = max_inference = max_age = 0.0
-    labels = set()
+    source = pipeline = recorder = None
     try:
-        detector = (detector_factory or DemoDetector)()
+        model = detector_factory() if detector_factory else create_detector(detector)
+        if not detector_factory:
+            report["detector"] = describe(model)
         if stop.is_set():
             report["status"] = "cancelled"
             return report, None
 
-        def acquire():
+        def acquire(stop, on_frame, update):
             try:
-                captured, _ = check.capture(candidate, seconds, stop, latest.update,
-                                            backend_factory=backend_factory, on_frame=latest.publish)
-                latest.update(captured)
+                captured, _ = check.capture(candidate, seconds, stop, update,
+                                            backend_factory=backend_factory, on_frame=on_frame)
+                return captured
             except Exception as error:
                 failed = check.new_report()
                 failed.update(status="error", reason="capture_thread_failed", error=str(error), cleanup_ok=False)
-                latest.update(failed)
-            finally:
-                latest.done.set()
-                with latest.condition:
-                    latest.condition.notify_all()
+                return failed
 
-        started = time.monotonic()
+        source = MirrorSource(acquire)
+        pipeline = Pipeline(source, model, threshold=threshold, max_fps=max_fps, latest_only=True,
+                            max_input_age_ms=MAXIMUM_INPUT_AGE_MS)
+        recorder = RecognitionRecorder(report, pipeline.stats, source, progress, want_preview)
+        pipeline.sinks = (recorder,)
         report["phase"] = "recognizing"
-        thread = threading.Thread(target=acquire, daemon=True)
-        thread.start()
-        next_inference, next_progress = started, started + 1
-        while not stop.is_set():
-            now = time.monotonic()
-            if now < next_inference:
-                stop.wait(min(0.05, next_inference - now))
-                continue
-            frame = latest.take()
-            if frame is None:
-                if latest.done.is_set():
-                    break
-                continue
-            age = (time.monotonic_ns() - frame.observed_ns) / 1e6
-            if age > 1000:
-                report["stale_inputs_skipped"] += 1
-                continue
-            next_inference = time.monotonic() + 1 / max_fps
-            detected = detector.detect(to_bgr(frame), threshold)
-            image = detected["image"]
-            report["frames_processed"] += 1
-            labels.update(detected["labels"])
-            total_inference += detected["inference_ms"]
-            max_inference = max(max_inference, detected["inference_ms"])
-            max_age = max(max_age, age)
-            report["last_result"] = {"read_sequence": frame.read_sequence,
-                                     "observation_time_ns": frame.observed_ns,
-                                     "processing_started_age_ms": round(age, 3),
-                                     "inference_ms": round(detected["inference_ms"], 3),
-                                     "labels": detected["labels"], "detections": detected["detections"][:20],
-                                     "width": image.shape[1], "height": image.shape[0],
-                                     "box_coordinate_space": "resized_mirror_pixels"}
-            if want_preview:
-                last_image = image
-            if time.monotonic() >= next_progress:
-                report.update(labels_seen=sorted(labels), capture=latest.snapshot()[0])
-                progress(report.copy())
-                next_progress = time.monotonic() + 1
-        report["status"] = "cancelled" if stop.is_set() else "recognized" if report["frames_processed"] else "no_frames"
-        if report["status"] == "no_frames" and report["stale_inputs_skipped"]:
+        stats = pipeline.run(stop)
+        report["status"] = "cancelled" if stats.cancelled else "recognized" if stats.frames_processed else "no_frames"
+        if report["status"] == "no_frames" and stats.stale_inputs_skipped:
             report.update(status="stale_input", reason="all_selected_observations_stale")
     except Exception as error:
         report.update(status="error", reason=getattr(error, "reason", "recognition_failed"), error=str(error))
     finally:
         stop.set()
-        if thread is not None:
-            thread.join(timeout=1)
-            if thread.is_alive():
-                report.update(status="error", reason="capture_thread_did_not_exit", cleanup_ok=False)
-        captured, replaced = latest.snapshot()
-        report.update(capture=captured, pending_frames_replaced=replaced, labels_seen=sorted(labels))
+        if pipeline is not None and pipeline.capture_thread_alive:
+            report.update(status="error", reason="capture_thread_did_not_exit", cleanup_ok=False)
+        captured = source.report if source is not None else {}
+        report["capture"] = captured
         if captured:
             report["cleanup_ok"] = report["cleanup_ok"] and captured["cleanup_ok"]
             if captured["status"] == "error":
-                report.update(status="error", reason=captured.get("reason", "capture_failed"), error=captured.get("error", "Capture failed"))
-        if started is not None:
-            elapsed = time.monotonic() - started
-            report.update(processing_elapsed_ms=round(elapsed * 1000, 3),
-                          observed_processing_rate_hz=round(report["frames_processed"] / max(elapsed, 0.001), 3),
-                          mean_inference_ms=round(total_inference / max(report["frames_processed"], 1), 3),
-                          maximum_inference_ms=round(max_inference, 3), maximum_processing_started_age_ms=round(max_age, 3))
+                report.update(status="error", reason=captured.get("reason", "capture_failed"),
+                              error=captured.get("error", "Capture failed"))
+        if pipeline is not None:
+            stats = pipeline.stats
+            report.update(frames_processed=stats.frames_processed, stale_inputs_skipped=stats.stale_inputs_skipped,
+                          pending_frames_replaced=stats.pending_replaced, labels_seen=sorted(stats.labels_seen),
+                          processing_elapsed_ms=round(stats.elapsed_s * 1000, 3),
+                          observed_processing_rate_hz=round(stats.frames_processed / max(stats.elapsed_s, 0.001), 3),
+                          mean_inference_ms=round(stats.mean_inference_ms, 3),
+                          maximum_inference_ms=round(stats.max_inference_ms, 3),
+                          mean_processing_ms=round(stats.mean_processing_ms, 3),
+                          maximum_processing_started_age_ms=round(stats.max_input_age_ms, 3))
+        else:
+            report["pending_frames_replaced"] = 0
         report["phase"] = "closed"
     if report["status"] == "recognized":
         age = (time.monotonic_ns() - report["last_result"]["observation_time_ns"]) / 1e6
         report["last_result_age_after_cleanup_ms"] = round(age, 3)
-        if age > 1000:
+        if age > MAXIMUM_INPUT_AGE_MS:
             report.update(status="stale_input", reason="last_observed_input_too_old")
-    return report, last_image if report["status"] == "recognized" and report["cleanup_ok"] else None
+    if report["status"] != "recognized" or not report["cleanup_ok"] or recorder is None or recorder.last is None:
+        return report, None
+    return report, {"preview": recorder.image, "still": to_bgr(recorder.last.frame)}
 
 
-def _worker(job, seconds, preview_temp, sender, stop, expected_parent, *, backend_factory=None, detector_factory=None):
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
-    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+def encode_png(image):
+    import cv2
 
-    def send(report, event="progress"):
-        sender.send_bytes(json.dumps({"event": event, "report": report}).encode())
+    okay, png = cv2.imencode(".png", image)
+    if not okay:
+        raise RuntimeError("PNG encoding failed")
+    return png.tobytes()
 
+
+def _worker(job, seconds, outputs, sender, stop, expected_parent, *, backend_factory=None, detector_factory=None):
+    """``outputs`` maps "preview"/"still" to reservations made by the launcher."""
     report = new_report()
+    outputs = outputs or {}
     try:
-        libc = ctypes.CDLL(None, use_errno=True)
-        if libc.prctl(1, signal.SIGTERM, 0, 0, 0) != 0:
-            raise OSError(ctypes.get_errno(), "Could not enable parent-death signaling")
-        if os.getppid() != expected_parent:
+        if not process.enter_worker(expected_parent):
             return
-        report, image = recognize(job["candidate"], seconds, stop, send, bool(preview_temp),
-                                  max_fps=job["max_fps"], threshold=job["threshold"],
-                                  backend_factory=backend_factory, detector_factory=detector_factory)
-        if image is not None and preview_temp:
+        report, images = recognize(job["candidate"], seconds, stop, lambda update: process.send_report(sender, update),
+                                   bool(outputs), max_fps=job["max_fps"], threshold=job["threshold"],
+                                   detector=job.get("detector", DEFAULT_DETECTOR),
+                                   backend_factory=backend_factory, detector_factory=detector_factory)
+        if images is not None and "preview" in outputs:
             import cv2
 
+            image = images["preview"]
             ratio = min(1.0, 640 / max(image.shape[:2]))
             if ratio < 1:
                 image = cv2.resize(image, (max(1, round(image.shape[1] * ratio)),
                                            max(1, round(image.shape[0] * ratio))), interpolation=cv2.INTER_AREA)
-            okay, png = cv2.imencode(".png", image)
-            if not okay:
-                raise RuntimeError("Preview encoding failed")
-            fd = os.open(preview_temp["path"], os.O_WRONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK)
-            try:
-                info = os.fstat(fd)
-                if (info.st_dev, info.st_ino) != tuple(preview_temp["identity"]):
-                    raise RuntimeError("Owned preview temporary file was replaced")
-                with os.fdopen(fd, "wb") as output:
-                    fd = None
-                    output.write(png.tobytes())
-            finally:
-                if fd is not None:
-                    os.close(fd)
+            output.write(outputs["preview"], encode_png(image))
             report.update(preview_ready=True, preview_width=image.shape[1], preview_height=image.shape[0])
-        send(report, "result")
+        if images is not None and "still" in outputs:
+            # Unannotated, at the detector's input size, for building evaluation sets.
+            output.write(outputs["still"], encode_png(images["still"]))
+            report.update(still_ready=True, still_width=images["still"].shape[1],
+                          still_height=images["still"].shape[0])
+        process.send_report(sender, report, "result")
     except Exception as error:
         report.update(status="error", reason="worker_failed", error=str(error))
         try:
-            send(report, "result")
+            process.send_report(sender, report, "result")
         except (OSError, BrokenPipeError):
             pass
     finally:
@@ -252,51 +190,51 @@ def main(argv=None):
     parser.add_argument("--seconds", type=int, choices=range(1, 11), default=10, metavar="1..10")
     parser.add_argument("--max-fps", type=int, choices=range(1, 6), default=5, metavar="1..5")
     parser.add_argument("--threshold", type=float, default=0.5)
+    parser.add_argument("--detector", choices=DETECTORS, default=DEFAULT_DETECTOR,
+                        help="Model; mobilenet-ssd is the device-validated baseline, yolox-nano an 80-class candidate")
     parser.add_argument("--preview", type=Path, help="Explicit new annotated PNG, published only after capture/inference stops")
+    parser.add_argument("--still", type=Path,
+                        help="Explicit new unannotated PNG of the last processed input, for evaluation sets")
     args = parser.parse_args(argv)
     if not math.isfinite(args.threshold) or not 0 <= args.threshold <= 1:
         parser.error("--threshold must be between zero and one")
-    if not args.capture and (args.device or args.preview):
-        parser.error("--device and --preview require --capture")
+    if not args.capture and (args.device or args.preview or args.still):
+        parser.error("--device, --preview and --still require --capture")
+    if args.preview and args.still and args.preview.expanduser().absolute() == args.still.expanduser().absolute():
+        parser.error("--preview and --still need distinct paths")
     discovery = discover()
     report = new_report()
     report.update(status="discovery_only", discovery=discovery, exit_code=0)
     if not args.capture:
         print(json.dumps(report, indent=2))
         return 0
-    temporary = None
-    old_term = signal.signal(signal.SIGTERM, check._stop_signal)
+    outputs = {}
+    old_term = signal.signal(signal.SIGTERM, process.stop_on_signal)
     try:
         candidate = select_candidate(discovery, args.device)
         if args.preview:
-            target = args.preview.expanduser().absolute()
-            if target.suffix.lower() != ".png" or not target.parent.is_dir() or target.exists() or target.is_symlink():
-                raise ValueError("Preview needs a new .png path in an existing directory")
-            fd, name = tempfile.mkstemp(prefix=".framejacker-recognition-", suffix=".png.part", dir=target.parent)
-            info = os.fstat(fd)
-            os.close(fd)
-            temporary = {"path": name, "identity": [info.st_dev, info.st_ino]}
-        job = {"candidate": candidate, "max_fps": args.max_fps, "threshold": args.threshold}
-        report = check.run_bounded(job, args.seconds, temporary, worker=_worker,
-                                   report_factory=new_report, success_status="recognized", timeout=args.seconds + 15)
-        report.update(discovery=discovery, candidate=candidate)
-        if temporary and report.get("preview_ready") and report["exit_code"] == 0:
-            os.link(temporary["path"], target, follow_symlinks=False)
-            report.update(images_saved=True, preview_path=str(target))
-    except (MirrorError, OSError, ValueError) as error:
+            outputs["preview"] = output.reserve(args.preview, ".framejacker-recognition-")
+        if args.still:
+            outputs["still"] = output.reserve(args.still, ".framejacker-still-")
+        job = {"candidate": candidate, "max_fps": args.max_fps, "threshold": args.threshold,
+               "detector": args.detector}
+        report = run_bounded(job, args.seconds, outputs or None, worker=_worker, report_factory=new_report,
+                             success_status="recognized", timeout=args.seconds + 15)
+        report.update(discovery=discovery, candidate=candidate, detector_requested=args.detector)
+        if report["exit_code"] == 0 and all(report.get(f"{kind}_ready") for kind in outputs):
+            for kind, reservation in outputs.items():
+                report[f"{kind}_path"] = output.publish(reservation)
+                report["images_saved"] = True
+    except (FramejackerError, OSError, ValueError) as error:
         report.update(status="unavailable" if getattr(error, "reason", None) == "mirror_unavailable" else "error",
                       reason=getattr(error, "reason", "output_or_launch_failed"), error=str(error), exit_code=1)
-    except (KeyboardInterrupt, check.StopRequested) as error:
-        number = error.number if isinstance(error, check.StopRequested) else signal.SIGINT
+    except (KeyboardInterrupt, StopRequested) as error:
+        number = error.number if isinstance(error, StopRequested) else signal.SIGINT
         report.update(status="cancelled", reason="signal", signal=number, exit_code=128 + number)
     finally:
-        if temporary:
+        for reservation in outputs.values():
             try:
-                info = Path(temporary["path"]).lstat()
-                if (info.st_dev, info.st_ino) == tuple(temporary["identity"]):
-                    Path(temporary["path"]).unlink()
-            except FileNotFoundError:
-                pass
+                output.discard(reservation)
             except OSError as error:
                 report.update(status="error", reason="preview_cleanup_failed", error=str(error), exit_code=1)
         signal.signal(signal.SIGTERM, old_term)

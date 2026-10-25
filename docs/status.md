@@ -19,6 +19,7 @@ unknown unless explicitly recorded below.
 | Continuous live input in the Qt/VR application | Planned; current mirror includes our panel | The timed VR panel appeared in the saved mirror image; use input independent of our output before continuous VR image display; [E18](#e18-vr-panel-included-in-mirror-input) |
 | Recognition on the saved room still | Frame execution confirmed; false positive | One image processed and annotated; user identifies the `sofa`-labeled item as a rug; [E15](#e15-saved-room-recognition-and-rug-false-positive) |
 | Bounded mirror recognition | Frame POC execution and sampled preview localization confirmed | Latest run: 100 captured / 51 processed reads, 4.993 processed fps, 40.065 ms mean inference, clean shutdown; user confirms matching preview labels/boxes and normal passthrough/tracking during/after; broader accuracy and continuous display remain separate; [E48](#e48-live-mirror-recognition-poc-and-matching-preview) |
+| Candidate detector and evaluation harness | Cloud-tested; Frame evaluation pending | YOLOX-Nano (80 COCO classes, ONNX Runtime) selectable beside MobileNet-SSD; seed comparison on six outdoor images only; no rug class in either model; [E50](#e50-candidate-detector-and-evaluation-harness-cloud-checks) |
 | Existing-mirror diagnostic | Frame capture confirmed; VR panel included in input | Physical-room preview and bounded inference work, but this composited view includes our overlay; physical camera identity/timing remain unknown; [E14](#e14-physical-room-visible-in-the-mirror-preview), [E18](#e18-vr-panel-included-in-mirror-input) |
 | Dedicated-camera shared-memory reader | Controlled x86_64 and Frame ARM64 tests passed | All 14 reader/supervisor tests pass on Frame; actual provider and upstream writer ordering remain unverified; [E23](#e23-reference-build-and-controlled-reader-on-frame) |
 | Native capture prerequisite report | Frame report received | aarch64 SteamOS 0.5.6, GCC 15.1.1 and Vulkan 1.4.309 development metadata/headers; no capture configuration at checked paths; [E21](#e21-capture-prerequisites-on-frame) |
@@ -436,7 +437,7 @@ live inference, physical camera identity or display-feedback exclusion.
 
 Execution date: 2026-10-16, Linux x86_64 cloud environment. The new
 [mirror recognizer](../scripts/mirror_recognize.py) uses the existing guarded
-capture loop and a [shared checksum-verified CPU detector](../scripts/demo_detector.py).
+capture loop and a [shared checksum-verified CPU detector](../framejacker/detection.py).
 The replay application uses that same detector. No actual camera, SteamVR
 service, Qt window or VR panel was started by the recognizer checks.
 
@@ -1627,6 +1628,59 @@ Browser diagnostics appear around preview opening, separately from
 the successful recognizer exit/cleanup report; they do not identify a capture
 or model failure. Dedicated capture activation remains paused pending its
 separate access, recovery and synchronization work.
+
+### E49: Shared pipeline and package refactor cloud checks
+
+Execution date: 2026-10-25, Linux x86_64 cloud environment, Python 3.12.3,
+branch `claude/peaceful-fermi-8m3bu6`. File replay and bounded mirror recognition
+now run through the [shared pipeline](../framejacker/pipeline.py) and detector
+interface described in [development](development.md#python-package-and-pipeline);
+see the [design review](design-review.md) for the reasoning. Command-line
+options, report fields and device behavior are intended to be unchanged; the
+mirror report adds `mean_processing_ms`, and the VR panel now receives images
+from the replay worker rather than the Qt thread.
+
+All 225 tests pass in `.venv-replay` with 55 skips for unbuilt capture
+adaptation fixtures, including 13 new pipeline/output tests that need no OpenCV.
+The smoke check passes using the shared detector, and ruff reports no findings.
+Replay and mirror scripts also ran as files from outside the checkout.
+
+GitHub Actions on commit `56eb472` passed both the x86_64 workflow (including
+lint and smoke) and the new ARM64 workflow on `ubuntu-24.04-arm`, which runs the
+native, capture-fixture, replay-window and mirror-recognition suites. That
+commit also restores CI: runner images had stopped shipping `libEGL.so.1`, so
+PySide6 import failed in the smoke and replay-window jobs on `main` as well.
+None of this is a Frame result: replay, the VR panel and mirror recognition must
+be rerun on the headset before treating the refactor as device-confirmed.
+
+### E50: Candidate detector and evaluation harness cloud checks
+
+Execution date: 2026-10-25, Linux x86_64 cloud CPU, Python 3.12.3, OpenCV
+4.12.0, ONNX Runtime 1.31.0, branch `claude/peaceful-fermi-8m3bu6`. `yolox-nano`
+(the pinned YOLOX 0.1.1rc0 ONNX export) is selectable with `--detector` in
+replay and mirror recognition; the default remains `mobilenet-ssd`. Mirror
+recognition can also save an unannotated `--still` for evaluation sets.
+[Evaluation](development.md#detector-evaluation) ran both detectors on the
+[seed manifest](../evaluation/seed.json) at threshold 0.5:
+
+| Detector | Runtime | Expected labels found | Must-be-absent labels reported | Unsupported labels | Mean inference |
+| --- | --- | --- | --- | --- | --- |
+| `mobilenet-ssd` | OpenCV DNN | 8/9 | 3 (horse as cow twice, giraffe as horse) | giraffe, zebra, kite | 21.0 ms |
+| `yolox-nano` | ONNX Runtime | 12/12 | 0 | none | 11.0 ms |
+
+MobileNet-SSD also missed the people in the beach/kite photo. YOLOX-Nano under
+OpenCV DNN produced the same detections but took about 55–90 ms per image here,
+so ONNX Runtime is preferred where installed. Tests cover letterbox mapping,
+grid decoding/NMS on synthetic output, both runtimes agreeing on the fixture,
+scoring/manifest validation and still publication after source closure.
+
+The seed images are outdoor, color and unrelated to Frame's indoor, composited
+or grayscale input, and contain no rug. They do not establish accuracy on the
+headset or address the [rug false positive](#e15-saved-room-recognition-and-rug-false-positive);
+neither model has a rug class, so the useful Frame measure is whether a rug is
+confused with `couch`. Cloud CPU timing is not Frame timing. Run the
+[Frame comparison](on-device.md#compare-detectors-on-frame-stills) before
+choosing a default.
 
 ## Maintaining the evidence
 

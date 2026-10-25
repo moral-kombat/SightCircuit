@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "framejacker"
+version = "0.1.0"
+description = "Object recognition for Steam Frame recordings and bounded live input"
+readme = "README.md"
+license = "MIT"
+requires-python = "==3.12.*"
+dependencies = []
+
+# Exact, tested-together pins remain in requirements-*.txt, which the setup
+# scripts install. These extras state compatible ranges for editable installs.
+[project.optional-dependencies]
+replay = ["av>=16.1"]
+window = [
+    "framejacker[replay]",
+    "numpy>=2.2",
+    "opencv-python-headless>=4.12,<5",  # MobileNet-SSD needs OpenCV 4's Caffe importer.
+    "pyside6-essentials>=6.12",
+]
+dev = ["framejacker[window]", "onnxruntime>=1.31", "ruff==0.14.2"]
+
+[tool.setuptools.packages.find]
+include = ["framejacker*"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+extend-exclude = [".cache", "artifacts"]
+
+[tool.ruff.lint]
+# Pyflakes and pycodestyle errors. Long legacy lines (E501) and compact
+# one-line statements (E701/E702) in existing code are not yet enforced.
+select = ["E4", "E7", "E9", "F", "W6"]
+ignore = ["E701", "E702"]

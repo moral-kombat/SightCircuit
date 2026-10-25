@@ -4,14 +4,13 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+if not __package__:  # Run as a file: import this checkout's packages without installation.
+    sys.path.insert(0, str(ROOT))
 ASSETS = ROOT / ".cache" / "framejacker" / "assets"
 RESULTS = ROOT / "artifacts" / "smoke"
-CLASSES = (
-    "background aeroplane bicycle bird boat bottle bus car cat chair cow "
-    "diningtable dog horse motorbike person pottedplant sheep sofa train tvmonitor"
-).split()
 FRAME_COUNT = 12
 
 
@@ -28,7 +27,8 @@ def main() -> None:
     import onnxruntime as ort
     from PySide6 import QtCore, QtGui, QtWidgets
 
-    cv2.setNumThreads(2)
+    from framejacker.detection import MobileNetSSD, annotate, create_detector, describe
+
     ort.disable_telemetry_events()
 
     # Execute an actual bundled ONNX graph, checking numerical results.
@@ -60,12 +60,8 @@ def main() -> None:
     finally:
         writer.release()
 
-    net = cv2.dnn.readNetFromCaffe(
-        str(ASSETS / "MobileNetSSD_deploy.prototxt"),
-        str(ASSETS / "MobileNetSSD_deploy.caffemodel"),
-    )
-    net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
-    net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+    # The application's shared, checksum-verified detector rather than a copy of it.
+    detector = MobileNetSSD()
     capture = cv2.VideoCapture(str(video_path), cv2.CAP_FFMPEG)
     if not capture.isOpened():
         raise RuntimeError("FFmpeg video capture failed")
@@ -99,24 +95,9 @@ def main() -> None:
                 timer.stop()
                 app.quit()
                 return
-            net.setInput(cv2.dnn.blobFromImage(frame, 0.007843, (300, 300), 127.5))
-            prediction = net.forward()
-            if prediction.shape != (1, 1, 100, 7):
-                raise RuntimeError(f"Unexpected detector output shape: {prediction.shape}")
-            found = {}
-            for detection in prediction[0, 0]:
-                confidence = float(detection[2])
-                if confidence < 0.5:
-                    continue
-                name = CLASSES[int(detection[1])]
-                found[name] = round(confidence, 4)
-                coords = detection[3:7] * np.array([width, height, width, height])
-                x1, y1, x2, y2 = coords.astype(int)
-                if x2 <= x1 or y2 <= y1:
-                    raise RuntimeError("Invalid detection bounding box")
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 230, 0), 3)
-                cv2.putText(frame, f"{name} {confidence:.2f}", (x1, max(22, y1 - 8)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 230, 0), 2)
+            result = detector.detect(frame, 0.5)
+            found = {detection.label: round(detection.confidence, 4) for detection in result.detections}
+            frame = annotate(frame, result)
             if not {"bicycle", "car", "dog"}.issubset(found):
                 raise RuntimeError(f"Expected bicycle, car, dog detections; got {found}")
             rgb = np.ascontiguousarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
@@ -142,6 +123,11 @@ def main() -> None:
         raise failures[0]
     if exit_code:
         raise RuntimeError(f"Qt exited with status {exit_code}")
+    # The 80-class candidate through ONNX Runtime must find the same fixture objects.
+    candidate = create_detector("yolox-nano", runtime="onnxruntime")
+    candidate_labels = candidate.detect(image, 0.5).labels
+    if not {"bicycle", "dog"}.issubset(candidate_labels) or not {"car", "truck"} & set(candidate_labels):
+        raise RuntimeError(f"YOLOX-Nano expected bicycle, dog and car/truck; got {candidate_labels}")
     screenshot = cv2.imread(str(screenshot_path))
     if screenshot is None or screenshot.std() < 10:
         raise RuntimeError("Rendered screenshot is blank or invalid")
@@ -154,6 +140,7 @@ def main() -> None:
         "onnxruntime": ort.__version__,
         "onnx_numerical_inference": "passed",
         "detector": "MobileNet-SSD (OpenCV DNN CPU)",
+        "candidate_detector": {**describe(candidate), "labels": candidate_labels},
         "capture_backend": backend,
         "qt_platform": app.platformName(),
         **state,

@@ -34,11 +34,13 @@ owns the current capture work plan.
 | Inspect SteamVR dependencies and launcher paths | [Read-only service details](on-device.md#inspect-the-service-relationships-without-restarting) |
 | Review the platform start/stop hooks | [Read shipped launcher definitions without executing them](on-device.md#read-the-platform-launcher-definitions) |
 | Understand or replace the recognition model | [Recognition architecture and model candidates](architecture.md#recognition-implementation-and-model-replacement) |
+| Compare detectors on labelled stills | [Frame procedure](on-device.md#compare-detectors-on-frame-stills) and [evaluation format](development.md#detector-evaluation) |
 | Inspect existing luma input or test the isolated reader | [Shared-memory procedure](on-device.md#check-existing-luma-shared-memory) and [controlled fixture](development.md#isolated-luma-reader-and-synthetic-producer) |
 | Set up cloud or desktop development | [Development setup](development.md) |
 | Continue live capture development | [Active capture plan](live-capture.md#current-work-order) |
 | Investigate camera access and upstream projects | [Camera interface reference](steam-frame-camera.md) and [dated code review](capture-reference-review.md) |
 | Understand components and frame flow | [Architecture](architecture.md) |
+| Review architecture and implementation improvements | [Dated design review](design-review.md) |
 | Contribute a change | [Contributing](../CONTRIBUTING.md) |
 | Check dependency attribution | [Third-party sources](../THIRD_PARTY.md) |
 | Maintain these documents | [Documentation plan and ownership](documentation-plan.md) |

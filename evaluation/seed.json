@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "description": "Seed regression set: six outdoor photos from the darknet repository (public-domain license), with image-level labels only. It checks detector wiring, label mapping and obvious confusions; it is not representative of Frame's indoor, grayscale or composited input and contains no rug. Add Frame stills in a local manifest for that.",
+  "images": [
+    {
+      "id": "darknet-dog",
+      "file": "darknet-dog.jpg",
+      "url": "https://raw.githubusercontent.com/pjreddie/darknet/f6afaabcdf85f77e7aff2ec55c020c0e297c77f9/data/dog.jpg",
+      "sha256": "5a9522051c3cec2bbd2f6323fccba32e8fbf3ddcc2b3e2fd46b04c720bc6f866",
+      "present": [
+        "dog",
+        "bicycle",
+        [
+          "car",
+          "truck"
+        ]
+      ],
+      "absent": [
+        "cat",
+        "horse",
+        "sheep",
+        "cow",
+        "couch",
+        "person"
+      ]
+    },
+    {
+      "id": "darknet-person",
+      "file": "darknet-person.jpg",
+      "url": "https://raw.githubusercontent.com/pjreddie/darknet/f6afaabcdf85f77e7aff2ec55c020c0e297c77f9/data/person.jpg",
+      "sha256": "cdcbab947e46110fc2b77784ac54ddbbab2640f1e44cb5e91fc8984a9793a7d1",
+      "present": [
+        "person",
+        "dog",
+        "horse"
+      ],
+      "absent": [
+        "cat",
+        "cow",
+        "sheep"
+      ]
+    },
+    {
+      "id": "darknet-horses",
+      "file": "darknet-horses.jpg",
+      "url": "https://raw.githubusercontent.com/pjreddie/darknet/f6afaabcdf85f77e7aff2ec55c020c0e297c77f9/data/horses.jpg",
+      "sha256": "c8f0a677a1356569e2ce71d2fa88c1030c0ae57ecf5e14170e02d9a86a20dcb4",
+      "present": [
+        "horse"
+      ],
+      "absent": [
+        "cow",
+        "sheep",
+        "dog",
+        "person",
+        "zebra"
+      ]
+    },
+    {
+      "id": "darknet-giraffe",
+      "file": "darknet-giraffe.jpg",
+      "url": "https://raw.githubusercontent.com/pjreddie/darknet/f6afaabcdf85f77e7aff2ec55c020c0e297c77f9/data/giraffe.jpg",
+      "sha256": "00dc48a9b2af8a1fe4c4b79319726591f1033c7e1150f21e7577a79f3b6659f1",
+      "present": [
+        "giraffe",
+        "zebra"
+      ],
+      "absent": [
+        "horse",
+        "cow",
+        "person"
+      ]
+    },
+    {
+      "id": "darknet-eagle",
+      "file": "darknet-eagle.jpg",
+      "url": "https://raw.githubusercontent.com/pjreddie/darknet/f6afaabcdf85f77e7aff2ec55c020c0e297c77f9/data/eagle.jpg",
+      "sha256": "f95f57297fd51a6c5ddceb5ed6916fa759d1d65f402fee34c05b31a9608755c0",
+      "present": [
+        "bird"
+      ],
+      "absent": [
+        "airplane",
+        "kite",
+        "cat",
+        "dog"
+      ]
+    },
+    {
+      "id": "darknet-kite",
+      "file": "darknet-kite.jpg",
+      "url": "https://raw.githubusercontent.com/pjreddie/darknet/f6afaabcdf85f77e7aff2ec55c020c0e297c77f9/data/kite.jpg",
+      "sha256": "87410f52f79cc256c3949b48a3548632c07c8e9943468ef8caa6250f6643be8e",
+      "present": [
+        "person",
+        "kite"
+      ],
+      "absent": [
+        "bird",
+        "airplane",
+        "couch"
+      ]
+    }
+  ]
+}

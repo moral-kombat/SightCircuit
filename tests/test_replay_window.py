@@ -72,6 +72,15 @@ class ReplayWindowTests(unittest.TestCase):
         self.assertIsNotNone(image)
         self.assertGreater(image.std(), 10)
 
+    def test_candidate_detector_is_selectable_and_reported(self):
+        result, report = self.run_window("--detector", "yolox-nano")
+        self.assertEqual(result.returncode, 0, (report, result.stderr))
+        self.assertEqual(report["detector"]["name"], "yolox-nano")
+        self.assertEqual(report["detector"]["classes"], 80)
+        self.assertTrue({"bicycle", "dog"}.issubset(report["labels_seen"]))
+        result, report = self.run_window()
+        self.assertEqual(report["detector"], {"name": "mobilenet-ssd", "runtime": "opencv-dnn", "classes": 20})
+
     def test_second_track_is_selectable(self):
         result, report = self.run_window("--video-stream", "1")
         self.assertEqual(result.returncode, 0, report)
@@ -114,7 +123,7 @@ class ReplayWindowTests(unittest.TestCase):
             wait_for(worker.done.is_set)
             restarted = worker.take_latest()
             self.assertIsNotNone(restarted)
-            self.assertEqual(restarted["media_time"], 0)
+            self.assertEqual(restarted.frame.media_time, 0)
             worker.playing.clear()
         finally:
             worker.stop()
@@ -156,7 +165,7 @@ class ReplayWindowTests(unittest.TestCase):
         # validation_only=true and runtime_initialized=false; this is not a
         # headset rendering test.
         code = (
-            "import sys\nfrom scripts import overlay_client, replay_window\n"
+            "import sys\nfrom framejacker import overlay as overlay_client\nfrom scripts import replay_window\n"
             "class ValidationClient(overlay_client.OverlayClient):\n"
             "    def __init__(self): super().__init__(validation_only=True)\n"
             "overlay_client.OverlayClient = ValidationClient\n"
@@ -176,7 +185,7 @@ class ReplayWindowTests(unittest.TestCase):
 
     def test_overlay_rgba_conversion_and_size_limit(self):
         import numpy as np
-        from scripts.overlay_client import rgba_from_bgr
+        from framejacker.overlay import rgba_from_bgr
 
         image = np.array([[[0, 0, 255], [255, 0, 0]]], dtype=np.uint8)
         width, height, pixels = rgba_from_bgr(image)
