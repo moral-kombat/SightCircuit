@@ -1712,11 +1712,25 @@ resyncs. So on this recording `--realtime` is decode-bound and cannot keep up
 with real time; pacing works but does not yet make playback real-time. Open
 question: a smaller or lower-resolution recording, or decoder settings.
 
-Also in this branch, not yet run in CI: `PANEL_LIMITS` single source with a
-Python/C++ consistency test (the new test passed locally on Windows; the bridge
-tests skipped there), and `scripts/run_tests_no_skips.py` wired into the
-replay-window and overlay-bridge CI jobs (verified locally that it exits 0 on
-passing tests and 1 on skips).
+GitHub Actions for PR #2 subsequently passed the lint and x86_64 and ARM64
+jobs, including the replay-window and overlay-bridge no-skip checks. The ARM64
+smoke job was skipped; all other listed checks passed.
+
+### E52: Bounded mirror stage via SSH
+
+Date: 2026-10-25, Frame revision `c57423a`, run remotely over SSH from the PC
+with `SKIP_UPDATE=1 COUNTDOWN=15 STEP_TIMEOUT=90`, stage `mirror`. The stage
+exited 0 after its bounded 10-second capture and saved
+`artifacts/frame-session/20261025-022435/mirror-recognize.json` and
+`mirror-detections.png`. The report says 12 frames were processed and the last
+result was `tvmonitor` at confidence 0.587; preview generation completed.
+
+This is a software report from `/dev/video99`, identified only as a SteamVR
+virtual-mirror candidate. It does not verify that a TV was physically in view,
+that the preview matched the scene, that the source was fresh camera imagery,
+or that passthrough/tracking was normal. The interactive observation prompt
+was unanswered; no user headset observation is recorded. Still capture,
+overlay and window-mirror stages remain unverified.
 
 ## Maintaining the evidence
 

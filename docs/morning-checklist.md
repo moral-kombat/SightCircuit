@@ -2,13 +2,25 @@
 
 Automated: `bash scripts/frame_session.sh` runs the steps below in order and
 writes reports and a pasteable `summary.md` to `artifacts/frame-session/<time>/`.
-It prompts only where a human must aim, look or judge (observations are recorded
-as answers in the summary). Stages can be selected, for example
+Stages can be selected, for example
 `bash scripts/frame_session.sh setup regression pacing`; `overlay` (needs the
 headset on) and `window-mirror` (step 5) are opt-in. Variables: `DEVICE`,
-`RECORDING`, `SKIP_UPDATE=1`, `YES=1` (no prompts). The script is not yet
-exercised on Frame; only its manifest helper has a unit test and its syntax was
-checked. Stage-to-step mapping: setup = 1, regression + overlay = 2,
+`RECORDING`, `SKIP_UPDATE=1`, `YES=1` (skip prompts), `COUNTDOWN=15` (start a
+no-typing capture after a countdown), and `SCENES="rug|present|absent;sofa||"`
+to describe still-capture scenes without typing between them. For example:
+
+```bash
+SKIP_UPDATE=1 COUNTDOWN=15 STEP_TIMEOUT=90 \
+  bash scripts/frame_session.sh mirror
+```
+
+`COUNTDOWN` automates timing only; aim the headset during the countdown and
+review the generated preview and report afterward. Interactive observations
+may remain unanswered in the summary. The setup, regression, pacing and mirror
+stages have been exercised remotely on the Frame; stills, overlay and
+window-mirror remain unverified. The manifest helper has a unit test and the
+shell script syntax has been checked. Stage-to-step mapping: setup = 1,
+regression + overlay = 2,
 pacing = 3, stills + evaluate = 4, window-mirror = 5 (mirror = E48 recognition).
 
 Manual equivalents follow. Run from the graphical session on Frame. Everything here is bounded; do not
