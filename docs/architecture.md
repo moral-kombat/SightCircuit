@@ -14,6 +14,43 @@ describes design and long-term acceptance criteria. The
 [camera reference](steam-frame-camera.md) documents interface constraints and
 the [dated source review](capture-reference-review.md) explains capture choices.
 
+## Progress summary
+
+<!-- BEGIN progress-summary: generated from the progress dashboard; edit status.md or live-capture.md instead of this block -->
+Generated from the [progress
+dashboard](https://claude.ai/artifact/XNPpBHVFUy5Q8JQV9aLaKq) using `main` at
+commit `ee87e50` (2026-10-24). This block only summarizes: [status](status.md)
+owns evidence and [live capture](live-capture.md#current-work-order) owns
+current tasks. Counts show how far each piece has got: confirmed working on
+Frame, tested on Frame with synthetic or controlled inputs, cloud-tested only,
+or not started (planned or researched). Held means paused, blocked or failed.
+
+| Track | Working on Frame | Tested on Frame | Cloud-tested | Not started | Held |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Input & capture | 4 | 9 | 1 | 3 | 3 |
+| Inference | 4 | 0 | 0 | 2 | 0 |
+| Presentation | 2 | 0 | 0 | 1 | 1 |
+| Geometry & reconstruction | 0 | 0 | 0 | 2 | 0 |
+| **All** | 10 | 9 | 1 | 8 | 4 |
+
+Milestones, from the [acceptance list](#milestones-and-acceptance-checks):
+
+1. **Replay and window:** Met on Frame except accuracy. Label accuracy not evaluated.
+2. **Live capture:** In progress, dedicated path paused. Mirror works but is composited; dedicated provider blocked on sync and trial recovery.
+3. **VR panel:** Visible and controllable; not measured. Measurements and live-input latency pending.
+4. **World-space labels:** Not started. Depends on live capture and calibration.
+5. **Splat experiment (optional):** Researched. No training or headset rendering yet.
+
+Critical path to milestone 2: 3 of 10 main steps done. Next: verify an
+independent SSH or terminal route (a working way back into the Frame that does
+not depend on the console app or SteamVR). After step 5, route A runs through
+step 6 (controlled metadata-layer load and restore) and step 7 (establish a safe
+frame-access contract). Route B, step 7a, would get a supported frame-sharing
+API from Valve / Arcturus and go straight to step 8. Both routes then continue
+with steps 8 to 10: owned-copy capture path on real hardware; capture-only
+device trial; close the remaining milestone 2 checks.
+<!-- END progress-summary -->
+
 ## Frame processing
 
 ```mermaid
