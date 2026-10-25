@@ -39,6 +39,7 @@ owns the current capture work plan.
 | Continue live capture development | [Active capture plan](live-capture.md#current-work-order) |
 | Investigate camera access and upstream projects | [Camera interface reference](steam-frame-camera.md) and [dated code review](capture-reference-review.md) |
 | Understand components and frame flow | [Architecture](architecture.md) |
+| Review architecture and implementation improvements | [Dated design review](design-review.md) |
 | Contribute a change | [Contributing](../CONTRIBUTING.md) |
 | Check dependency attribution | [Third-party sources](../THIRD_PARTY.md) |
 | Maintain these documents | [Documentation plan and ownership](documentation-plan.md) |
