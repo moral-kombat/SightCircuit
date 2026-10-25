@@ -1,6 +1,17 @@
 # Frame test checklist (after the overnight cloud work)
 
-Run from the graphical session on Frame. Everything here is bounded; do not
+Automated: `bash scripts/frame_session.sh` runs the steps below in order and
+writes reports and a pasteable `summary.md` to `artifacts/frame-session/<time>/`.
+It prompts only where a human must aim, look or judge (observations are recorded
+as answers in the summary). Stages can be selected, for example
+`bash scripts/frame_session.sh setup regression pacing`; `overlay` (needs the
+headset on) and `window-mirror` (step 5) are opt-in. Variables: `DEVICE`,
+`RECORDING`, `SKIP_UPDATE=1`, `YES=1` (no prompts). The script is not yet
+exercised on Frame; only its manifest helper has a unit test and its syntax was
+checked. Stage-to-step mapping: setup = 1, regression + overlay = 2,
+pacing = 3, stills + evaluate = 4, window-mirror = 5 (mirror = E48 recognition).
+
+Manual equivalents follow. Run from the graphical session on Frame. Everything here is bounded; do not
 activate capture layers or restart SteamVR. Commands are detailed in
 [on-device](on-device.md). Record results as new [status](status.md) entries,
 labelled device-confirmed, and keep cloud/CI results separate.
