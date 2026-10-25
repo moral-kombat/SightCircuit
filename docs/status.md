@@ -1692,6 +1692,12 @@ Windows Python 3.11). The decode path, Qt window and summary fields were not
 run: no PyAV, OpenCV or Qt in that environment, and CI had not yet run. Not
 measured on Frame; see the [morning checklist](morning-checklist.md).
 
+Also in this branch, not yet run in CI: `PANEL_LIMITS` single source with a
+Python/C++ consistency test (the new test passed locally on Windows; the bridge
+tests skipped there), and `scripts/run_tests_no_skips.py` wired into the
+replay-window and overlay-bridge CI jobs (verified locally that it exits 0 on
+passing tests and 1 on skips).
+
 ## Maintaining the evidence
 
 For a new result, record the execution date, platform/runtime versions,

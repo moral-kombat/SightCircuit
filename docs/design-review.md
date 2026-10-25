@@ -240,10 +240,13 @@ PR description predates item 3 and the CI fixes; update it before merging.
 ### Remaining from items 1–3
 
 - Lock file covering x86_64 and aarch64; console entry points.
-- Fail CI on unexpected test skips (fixture tests skip silently when a build
-  step is missing).
-- CI runs twice per PR push (`push` and `pull_request`); limit `push` to `main`.
+- ~~Fail CI on unexpected test skips~~ Done for the replay-window and
+  overlay-bridge jobs via `scripts/run_tests_no_skips.py`; capture-fixture jobs
+  still skip by design where a build mode is absent.
+- ~~CI runs twice per PR push~~ `push` limited to `main`.
 - Move the V4L2 mirror module and acquisition loop (`scripts/mirror_capture.py`,
   `scripts/mirror_check.py`) into `framejacker/sources/`; reuse `LatestSlot` in
   the overlay client; consolidate the capture supervisor's process handling.
-- One source of truth for VR panel limits (Python, Qt and C++ copies).
+- ~~One source of truth for VR panel limits~~ `PANEL_LIMITS` in
+  `framejacker/overlay.py` feeds validation and the Qt spin boxes; a test checks
+  it against `tools/overlay_bridge.cpp`.

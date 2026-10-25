@@ -137,7 +137,7 @@ def main(argv=None):
             raise RuntimeError(f"Window dependencies unavailable: {error}. Run bash scripts/setup_window.sh") from error
         check_display_libraries(QtCore)
         if args.overlay:
-            from framejacker.overlay import OverlayClient, OverlaySink, PanelSettings
+            from framejacker.overlay import PANEL_LIMITS, OverlayClient, OverlaySink, PanelSettings
             overlay = OverlayClient()
             overlay.start()
 
@@ -184,12 +184,11 @@ def main(argv=None):
             visible.setChecked(True)
             grid.addWidget(visible, 0, 0, 1, 2)
             fields = {}
-            for index, (name, label, low, high, value) in enumerate((
-                    ("width", "Width (m)", .25, 1.5, .8),
-                    ("distance", "Distance (m)", .5, 3, 1.5),
-                    ("x", "Horizontal (m)", -1, 1, 0),
-                    ("y", "Vertical (m)", -1, 1, -.2),
-                    ("opacity", "Opacity", .2, 1, .95))):
+            labels = {"width": "Width (m)", "distance": "Distance (m)", "x": "Horizontal (m)",
+                      "y": "Vertical (m)", "opacity": "Opacity"}
+            defaults = PanelSettings()
+            for index, (name, low, high) in enumerate(PANEL_LIMITS):
+                label, value = labels[name], getattr(defaults, name)
                 spin = QtWidgets.QDoubleSpinBox()
                 spin.setRange(low, high)
                 spin.setSingleStep(.05)

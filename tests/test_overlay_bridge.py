@@ -8,7 +8,7 @@ import tempfile
 import time
 import unittest
 
-from framejacker.overlay import DEFAULT_BRIDGE, OverlayClient, PanelSettings, packet
+from framejacker.overlay import DEFAULT_BRIDGE, MAX_SIDE, PANEL_LIMITS, OverlayClient, PanelSettings, packet
 
 
 @unittest.skipUnless(DEFAULT_BRIDGE.is_file(), "Build scripts/build_overlay_bridge.sh first")
@@ -121,6 +121,23 @@ class OverlayBridgeTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "VRInitError_Init_PathRegistryNotFound"):
             client.start()
         self.assertIsNotNone(client.process.poll())
+
+
+class PanelLimitConsistencyTests(unittest.TestCase):
+    def test_python_limits_match_native_bridge(self):
+        import re
+
+        source = (Path(__file__).resolve().parents[1] / "tools/overlay_bridge.cpp").read_text()
+        native = {name: (float(low), float(high)) for name, low, high in
+                  re.findall(r"bounded\(s\.(\w+),\s*(-?[\d.]+)f?,\s*(-?[\d.]+)f?\)", source)}
+        native["opacity"] = native.pop("alpha")
+        self.assertEqual({name: (float(low), float(high)) for name, low, high in PANEL_LIMITS}, native)
+        self.assertEqual(MAX_SIDE, int(re.search(r"kMaxSide = (\d+)", source).group(1)))
+
+    def test_defaults_are_within_limits(self):
+        defaults = PanelSettings()
+        for name, low, high in PANEL_LIMITS:
+            self.assertTrue(low <= getattr(defaults, name) <= high, name)
 
 
 class PanelSettingsTests(unittest.TestCase):
