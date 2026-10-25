@@ -1682,6 +1682,16 @@ confused with `couch`. Cloud CPU timing is not Frame timing. Run the
 [Frame comparison](on-device.md#compare-detectors-on-frame-stills) before
 choosing a default.
 
+### E51: Media-time replay pacing (unit-tested only)
+
+Date: 2026-10-25, branch `overnight/pacing-and-live-prep`. Replay gained an
+opt-in `--realtime` mode (`ReplaySource(realtime=True)`) that follows media time
+and drops frames more than 0.1 s late. Only the `PlaybackClock` schedule logic
+has a unit test (`tests/test_playback_clock.py`, three tests, run locally on
+Windows Python 3.11). The decode path, Qt window and summary fields were not
+run: no PyAV, OpenCV or Qt in that environment, and CI had not yet run. Not
+measured on Frame; see the [morning checklist](morning-checklist.md).
+
 ## Maintaining the evidence
 
 For a new result, record the execution date, platform/runtime versions,
