@@ -1692,6 +1692,15 @@ Windows Python 3.11). The decode path, Qt window and summary fields were not
 run: no PyAV, OpenCV or Qt in that environment, and CI had not yet run. Not
 measured on Frame; see the [morning checklist](morning-checklist.md).
 
+Partial Frame console output, relayed by the user from a session on the Frame
+(2026-10-25, branch revision `507c91b`; the agent's report, not independently
+verified): setup and the YOLOX model download succeeded and the overlay bridge
+built (not launched). The offscreen replay regression processed 30 frames at
+5.055 fps with 0 dropped, mean processing 37.7 ms, no labels detected. The
+realtime pacing run had not finished in the pasted output, so there is no
+pacing result yet. Mirror, stills, overlay and window-mirror stages were not
+run.
+
 Also in this branch, not yet run in CI: `PANEL_LIMITS` single source with a
 Python/C++ consistency test (the new test passed locally on Windows; the bridge
 tests skipped there), and `scripts/run_tests_no_skips.py` wired into the
