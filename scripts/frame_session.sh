@@ -8,7 +8,9 @@
 #   setup regression pacing overlay mirror stills evaluate window-mirror
 # Environment: DEVICE (default /dev/video99), RECORDING (default newest recording),
 #   SKIP_UPDATE=1 (do not git pull), YES=1 (no prompts; observations recorded as "unanswered"),
-#   STEP_TIMEOUT=300 (seconds of wall-clock per command; exit 124 = timed out).
+#   COUNTDOWN=N (no typing: wait N seconds with bells before each human step; observation
+#   questions are left unanswered for you to give afterwards), SCENES="rug|chair|couch;tv|tv|"
+#   (stills as id|present|absent, ';'-separated), STEP_TIMEOUT=300 (seconds per command; 124 = timed out).
 #
 # Everything is bounded and read-only toward SteamVR: no layers, no restarts, no probe.
 # Results go to artifacts/frame-session/<timestamp>/ with summary.md ready to paste
@@ -29,10 +31,15 @@ say() { printf '\n== %s\n' "$*" >&2; }  # stderr, so stdout redirects capture on
 note() { printf '%s\n' "$*" >> "$summary"; }
 ask() { # ask "question" -> records answer
   local answer="unanswered"
-  if [ -z "${YES:-}" ]; then read -r -p "$1 " answer || answer="unanswered"; fi
+  if [ -z "${YES:-}" ] && [ -z "${COUNTDOWN:-}" ]; then read -r -p "$1 " answer || answer="unanswered"; fi
   note "- $1 **${answer:-unanswered}**"
 }
-confirm() { [ -n "${YES:-}" ] || { read -r -p "$1 [Enter to continue, s to skip] " reply; [ "$reply" != s ]; }; }
+confirm() { # COUNTDOWN=N waits N seconds (with terminal bells) instead of reading a key
+  if [ -n "${COUNTDOWN:-}" ]; then
+    say "$1 Starting in ${COUNTDOWN}s"; printf '\a' >&2; sleep "$COUNTDOWN"; printf '\a' >&2; return 0
+  fi
+  [ -n "${YES:-}" ] || { read -r -p "$1 [Enter to continue, s to skip] " reply; [ "$reply" != s ]; }
+}
 # Wall-clock limit per command (seconds); exit 124 means it timed out.
 limit="${STEP_TIMEOUT:-300}"
 run() { # run name command... -> records exit code, keeps going on failure
@@ -120,14 +127,22 @@ stage_mirror() {
 
 stage_stills() {
   note; note "## Evaluation stills (private, evaluation/local/)"
-  echo "Capture stills for the evaluation set. Suggested: id 'rug' (absent: couch), 'chair-tv'."
+  # SCENES="id|present,labels|absent,labels;id2|..." runs without prompts.
+  local scenes=()
+  if [ -n "${SCENES:-}" ]; then IFS=';' read -ra scenes <<< "$SCENES"; fi
+  local index=0
   while true; do
-    local id=""
-    if [ -z "${YES:-}" ]; then read -r -p "Scene id (blank to finish): " id; else id=""; fi
-    [ -z "$id" ] && break
-    local present absent
-    read -r -p "Labels present (COCO names, comma-separated): " present
-    read -r -p "Labels that must NOT be reported (e.g. couch): " absent
+    local id="" present="" absent=""
+    if [ -n "${SCENES:-}" ]; then
+      [ "$index" -ge "${#scenes[@]}" ] && break
+      IFS='|' read -r id present absent <<< "${scenes[$index]}"; index=$((index + 1))
+    else
+      [ -n "${YES:-}" ] && break
+      read -r -p "Scene id (blank to finish): " id
+      [ -z "$id" ] && break
+      read -r -p "Labels present (COCO names, comma-separated): " present
+      read -r -p "Labels that must NOT be reported (e.g. couch): " absent
+    fi
     local file="evaluation/local/$id-$stamp.png"
     confirm "Aim at '$id' and hold for 5 s." || continue
     timeout --foreground -k 10 "$limit" "$py" scripts/mirror_recognize.py --capture --device "$device" \
