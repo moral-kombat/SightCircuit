@@ -1701,6 +1701,17 @@ realtime pacing run had not finished in the pasted output, so there is no
 pacing result yet. Mirror, stills, overlay and window-mirror stages were not
 run.
 
+Later the same day, over SSH from the PC (observed directly, Frame revision
+`5cea01c`, newest recording 3.8 GB, offscreen): an unpaced replay processed 200
+frames at 5.09 fps (mean 42.5 ms processing, max input age 0.4 ms). The first
+`--realtime` implementation timed out with no report: decoding this file runs
+at about 13 fps, slower than the recording, so every frame was late and all
+were dropped. Fixed by resyncing when nothing was emitted for one second.
+With the fix, 60 frames processed in about 60 s (0.97 fps), 740 dropped, 59
+resyncs. So on this recording `--realtime` is decode-bound and cannot keep up
+with real time; pacing works but does not yet make playback real-time. Open
+question: a smaller or lower-resolution recording, or decoder settings.
+
 Also in this branch, not yet run in CI: `PANEL_LIMITS` single source with a
 Python/C++ consistency test (the new test passed locally on Windows; the bridge
 tests skipped there), and `scripts/run_tests_no_skips.py` wired into the
