@@ -58,7 +58,9 @@ class ShmSupervisorTests(ShmTestCase):
 
     def test_native_crash_is_contained(self):
         fake = self.helper("import os, resource, signal\nresource.setrlimit(resource.RLIMIT_CORE, (0, 0))\nos.kill(os.getpid(), signal.SIGBUS)\n")
-        report = check.run_reader(self.root / "source", 1, binary=fake)
+        # A system crash handler (such as apport) may hold the dying process for
+        # seconds regardless of RLIMIT_CORE; the deadline must not mask the signal.
+        report = check.run_reader(self.root / "source", 1, binary=fake, timeout=20)
         self.assertEqual(report["reason"], "reader_terminated_by_signal")
         self.assertEqual(report["native_signal"], signal.SIGBUS)
         self.assertFalse(report["cleanup_ok"])

@@ -6,6 +6,68 @@ Python 3.12; it does not launch the interactive application or connect to a came
 Use the [on-device guide](on-device.md) for Frame and [status](status.md) for
 validation evidence and compatibility limits.
 
+## Python package and pipeline
+
+Reusable code lives in the `framejacker/` package; `scripts/` keeps the
+documented command-line tools. Scripts add the checkout root to `sys.path`
+when run as files, so headset commands need no installation step.
+`pip install -e '.[window]'` (or `uv pip install -e .`) also works for desktop
+development; exact tested pins remain in the `requirements-*.txt` files.
+
+| Module | Responsibility |
+| --- | --- |
+| `framejacker/frame.py` | `Frame` (pixels, layout, source, sequence, observation time, media time) and detection result types |
+| `framejacker/pipeline.py` | `FrameSource`/`Sink` interfaces and `Pipeline`: conversion, detection, annotation, rate cap, latest-only or every-frame scheduling |
+| `framejacker/latest.py` | One-pending-item handoff; newer items replace older ones |
+| `framejacker/convert.py` | BGR24 and padded RGB3/BGR3 conversion to detector input of at most 960 pixels |
+| `framejacker/detection.py` | `Detector` interface, `MobileNetSSD` baseline, `YoloxDetector` candidate, `create_detector()` and separate `annotate()` |
+| `framejacker/preprocess.py`, `framejacker/labels.py` | Letterbox input and inverse box mapping; COCO vocabulary and VOC-to-canonical label names |
+| `framejacker/evaluation.py`, `framejacker/assets.py` | Detector evaluation scoring; checksum-verified model/fixture download and verification |
+| `framejacker/sources/` | `ReplaySource` (PyAV) and `MirrorSource` (adapter for the V4L2 mirror acquisition loop) |
+| `framejacker/overlay.py` | Overlay bridge client and pipeline sink |
+| `framejacker/runtime/` | Bounded spawned workers, parent-death signalling, and reserve/publish of explicit image outputs |
+
+File replay uses every-frame scheduling, so each decoded frame is processed in
+order. Mirror recognition uses latest-only scheduling with a one-second input
+age limit. The V4L2 mirror device module and diagnostic loop remain in
+`scripts/mirror_capture.py` and `scripts/mirror_check.py` for now.
+
+Lint with the configuration in `pyproject.toml`:
+
+```bash
+uvx ruff@0.14.2 check .
+```
+
+## Detector evaluation
+
+`scripts/evaluate_detectors.py` runs each detector on the same stills through
+the application's conversion path (scaled to at most 960 pixels) and scores
+them against a manifest. The default
+[seed manifest](../evaluation/seed.json) holds six checksum-pinned outdoor
+darknet photos with image-level labels; `--fetch` downloads them into ignored
+`.cache/framejacker/evaluation/`. It is a regression check for wiring, label
+mapping and gross confusions, not evidence about Frame's indoor input.
+
+```bash
+.venv-replay/bin/python scripts/evaluate_detectors.py --fetch
+.venv-replay/bin/python scripts/evaluate_detectors.py --manifest evaluation/local/frame.json \
+  --detector yolox-nano --threshold 0.4 --report /tmp/evaluation.json
+```
+
+Manifest entries (`schema_version: 1`) need a unique `id` and either `path`
+(relative to the manifest) or `file` plus `url`/`sha256` for download. `present`
+lists canonical COCO labels that must be detected; a nested list accepts any
+alternative, such as `["car", "truck"]`. `absent` lists labels that must not be
+reported. Optional `objects` give `label`, source-pixel `box_xyxy` and
+`confusable` labels: supported labels are matched at `--iou` (default 0.5); a
+confusable detection overlapping the object at IoU 0.3 is a confusion. Set
+`boxes_complete: true` only when every supported object is boxed, enabling
+false-positive and precision counts. Labels a detector cannot output are
+reported as unsupported. The JSON report has per-detector totals, per-image
+detections and timing; a one-line summary per detector goes to stderr.
+Private Frame stills belong in ignored `evaluation/local/`; see the
+[device procedure](on-device.md#compare-detectors-on-frame-stills).
+
 ## Install and run
 
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/) using its
@@ -118,9 +180,10 @@ calibration, metadata payloads, dependent stereo views or HDR color management.
 
 ## Annotated replay window
 
-Replay and bounded mirror recognition share `scripts/demo_detector.py`: the
-same checked MobileNet-SSD model, CPU execution, 20 labels, preprocessing and
-annotation code. Boxes now show explicit percentage confidence scores. These
+Replay and bounded mirror recognition share `framejacker/detection.py` through
+the [shared pipeline](#python-package-and-pipeline): the same checked
+MobileNet-SSD model, CPU execution, 20 labels, preprocessing and annotation code.
+The smoke check uses the same detector. Boxes now show explicit percentage confidence scores. These
 scores are not calibrated probabilities; the device's rug-as-sofa false positive
 is recorded in [status](status.md#e15-saved-room-recognition-and-rug-false-positive).
 
@@ -131,8 +194,9 @@ bash scripts/setup_window.sh
 
 Setup extends `.venv-replay` using `requirements-window.txt` and verifies the
 existing model/image fixtures. The window runs PyAV and CPU MobileNet-SSD on a
-worker thread, keeps one latest annotated result, and presents it on the Qt
-thread. The prototype has pause/resume, replay and loop controls. Processing
+worker thread through the shared pipeline, keeps one latest annotated result,
+and presents it on the Qt thread. The optional VR panel is a pipeline sink fed
+from the worker thread. The prototype has pause/resume, replay and loop controls. Processing
 replay is capped at 10 fps by default and preserves every processed frame's
 association with its detections; this is not a real-time source-timing player.
 
@@ -164,8 +228,12 @@ a nonblank preview, correct track selection and input-file preservation.
 
 ## Continuous integration
 
-The [GitHub Actions workflow](../.github/workflows/checks.yml) runs the same setup
-and smoke check on an Ubuntu runner with Python 3.12. It needs network access to
+The [GitHub Actions workflow](../.github/workflows/checks.yml) runs ruff and the
+[shared job definitions](../.github/workflows/check-jobs.yml) on x86_64 Ubuntu,
+including the same setup and smoke check with Python 3.12. The
+[ARM64 workflow](../.github/workflows/arm64.yml) runs the same native and Python
+jobs, except the x86_64 smoke environment, on `ubuntu-24.04-arm`: the
+headset's architecture, without its drivers, SteamVR or cameras. It needs network access to
 the fixture sources. A file-decoder job installs PyAV and exercises fragmented
 HEVC replay and RGB conversion. A separate job builds the native OpenVR probe, verifies that
 default and invalid invocations stop before OpenVR initialization, and checks
@@ -220,7 +288,8 @@ validation evidence.
 ## Bounded mirror recognition
 
 `scripts/mirror_recognize.py` reuses the guarded capture loop and supervised
-process deadline. Default execution performs metadata-only discovery. Opt-in
+process deadline, and runs recognition through the latest-only
+[shared pipeline](#python-package-and-pipeline). Default execution performs metadata-only discovery. Opt-in
 capture/inference needs the existing OpenCV/NumPy environment and checked model
 fixtures, with no Qt, PyAV or OpenVR initialization. The recognizer accepts only
 RGB3/BGR3, respects row padding and converts to owned BGR images of at most 960

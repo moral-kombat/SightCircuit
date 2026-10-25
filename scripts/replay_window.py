@@ -9,39 +9,49 @@ import signal
 import subprocess
 import sys
 import threading
-import time
 
-if __package__:
-    from .recording_check import RecordingError, latest_recording
-    from .demo_detector import DemoDetector
-else:
-    from recording_check import RecordingError, latest_recording
-    from demo_detector import DemoDetector
+if not __package__:  # Run as a file: import this checkout's packages without installation.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from framejacker.detection import DEFAULT_DETECTOR, DETECTORS, create_detector, describe
+from framejacker.pipeline import LatestResultSink, Pipeline
+from framejacker.sources.replay import ReplaySource
+from scripts.recording_check import RecordingError, latest_recording
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReplayWorker(threading.Thread):
-    """Own decoding/inference and retain one latest completed image for the UI."""
-    def __init__(self, path, ordinal, threshold, max_fps, max_frames):
+    """Run file replay through the shared pipeline; retain one latest result for the UI."""
+    def __init__(self, path, ordinal, threshold, max_fps, max_frames, sinks=(), detector=DEFAULT_DETECTOR):
         super().__init__(daemon=True)
-        self.path, self.ordinal, self.threshold = path, ordinal, threshold
-        self.period, self.limit = 1 / max_fps, max_frames
-        self.stopping, self.playing = threading.Event(), threading.Event()
-        self.restart, self.looping = threading.Event(), threading.Event()
-        self.done, self.at_end = threading.Event(), threading.Event()
-        self.playing.set()
-        self.looping.set()
-        self.lock = threading.Lock()
-        self.latest = None
+        self.detector_name = detector
+        self.source = ReplaySource(path, ordinal)
+        self.playing, self.restart = self.source.playing, self.source.restart
+        self.looping, self.at_end = self.source.looping, self.source.at_end
+        self.stopping, self.done = threading.Event(), threading.Event()
+        self.results = LatestResultSink()
+        self.pipeline = Pipeline(self.source, None, (self.results, *sinks), threshold=threshold,
+                                 max_fps=max_fps, latest_only=False, max_frames=max_frames)
         self.error = None
-        self.frames_processed = 0
-        self.stream_index = None
+
+    @property
+    def frames_processed(self):
+        return self.pipeline.stats.frames_processed
+
+    @property
+    def stream_index(self):
+        return self.source.stream_index
+
+    @property
+    def limit(self):
+        return self.pipeline.max_frames
+
+    @limit.setter
+    def limit(self, value):
+        self.pipeline.max_frames = value
 
     def take_latest(self):
-        with self.lock:
-            result, self.latest = self.latest, None
-        return result
+        return self.results.take()
 
     def stop(self):
         self.stopping.set()
@@ -50,57 +60,8 @@ class ReplayWorker(threading.Thread):
 
     def run(self):
         try:
-            import av
-            detector = DemoDetector()
-            while not self.stopping.is_set():
-                self.restart.clear()
-                self.at_end.clear()
-                pass_frames = 0
-                with av.open(str(self.path), mode="r") as container:
-                    videos = list(container.streams.video)
-                    if self.ordinal >= len(videos):
-                        raise RecordingError("Selected video stream is absent")
-                    stream = videos[self.ordinal]
-                    self.stream_index = stream.index
-                    stream.codec_context.thread_count = 2
-                    for decoded in container.decode(stream):
-                        if self.stopping.is_set() or self.restart.is_set():
-                            break
-                        while not self.playing.wait(0.1):
-                            if self.stopping.is_set():
-                                return
-                        if self.stopping.is_set() or self.restart.is_set():
-                            break
-                        started = time.monotonic()
-                        if decoded.is_corrupt or min(decoded.width, decoded.height) <= 0:
-                            raise RuntimeError("Decoder returned an invalid frame")
-                        ratio = min(1.0, 960 / max(decoded.width, decoded.height))
-                        width = max(1, round(decoded.width * ratio))
-                        height = max(1, round(decoded.height * ratio))
-                        image = decoded.reformat(width=width, height=height,
-                                                 format="bgr24").to_ndarray()
-                        detected = detector.detect(image, self.threshold)
-                        self.frames_processed += 1
-                        pass_frames += 1
-                        result = {
-                            "image": detected["image"], "labels": detected["labels"],
-                            "inference_ms": detected["inference_ms"], "number": self.frames_processed,
-                            "media_time": float(decoded.pts * decoded.time_base)
-                            if decoded.pts is not None and decoded.time_base is not None else None,
-                        }
-                        with self.lock:
-                            self.latest = result
-                        if self.limit and self.frames_processed >= self.limit:
-                            return
-                        self.stopping.wait(max(0, self.period - (time.monotonic() - started)))
-                if self.stopping.is_set():
-                    return
-                if not pass_frames and not self.restart.is_set():
-                    raise RuntimeError("No video frames decoded")
-                self.at_end.set()
-                while not self.looping.is_set() and not self.restart.wait(0.1):
-                    if self.stopping.is_set():
-                        return
+            self.pipeline.detector = create_detector(self.detector_name)
+            self.pipeline.run(self.stopping)
         except Exception as error:
             self.error = str(error)
         finally:
@@ -130,6 +91,8 @@ def main(argv=None):
     parser.add_argument("path", nargs="?", help="Defaults to newest Arcturus stereo recording")
     parser.add_argument("--video-stream", type=int, default=0, help="Video-track ordinal; no left/right assumption")
     parser.add_argument("--threshold", type=float, default=0.5)
+    parser.add_argument("--detector", choices=DETECTORS, default=DEFAULT_DETECTOR,
+                        help="Model; mobilenet-ssd is the device-validated baseline, yolox-nano an 80-class candidate")
     parser.add_argument("--max-fps", type=float, default=10, help="Processing/playback cap; default 10")
     parser.add_argument("--max-frames", type=int, default=0, help="Exit after this many processed frames; default unlimited")
     parser.add_argument("--preview", type=Path, help="Explicitly save the last displayed window as PNG")
@@ -145,7 +108,7 @@ def main(argv=None):
     report = {"report_kind": "annotated_file_replay", "status": "error",
               "video_stream_ordinal": args.video_stream, "frames_presented": 0,
               "labels_seen": [], "images_saved": False,
-              "overlay_requested": args.overlay,
+              "overlay_requested": args.overlay, "detector_requested": args.detector,
               "scope": "File replay; live camera, HDR appearance, stereo alignment and VR overlay unvalidated"}
     worker = None
     overlay = None
@@ -171,10 +134,7 @@ def main(argv=None):
             raise RuntimeError(f"Window dependencies unavailable: {error}. Run bash scripts/setup_window.sh") from error
         check_display_libraries(QtCore)
         if args.overlay:
-            if __package__:
-                from .overlay_client import OverlayClient, PanelSettings
-            else:
-                from overlay_client import OverlayClient, PanelSettings
+            from framejacker.overlay import OverlayClient, OverlaySink, PanelSettings
             overlay = OverlayClient()
             overlay.start()
 
@@ -198,7 +158,8 @@ def main(argv=None):
         window.setWindowTitle("Framejacker — annotated replay")
         window.resize(960, 800)
         layout = QtWidgets.QVBoxLayout(window)
-        title = QtWidgets.QLabel(f"{path.name} · video track {args.video_stream} · replay up to {args.max_fps:g} fps")
+        title = QtWidgets.QLabel(f"{path.name} · video track {args.video_stream} · {args.detector} · "
+                                 f"replay up to {args.max_fps:g} fps")
         title.setWordWrap(True)
         layout.addWidget(title)
         canvas = Canvas()
@@ -244,7 +205,8 @@ def main(argv=None):
                 field.valueChanged.connect(configure_panel)
             visible.toggled.connect(configure_panel)
             layout.addWidget(panel)
-        worker = ReplayWorker(path, args.video_stream, args.threshold, args.max_fps, args.max_frames)
+        worker = ReplayWorker(path, args.video_stream, args.threshold, args.max_fps, args.max_frames,
+                              sinks=(OverlaySink(overlay),) if overlay else (), detector=args.detector)
 
         def toggle_pause():
             if worker.playing.is_set():
@@ -275,17 +237,16 @@ def main(argv=None):
                     return
                 result = worker.take_latest()
                 if result:
-                    image = result["image"]
+                    image = result.image
                     canvas.image = QtGui.QImage(image.data, image.shape[1], image.shape[0], image.strides[0],
                                                QtGui.QImage.Format.Format_BGR888).copy()
                     canvas.update()
-                    if overlay:
-                        overlay.submit_bgr(image)
                     report["frames_presented"] += 1
-                    labels_seen.update(result["labels"])
-                    media = f"{result['media_time']:.3f}s" if result["media_time"] is not None else "unknown time"
-                    status.setText(f"Frame {result['number']} · {media} · inference {result['inference_ms']:.0f} ms · "
-                                   + (", ".join(result["labels"]) or "No objects above threshold"))
+                    labels_seen.update(result.labels)
+                    media_time = result.frame.media_time
+                    media = f"{media_time:.3f}s" if media_time is not None else "unknown time"
+                    status.setText(f"Frame {result.index} · {media} · inference {result.result.inference_ms:.0f} ms · "
+                                   + (", ".join(result.labels) or "No objects above threshold"))
                 if worker.done.is_set():
                     if worker.error:
                         raise RuntimeError(worker.error)
@@ -317,6 +278,7 @@ def main(argv=None):
             raise RuntimeError("; ".join(failures) or worker.error or f"Qt exited with code {exit_code}")
         report.update(status="finished" if args.max_frames and worker.frames_processed >= args.max_frames else "closed",
                       frames_processed=worker.frames_processed, labels_seen=sorted(labels_seen),
+                      detector=describe(worker.pipeline.detector),
                       container_stream_index=worker.stream_index, qt_platform=app.platformName())
     except Exception as error:
         report["error"] = str(error)

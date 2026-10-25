@@ -18,6 +18,8 @@ anchors are preserved. [The index](README.md) is the starting point.
 | [Live capture](live-capture.md) | Current capture work order, dependencies and acceptance checks | A task is completed or the chosen path changes |
 | [Camera reference](steam-frame-camera.md) | Camera interfaces, compatibility research and pinned references | A source/runtime review produces new findings |
 | [Capture review](capture-reference-review.md) | Dated code analysis and the reasoning for the reviewed strategy | A factual correction is needed; later decisions belong in the active plan |
+| [Design review](design-review.md) | Dated architecture/implementation review, its work order and current next steps | A factual correction is needed; record progress in the owning documents |
+| [CLAUDE.md](../CLAUDE.md) | Short orientation, cloud setup and checks for a new agent session | Setup, layout or checks change |
 | [Contributing](../CONTRIBUTING.md) | Contribution and documentation maintenance workflow | Review conventions change |
 | [Third-party sources](../THIRD_PARTY.md) | Dependency, fixture and reused-code attribution | Dependencies, fixtures or external code change |
 | This document | Ownership, organization and consolidation checklist | Documentation structure or maintenance rules change |
