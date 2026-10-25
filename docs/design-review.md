@@ -194,6 +194,12 @@ own file and generate the status matrix, and state each caveat once.
 - Cloud evidence: [E49](status.md#e49-shared-pipeline-and-package-refactor-cloud-checks),
   [E50](status.md#e50-candidate-detector-and-evaluation-harness-cloud-checks).
 
+- Replay pacing (item 4), cloud-only: `ReplaySource(realtime=True)` /
+  `replay_window.py --realtime` follow media time and drop late frames;
+  end-to-end figures appear in the summary. Unmeasured on Frame; see the
+  [morning checklist](morning-checklist.md). Pushes to branches now run CI only
+  through pull requests (`push` limited to `main`).
+
 ## Next steps
 
 State at handoff (2026-10-25): items 1–3 are on branch

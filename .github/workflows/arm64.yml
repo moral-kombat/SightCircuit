@@ -5,6 +5,7 @@ name: ARM64 checks
 # device validation of drivers, SteamVR or cameras.
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 

@@ -22,10 +22,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class ReplayWorker(threading.Thread):
     """Run file replay through the shared pipeline; retain one latest result for the UI."""
-    def __init__(self, path, ordinal, threshold, max_fps, max_frames, sinks=(), detector=DEFAULT_DETECTOR):
+    def __init__(self, path, ordinal, threshold, max_fps, max_frames, sinks=(), detector=DEFAULT_DETECTOR,
+                 realtime=False):
         super().__init__(daemon=True)
         self.detector_name = detector
-        self.source = ReplaySource(path, ordinal)
+        self.source = ReplaySource(path, ordinal, realtime=realtime)
         self.playing, self.restart = self.source.playing, self.source.restart
         self.looping, self.at_end = self.source.looping, self.source.at_end
         self.stopping, self.done = threading.Event(), threading.Event()
@@ -95,6 +96,8 @@ def main(argv=None):
                         help="Model; mobilenet-ssd is the device-validated baseline, yolox-nano an 80-class candidate")
     parser.add_argument("--max-fps", type=float, default=10, help="Processing/playback cap; default 10")
     parser.add_argument("--max-frames", type=int, default=0, help="Exit after this many processed frames; default unlimited")
+    parser.add_argument("--realtime", action="store_true",
+                        help="Pace playback by media time and drop frames processing cannot keep up with")
     parser.add_argument("--preview", type=Path, help="Explicitly save the last displayed window as PNG")
     parser.add_argument("--report", type=Path, help="Explicitly save the final JSON summary")
     parser.add_argument("--overlay", action="store_true", help="Also show a head-relative OpenVR panel; test the native panel first")
@@ -206,6 +209,7 @@ def main(argv=None):
             visible.toggled.connect(configure_panel)
             layout.addWidget(panel)
         worker = ReplayWorker(path, args.video_stream, args.threshold, args.max_fps, args.max_frames,
+                              realtime=args.realtime,
                               sinks=(OverlaySink(overlay),) if overlay else (), detector=args.detector)
 
         def toggle_pause():
@@ -279,6 +283,10 @@ def main(argv=None):
         report.update(status="finished" if args.max_frames and worker.frames_processed >= args.max_frames else "closed",
                       frames_processed=worker.frames_processed, labels_seen=sorted(labels_seen),
                       detector=describe(worker.pipeline.detector),
+                      realtime=args.realtime, frames_dropped=worker.source.frames_dropped,
+                      processed_fps=round(worker.frames_processed / max(worker.pipeline.stats.elapsed_s, 1e-9), 3),
+                      mean_processing_ms=round(worker.pipeline.stats.mean_processing_ms, 3),
+                      max_input_age_ms=round(worker.pipeline.stats.max_input_age_ms, 3),
                       container_stream_index=worker.stream_index, qt_platform=app.platformName())
     except Exception as error:
         report["error"] = str(error)
