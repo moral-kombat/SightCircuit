@@ -1642,10 +1642,15 @@ from the replay worker rather than the Qt thread.
 All 225 tests pass in `.venv-replay` with 55 skips for unbuilt capture
 adaptation fixtures, including 13 new pipeline/output tests that need no OpenCV.
 The smoke check passes using the shared detector, and ruff reports no findings.
-Replay and mirror scripts also ran as files from outside the checkout. This is
-not a GitHub Actions or Frame result: replay, the VR panel and mirror
-recognition must be rerun on the headset before treating the refactor as
-device-confirmed.
+Replay and mirror scripts also ran as files from outside the checkout.
+
+GitHub Actions on commit `56eb472` passed both the x86_64 workflow (including
+lint and smoke) and the new ARM64 workflow on `ubuntu-24.04-arm`, which runs the
+native, capture-fixture, replay-window and mirror-recognition suites. That
+commit also restores CI: runner images had stopped shipping `libEGL.so.1`, so
+PySide6 import failed in the smoke and replay-window jobs on `main` as well.
+None of this is a Frame result: replay, the VR panel and mirror recognition must
+be rerun on the headset before treating the refactor as device-confirmed.
 
 ## Maintaining the evidence
 
