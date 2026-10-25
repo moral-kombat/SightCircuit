@@ -28,6 +28,12 @@ flowchart LR
     Results --> Overlay[Head-relative VR panel]
 ```
 
+These stages are implemented as the `framejacker` package's `FrameSource`,
+`convert.to_bgr`, `Detector`, `annotate` and `Sink` interfaces, connected by
+`Pipeline`. Live sources use its latest-only mode (the bounded latest-frame
+queue); file replay uses every-frame mode. See
+[development](development.md#python-package-and-pipeline) for the module layout.
+
 Keep capture, inference, and presentation separate so a new camera backend does
 not require a different detector or renderer. A slow detector should discard old
 queued frames rather than accumulate latency. Preserve the source frame until
@@ -49,8 +55,9 @@ and license must be recorded together for reproducible results.
 
 ## Recognition implementation and model replacement
 
-The implemented detector is [`DemoDetector`](../scripts/demo_detector.py), shared
-by file replay and the bounded mirror recognizer. It loads SHA-256-verified
+The implemented detector is [`MobileNetSSD`](../framejacker/detection.py), shared
+by file replay and the bounded mirror recognizer through the
+[shared pipeline](../framejacker/pipeline.py). It loads SHA-256-verified
 MobileNet-SSD Caffe weights/configuration into OpenCV DNN, explicitly selects
 CPU execution and limits OpenCV to two threads. It recognizes the 20 Pascal VOC
 foreground classes plus a background output; it has no rug class. A rug labeled
@@ -61,7 +68,7 @@ flowchart LR
     File[Recorded track: PyAV] --> BGR[Owned BGR image, longest side at most 960]
     Mirror[Bounded mirror: RGB3 or BGR3 with stride] --> Latest[One pending input; replace older reads]
     Latest --> BGR
-    BGR --> Adapter[DemoDetector: resize to 300 by 300, scale and mean]
+    BGR --> Adapter[MobileNetSSD: resize to 300 by 300, scale and mean]
     Adapter --> CPU[OpenCV DNN on CPU]
     CPU --> Decode[Filter scores/classes and map boxes to this input image]
     Decode --> Result[Labels, boxes, scores, annotated image and inference time]
@@ -79,20 +86,20 @@ to the dimensions of that specific input image, clamped and drawn on an owned
 copy. The default score threshold is 0.5. Scores are not calibrated
 probabilities or a measured accuracy percentage.
 
-The current adapter boundary is an ordinary Python method:
+The detector boundary is the `Detector` protocol; drawing is separate:
 
 ```python
-result = detector.detect(bgr_image, threshold)
-# result contains:
-# image: owned annotated uint8 BGR image matching this input
-# labels: sorted label strings
-# detections: [{"label": str, "confidence": float, "box_xyxy": [x1, y1, x2, y2]}]
-# inference_ms: time spent in the model's forward call
+result = detector.detect(bgr_image, threshold)   # framejacker.frame.DetectionResult
+# result.detections: (Detection(label, confidence, box_xyxy), ...) in input pixels
+# result.labels: sorted label strings
+# result.inference_ms: time spent in the model's forward call
+image = annotate(bgr_image, result)              # owned annotated copy
 ```
 
-Both callers currently construct `DemoDetector` directly; there is no model
-selector or second detector adapter yet. The mirror worker already accepts an
-injected detector factory for tests. Replay presents one latest completed
+`Pipeline` performs conversion, detection and annotation for both callers and
+hands each `Processed` result (frame, detections, annotated image, input age and
+total processing time) to sinks. There is no model selector or second detector
+yet; a replacement implements the same protocol. Replay presents one latest completed
 result, while mirror capture keeps one pending owned input for inference and
 drops observations older than one second. The measured 42.044 ms mean forward
 time and roughly 5 processed fps belong to the bounded mirror/MobileNet trial,
@@ -166,7 +173,7 @@ a supervised process. Capture and inference run separately with one pending
 read; newer captured input replaces pending input when processing falls behind.
 Each result retains its own image, local read count and observation time. RGB3
 and BGR3 are converted explicitly, including stride padding, before the shared
-`DemoDetector` runs. This is composited input, with no exposure timestamps or
+detector runs. This is composited input, with no exposure timestamps or
 verified physical-camera identity. The fixed-panel device test confirmed that
 this mirror includes our VR output. Keep it for bounded/no-display recognition
 and post-capture snapshots; continuous VR image output should use input before
@@ -197,16 +204,16 @@ camera nodes already owned by XRService. Details and sources are in the
 ## Presentation and spatial labels
 
 `scripts/replay_window.py` implements the first window prototype. A worker thread
-owns PyAV decoding, resizing and CPU inference, then publishes one latest
-completed annotated image under a lock. The Qt thread copies that image into
+runs `ReplaySource` (PyAV decoding and resizing) through the every-frame
+pipeline, which publishes one latest completed annotated result for the UI. The Qt thread copies that image into
 an owned QImage and paints it with aspect ratio preserved. Each annotation
 belongs to the image it was inferred from; queued results do not accumulate.
 The worker checks pause/replay/stop events and closes the file between loops.
 Playback processes each frame at up to 10 fps by default, rather than promising
 the recording's original timing. The UI offers pause/resume, replay and looping.
 
-Optional `--overlay` sends the same completed annotated image to a separate
-native process owning a public OpenVR overlay. A sender thread retains one
+Optional `--overlay` adds a pipeline sink that sends the same completed
+annotated image to a separate native process owning a public OpenVR overlay. A sender thread retains one
 pending RGBA image and sends settings independently of replay frames, keeping
 the GUI responsive while paused or while native writes are blocked. The panel
 follows the HMD; no calibrated world-space transform is implied. See the

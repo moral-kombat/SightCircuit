@@ -205,3 +205,13 @@ class OverlayClient:
         return {"requested": True, "validation_only": self.validation_only,
                 "frames_sent": self.frames_sent, "error": self.error,
                 "native_report": self.final_report, "forced_termination": self.forced_termination}
+
+
+class OverlaySink:
+    """Pipeline sink that mirrors each annotated image into the VR panel."""
+
+    def __init__(self, client):
+        self.client = client
+
+    def submit(self, processed):
+        self.client.submit_bgr(processed.image)

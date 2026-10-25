@@ -473,7 +473,7 @@ remain separate milestones.
 ## Connect the working application
 
 The standalone `mirror_recognize.py` now exercises guarded mirror input and the
-shared `DemoDetector` without a visible result window. Its first bounded Frame
+shared MobileNet-SSD detector without a visible result window. Its first bounded Frame
 trial passed execution/cleanup and the user reports normal passthrough.
 Continuous Qt/VR integration remains pending; the bounded tool is not a live
 display backend. The fixed-panel test confirmed that our panel reappears in

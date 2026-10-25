@@ -8,7 +8,7 @@ import tempfile
 import time
 import unittest
 
-from scripts.overlay_client import DEFAULT_BRIDGE, OverlayClient, PanelSettings, packet
+from framejacker.overlay import DEFAULT_BRIDGE, OverlayClient, PanelSettings, packet
 
 
 @unittest.skipUnless(DEFAULT_BRIDGE.is_file(), "Build scripts/build_overlay_bridge.sh first")

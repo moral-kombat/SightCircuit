@@ -7,6 +7,8 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
+*.egg-info/
+/build/
 
 # Local inputs and models; keep private camera recordings out of source control
 /recordings/

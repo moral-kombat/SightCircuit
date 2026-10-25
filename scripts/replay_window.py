@@ -9,39 +9,48 @@ import signal
 import subprocess
 import sys
 import threading
-import time
 
-if __package__:
-    from .recording_check import RecordingError, latest_recording
-    from .demo_detector import DemoDetector
-else:
-    from recording_check import RecordingError, latest_recording
-    from demo_detector import DemoDetector
+if not __package__:  # Run as a file: import this checkout's packages without installation.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from framejacker.detection import MobileNetSSD
+from framejacker.pipeline import LatestResultSink, Pipeline
+from framejacker.sources.replay import ReplaySource
+from scripts.recording_check import RecordingError, latest_recording
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReplayWorker(threading.Thread):
-    """Own decoding/inference and retain one latest completed image for the UI."""
-    def __init__(self, path, ordinal, threshold, max_fps, max_frames):
+    """Run file replay through the shared pipeline; retain one latest result for the UI."""
+    def __init__(self, path, ordinal, threshold, max_fps, max_frames, sinks=()):
         super().__init__(daemon=True)
-        self.path, self.ordinal, self.threshold = path, ordinal, threshold
-        self.period, self.limit = 1 / max_fps, max_frames
-        self.stopping, self.playing = threading.Event(), threading.Event()
-        self.restart, self.looping = threading.Event(), threading.Event()
-        self.done, self.at_end = threading.Event(), threading.Event()
-        self.playing.set()
-        self.looping.set()
-        self.lock = threading.Lock()
-        self.latest = None
+        self.source = ReplaySource(path, ordinal)
+        self.playing, self.restart = self.source.playing, self.source.restart
+        self.looping, self.at_end = self.source.looping, self.source.at_end
+        self.stopping, self.done = threading.Event(), threading.Event()
+        self.results = LatestResultSink()
+        self.pipeline = Pipeline(self.source, None, (self.results, *sinks), threshold=threshold,
+                                 max_fps=max_fps, latest_only=False, max_frames=max_frames)
         self.error = None
-        self.frames_processed = 0
-        self.stream_index = None
+
+    @property
+    def frames_processed(self):
+        return self.pipeline.stats.frames_processed
+
+    @property
+    def stream_index(self):
+        return self.source.stream_index
+
+    @property
+    def limit(self):
+        return self.pipeline.max_frames
+
+    @limit.setter
+    def limit(self, value):
+        self.pipeline.max_frames = value
 
     def take_latest(self):
-        with self.lock:
-            result, self.latest = self.latest, None
-        return result
+        return self.results.take()
 
     def stop(self):
         self.stopping.set()
@@ -50,57 +59,8 @@ class ReplayWorker(threading.Thread):
 
     def run(self):
         try:
-            import av
-            detector = DemoDetector()
-            while not self.stopping.is_set():
-                self.restart.clear()
-                self.at_end.clear()
-                pass_frames = 0
-                with av.open(str(self.path), mode="r") as container:
-                    videos = list(container.streams.video)
-                    if self.ordinal >= len(videos):
-                        raise RecordingError("Selected video stream is absent")
-                    stream = videos[self.ordinal]
-                    self.stream_index = stream.index
-                    stream.codec_context.thread_count = 2
-                    for decoded in container.decode(stream):
-                        if self.stopping.is_set() or self.restart.is_set():
-                            break
-                        while not self.playing.wait(0.1):
-                            if self.stopping.is_set():
-                                return
-                        if self.stopping.is_set() or self.restart.is_set():
-                            break
-                        started = time.monotonic()
-                        if decoded.is_corrupt or min(decoded.width, decoded.height) <= 0:
-                            raise RuntimeError("Decoder returned an invalid frame")
-                        ratio = min(1.0, 960 / max(decoded.width, decoded.height))
-                        width = max(1, round(decoded.width * ratio))
-                        height = max(1, round(decoded.height * ratio))
-                        image = decoded.reformat(width=width, height=height,
-                                                 format="bgr24").to_ndarray()
-                        detected = detector.detect(image, self.threshold)
-                        self.frames_processed += 1
-                        pass_frames += 1
-                        result = {
-                            "image": detected["image"], "labels": detected["labels"],
-                            "inference_ms": detected["inference_ms"], "number": self.frames_processed,
-                            "media_time": float(decoded.pts * decoded.time_base)
-                            if decoded.pts is not None and decoded.time_base is not None else None,
-                        }
-                        with self.lock:
-                            self.latest = result
-                        if self.limit and self.frames_processed >= self.limit:
-                            return
-                        self.stopping.wait(max(0, self.period - (time.monotonic() - started)))
-                if self.stopping.is_set():
-                    return
-                if not pass_frames and not self.restart.is_set():
-                    raise RuntimeError("No video frames decoded")
-                self.at_end.set()
-                while not self.looping.is_set() and not self.restart.wait(0.1):
-                    if self.stopping.is_set():
-                        return
+            self.pipeline.detector = MobileNetSSD()
+            self.pipeline.run(self.stopping)
         except Exception as error:
             self.error = str(error)
         finally:
@@ -171,10 +131,7 @@ def main(argv=None):
             raise RuntimeError(f"Window dependencies unavailable: {error}. Run bash scripts/setup_window.sh") from error
         check_display_libraries(QtCore)
         if args.overlay:
-            if __package__:
-                from .overlay_client import OverlayClient, PanelSettings
-            else:
-                from overlay_client import OverlayClient, PanelSettings
+            from framejacker.overlay import OverlayClient, OverlaySink, PanelSettings
             overlay = OverlayClient()
             overlay.start()
 
@@ -244,7 +201,8 @@ def main(argv=None):
                 field.valueChanged.connect(configure_panel)
             visible.toggled.connect(configure_panel)
             layout.addWidget(panel)
-        worker = ReplayWorker(path, args.video_stream, args.threshold, args.max_fps, args.max_frames)
+        worker = ReplayWorker(path, args.video_stream, args.threshold, args.max_fps, args.max_frames,
+                              sinks=(OverlaySink(overlay),) if overlay else ())
 
         def toggle_pause():
             if worker.playing.is_set():
@@ -275,17 +233,16 @@ def main(argv=None):
                     return
                 result = worker.take_latest()
                 if result:
-                    image = result["image"]
+                    image = result.image
                     canvas.image = QtGui.QImage(image.data, image.shape[1], image.shape[0], image.strides[0],
                                                QtGui.QImage.Format.Format_BGR888).copy()
                     canvas.update()
-                    if overlay:
-                        overlay.submit_bgr(image)
                     report["frames_presented"] += 1
-                    labels_seen.update(result["labels"])
-                    media = f"{result['media_time']:.3f}s" if result["media_time"] is not None else "unknown time"
-                    status.setText(f"Frame {result['number']} · {media} · inference {result['inference_ms']:.0f} ms · "
-                                   + (", ".join(result["labels"]) or "No objects above threshold"))
+                    labels_seen.update(result.labels)
+                    media_time = result.frame.media_time
+                    media = f"{media_time:.3f}s" if media_time is not None else "unknown time"
+                    status.setText(f"Frame {result.index} · {media} · inference {result.result.inference_ms:.0f} ms · "
+                                   + (", ".join(result.labels) or "No objects above threshold"))
                 if worker.done.is_set():
                     if worker.error:
                         raise RuntimeError(worker.error)

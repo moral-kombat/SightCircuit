@@ -168,3 +168,19 @@ own file and generate the status matrix, and state each caveat once.
    time-boxed, collapse its patches and trim CI to the current mode.
 6. Slim the documentation.
 
+## Progress
+
+- Item 1, partly done: [`pyproject.toml`](../pyproject.toml) with extras and
+  ruff configuration, a `framejacker/` library package beside the `scripts/`
+  commands, a ruff CI job and an [ARM64 workflow](../.github/workflows/arm64.yml)
+  sharing [one job definition](../.github/workflows/check-jobs.yml) with x86_64.
+  The package sits at the repository root rather than under `src/` so that
+  headset commands keep working from a plain checkout. A multi-architecture
+  lock file, console entry points and failing CI on unexpected skips remain.
+- Item 2, done for replay and mirror recognition: `Frame`, `FrameSource`,
+  `Detector`, `Sink`, `LatestSlot` and `Pipeline`, plus shared worker
+  supervision and output publication. `smoke_check.py` uses the shared
+  detector, and detection is separate from annotation. The V4L2 mirror module,
+  the overlay client's own pending-frame holder and the capture supervisor's
+  process handling are not yet consolidated.
+- Cloud evidence: [E49](status.md#e49-shared-pipeline-and-package-refactor-cloud-checks).

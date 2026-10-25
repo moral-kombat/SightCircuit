@@ -436,7 +436,7 @@ live inference, physical camera identity or display-feedback exclusion.
 
 Execution date: 2026-10-16, Linux x86_64 cloud environment. The new
 [mirror recognizer](../scripts/mirror_recognize.py) uses the existing guarded
-capture loop and a [shared checksum-verified CPU detector](../scripts/demo_detector.py).
+capture loop and a [shared checksum-verified CPU detector](../framejacker/detection.py).
 The replay application uses that same detector. No actual camera, SteamVR
 service, Qt window or VR panel was started by the recognizer checks.
 
@@ -1627,6 +1627,25 @@ Browser diagnostics appear around preview opening, separately from
 the successful recognizer exit/cleanup report; they do not identify a capture
 or model failure. Dedicated capture activation remains paused pending its
 separate access, recovery and synchronization work.
+
+### E49: Shared pipeline and package refactor cloud checks
+
+Execution date: 2026-10-25, Linux x86_64 cloud environment, Python 3.12.3,
+branch `claude/peaceful-fermi-8m3bu6`. File replay and bounded mirror recognition
+now run through the [shared pipeline](../framejacker/pipeline.py) and detector
+interface described in [development](development.md#python-package-and-pipeline);
+see the [design review](design-review.md) for the reasoning. Command-line
+options, report fields and device behavior are intended to be unchanged; the
+mirror report adds `mean_processing_ms`, and the VR panel now receives images
+from the replay worker rather than the Qt thread.
+
+All 225 tests pass in `.venv-replay` with 55 skips for unbuilt capture
+adaptation fixtures, including 13 new pipeline/output tests that need no OpenCV.
+The smoke check passes using the shared detector, and ruff reports no findings.
+Replay and mirror scripts also ran as files from outside the checkout. This is
+not a GitHub Actions or Frame result: replay, the VR panel and mirror
+recognition must be rerun on the headset before treating the refactor as
+device-confirmed.
 
 ## Maintaining the evidence
 

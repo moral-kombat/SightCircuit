@@ -13,6 +13,7 @@ a separate Git worktree is only needed if explicitly requested.
 ```bash
 bash scripts/setup.sh
 .venv/bin/python scripts/smoke_check.py
+uvx ruff@0.14.2 check .
 git diff --check
 ```
 
@@ -36,7 +37,9 @@ passing checks tied to what actually executed.
 ## Changes and pull requests
 
 - Keep capture, preprocessing, inference and display components separate. A
-  file/replay input should remain useful without camera hardware.
+  file/replay input should remain useful without camera hardware. Add reusable
+  code to the `framejacker/` package (a new input is a `FrameSource`, a new
+  output a `Sink`, a new model a `Detector`); keep `scripts/` for commands.
 - Preserve timestamps, timebase provenance, image layout and calibration
   information when adding a camera backend.
 - Distinguish official API contracts, community observations and measurements
