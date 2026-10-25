@@ -12,7 +12,7 @@ import threading
 
 if not __package__:  # Run as a file: import this checkout's packages without installation.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from framejacker.detection import MobileNetSSD
+from framejacker.detection import DEFAULT_DETECTOR, DETECTORS, create_detector, describe
 from framejacker.pipeline import LatestResultSink, Pipeline
 from framejacker.sources.replay import ReplaySource
 from scripts.recording_check import RecordingError, latest_recording
@@ -22,8 +22,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class ReplayWorker(threading.Thread):
     """Run file replay through the shared pipeline; retain one latest result for the UI."""
-    def __init__(self, path, ordinal, threshold, max_fps, max_frames, sinks=()):
+    def __init__(self, path, ordinal, threshold, max_fps, max_frames, sinks=(), detector=DEFAULT_DETECTOR):
         super().__init__(daemon=True)
+        self.detector_name = detector
         self.source = ReplaySource(path, ordinal)
         self.playing, self.restart = self.source.playing, self.source.restart
         self.looping, self.at_end = self.source.looping, self.source.at_end
@@ -59,7 +60,7 @@ class ReplayWorker(threading.Thread):
 
     def run(self):
         try:
-            self.pipeline.detector = MobileNetSSD()
+            self.pipeline.detector = create_detector(self.detector_name)
             self.pipeline.run(self.stopping)
         except Exception as error:
             self.error = str(error)
@@ -90,6 +91,8 @@ def main(argv=None):
     parser.add_argument("path", nargs="?", help="Defaults to newest Arcturus stereo recording")
     parser.add_argument("--video-stream", type=int, default=0, help="Video-track ordinal; no left/right assumption")
     parser.add_argument("--threshold", type=float, default=0.5)
+    parser.add_argument("--detector", choices=DETECTORS, default=DEFAULT_DETECTOR,
+                        help="Model; mobilenet-ssd is the device-validated baseline, yolox-nano an 80-class candidate")
     parser.add_argument("--max-fps", type=float, default=10, help="Processing/playback cap; default 10")
     parser.add_argument("--max-frames", type=int, default=0, help="Exit after this many processed frames; default unlimited")
     parser.add_argument("--preview", type=Path, help="Explicitly save the last displayed window as PNG")
@@ -105,7 +108,7 @@ def main(argv=None):
     report = {"report_kind": "annotated_file_replay", "status": "error",
               "video_stream_ordinal": args.video_stream, "frames_presented": 0,
               "labels_seen": [], "images_saved": False,
-              "overlay_requested": args.overlay,
+              "overlay_requested": args.overlay, "detector_requested": args.detector,
               "scope": "File replay; live camera, HDR appearance, stereo alignment and VR overlay unvalidated"}
     worker = None
     overlay = None
@@ -155,7 +158,8 @@ def main(argv=None):
         window.setWindowTitle("Framejacker — annotated replay")
         window.resize(960, 800)
         layout = QtWidgets.QVBoxLayout(window)
-        title = QtWidgets.QLabel(f"{path.name} · video track {args.video_stream} · replay up to {args.max_fps:g} fps")
+        title = QtWidgets.QLabel(f"{path.name} · video track {args.video_stream} · {args.detector} · "
+                                 f"replay up to {args.max_fps:g} fps")
         title.setWordWrap(True)
         layout.addWidget(title)
         canvas = Canvas()
@@ -202,7 +206,7 @@ def main(argv=None):
             visible.toggled.connect(configure_panel)
             layout.addWidget(panel)
         worker = ReplayWorker(path, args.video_stream, args.threshold, args.max_fps, args.max_frames,
-                              sinks=(OverlaySink(overlay),) if overlay else ())
+                              sinks=(OverlaySink(overlay),) if overlay else (), detector=args.detector)
 
         def toggle_pause():
             if worker.playing.is_set():
@@ -274,6 +278,7 @@ def main(argv=None):
             raise RuntimeError("; ".join(failures) or worker.error or f"Qt exited with code {exit_code}")
         report.update(status="finished" if args.max_frames and worker.frames_processed >= args.max_frames else "closed",
                       frames_processed=worker.frames_processed, labels_seen=sorted(labels_seen),
+                      detector=describe(worker.pipeline.detector),
                       container_stream_index=worker.stream_index, qt_platform=app.platformName())
     except Exception as error:
         report["error"] = str(error)

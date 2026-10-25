@@ -80,7 +80,8 @@ Replay converts its selected decoded track to BGR24 and scales it to at most
 960 pixels on the longest side. The mirror path handles padded RGB3/BGR3 reads,
 converts to BGR and uses the same limit. The detector requires a nonempty
 `uint8` image with three BGR channels. Its `blobFromImage` uses a 300 × 300
-resize, scale `0.007843` and mean `127.5`; this resize stretches the image,
+resize, scale `0.007843` and mean `127.5`; this resize stretches the image, as
+in SSD training,
 rather than adding letterbox padding. SSD's normalized boxes are mapped back
 to the dimensions of that specific input image, clamped and drawn on an owned
 copy. The default score threshold is 0.5. Scores are not calibrated
@@ -105,6 +106,13 @@ drops observations older than one second. The measured 42.044 ms mean forward
 time and roughly 5 processed fps belong to the bounded mirror/MobileNet trial,
 not to a replacement model or a full live VR pipeline.
 
+YOLOX-Nano instead letterboxes its input: the image is scaled to fit 416 × 416
+without distortion, padded at the bottom/right with gray 114, and boxes are
+mapped back through the inverse transform (`framejacker/preprocess.py`). Its
+scores are objectness × class probability after class-aware NMS at IoU 0.45.
+Detectors keep native label names in reports (`sofa` for MobileNet-SSD,
+`couch` for YOLOX); evaluation compares them through canonical COCO names.
+
 ### Candidate models
 
 These are candidates to evaluate, not installed backends or Frame benchmarks.
@@ -115,7 +123,7 @@ terms.
 | Candidate | Why consider it | Runtime and tradeoff |
 | --- | --- | --- |
 | Current MobileNet-SSD | Small working baseline with measured Frame execution | OpenCV DNN CPU; only 20 foreground classes and observed false positives |
-| [YOLOX-Nano](https://github.com/Megvii-BaseDetection/YOLOX) | First compact alternative to compare on indoor objects; standard COCO training covers 80 classes | Export/pin ONNX, implement its preprocessing, output decoding and NMS, test OpenCV DNN or ONNX Runtime CPU; source uses Apache-2.0 |
+| [YOLOX-Nano](https://github.com/Megvii-BaseDetection/YOLOX) | **Implemented candidate** (`--detector yolox-nano`); standard COCO training covers 80 classes | Pinned 0.1.1rc0 ONNX export, letterbox input, grid decoding and class-aware NMS; ONNX Runtime CPU with OpenCV DNN fallback; Apache-2.0 source; Frame evaluation pending |
 | [YOLO11n](https://docs.ultralytics.com/models/yolo11/) | Another small 80-class COCO detector with an established export workflow | Export off-device instead of requiring the training stack on Frame; verify ONNX operators/runtime and AGPL-3.0 or applicable commercial licensing |
 | [EfficientDet-Lite0](https://ai.google.dev/edge/litert/libraries/task_library/object_detector) | A mobile-oriented alternative, including quantized deployment | Requires a LiteRT/TFLite adapter and verified ARM64 runtime; quantized accuracy and preprocessing need measurement |
 | [Grounding DINO](https://github.com/IDEA-Research/GroundingDINO) or [OWLv2](https://huggingface.co/docs/transformers/model_doc/owlv2) | Text-prompted categories such as rug/carpet without the current fixed label list | Much heavier candidates; begin with offline evaluation or an explicit companion-computer experiment before headset deployment |
@@ -132,17 +140,21 @@ splats concern scene reconstruction and do not replace the detector.
 1. Agree on target classes and an annotated evaluation set from representative
    recordings/stills, including rugs and objects previously confused. Measure
    correct classes, missed objects, false positives and box placement.
+   `scripts/evaluate_detectors.py` implements the comparison; the committed seed
+   set is outdoor regression data, and the representative set is captured on
+   Frame ([procedure](on-device.md#compare-detectors-on-frame-stills)).
 2. Add a detector adapter that preserves the method/result boundary above.
    Pin weights and label-map hashes, input dtype/shape, RGB/BGR order,
    normalization, model/runtime versions and licenses. Add the runtime only to
-   environments that use it. ONNX Runtime is present in the cloud smoke setup;
-   it is not currently a replay dependency or a recognition backend.
+   environments that use it. ONNX Runtime is pinned in the window environment
+   for YOLOX; MobileNet-SSD continues to use OpenCV DNN.
 3. Perform the new model's own preprocessing/output decoding, score filtering
    and NMS where needed. Invert any letterbox/crop/resize transform before
    returning boxes. Keep the original frame association and owned output image;
    changing a weight filename alone is insufficient.
 4. Introduce a shared factory/model selection for both callers and retain
-   MobileNet-SSD as the comparison baseline. Test decoding, class IDs, finite
+   MobileNet-SSD as the comparison baseline (implemented as
+   `create_detector()` and `--detector`). Test decoding, class IDs, finite
    scores, coordinate transforms, empty results and shutdown with the adapter.
 5. Compare the models on the same inputs, then benchmark ARM64 startup, memory,
    preprocessing/inference/render times, input age, thermals and passthrough

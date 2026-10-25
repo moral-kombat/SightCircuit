@@ -183,4 +183,13 @@ own file and generate the status matrix, and state each caveat once.
   detector, and detection is separate from annotation. The V4L2 mirror module,
   the overlay client's own pending-frame holder and the capture supervisor's
   process handling are not yet consolidated.
-- Cloud evidence: [E49](status.md#e49-shared-pipeline-and-package-refactor-cloud-checks).
+- Item 3, implemented in the cloud: YOLOX-Nano (ONNX Runtime, OpenCV DNN
+  fallback) behind the `Detector` interface with letterbox input; `--detector`
+  in replay and mirror recognition; `--still` captures unannotated evaluation
+  inputs; `scripts/evaluate_detectors.py` with a seed manifest and a format for
+  private Frame stills. Correction to finding 3: MobileNet-SSD keeps its
+  stretched 300 × 300 input, because SSD models are trained that way;
+  letterboxing applies to the YOLOX family. The representative evaluation set
+  (including the rug) must be captured on Frame.
+- Cloud evidence: [E49](status.md#e49-shared-pipeline-and-package-refactor-cloud-checks),
+  [E50](status.md#e50-candidate-detector-and-evaluation-harness-cloud-checks).

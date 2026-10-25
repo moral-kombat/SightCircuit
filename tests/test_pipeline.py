@@ -6,9 +6,7 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import patch
 
-from framejacker import detection
 from framejacker.errors import OutputError
 from framejacker.frame import Detection, DetectionResult, Frame
 from framejacker.latest import LatestSlot
@@ -171,16 +169,6 @@ class PipelineTests(unittest.TestCase):
         item = frames[0]
         self.assertEqual((item.pixels, item.pixel_format, item.width, item.stride, item.sequence, item.observed_ns),
                          (b"abcdef", "RGB3", 2, 6, 7, 123))
-
-
-class DetectorManifestTests(unittest.TestCase):
-    def test_missing_manifest_entries_fail_closed(self):
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            (root / "scripts").mkdir()
-            (root / "scripts/smoke-assets.json").write_text('{"assets": [{"name": "dog.jpg", "sha256": "0"}]}')
-            with patch.object(detection, "ROOT", root), self.assertRaisesRegex(RuntimeError, "missing"):
-                detection.verify_model()
 
 
 class OutputTests(unittest.TestCase):

@@ -72,6 +72,15 @@ class ReplayWindowTests(unittest.TestCase):
         self.assertIsNotNone(image)
         self.assertGreater(image.std(), 10)
 
+    def test_candidate_detector_is_selectable_and_reported(self):
+        result, report = self.run_window("--detector", "yolox-nano")
+        self.assertEqual(result.returncode, 0, (report, result.stderr))
+        self.assertEqual(report["detector"]["name"], "yolox-nano")
+        self.assertEqual(report["detector"]["classes"], 80)
+        self.assertTrue({"bicycle", "dog"}.issubset(report["labels_seen"]))
+        result, report = self.run_window()
+        self.assertEqual(report["detector"], {"name": "mobilenet-ssd", "runtime": "opencv-dnn", "classes": 20})
+
     def test_second_track_is_selectable(self):
         result, report = self.run_window("--video-stream", "1")
         self.assertEqual(result.returncode, 0, report)

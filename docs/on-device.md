@@ -499,6 +499,67 @@ our result into its own input. A future live window/VR panel still requires a
 display-feedback check. [Cloud evidence](status.md#e16-bounded-mirror-recognition-cloud-checks)
 is distinct from the subsequent device execution result.
 
+### Compare detectors on Frame stills
+
+`yolox-nano`, an 80-class COCO candidate, can be selected with `--detector` in
+`replay_window.py` and `mirror_recognize.py`; the default remains the validated
+`mobilenet-ssd`. Neither model has a rug class. Run setup once after updating,
+because it adds the pinned ONNX Runtime wheel and the checksum-verified model:
+
+```bash
+cd "$HOME/framejacker" && git pull --ff-only && bash scripts/setup_window.sh
+```
+
+Then capture unannotated stills for a private evaluation set. `--still` saves
+the last processed input, at the detector's input size, after the source closes;
+it is separate from the annotated `--preview`. Aim at the scene to label,
+including the rug from [E15](status.md#e15-saved-room-recognition-and-rug-false-positive),
+and keep it in view through the final seconds:
+
+```bash
+(
+  set -e
+  cd "$HOME/framejacker"
+  mkdir -p evaluation/local
+  .venv-replay/bin/python scripts/mirror_recognize.py --capture --device /dev/video99 \
+    --seconds 5 --detector yolox-nano \
+    --still "evaluation/local/room-$(date +%Y%m%d-%H%M%S).png"
+)
+```
+
+The earlier grayscale `artifacts/mirror-check/scene-check.png` is also usable.
+`evaluation/local/` is ignored by Git, so private room images stay on the
+device. Describe each still in `evaluation/local/frame.json`; boxes are optional
+source-pixel coordinates (an image viewer's cursor position is enough):
+
+```json
+{
+  "schema_version": 1,
+  "images": [{
+    "id": "room-rug",
+    "path": "room-20261025-120000.png",
+    "present": ["chair"],
+    "absent": ["couch"],
+    "objects": [{"label": "rug", "box_xyxy": [120, 300, 520, 470], "confusable": ["couch", "bed"]}]
+  }]
+}
+```
+
+Compare both detectors on identical inputs and paste the summary lines and
+JSON totals:
+
+```bash
+.venv-replay/bin/python scripts/evaluate_detectors.py --manifest evaluation/local/frame.json \
+  --report "evaluation/local/report-$(date +%Y%m%d-%H%M%S).json"
+```
+
+`present`/`absent` list canonical COCO names (`couch`, `tv`, `dining table`);
+VOC output such as `sofa` is mapped automatically. A rug detected as `couch`
+inside the rug's box is counted under `confusions`. Labels a model cannot
+produce are listed as unsupported rather than missed. Timing is per still on
+Frame's CPU, without capture or display. See
+[development](development.md#detector-evaluation) for the full format.
+
 ### Check whether the VR panel appears in mirror input
 
 This check confirmed that the panel appears both in the headset and in mirror

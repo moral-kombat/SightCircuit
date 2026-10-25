@@ -1,0 +1,124 @@
+"""Detector evaluation scoring, manifest validation and the comparison command."""
+from contextlib import redirect_stderr, redirect_stdout
+import importlib.util
+import io
+import json
+from pathlib import Path
+import tempfile
+import unittest
+
+from framejacker import evaluation
+from framejacker.frame import Detection
+
+ROOT = Path(__file__).resolve().parents[1]
+ASSETS = ROOT / ".cache/framejacker/assets"
+AVAILABLE = all(importlib.util.find_spec(name) for name in ("cv2", "numpy"))
+VOC = ("sofa", "chair", "dog", "car")
+
+
+def found(label, box, confidence=0.9):
+    return Detection(label, confidence, tuple(box))
+
+
+class ScoringTests(unittest.TestCase):
+    def test_image_labels_alternatives_unsupported_and_absent(self):
+        entry = {"id": "room", "present": ["dog", ["car", "truck"], "giraffe"], "absent": ["couch", "bed"]}
+        score = evaluation.score_image(entry, [found("dog", [0, 0, 5, 5]), found("sofa", [5, 5, 9, 9])], VOC)
+        self.assertEqual(score["present_hits"], ["dog"])
+        self.assertEqual(score["present_misses"], ["car|truck"])
+        self.assertEqual(score["unsupported"], ["bed", "giraffe"])
+        self.assertEqual(score["absent_violations"], ["couch"])  # VOC "sofa" is canonical "couch".
+        self.assertEqual(score["reported"], ["couch", "dog"])
+
+    def test_boxes_matching_scale_confusions_and_false_positives(self):
+        entry = {"id": "rug", "boxes_complete": True, "objects": [
+            {"label": "rug", "box_xyxy": [0, 100, 200, 200], "confusable": ["couch"]},
+            {"label": "chair", "box_xyxy": [200, 0, 300, 100]},
+            {"label": "dog", "box_xyxy": [300, 100, 400, 200]}]}
+        detections = [found("sofa", [0, 50, 100, 100], 0.7),   # Rug at half scale: confusion.
+                      found("chair", [100, 0, 150, 50]),        # Matches the chair.
+                      found("chair", [150, 0, 200, 50], 0.6)]   # Duplicate: false positive.
+        score = evaluation.score_image(entry, detections, VOC, scale=0.5)
+        self.assertEqual((score["true_positives"], score["false_negatives"], score["false_positives"]), (1, 1, 2))
+        self.assertEqual(score["confusions"], [{"object": "rug", "detected": "couch", "confidence": 0.7}])
+        self.assertEqual(score["unsupported"], ["rug"])
+        summary = evaluation.totals([score, evaluation.score_image({"id": "x", "present": ["dog"]}, [], VOC)])
+        self.assertEqual(summary["box_recall"], 0.5)
+        self.assertEqual(summary["box_precision"], round(1 / 3, 4))
+        self.assertEqual((summary["present_recall"], summary["confusions"]), (0.0, 1))
+
+    def test_incomplete_boxes_do_not_count_false_positives(self):
+        entry = {"id": "partial", "objects": [{"label": "dog", "box_xyxy": [0, 0, 10, 10]}]}
+        score = evaluation.score_image(entry, [found("car", [20, 20, 30, 30])], VOC)
+        self.assertNotIn("false_positives", score)
+        self.assertNotIn("box_precision", evaluation.totals([score]))
+
+    def test_iou(self):
+        self.assertEqual(evaluation.iou([0, 0, 10, 10], [10, 10, 20, 20]), 0)
+        self.assertAlmostEqual(evaluation.iou([0, 0, 10, 10], [5, 0, 15, 10]), 1 / 3)
+
+
+class ManifestTests(unittest.TestCase):
+    def write(self, folder, manifest):
+        path = Path(folder) / "manifest.json"
+        path.write_text(json.dumps(manifest))
+        return path
+
+    def test_invalid_manifests_are_rejected(self):
+        bad = ({"schema_version": 2, "images": []},
+               {"schema_version": 1, "images": [{"id": "a", "path": "a.png"}, {"id": "a", "path": "b.png"}]},
+               {"schema_version": 1, "images": [{"id": "a", "path": "a.png", "file": "a.png"}]},
+               {"schema_version": 1, "images": [{"id": "a", "path": "a.png",
+                                                 "objects": [{"label": "rug", "box_xyxy": [5, 0, 1, 1]}]}]})
+        with tempfile.TemporaryDirectory() as folder:
+            for manifest in bad:
+                with self.subTest(manifest=manifest), self.assertRaises(evaluation.ManifestError):
+                    evaluation.load_manifest(self.write(folder, manifest))
+
+    def test_paths_resolve_relative_to_manifest(self):
+        with tempfile.TemporaryDirectory() as folder:
+            manifest = evaluation.load_manifest(self.write(folder, {"schema_version": 1, "images": [
+                {"id": "local", "path": "stills/room.png"}, {"id": "remote", "file": "r.jpg", "url": "u"}]}))
+            local, remote = manifest["images"]
+            self.assertEqual(evaluation.resolve_image(manifest, local, "/downloads"), Path(folder) / "stills/room.png")
+            self.assertEqual(evaluation.resolve_image(manifest, remote, "/downloads"), Path("/downloads/r.jpg"))
+
+    def test_seed_manifest_is_valid_and_pinned(self):
+        manifest = evaluation.load_manifest(ROOT / "evaluation/seed.json")
+        for entry in manifest["images"]:
+            self.assertEqual(len(entry["sha256"]), 64)
+            self.assertTrue(entry["url"].startswith("https://raw.githubusercontent.com/pjreddie/darknet/"))
+
+
+@unittest.skipUnless(AVAILABLE and (ASSETS / "yolox_nano.onnx").is_file(), "Run scripts/setup_window.sh first")
+class CommandTests(unittest.TestCase):
+    def test_compares_detectors_on_local_stills_and_refuses_overwrite(self):
+        from scripts import evaluate_detectors
+
+        with tempfile.TemporaryDirectory() as folder:
+            manifest = Path(folder) / "local.json"
+            manifest.write_text(json.dumps({"schema_version": 1, "images": [{
+                "id": "dog", "path": str(ASSETS / "dog.jpg"), "present": ["dog", "bicycle"], "absent": ["cat"],
+                "objects": [{"label": "dog", "box_xyxy": [130, 205, 325, 540]}]}]}))
+            report_path = Path(folder) / "report.json"
+            with redirect_stdout(io.StringIO()) as output, redirect_stderr(io.StringIO()):
+                code = evaluate_detectors.main(["--manifest", str(manifest), "--report", str(report_path)])
+            report = json.loads(output.getvalue())
+            self.assertEqual(code, 0, report)
+            self.assertEqual(json.loads(report_path.read_text()), report)
+            self.assertEqual(set(report["detectors"]), {"mobilenet-ssd", "yolox-nano"})
+            for result in report["detectors"].values():
+                self.assertEqual(result["totals"]["present_hits"], 2)
+                self.assertEqual(result["totals"]["true_positives"], 1)
+                self.assertGreater(result["totals"]["mean_inference_ms"], 0)
+            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                evaluate_detectors.main(["--manifest", str(manifest), "--report", str(report_path)])
+            missing = Path(folder) / "missing.json"
+            missing.write_text(json.dumps({"schema_version": 1, "images": [{"id": "x", "path": "absent.png"}]}))
+            with redirect_stdout(io.StringIO()) as output, redirect_stderr(io.StringIO()):
+                self.assertEqual(evaluate_detectors.main(["--manifest", str(missing)]), 1)
+            self.assertIn("not found", json.loads(output.getvalue())["error"])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -15,6 +15,13 @@ are recorded in [scripts/smoke-assets.json](scripts/smoke-assets.json).
 | --- | --- | --- |
 | `MobileNetSSD_deploy.prototxt`, `MobileNetSSD_deploy.caffemodel` | [chuanqi305/MobileNet-SSD](https://github.com/chuanqi305/MobileNet-SSD/tree/bb17b6c3eef36d80be441ae8e5339be66e8e3b7a), [upstream license](https://github.com/chuanqi305/MobileNet-SSD/blob/bb17b6c3eef36d80be441ae8e5339be66e8e3b7a/LICENSE) | OpenCV CPU detector fixture |
 | `dog.jpg` | [pjreddie/darknet sample data](https://github.com/pjreddie/darknet/blob/f6afaabcdf85f77e7aff2ec55c020c0e297c77f9/data/dog.jpg), [upstream license](https://github.com/pjreddie/darknet/blob/f6afaabcdf85f77e7aff2ec55c020c0e297c77f9/LICENSE) | Repeated sample-image frames for the smoke check |
+| `yolox_nano.onnx` | [Megvii-BaseDetection/YOLOX release 0.1.1rc0](https://github.com/Megvii-BaseDetection/YOLOX/releases/tag/0.1.1rc0), [Apache-2.0 license](https://github.com/Megvii-BaseDetection/YOLOX/blob/0.1.1rc0/LICENSE) | Candidate 80-class COCO detector; trained on COCO, whose annotations are CC BY 4.0 |
+
+The [seed evaluation manifest](evaluation/seed.json) lists six further
+[darknet sample images](https://github.com/pjreddie/darknet/tree/f6afaabcdf85f77e7aff2ec55c020c0e297c77f9/data)
+by immutable URL and checksum; `scripts/evaluate_detectors.py --fetch` downloads
+them into ignored `.cache/framejacker/evaluation/`. Their labels are original
+Framejacker annotations.
 
 The license links identify the upstream repositories' notices; they do not
 relicense individual assets as original Framejacker material. Generated sample
@@ -38,7 +45,8 @@ the installed wheel's notices and upstream licenses for those components. They
 are installed in ignored `.venv-replay/`, not committed to this repository.
 
 [requirements-window.txt](requirements-window.txt) extends that environment
-with NumPy, OpenCV headless, PySide6 Essentials and Shiboken. The annotated
+with NumPy, OpenCV headless, PySide6 Essentials, Shiboken and
+[ONNX Runtime](https://github.com/microsoft/onnxruntime) (MIT) with its supporting packages. The annotated
 replay prototype reuses the checksum-verified MobileNet-SSD files listed above
 as a demo detector; their upstream notices continue to apply.
 

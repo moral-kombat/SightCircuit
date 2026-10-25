@@ -9,7 +9,8 @@ import time
 
 if not __package__:  # Run as a file: import this checkout's packages without installation.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from framejacker.detection import MobileNetSSD
+from framejacker.convert import to_bgr
+from framejacker.detection import DEFAULT_DETECTOR, DETECTORS, create_detector, describe
 from framejacker.errors import FramejackerError
 from framejacker.pipeline import Pipeline
 from framejacker.runtime import output, process
@@ -38,7 +39,7 @@ class RecognitionRecorder:
     def __init__(self, report, stats, source, progress, want_preview):
         self.report, self.stats, self.source = report, stats, source
         self.progress, self.want_preview = progress, want_preview
-        self.image = None
+        self.image = self.last = None
         self.next_progress = time.monotonic() + 1
 
     def submit(self, processed):
@@ -53,7 +54,7 @@ class RecognitionRecorder:
             "width": image.shape[1], "height": image.shape[0],
             "box_coordinate_space": "resized_mirror_pixels"}
         if self.want_preview:
-            self.image = image
+            self.image, self.last = image, processed
         if time.monotonic() >= self.next_progress:
             self.report.update(labels_seen=sorted(self.stats.labels_seen), capture=self.source.report)
             self.progress(self.report.copy())
@@ -61,14 +62,21 @@ class RecognitionRecorder:
 
 
 def recognize(candidate, seconds, stop, progress=lambda report: None, want_preview=False,
-              *, max_fps=5, threshold=0.5, backend_factory=None, detector_factory=None):
+              *, max_fps=5, threshold=0.5, detector=DEFAULT_DETECTOR, backend_factory=None, detector_factory=None):
+    """Run bounded recognition; return the report and, on success, final images.
+
+    Images are ``{"preview": annotated, "still": unannotated detector input}``
+    for the last processed frame when ``want_preview`` is set, otherwise None.
+    """
     report = new_report()
     report.update(candidate=candidate, phase="loading_detector", maximum_processing_fps=max_fps,
                   threshold=threshold, seconds_requested=seconds)
     progress(report.copy())
     source = pipeline = recorder = None
     try:
-        detector = (detector_factory or MobileNetSSD)()
+        model = detector_factory() if detector_factory else create_detector(detector)
+        if not detector_factory:
+            report["detector"] = describe(model)
         if stop.is_set():
             report["status"] = "cancelled"
             return report, None
@@ -84,7 +92,7 @@ def recognize(candidate, seconds, stop, progress=lambda report: None, want_previ
                 return failed
 
         source = MirrorSource(acquire)
-        pipeline = Pipeline(source, detector, threshold=threshold, max_fps=max_fps, latest_only=True,
+        pipeline = Pipeline(source, model, threshold=threshold, max_fps=max_fps, latest_only=True,
                             max_input_age_ms=MAXIMUM_INPUT_AGE_MS)
         recorder = RecognitionRecorder(report, pipeline.stats, source, progress, want_preview)
         pipeline.sinks = (recorder,)
@@ -124,30 +132,46 @@ def recognize(candidate, seconds, stop, progress=lambda report: None, want_previ
         report["last_result_age_after_cleanup_ms"] = round(age, 3)
         if age > MAXIMUM_INPUT_AGE_MS:
             report.update(status="stale_input", reason="last_observed_input_too_old")
-    image = recorder.image if recorder is not None else None
-    return report, image if report["status"] == "recognized" and report["cleanup_ok"] else None
+    if report["status"] != "recognized" or not report["cleanup_ok"] or recorder is None or recorder.last is None:
+        return report, None
+    return report, {"preview": recorder.image, "still": to_bgr(recorder.last.frame)}
 
 
-def _worker(job, seconds, preview_temp, sender, stop, expected_parent, *, backend_factory=None, detector_factory=None):
+def encode_png(image):
+    import cv2
+
+    okay, png = cv2.imencode(".png", image)
+    if not okay:
+        raise RuntimeError("PNG encoding failed")
+    return png.tobytes()
+
+
+def _worker(job, seconds, outputs, sender, stop, expected_parent, *, backend_factory=None, detector_factory=None):
+    """``outputs`` maps "preview"/"still" to reservations made by the launcher."""
     report = new_report()
+    outputs = outputs or {}
     try:
         if not process.enter_worker(expected_parent):
             return
-        report, image = recognize(job["candidate"], seconds, stop, lambda update: process.send_report(sender, update),
-                                  bool(preview_temp), max_fps=job["max_fps"], threshold=job["threshold"],
-                                  backend_factory=backend_factory, detector_factory=detector_factory)
-        if image is not None and preview_temp:
+        report, images = recognize(job["candidate"], seconds, stop, lambda update: process.send_report(sender, update),
+                                   bool(outputs), max_fps=job["max_fps"], threshold=job["threshold"],
+                                   detector=job.get("detector", DEFAULT_DETECTOR),
+                                   backend_factory=backend_factory, detector_factory=detector_factory)
+        if images is not None and "preview" in outputs:
             import cv2
 
+            image = images["preview"]
             ratio = min(1.0, 640 / max(image.shape[:2]))
             if ratio < 1:
                 image = cv2.resize(image, (max(1, round(image.shape[1] * ratio)),
                                            max(1, round(image.shape[0] * ratio))), interpolation=cv2.INTER_AREA)
-            okay, png = cv2.imencode(".png", image)
-            if not okay:
-                raise RuntimeError("Preview encoding failed")
-            output.write(preview_temp, png.tobytes())
+            output.write(outputs["preview"], encode_png(image))
             report.update(preview_ready=True, preview_width=image.shape[1], preview_height=image.shape[0])
+        if images is not None and "still" in outputs:
+            # Unannotated, at the detector's input size, for building evaluation sets.
+            output.write(outputs["still"], encode_png(images["still"]))
+            report.update(still_ready=True, still_width=images["still"].shape[1],
+                          still_height=images["still"].shape[0])
         process.send_report(sender, report, "result")
     except Exception as error:
         report.update(status="error", reason="worker_failed", error=str(error))
@@ -166,30 +190,41 @@ def main(argv=None):
     parser.add_argument("--seconds", type=int, choices=range(1, 11), default=10, metavar="1..10")
     parser.add_argument("--max-fps", type=int, choices=range(1, 6), default=5, metavar="1..5")
     parser.add_argument("--threshold", type=float, default=0.5)
+    parser.add_argument("--detector", choices=DETECTORS, default=DEFAULT_DETECTOR,
+                        help="Model; mobilenet-ssd is the device-validated baseline, yolox-nano an 80-class candidate")
     parser.add_argument("--preview", type=Path, help="Explicit new annotated PNG, published only after capture/inference stops")
+    parser.add_argument("--still", type=Path,
+                        help="Explicit new unannotated PNG of the last processed input, for evaluation sets")
     args = parser.parse_args(argv)
     if not math.isfinite(args.threshold) or not 0 <= args.threshold <= 1:
         parser.error("--threshold must be between zero and one")
-    if not args.capture and (args.device or args.preview):
-        parser.error("--device and --preview require --capture")
+    if not args.capture and (args.device or args.preview or args.still):
+        parser.error("--device, --preview and --still require --capture")
+    if args.preview and args.still and args.preview.expanduser().absolute() == args.still.expanduser().absolute():
+        parser.error("--preview and --still need distinct paths")
     discovery = discover()
     report = new_report()
     report.update(status="discovery_only", discovery=discovery, exit_code=0)
     if not args.capture:
         print(json.dumps(report, indent=2))
         return 0
-    temporary = None
+    outputs = {}
     old_term = signal.signal(signal.SIGTERM, process.stop_on_signal)
     try:
         candidate = select_candidate(discovery, args.device)
         if args.preview:
-            temporary = output.reserve(args.preview, ".framejacker-recognition-")
-        job = {"candidate": candidate, "max_fps": args.max_fps, "threshold": args.threshold}
-        report = run_bounded(job, args.seconds, temporary, worker=_worker, report_factory=new_report,
+            outputs["preview"] = output.reserve(args.preview, ".framejacker-recognition-")
+        if args.still:
+            outputs["still"] = output.reserve(args.still, ".framejacker-still-")
+        job = {"candidate": candidate, "max_fps": args.max_fps, "threshold": args.threshold,
+               "detector": args.detector}
+        report = run_bounded(job, args.seconds, outputs or None, worker=_worker, report_factory=new_report,
                              success_status="recognized", timeout=args.seconds + 15)
-        report.update(discovery=discovery, candidate=candidate)
-        if temporary and report.get("preview_ready") and report["exit_code"] == 0:
-            report.update(images_saved=True, preview_path=output.publish(temporary))
+        report.update(discovery=discovery, candidate=candidate, detector_requested=args.detector)
+        if report["exit_code"] == 0 and all(report.get(f"{kind}_ready") for kind in outputs):
+            for kind, reservation in outputs.items():
+                report[f"{kind}_path"] = output.publish(reservation)
+                report["images_saved"] = True
     except (FramejackerError, OSError, ValueError) as error:
         report.update(status="unavailable" if getattr(error, "reason", None) == "mirror_unavailable" else "error",
                       reason=getattr(error, "reason", "output_or_launch_failed"), error=str(error), exit_code=1)
@@ -197,9 +232,9 @@ def main(argv=None):
         number = error.number if isinstance(error, StopRequested) else signal.SIGINT
         report.update(status="cancelled", reason="signal", signal=number, exit_code=128 + number)
     finally:
-        if temporary:
+        for reservation in outputs.values():
             try:
-                output.discard(temporary)
+                output.discard(reservation)
             except OSError as error:
                 report.update(status="error", reason="preview_cleanup_failed", error=str(error), exit_code=1)
         signal.signal(signal.SIGTERM, old_term)

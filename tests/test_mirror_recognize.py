@@ -123,7 +123,7 @@ class RecognitionGuardTests(unittest.TestCase):
     def test_discovery_does_not_load_model_or_open_device(self):
         output = io.StringIO()
         with patch.object(live, "discover", return_value=DISCOVERY), \
-                patch.object(live, "MobileNetSSD", side_effect=AssertionError("model must not load")), \
+                patch.object(live, "create_detector", side_effect=AssertionError("model must not load")), \
                 patch.object(live, "run_bounded", side_effect=AssertionError("worker must not start")), redirect_stdout(output):
             self.assertEqual(live.main([]), 0)
         report = json.loads(output.getvalue())
@@ -132,7 +132,9 @@ class RecognitionGuardTests(unittest.TestCase):
         self.assertFalse(report["images_saved"])
 
     def test_invalid_options_and_unavailable_source_stop_before_worker(self):
-        for arguments in (["--preview", "x.png"], ["--max-fps", "6"], ["--seconds", "11"], ["--threshold", "nan"]):
+        for arguments in (["--preview", "x.png"], ["--still", "x.png"], ["--max-fps", "6"], ["--seconds", "11"],
+                          ["--threshold", "nan"], ["--detector", "unknown"],
+                          ["--capture", "--preview", "x.png", "--still", "x.png"]):
             with self.subTest(arguments=arguments), redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as error:
                     live.main(arguments)
@@ -174,7 +176,7 @@ class RecognitionIntegrationTests(unittest.TestCase):
             to_bgr(mirror_frame(raw[:-1], 1, 0, device.validate_format(2, 2, "RGB3", 8, 16)))
 
     def test_slow_inference_discards_old_input_and_keeps_boxes_on_its_frame(self):
-        report, image = live.recognize(CANDIDATE, 0.8, threading.Event(), want_preview=True,
+        report, images = live.recognize(CANDIDATE, 0.8, threading.Event(), want_preview=True,
                                         backend_factory=MarkedMirror, detector_factory=SlowDetector)
         self.assertEqual(report["status"], "recognized", report)
         self.assertTrue(MarkedMirror.closed)
@@ -182,24 +184,26 @@ class RecognitionIntegrationTests(unittest.TestCase):
         last = report["last_result"]
         self.assertEqual(last["read_sequence"], last["detections"][0]["box_xyxy"][0])
         # The annotation overwrites the box corner; an untouched pixel identifies the frame.
-        self.assertEqual(int(image[-1, 0, 0]), last["read_sequence"])
+        self.assertEqual(int(images["preview"][-1, 0, 0]), last["read_sequence"])
+        # The still is the unannotated input: every pixel carries the frame's marker value.
+        self.assertEqual(set(images["still"].reshape(-1).tolist()), {last["read_sequence"]})
         self.assertLess(report["frames_processed"], report["capture"]["frames_read"])
 
     def test_empty_labels_are_successful_inference_without_image_output(self):
-        report, image = live.recognize(CANDIDATE, 0.3, threading.Event(), backend_factory=MarkedMirror,
+        report, images = live.recognize(CANDIDATE, 0.3, threading.Event(), backend_factory=MarkedMirror,
                                         detector_factory=EmptyDetector)
         self.assertEqual(report["status"], "recognized", report)
         self.assertEqual(report["labels_seen"], [])
-        self.assertIsNone(image)
+        self.assertIsNone(images)
         self.assertFalse(report["images_saved"])
 
     def test_empty_failing_and_unclean_sources(self):
         for factory, status in ((EmptyMirror, "no_frames"), (FailingMirror, "error"), (BadCloseMirror, "error")):
             with self.subTest(factory=factory):
-                report, image = live.recognize(CANDIDATE, 0.3, threading.Event(), want_preview=True,
+                report, images = live.recognize(CANDIDATE, 0.3, threading.Event(), want_preview=True,
                                                 backend_factory=factory, detector_factory=MarkedDetector)
                 self.assertEqual(report["status"], status, report)
-                self.assertIsNone(image)
+                self.assertIsNone(images)
                 self.assertTrue(factory.closed)
                 if factory == BadCloseMirror:
                     self.assertFalse(report["cleanup_ok"])
@@ -207,21 +211,21 @@ class RecognitionIntegrationTests(unittest.TestCase):
     def test_model_failure_does_not_open_source_and_cancel_is_bounded(self):
         factory = unittest.mock.Mock(side_effect=RuntimeError("model missing"))
         backend = unittest.mock.Mock(side_effect=AssertionError("source must not open"))
-        report, image = live.recognize(CANDIDATE, 1, threading.Event(), backend_factory=backend, detector_factory=factory)
+        report, images = live.recognize(CANDIDATE, 1, threading.Event(), backend_factory=backend, detector_factory=factory)
         self.assertEqual(report["status"], "error")
         backend.assert_not_called()
         stop = threading.Event()
         stop.set()
-        report, image = live.recognize(CANDIDATE, 1, stop, backend_factory=backend, detector_factory=MarkedDetector)
+        report, images = live.recognize(CANDIDATE, 1, stop, backend_factory=backend, detector_factory=MarkedDetector)
         self.assertEqual(report["status"], "cancelled")
         backend.assert_not_called()
 
     def test_stalled_input_is_stale_and_not_published(self):
-        report, image = live.recognize(CANDIDATE, 1.2, threading.Event(), want_preview=True,
+        report, images = live.recognize(CANDIDATE, 1.2, threading.Event(), want_preview=True,
                                         backend_factory=StalledMirror, detector_factory=MarkedDetector)
         self.assertEqual(report["status"], "stale_input", report)
         self.assertEqual(report["frames_processed"], 1)
-        self.assertIsNone(image)
+        self.assertIsNone(images)
 
     def test_old_selected_frames_are_skipped(self):
         capture = check.capture
@@ -231,7 +235,7 @@ class RecognitionIntegrationTests(unittest.TestCase):
                 data, fmt, number, observed - 2000000000), **kwargs)
 
         with patch.object(check, "capture", old_capture):
-            report, image = live.recognize(CANDIDATE, 0.3, threading.Event(), backend_factory=MarkedMirror,
+            report, images = live.recognize(CANDIDATE, 0.3, threading.Event(), backend_factory=MarkedMirror,
                                             detector_factory=MarkedDetector)
         self.assertEqual(report["status"], "stale_input", report)
         self.assertEqual(report["frames_processed"], 0)
@@ -243,8 +247,9 @@ class RecognitionIntegrationTests(unittest.TestCase):
         real_link = os.link
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "result.png"
+            still = Path(directory) / "input.png"
             with patch.object(live, "discover", return_value=DISCOVERY), patch.object(live, "_worker", fixture_worker), redirect_stdout(io.StringIO()) as output:
-                code = live.main(["--capture", "--seconds", "1", "--preview", str(target)])
+                code = live.main(["--capture", "--seconds", "1", "--preview", str(target), "--still", str(still)])
             report = json.loads(output.getvalue())
             self.assertEqual(code, 0, report)
             self.assertEqual(report["status"], "recognized")
@@ -257,6 +262,11 @@ class RecognitionIntegrationTests(unittest.TestCase):
             self.assertIsNotNone(image)
             self.assertLessEqual(max(image.shape[:2]), 640)
             self.assertGreater(image.std(), 1)
+            fixture = cv2.imread(str(ROOT / ".cache/framejacker/assets/dog.jpg"))
+            unannotated = cv2.imread(str(still))
+            self.assertEqual(unannotated.shape, fixture.shape)  # Fixture is within the 960-pixel limit.
+            self.assertLess(cv2.absdiff(unannotated, fixture).max(), 1)
+            self.assertEqual(report["still_path"], str(still))
             old = target.read_bytes()
             with patch.object(live, "discover", return_value=DISCOVERY), redirect_stdout(io.StringIO()):
                 self.assertEqual(live.main(["--capture", "--preview", str(target)]), 1)
@@ -272,6 +282,7 @@ class RecognitionIntegrationTests(unittest.TestCase):
                 self.assertEqual(live.main(["--capture", "--seconds", "1", "--preview", str(target)]), 1)
             self.assertEqual(target.read_bytes(), b"preserve concurrent output")
             self.assertEqual(list(Path(directory).glob(".framejacker-recognition-*")), [])
+            self.assertEqual(list(Path(directory).glob(".framejacker-still-*")), [])
 
 
 if __name__ == "__main__":

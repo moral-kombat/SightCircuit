@@ -22,3 +22,6 @@ __pycache__/
 .DS_Store
 *.swp
 *.swo
+
+# Private evaluation stills and manifests captured on Frame
+/evaluation/local/

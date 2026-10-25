@@ -27,7 +27,7 @@ def main() -> None:
     import onnxruntime as ort
     from PySide6 import QtCore, QtGui, QtWidgets
 
-    from framejacker.detection import MobileNetSSD, annotate
+    from framejacker.detection import MobileNetSSD, annotate, create_detector, describe
 
     ort.disable_telemetry_events()
 
@@ -123,6 +123,11 @@ def main() -> None:
         raise failures[0]
     if exit_code:
         raise RuntimeError(f"Qt exited with status {exit_code}")
+    # The 80-class candidate through ONNX Runtime must find the same fixture objects.
+    candidate = create_detector("yolox-nano", runtime="onnxruntime")
+    candidate_labels = candidate.detect(image, 0.5).labels
+    if not {"bicycle", "dog"}.issubset(candidate_labels) or not {"car", "truck"} & set(candidate_labels):
+        raise RuntimeError(f"YOLOX-Nano expected bicycle, dog and car/truck; got {candidate_labels}")
     screenshot = cv2.imread(str(screenshot_path))
     if screenshot is None or screenshot.std() < 10:
         raise RuntimeError("Rendered screenshot is blank or invalid")
@@ -135,6 +140,7 @@ def main() -> None:
         "onnxruntime": ort.__version__,
         "onnx_numerical_inference": "passed",
         "detector": "MobileNet-SSD (OpenCV DNN CPU)",
+        "candidate_detector": {**describe(candidate), "labels": candidate_labels},
         "capture_backend": backend,
         "qt_platform": app.platformName(),
         **state,

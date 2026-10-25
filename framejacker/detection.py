@@ -1,15 +1,19 @@
-"""Detector interface, the checksum-verified MobileNet-SSD baseline and annotation."""
-import hashlib
-import json
+"""Detector interface, checksum-verified detectors and annotation.
+
+``mobilenet-ssd`` is the device-validated baseline (Pascal VOC, 20 classes).
+``yolox-nano`` is an 80-class COCO candidate under evaluation. Detectors keep
+their native label names; ``framejacker.labels.canonical`` compares them.
+"""
 import math
-from pathlib import Path
 import time
 from typing import Protocol
 
+from . import assets
 from .frame import Detection, DetectionResult
+from .labels import COCO_CLASSES
+from .preprocess import letterbox
 
-ROOT = Path(__file__).resolve().parents[1]
-ASSETS = ROOT / ".cache/framejacker/assets"
+ASSETS = assets.ASSETS
 MODEL_FILES = ("MobileNetSSD_deploy.prototxt", "MobileNetSSD_deploy.caffemodel")
 CLASSES = (
     "background aeroplane bicycle bird boat bottle bus car cat chair cow "
@@ -18,22 +22,16 @@ CLASSES = (
 
 
 class Detector(Protocol):
+    name: str
+    classes: tuple
+    runtime: str
+
     def detect(self, bgr, threshold: float) -> DetectionResult:
         """Detect objects in a nonempty uint8 BGR image; boxes use its pixel space."""
 
 
 def verify_model():
-    manifest = json.loads((ROOT / "scripts/smoke-assets.json").read_text())
-    expected = {asset["name"]: asset["sha256"] for asset in manifest["assets"] if asset["name"] in MODEL_FILES}
-    if set(expected) != set(MODEL_FILES):
-        raise RuntimeError("Detector model checksums are missing from scripts/smoke-assets.json")
-    for name, digest in expected.items():
-        path = ASSETS / name
-        if not path.is_file():
-            raise RuntimeError("Detector model missing. Run bash scripts/setup_window.sh")
-        with path.open("rb") as source:
-            if hashlib.file_digest(source, "sha256").hexdigest() != digest:
-                raise RuntimeError(f"Detector model failed SHA-256 verification: {path.name}")
+    return assets.verify(MODEL_FILES)
 
 
 def validate_input(bgr, threshold):
@@ -46,7 +44,13 @@ def validate_input(bgr, threshold):
 
 
 class MobileNetSSD:
-    """Pascal VOC MobileNet-SSD through OpenCV DNN on CPU (20 foreground classes)."""
+    """Pascal VOC MobileNet-SSD through OpenCV DNN on CPU (20 foreground classes).
+
+    Input is stretched to 300 × 300 without letterboxing, matching how SSD models
+    are trained; letterboxing this model would change its validated behavior.
+    """
+    name, runtime = "mobilenet-ssd", "opencv-dnn"
+    classes = tuple(CLASSES[1:])
 
     def __init__(self):
         import cv2
@@ -84,6 +88,113 @@ class MobileNetSSD:
                 continue
             detections.append(Detection(CLASSES[class_id], round(float(row[2]), 5), (x1, y1, x2, y2)))
         return DetectionResult(tuple(detections), elapsed)
+
+
+class YoloxDetector:
+    """YOLOX ONNX export (COCO, 80 classes) with letterbox input and class-aware NMS.
+
+    Uses ONNX Runtime on CPU when installed, otherwise OpenCV DNN; both run the
+    same graph. The 0.1.1rc0 exports take unnormalized BGR 0–255 input, padded
+    with 114 at the bottom/right, and return undecoded grid offsets with
+    sigmoid objectness and class scores.
+    """
+    MODELS = {"yolox-nano": ("yolox_nano.onnx", 416)}
+    STRIDES = (8, 16, 32)
+
+    def __init__(self, name="yolox-nano", runtime="auto", nms_threshold=0.45, threads=2):
+        import cv2
+        import numpy as np
+
+        if name not in self.MODELS:
+            raise ValueError(f"Unknown YOLOX model: {name}")
+        filename, self.size = self.MODELS[name]
+        (path,) = assets.verify([filename])
+        self.cv2, self.np = cv2, np
+        self.name, self.classes, self.nms_threshold = name, COCO_CLASSES, nms_threshold
+        if runtime == "auto":
+            try:
+                import onnxruntime  # noqa: F401
+                runtime = "onnxruntime"
+            except ImportError:
+                runtime = "opencv-dnn"
+        if runtime == "onnxruntime":
+            import onnxruntime as ort
+
+            options = ort.SessionOptions()
+            options.intra_op_num_threads, options.inter_op_num_threads = threads, 1
+            self.session = ort.InferenceSession(str(path), sess_options=options,
+                                                providers=["CPUExecutionProvider"])
+            self.input_name = self.session.get_inputs()[0].name
+        elif runtime == "opencv-dnn":
+            cv2.setNumThreads(threads)
+            self.net = cv2.dnn.readNetFromONNX(str(path))
+            self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+            self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+        else:
+            raise ValueError(f"Unknown YOLOX runtime: {runtime}")
+        self.runtime = runtime
+        grids, strides = [], []
+        for stride in self.STRIDES:
+            cells = self.size // stride
+            ys, xs = np.meshgrid(np.arange(cells), np.arange(cells), indexing="ij")
+            grids.append(np.stack((xs, ys), 2).reshape(-1, 2))
+            strides.append(np.full((cells * cells, 1), stride))
+        self.grid, self.stride = np.concatenate(grids), np.concatenate(strides)
+
+    def _forward(self, blob):
+        if self.runtime == "onnxruntime":
+            return self.session.run(None, {self.input_name: blob})[0]
+        self.net.setInput(blob)
+        return self.net.forward()
+
+    def detect(self, bgr, threshold):
+        cv2, np = self.cv2, self.np
+        validate_input(bgr, threshold)
+        image, transform = letterbox(bgr, self.size)
+        blob = np.ascontiguousarray(image.transpose(2, 0, 1)[None], dtype=np.float32)
+        started = time.monotonic()
+        output = self._forward(blob)
+        elapsed = (time.monotonic() - started) * 1000
+        expected = (1, len(self.grid), 5 + len(self.classes))
+        if output.shape != expected:
+            raise RuntimeError(f"Unexpected YOLOX output shape {output.shape}; expected {expected}")
+        output = output[0]
+        scores = output[:, 4:5] * output[:, 5:]
+        class_ids, confidences = scores.argmax(1), scores.max(1)
+        keep = np.isfinite(output).all(1) & (confidences >= threshold)
+        if not keep.any():
+            return DetectionResult((), elapsed)
+        centers = (output[keep, :2] + self.grid[keep]) * self.stride[keep]
+        sizes = np.exp(np.clip(output[keep, 2:4], -20, 20)) * self.stride[keep]
+        corners = np.concatenate((centers - sizes / 2, centers + sizes / 2), 1)
+        class_ids, confidences = class_ids[keep], confidences[keep]
+        rects = np.concatenate((corners[:, :2], corners[:, 2:] - corners[:, :2]), 1)
+        indices = cv2.dnn.NMSBoxesBatched(rects.tolist(), confidences.tolist(), class_ids.tolist(),
+                                          threshold, self.nms_threshold)
+        detections = []
+        for index in sorted(np.array(indices).reshape(-1).tolist(), key=lambda i: -confidences[i]):
+            x1, y1, x2, y2 = transform.to_source(*corners[index])
+            if x2 <= x1 or y2 <= y1:
+                continue
+            detections.append(Detection(self.classes[class_ids[index]], round(float(confidences[index]), 5),
+                                        (x1, y1, x2, y2)))
+        return DetectionResult(tuple(detections), elapsed)
+
+
+DETECTORS = {"mobilenet-ssd": MobileNetSSD, "yolox-nano": YoloxDetector}
+DEFAULT_DETECTOR = "mobilenet-ssd"
+
+
+def create_detector(name=DEFAULT_DETECTOR, **options):
+    if name not in DETECTORS:
+        raise ValueError(f"Unknown detector {name!r}; choose from {', '.join(DETECTORS)}")
+    factory = DETECTORS[name]
+    return factory(name, **options) if factory is YoloxDetector else factory(**options)
+
+
+def describe(detector):
+    """Report fields identifying the model, runtime and label vocabulary."""
+    return {"name": detector.name, "runtime": detector.runtime, "classes": len(detector.classes)}
 
 
 def annotate(bgr, result):

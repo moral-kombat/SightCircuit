@@ -4,3 +4,9 @@ numpy==2.2.6
 opencv-python-headless==4.12.0.88
 pyside6-essentials==6.12.0
 shiboken6==6.12.0
+# ONNX Runtime CPU for the YOLOX candidate detector, with its dependencies.
+# Linux x86_64 and ARM64 wheels; OpenCV DNN remains the fallback runtime.
+flatbuffers==25.12.19
+onnxruntime==1.31.0
+packaging==26.3
+protobuf==7.36.2

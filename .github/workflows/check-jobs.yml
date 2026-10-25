@@ -192,6 +192,8 @@ jobs:
         run: bash scripts/build_overlay_bridge.sh
       - name: Verify replay, offscreen presentation and bounded mirror recognition
         run: .venv-replay/bin/python -m unittest discover -s tests -v
+      - name: Compare detectors on the seed evaluation set (runner CPU, not Frame)
+        run: .venv-replay/bin/python scripts/evaluate_detectors.py --fetch --report evaluation-report.json > /dev/null
 
   overlay-bridge:
     runs-on: ${{ inputs.runner }}
