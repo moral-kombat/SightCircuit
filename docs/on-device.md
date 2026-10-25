@@ -1486,6 +1486,11 @@ binaries are still non-executable inspection artifacts.
 The isolated shared-memory reader and synthetic fixture are implemented and
 tested on cloud x86_64 and Frame ARM64; real-provider validation and capture-layer
 deployment are pending.
+Since 2026-10-25 the replay and mirror commands run on the shared framejacker
+pipeline (cloud and CI only so far; reconfirm replay/overlay and mirror recognition
+on Frame). Re-run scripts/setup_window.sh, then compare detectors on Frame stills:
+docs/on-device.md#compare-detectors-on-frame-stills. Next steps are in
+docs/design-review.md#next-steps.
 Keep user observations, cloud checks and upstream capture claims distinct.
 Record new results in docs/status.md, including unknown dates/versions explicitly.
 ```

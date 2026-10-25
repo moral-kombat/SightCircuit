@@ -193,3 +193,51 @@ own file and generate the status matrix, and state each caveat once.
   (including the rug) must be captured on Frame.
 - Cloud evidence: [E49](status.md#e49-shared-pipeline-and-package-refactor-cloud-checks),
   [E50](status.md#e50-candidate-detector-and-evaluation-harness-cloud-checks).
+
+## Next steps
+
+State at handoff (2026-10-25): items 1–3 are on branch
+`claude/peaceful-fermi-8m3bu6` in [pull request #1](https://github.com/moral-kombat/framejacker/pull/1),
+head `ce733dd`, with all x86_64 and ARM64 CI green and no review threads. The
+PR description predates item 3 and the CI fixes; update it before merging.
+
+### Needs the headset
+
+1. Re-run `bash scripts/setup_window.sh` on Frame (adds ONNX Runtime and the
+   YOLOX model).
+2. Confirm the refactor on device ([E49](status.md#e49-shared-pipeline-and-package-refactor-cloud-checks)
+   is cloud-only): replay window with `--overlay`, then bounded mirror
+   recognition with the default detector, as in E47/E48.
+3. Run the [detector comparison](on-device.md#compare-detectors-on-frame-stills):
+   capture stills with `--still` (including the rug), describe them in
+   `evaluation/local/frame.json`, run `evaluate_detectors.py`, and record the
+   result and Frame timing as a new status entry. Choose the default detector
+   from that, not from the outdoor seed set.
+
+### Engineering, in order
+
+4. **Replay pacing (item 4).** Pace `ReplaySource` by media time (`pts`) and
+   drop frames instead of processing every frame; run replay in the pipeline's
+   `latest_only` mode. Report duration, processed fps and end-to-end latency
+   (`Frame.observed_ns` to presentation).
+5. **Live input in the Qt window (item 5).** First test on Frame whether the
+   desktop window appears in the SteamVR mirror, as the VR panel did (E18). If
+   not, feed `MirrorSource` continuously into the replay window's sinks.
+   Keep the capture-provider track frozen: collapse `patches/mrhand/` into one
+   patch or a fork, and drop historical `build_capture_reference.sh` modes from CI.
+6. **Rug coverage.** Neither model has a rug class. If rugs matter, evaluate an
+   open-vocabulary model offline or fine-tune a small detector on labelled
+   Frame stills; keep both baselines in the evaluation.
+7. **Documentation weight (item 6).** One-screen README; per-entry evidence
+   files or raw JSON reports instead of the 1,600-line status page.
+
+### Remaining from items 1–3
+
+- Lock file covering x86_64 and aarch64; console entry points.
+- Fail CI on unexpected test skips (fixture tests skip silently when a build
+  step is missing).
+- CI runs twice per PR push (`push` and `pull_request`); limit `push` to `main`.
+- Move the V4L2 mirror module and acquisition loop (`scripts/mirror_capture.py`,
+  `scripts/mirror_check.py`) into `framejacker/sources/`; reuse `LatestSlot` in
+  the overlay client; consolidate the capture supervisor's process handling.
+- One source of truth for VR panel limits (Python, Qt and C++ copies).
