@@ -192,6 +192,11 @@ jobs:
         run: bash scripts/build_overlay_bridge.sh
       - name: Verify replay, offscreen presentation and bounded mirror recognition
         run: .venv-replay/bin/python -m unittest discover -s tests -v
+      - name: Fail if detector, pipeline, replay or mirror-recognition tests were skipped
+        run: |
+          .venv-replay/bin/python scripts/run_tests_no_skips.py tests/test_detection.py tests/test_evaluation.py \
+            tests/test_pipeline.py tests/test_playback_clock.py tests/test_mirror_recognize.py \
+            tests/test_replay_window.py tests/test_overlay_bridge.py
       - name: Compare detectors on the seed evaluation set (runner CPU, not Frame)
         run: .venv-replay/bin/python scripts/evaluate_detectors.py --fetch --report evaluation-report.json > /dev/null
 
@@ -208,6 +213,8 @@ jobs:
           g++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -I.cache/openvr/headers -I.cache/openvr/src -fsyntax-only tools/overlay_bridge.cpp
       - name: Verify protocol and runtime failure handling without a headset
         run: python3 -m unittest discover -s tests -p test_overlay_bridge.py -v
+      - name: Fail if any bridge test was skipped
+        run: python3 scripts/run_tests_no_skips.py tests/test_overlay_bridge.py
 
   camera-probe:
     runs-on: ${{ inputs.runner }}

@@ -1682,6 +1682,74 @@ confused with `couch`. Cloud CPU timing is not Frame timing. Run the
 [Frame comparison](on-device.md#compare-detectors-on-frame-stills) before
 choosing a default.
 
+### E51: Media-time replay pacing (unit-tested only)
+
+Date: 2026-10-25, branch `overnight/pacing-and-live-prep`. Replay gained an
+opt-in `--realtime` mode (`ReplaySource(realtime=True)`) that follows media time
+and drops frames more than 0.1 s late. Only the `PlaybackClock` schedule logic
+has a unit test (`tests/test_playback_clock.py`, three tests, run locally on
+Windows Python 3.11). The decode path, Qt window and summary fields were not
+run: no PyAV, OpenCV or Qt in that environment, and CI had not yet run. Not
+measured on Frame; see the [morning checklist](morning-checklist.md).
+
+Partial Frame console output, relayed by the user from a session on the Frame
+(2026-10-25, branch revision `507c91b`; the agent's report, not independently
+verified): setup and the YOLOX model download succeeded and the overlay bridge
+built (not launched). The offscreen replay regression processed 30 frames at
+5.055 fps with 0 dropped, mean processing 37.7 ms, no labels detected. The
+realtime pacing run had not finished in the pasted output, so there is no
+pacing result yet. Mirror, stills, overlay and window-mirror stages were not
+run.
+
+Later the same day, over SSH from the PC (observed directly, Frame revision
+`5cea01c`, newest recording 3.8 GB, offscreen): an unpaced replay processed 200
+frames at 5.09 fps (mean 42.5 ms processing, max input age 0.4 ms). The first
+`--realtime` implementation timed out with no report: decoding this file runs
+at about 13 fps, slower than the recording, so every frame was late and all
+were dropped. Fixed by resyncing when nothing was emitted for one second.
+With the fix, 60 frames processed in about 60 s (0.97 fps), 740 dropped, 59
+resyncs. So on this recording `--realtime` is decode-bound and cannot keep up
+with real time; pacing works but does not yet make playback real-time. Open
+question: a smaller or lower-resolution recording, or decoder settings.
+
+GitHub Actions for PR #2 subsequently passed the lint and x86_64 and ARM64
+jobs, including the replay-window and overlay-bridge no-skip checks. The ARM64
+smoke job was skipped; all other listed checks passed.
+
+### E52: Bounded mirror stage via SSH
+
+Date: 2026-10-25, Frame revision `c57423a`, run remotely over SSH from the PC
+with `SKIP_UPDATE=1 COUNTDOWN=15 STEP_TIMEOUT=90`, stage `mirror`. The stage
+exited 0 after its bounded 10-second capture and saved
+`artifacts/frame-session/20261025-022435/mirror-recognize.json` and
+`mirror-detections.png`. The report says 12 frames were processed and the last
+result was `tvmonitor` at confidence 0.587; preview generation completed.
+
+This is a software report from `/dev/video99`, identified only as a SteamVR
+virtual-mirror candidate. It does not verify that a TV was physically in view,
+that the preview matched the scene, that the source was fresh camera imagery,
+or that passthrough/tracking was normal. The interactive observation prompt
+was unanswered; no user headset observation is recorded. Still capture,
+overlay and window-mirror stages remain unverified.
+
+### E53: Unattended replay regression and pacing rerun
+
+Date: 2026-10-25, Frame revision `b8d2283`, run remotely over SSH with
+`SKIP_UPDATE=1 YES=1 STEP_TIMEOUT=300`, stages `regression pacing evaluate`.
+All commands exited 0. Offscreen regression processed 30 frames at 4.48 fps,
+with no labels and no dropped frames. On the same recording, unpaced replay
+processed 200 frames at 5.15 fps with no drops; realtime mode processed 200
+frames at 0.969 fps, dropping 2,532 frames and resyncing 199 times. This
+reconfirms that realtime replay is decode-bound on this recording. Labels
+reported by the file-replay detector are not verified scene truth.
+
+Detector evaluation skipped because `evaluation/local/frame.json` is absent;
+no private stills were fabricated without an observed scene and labels.
+Overlay and window-mirror were not run: they need a person wearing and
+observing the headset. These results are remote device-command observations,
+not user confirmation of headset display, passthrough, tracking or detector
+accuracy.
+
 ## Maintaining the evidence
 
 For a new result, record the execution date, platform/runtime versions,
