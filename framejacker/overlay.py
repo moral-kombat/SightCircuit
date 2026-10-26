@@ -12,6 +12,9 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BRIDGE = ROOT / "artifacts/overlay-bridge/framejacker-overlay-bridge"
 MAX_SIDE = 512
+# (name, low, high); the native bridge repeats these in tools/overlay_bridge.cpp and
+# tests/test_overlay_bridge.py checks that the copies agree.
+PANEL_LIMITS = (("width", .25, 1.5), ("distance", .5, 3), ("x", -1, 1), ("y", -1, 1), ("opacity", .2, 1))
 
 
 def packet(kind, payload=b""):
@@ -28,8 +31,8 @@ class PanelSettings:
     visible: bool = True
 
     def encode(self):
-        for value, low, high in ((self.width, .25, 1.5), (self.distance, .5, 3),
-                                 (self.x, -1, 1), (self.y, -1, 1), (self.opacity, .2, 1)):
+        for name, low, high in PANEL_LIMITS:
+            value = getattr(self, name)
             if not math.isfinite(value) or not low <= value <= high:
                 raise ValueError("Panel setting out of range")
         if not isinstance(self.visible, bool):
