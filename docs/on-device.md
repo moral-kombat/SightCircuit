@@ -235,10 +235,22 @@ may be slower than the source recording. `--max-fps` changes that cap;
 `--threshold` changes the default 0.5 confidence threshold. No detections above
 threshold is a valid result for a scene outside the demo model's classes.
 
-`--realtime` (cloud-tested only, not yet run on Frame) paces playback by media
-time instead of processing every frame: frames more than 0.1 s behind schedule
-are dropped, and the JSON summary adds `frames_dropped`, `processed_fps`,
-`mean_processing_ms` and `max_input_age_ms`. Without it behavior is unchanged.
+`--realtime` follows media time instead of processing every frame. Decoding
+runs on its own thread and inference takes only the newest decoded frame. When
+decoding falls more than 0.5 s behind (the 2464 × 2464, ~60 fps recordings
+decode at about 13 fps on Frame), undecoded packets are skipped to the next
+keyframe at the current playback position, so time advances at the recording's
+rate while fewer frames are shown. `--decode-threads N` (default 2) sets FFmpeg
+frame/slice threads; more threads decode faster but compete with inference and
+the compositor. The JSON summary reports `realtime_ratio` (media seconds per wall
+second; about 1.0 means real time), `media_seconds_played`, `decode_fps`,
+`frames_decoded`, `frames_skipped`, `catch_ups`, `frames_replaced` (decoded but
+superseded before inference), `frames_dropped`, `processed_fps`,
+`mean_processing_ms`, presentation latency and `max_schedule_lateness_ms`. The
+keyframe-skipping version is cloud-tested only; see
+[E54](status.md#e54-keyframe-catch-up-realtime-replay-cloud-checks). Without
+`--realtime` every frame is processed in order, which plays this recording in
+slow motion.
 
 By default the prototype displays an ordinary Qt window without opening camera
 nodes, calling OpenVR, changing SteamVR or saving images. Optional `--overlay`
