@@ -180,19 +180,7 @@ class OverlayClient:
         if self.process:
             if self.writer:
                 self.writer.join(timeout=2)
-            if not self.writer or self.writer.is_alive():
-                if self.process.poll() is None:
-                    self.process.terminate()
-            try:
-                self.process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                self.process.terminate()
-                try:
-                    self.process.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    self.forced_termination = True
-                    self.process.kill()
-                    self.process.wait(timeout=2)
+            self._end_process(cooperative=bool(self.writer) and not self.writer.is_alive())
             if self.writer:
                 self.writer.join(timeout=1)
             if self.reader:
@@ -205,9 +193,36 @@ class OverlayClient:
                 self.process.stdout.close()
             if self.forced_termination:
                 self._fail("Overlay bridge required forced termination; cleanup is unconfirmed")
+        report = self.final_report or {}
+        cleanup_confirmed = (report.get("exit_code") == 0 and report.get("cleanup_ok") is True
+                             and not self.forced_termination and self.error is None)
         return {"requested": True, "validation_only": self.validation_only,
                 "frames_sent": self.frames_sent, "error": self.error,
-                "native_report": self.final_report, "forced_termination": self.forced_termination}
+                "native_report": self.final_report, "forced_termination": self.forced_termination,
+                "cleanup_confirmed": cleanup_confirmed}
+
+    def _end_process(self, cooperative):
+        if cooperative:
+            try:
+                self.process.wait(timeout=2)
+                return
+            except subprocess.TimeoutExpired:
+                pass
+        if self.process.poll() is not None:
+            return
+        self.forced_termination = True
+        self.process.terminate()
+        try:
+            self.process.wait(timeout=2)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        self.process.kill()
+        try:
+            self.process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            self._fail("Overlay bridge did not exit after kill; cleanup is unconfirmed")
+
 
 
 class OverlaySink:
