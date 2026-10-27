@@ -37,6 +37,7 @@ owns the current capture work plan.
 | Compare detectors on labelled stills | [Frame procedure](on-device.md#compare-detectors-on-frame-stills) and [evaluation format](development.md#detector-evaluation) |
 | Inspect existing luma input or test the isolated reader | [Shared-memory procedure](on-device.md#check-existing-luma-shared-memory) and [controlled fixture](development.md#isolated-luma-reader-and-synthetic-producer) |
 | Set up cloud or desktop development | [Development setup](development.md) |
+| Plan the next POC work packages | [POC scope: world-locked label](poc-scope.md) |
 | Continue live capture development | [Active capture plan](live-capture.md#current-work-order) |
 | Investigate camera access and upstream projects | [Camera interface reference](steam-frame-camera.md) and [dated code review](capture-reference-review.md) |
 | Understand components and frame flow | [Architecture](architecture.md) |
