@@ -635,6 +635,39 @@ input independent of our output. The mirror can still provide bounded recognitio
 and snapshots displayed after capture closes. This procedure does not install
 layers, switch camera sources or repeat the public tracked-camera probe.
 
+### Record headset observations for a run
+
+`scripts/observation_page.py` serves a short form on the local network. The
+person wearing the headset opens it in the headset browser (or a phone on the
+same Wi-Fi) and answers fixed questions, so answers are saved against the run
+instead of being left unanswered at an SSH prompt. It is standard-library Python
+and needs no setup beyond the checkout. Start it before the test and leave it
+running:
+
+```bash
+cd "$HOME/framejacker"
+RUN="artifacts/frame-session/$(date +%Y%m%d-%H%M%S)"
+python3 scripts/observation_page.py --run-dir "$RUN" --minutes 20
+```
+
+The first line of output is JSON with a `url` that contains a random token.
+Open that URL from the headset or phone. Each submission is appended to
+`$RUN/observations.json` with a UTC `submitted_at` time and the answers. The
+server stops after `--minutes` (maximum 120) or on Ctrl-C, and prints how many
+submissions it saved.
+
+Options: `--run-id` sets the label shown on the page (default: the run directory
+name); `--port` defaults to 8765; `--host 127.0.0.1` keeps the page local, so
+only the Frame itself (for example with `curl` over SSH) can reach it. The default `--host 0.0.0.0` listens on
+all interfaces, so the page is reachable from the LAN while it runs. Traffic is
+plain HTTP, the token is the only access control, and the server only accepts
+the form's fixed fields and choices. Do not leave it running after the session.
+
+Whether the headset browser can reach the printed address is not yet verified.
+If it cannot, note the URL, the error, and the network setup in
+[status](status.md) rather than assuming the page works. Record the answers in
+`observations.json` as user-reported results, not as device checks.
+
 ### Check native capture prerequisites
 
 Use the normal Frame terminal to collect the build metadata needed for a
