@@ -8,6 +8,13 @@ layer has been deployed by Framejacker.
 
 ## Current work order
 
+### Scope decision (2026-10-27)
+
+The POC goal is narrowed to a world-locked label on a detected object, using
+the mirror source and head pose; see [POC scope](poc-scope.md). The provider
+track below stays frozen, and the handoff that follows still governs device
+authorization.
+
 ### October 26 evening handoff
 
 The latest source-only check is [E60](status.md#e60-evening-source-only-mirror-capture-and-scene-correspondence):

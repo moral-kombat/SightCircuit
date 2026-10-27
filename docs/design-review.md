@@ -218,6 +218,11 @@ keyframe catch-up rework of realtime replay was merged from
 `claude/peaceful-fermi-8m3bu6` ([E62](status.md#e62-keyframe-catch-up-realtime-replay-cloud-checks));
 see E52/E53 for device-command evidence and limitations.
 
+The POC scope and work packages are in [POC scope](poc-scope.md), which
+supersedes the engineering order below where they differ: the target is a
+world-locked label on a detected object, and the provider track, stereo depth
+and splats are deferred.
+
 ### Needs the headset
 
 0. Measure the reworked realtime replay on the real recording:
