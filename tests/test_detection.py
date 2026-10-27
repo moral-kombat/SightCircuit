@@ -47,9 +47,26 @@ class LabelAndTransformTests(unittest.TestCase):
         self.assertEqual(canonical("rug"), "rug")
 
     def test_letterbox_inverse_maps_and_clamps_boxes(self):
-        transform = Letterbox(scale=0.5, pad_x=0, pad_y=52, width=832, height=624)
+        transform = Letterbox(scale_x=0.5, scale_y=0.5, pad_x=0, pad_y=52, width=832, height=624)
         self.assertEqual(transform.to_source(10, 62, 110, 162), (20, 20, 220, 220))
         self.assertEqual(transform.to_source(-5, 0, 1000, 1000), (0, 0, 831, 623))
+
+    def test_letterbox_inverse_uses_realized_resize_ratio(self):
+        from framejacker.preprocess import letterbox_geometry
+
+        resized_w, resized_h, transform = letterbox_geometry(1440, 1080, 416)
+        self.assertEqual((resized_w, resized_h), (415, 311))
+        self.assertEqual(transform.to_source(0, 0, resized_w, resized_h), (0, 0, 1439, 1079))
+        self.assertEqual(transform.to_source(0, 300, 0, 300)[1], 1041)
+
+    def test_letterbox_inverse_error_is_subpixel_for_common_sources(self):
+        from framejacker.preprocess import letterbox_geometry
+
+        for width, height in ((640, 360), (960, 540), (1280, 720), (1920, 1080), (1440, 1080), (1366, 768)):
+            resized_w, resized_h, transform = letterbox_geometry(width, height, 416)
+            far_x, far_y = transform.to_source(0, 0, resized_w, resized_h)[2:]
+            self.assertLessEqual(width - 1 - far_x, 1, (width, height))
+            self.assertLessEqual(height - 1 - far_y, 1, (width, height))
 
     def test_unknown_detector_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "Unknown detector"):
@@ -65,7 +82,7 @@ class LetterboxImageTests(unittest.TestCase):
         image = np.full((100, 200, 3), 7, dtype=np.uint8)
         padded, transform = letterbox(image, 64)
         self.assertEqual(padded.shape, (64, 64, 3))
-        self.assertEqual((transform.scale, transform.pad_x, transform.pad_y), (0.32, 0, 0))
+        self.assertEqual((transform.scale_x, transform.scale_y, transform.pad_x, transform.pad_y), (0.32, 0.32, 0, 0))
         self.assertTrue((padded[:32] == 7).all() and (padded[32:] == 114).all())
         padded, transform = letterbox(image, 64, center=True)
         self.assertEqual(transform.pad_y, 16)

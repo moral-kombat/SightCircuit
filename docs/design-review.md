@@ -196,28 +196,34 @@ own file and generate the status matrix, and state each caveat once.
 - Cloud evidence: [E49](status.md#e49-shared-pipeline-and-package-refactor-cloud-checks),
   [E50](status.md#e50-candidate-detector-and-evaluation-harness-cloud-checks).
 
-- Replay pacing (item 4): `ReplaySource(realtime=True)` /
-  `replay_window.py --realtime` follow media time, drop late frames and resync
-  after a stall. Frame measurements in [E51](status.md#e51-media-time-replay-pacing-unit-tested-only)
-  and [E53](status.md#e53-unattended-replay-regression-and-pacing-rerun) show
-  this large recording is decode-bound: 200 frames processed at 0.969 fps,
-  with 2,532 dropped and 199 resyncs. Pacing is implemented and device-tested,
-  but real-time playback is not achieved on this file.
+- Replay pacing (item 4): the first `--realtime` implementation dropped frames
+  after decoding them and resynced after one-second stalls; Frame measurements
+  in [E51](status.md#e51-media-time-replay-pacing-unit-tested-only) and
+  [E53](status.md#e53-unattended-replay-regression-and-pacing-rerun) show it
+  decode-bound at 0.969 processed fps. It now decodes on its own thread with
+  FFmpeg frame threading, runs inference on the newest frame only, and skips
+  undecoded packets to the next keyframe when more than 0.5 s behind. On a
+  synthetic stand-in that reproduces the old Frame result (0.977 fps), it
+  reaches a 0.94 real-time ratio at 4.7 processed fps
+  ([E62](status.md#e62-keyframe-catch-up-realtime-replay-cloud-checks)).
+  Frame measurement of the new version is pending.
 - Branch CI runs through pull requests (`push` is limited to `main`). All
   checks passed on code commit `b8d2283`; the later documentation-only commit
   `769eedf` did not trigger checks.
 
 ## Next steps
 
-State at handoff (2026-10-25): the current work is on branch
-`overnight/pacing-and-live-prep` in [pull request #2](https://github.com/moral-kombat/framejacker/pull/2),
-head `769eedf`. The code-bearing commit `b8d2283` passed lint and x86_64/ARM64
-checks (ARM64 smoke skipped); the final docs-only commit did not trigger CI.
-The Frame checkout is synced to the branch. See E52/E53 for device-command
-evidence and limitations.
+State (2026-10-26): pull requests #1 to #6 are merged into `main`, and the
+keyframe catch-up rework of realtime replay was merged from
+`claude/peaceful-fermi-8m3bu6` ([E62](status.md#e62-keyframe-catch-up-realtime-replay-cloud-checks));
+see E52/E53 for device-command evidence and limitations.
 
 ### Needs the headset
 
+0. Measure the reworked realtime replay on the real recording:
+   `SKIP_UPDATE=1 YES=1 bash scripts/frame_session.sh pacing` (no headset wearer
+   needed). Record `realtime_ratio`, `processed_fps`, `decode_fps` and
+   `catch_ups` for 2 and 4 decoder threads, and pick the default thread count.
 1. Review the bounded mirror preview and report from E52 against what was
    actually in view, and confirm passthrough/tracking remained normal. The
    unattended run's software label is not scene verification.

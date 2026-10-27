@@ -235,16 +235,26 @@ may be slower than the source recording. `--max-fps` changes that cap;
 `--threshold` changes the default 0.5 confidence threshold. No detections above
 threshold is a valid result for a scene outside the demo model's classes.
 
-`--realtime` paces playback by media time instead of processing every frame:
-frames more than 0.1 s behind schedule are dropped, and the JSON summary adds
-`frames_dropped`, `processed_fps`, `mean_processing_ms` and `max_input_age_ms`.
-If decoding stalls, the source resynchronizes after one second without an
-emitted frame. Frame measurements in
-[E51](status.md#e51-media-time-replay-pacing-unit-tested-only) and
-[E53](status.md#e53-unattended-replay-regression-and-pacing-rerun) show that
-the tested large recording is decode-bound: replay processed about 0.97 fps
-with realtime pacing versus 5.15 fps unpaced. Without `--realtime` behavior
-is unchanged.
+`--realtime` follows media time instead of processing every frame. Decoding
+runs on its own thread and inference takes only the newest decoded frame. When
+decoding falls more than 0.5 s behind (the 2464 × 2464, ~60 fps recordings
+decode at about 13 fps on Frame), undecoded packets are skipped to the next
+keyframe at the current playback position, so time advances at the recording's
+rate while fewer frames are shown. `--decode-threads N` (default 2) sets FFmpeg
+frame/slice threads; more threads decode faster but compete with inference and
+the compositor. The JSON summary reports `realtime_ratio` (media seconds per wall
+second; about 1.0 means real time), `media_seconds_played`, `decode_fps`,
+`frames_decoded`, `frames_skipped`, `catch_ups`, `frames_replaced` (decoded but
+superseded before inference), `frames_dropped`, `processed_fps`,
+`mean_processing_ms`, presentation latency and `max_schedule_lateness_ms`. The
+keyframe-skipping version is cloud-tested only; see
+[E62](status.md#e62-keyframe-catch-up-realtime-replay-cloud-checks). The earlier
+frame-dropping version was decode-bound on Frame, processing about 0.97 fps
+versus 5.15 fps unpaced
+([E51](status.md#e51-media-time-replay-pacing-unit-tested-only),
+[E53](status.md#e53-unattended-replay-regression-and-pacing-rerun)). Without
+`--realtime` every frame is processed in order, which plays this recording in
+slow motion.
 
 By default the prototype displays an ordinary Qt window without opening camera
 nodes, calling OpenVR, changing SteamVR or saving images. Optional `--overlay`
@@ -634,6 +644,39 @@ unknown. The next task is the native prerequisite check below and preparing
 input independent of our output. The mirror can still provide bounded recognition
 and snapshots displayed after capture closes. This procedure does not install
 layers, switch camera sources or repeat the public tracked-camera probe.
+
+### Record headset observations for a run
+
+`scripts/observation_page.py` serves a short form on the local network. The
+person wearing the headset opens it in the headset browser (or a phone on the
+same Wi-Fi) and answers fixed questions, so answers are saved against the run
+instead of being left unanswered at an SSH prompt. It is standard-library Python
+and needs no setup beyond the checkout. Start it before the test and leave it
+running:
+
+```bash
+cd "$HOME/framejacker"
+RUN="artifacts/frame-session/$(date +%Y%m%d-%H%M%S)"
+python3 scripts/observation_page.py --run-dir "$RUN" --minutes 20
+```
+
+The first line of output is JSON with a `url` that contains a random token.
+Open that URL from the headset or phone. Each submission is appended to
+`$RUN/observations.json` with a UTC `submitted_at` time and the answers. The
+server stops after `--minutes` (maximum 120) or on Ctrl-C, and prints how many
+submissions it saved.
+
+Options: `--run-id` sets the label shown on the page (default: the run directory
+name); `--port` defaults to 8765; `--host 127.0.0.1` keeps the page local, so
+only the Frame itself (for example with `curl` over SSH) can reach it. The default `--host 0.0.0.0` listens on
+all interfaces, so the page is reachable from the LAN while it runs. Traffic is
+plain HTTP, the token is the only access control, and the server only accepts
+the form's fixed fields and choices. Do not leave it running after the session.
+
+Whether the headset browser can reach the printed address is not yet verified.
+If it cannot, note the URL, the error, and the network setup in
+[status](status.md) rather than assuming the page works. Record the answers in
+`observations.json` as user-reported results, not as device checks.
 
 ### Check native capture prerequisites
 
