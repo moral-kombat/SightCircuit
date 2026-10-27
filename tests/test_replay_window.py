@@ -72,6 +72,21 @@ class ReplayWindowTests(unittest.TestCase):
         self.assertIsNotNone(image)
         self.assertGreater(image.std(), 10)
 
+    def test_realtime_replay_reports_pacing_fields(self):
+        result, report = self.run_window("--realtime", "--decode-threads", "3")
+        self.assertEqual(result.returncode, 0, (report, result.stderr))
+        self.assertEqual(report["status"], "finished")
+        self.assertTrue(report["realtime"])
+        self.assertEqual(report["decode_threads"], 3)
+        self.assertGreaterEqual(report["frames_decoded"], report["frames_processed"])
+        for field in ("realtime_ratio", "media_seconds_played", "frames_skipped", "catch_ups", "frames_replaced",
+                      "decode_fps", "mean_presentation_latency_ms", "max_schedule_lateness_ms"):
+            self.assertIn(field, report)
+        self.assertGreater(report["realtime_ratio"], 0)
+        invalid = subprocess.run([sys.executable, str(SCRIPT), str(self.clip), "--decode-threads", "0"],
+                                 capture_output=True, text=True, timeout=30)
+        self.assertEqual(invalid.returncode, 2)
+
     def test_candidate_detector_is_selectable_and_reported(self):
         result, report = self.run_window("--detector", "yolox-nano")
         self.assertEqual(result.returncode, 0, (report, result.stderr))

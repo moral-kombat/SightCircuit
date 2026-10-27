@@ -35,22 +35,24 @@ class ReplaySource:
     """Decode a video track to BGR, with thread-safe pause, restart and loop controls.
 
     Frames are scaled by the decoder so the longest side is at most 960 pixels.
-    No left/right meaning is assumed for the track ordinal.
+    No left/right meaning is assumed for the track ordinal. Decoding uses FFmpeg
+    frame and slice threading with ``decode_threads`` threads.
 
-    With ``realtime`` the source follows media time: frames that arrive more than
-    ``max_lateness`` seconds behind schedule (because processing was slower than the
-    recording) are dropped and counted in ``frames_dropped``, and early frames wait.
-    If nothing has been emitted for ``max_stall`` seconds (decoding itself is slower
-    than real time) the next frame is emitted and the schedule resyncs to it, counted
-    in ``resyncs``. Without ``realtime`` every frame is emitted, as before.
+    Without ``realtime`` every frame is emitted in order. With ``realtime`` the
+    source follows media time: early frames wait for their scheduled time. When
+    decoding falls more than ``catch_up_after`` seconds behind schedule, packets
+    are skipped without decoding until the next keyframe at or after the current
+    schedule position, so playback keeps real-time progress even when the
+    decoder cannot keep up with the recording (``catch_ups``/``frames_skipped``).
+    Pair it with a latest-only pipeline so slow inference never stalls decoding.
     """
 
-    def __init__(self, path, ordinal, realtime=False, max_lateness=0.1, clock=None, max_stall=1.0):
+    def __init__(self, path, ordinal, realtime=False, catch_up_after=0.5, clock=None, decode_threads=2):
         self.path, self.ordinal = path, ordinal
-        self.realtime, self.max_lateness, self.max_stall = realtime, max_lateness, max_stall
+        self.realtime, self.catch_up_after, self.decode_threads = realtime, catch_up_after, decode_threads
         self.clock = clock or PlaybackClock()
-        self.frames_dropped = 0
-        self.resyncs = 0
+        self.frames_decoded = self.frames_dropped = self.frames_skipped = self.catch_ups = 0
+        self.media_seconds = 0.0  # Media time advanced by emitted frames, including catch-up jumps.
         self.playing, self.restart = threading.Event(), threading.Event()
         self.looping, self.at_end = threading.Event(), threading.Event()
         self.playing.set()
@@ -66,51 +68,70 @@ class ReplaySource:
             self.restart.clear()
             self.at_end.clear()
             pass_frames = 0
-            was_playing = False
-            last_emit = self.clock.now()
-            self.clock.rebase()
+            rebase = True
+            skip_until = discard_before = previous_media = None
             with av.open(str(self.path), mode="r") as container:
                 videos = list(container.streams.video)
                 if self.ordinal >= len(videos):
                     raise SourceError("Selected video stream is absent")
                 stream = videos[self.ordinal]
                 self.stream_index = stream.index
-                stream.codec_context.thread_count = 2
-                for decoded in container.decode(stream):
+                stream.thread_type = "AUTO"
+                stream.codec_context.thread_count = self.decode_threads
+                for packet in container.demux(stream):
                     if stop.is_set() or self.restart.is_set():
                         break
                     while not self.playing.wait(0.1):
-                        was_playing = False
+                        rebase = True  # Resume on schedule instead of catching up the pause.
                         if stop.is_set():
                             return
                     if stop.is_set() or self.restart.is_set():
                         break
-                    if decoded.is_corrupt or min(decoded.width, decoded.height) <= 0:
-                        raise SourceError("Decoder returned an invalid frame")
-                    media_time = (float(decoded.pts * decoded.time_base)
-                                  if decoded.pts is not None and decoded.time_base is not None else None)
-                    if self.realtime and media_time is not None:
-                        if not was_playing:
-                            self.clock.rebase()
-                        lateness = self.clock.lateness(media_time)
-                        if lateness < -0.002 and stop.wait(-lateness):
-                            return
-                        if lateness > self.max_lateness:
-                            # Decoding slower than real time would otherwise drop every frame forever.
-                            if self.clock.now() - last_emit < self.max_stall:
+                    if skip_until is not None and packet.size:
+                        when = (float(packet.pts * packet.time_base)
+                                if packet.pts is not None and packet.time_base is not None else None)
+                        if not packet.is_keyframe or when is None or when < skip_until:
+                            self.frames_skipped += 1
+                            continue
+                        skip_until = None
+                    for decoded in stream.decode(packet):
+                        self.frames_decoded += 1
+                        media_time = (float(decoded.pts * decoded.time_base)
+                                      if decoded.pts is not None and decoded.time_base is not None else None)
+                        if discard_before is not None:
+                            # Frames still in the decoder from before a catch-up, or leading
+                            # pictures that reference skipped data.
+                            if media_time is None or media_time < discard_before or decoded.is_corrupt:
                                 self.frames_dropped += 1
                                 continue
-                            self.resyncs += 1
-                            self.clock.rebase()
-                            self.clock.lateness(media_time)
-                    was_playing = True
-                    last_emit = self.clock.now()
-                    width, height = processing_size(decoded.width, decoded.height)
-                    image = decoded.reformat(width=width, height=height, format="bgr24").to_ndarray()
-                    pass_frames += 1
-                    self.sequence += 1
-                    emit(Frame(image, "BGR24", width, height, image.strides[0], label, self.sequence,
-                               time.monotonic_ns(), media_time))
+                            discard_before = None
+                        if decoded.is_corrupt or min(decoded.width, decoded.height) <= 0:
+                            raise SourceError("Decoder returned an invalid frame")
+                        lateness = None
+                        if self.realtime and media_time is not None:
+                            if rebase:
+                                self.clock.rebase()
+                                rebase = False
+                            lateness = self.clock.lateness(media_time)
+                            if lateness > self.catch_up_after:
+                                skip_until = discard_before = media_time + lateness
+                                self.catch_ups += 1
+                                self.frames_dropped += 1
+                                break
+                            if lateness < -0.002 and stop.wait(-lateness):
+                                return
+                        if stop.is_set() or self.restart.is_set():
+                            break
+                        width, height = processing_size(decoded.width, decoded.height)
+                        image = decoded.reformat(width=width, height=height, format="bgr24").to_ndarray()
+                        if media_time is not None and previous_media is not None and media_time > previous_media:
+                            self.media_seconds += media_time - previous_media
+                        previous_media = media_time
+                        pass_frames += 1
+                        self.sequence += 1
+                        metadata = {} if lateness is None else {"schedule_lateness_ms": round(lateness * 1000, 3)}
+                        emit(Frame(image, "BGR24", width, height, image.strides[0], label, self.sequence,
+                                   time.monotonic_ns(), media_time, metadata))
             if stop.is_set():
                 return
             if not pass_frames and not self.restart.is_set():

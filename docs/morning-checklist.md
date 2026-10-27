@@ -35,9 +35,11 @@ labelled device-confirmed, and keep cloud/CI results separate.
 2. Refactor regression ([E49](status.md#e49-shared-pipeline-and-package-refactor-cloud-checks)):
    replay window with `--overlay` as in E47, then bounded mirror recognition as in E48.
    Expect the same behavior; note any difference.
-3. New pacing: run replay with `--realtime --max-frames 200 --report <new file>`.
-   Record `processed_fps`, `frames_dropped`, `mean_processing_ms`, `max_input_age_ms`.
-   Check playback no longer looks slow-motion.
+3. New pacing: run replay with `--realtime --max-frames 200 --report <new file>`,
+   once with the default 2 decoder threads and once with `--decode-threads 4`.
+   Record `realtime_ratio` (about 1.0 is real time), `processed_fps`, `decode_fps`,
+   `catch_ups`, `mean_processing_ms`, and whether playback looks real-time
+   rather than slow motion.
 4. Detector comparison: capture stills with `--still` (include the rug and sofa),
    describe them in `evaluation/local/frame.json`, run `scripts/evaluate_detectors.py`.
    Choose the default detector from this, not the outdoor seed.
