@@ -8,13 +8,76 @@ layer has been deployed by Framejacker.
 
 ## Current work order
 
+### October 26 evening handoff
+
+The latest source-only check is [E60](status.md#e60-evening-source-only-mirror-capture-and-scene-correspondence):
+The owner confirmed the saved TV scene and normal operation during and 30 seconds
+afterward without a toggle. The subsequent [one-still comparison](status.md#e61-file-only-detector-comparison-on-the-evening-grayscale-still)
+ran successfully but both models missed the expected TV. The
+[green-input recurrence and V4 cleanup failure](status.md#e59-arcturus-green-input-recurrence-and-operator-recovery)
+remain unresolved. E58's general wearer confirmations remain valid within
+their original scope.
+
+This checkpoint governs the next work; existing commands elsewhere are not
+authorization for another device operation. Frame/Arcturus remains the goal.
+Native passthrough is a recovery workaround, not acceptance of a different
+POC input source.
+
+1. **Obtain approved access to the existing still before diagnosing it.**
+   Inspect the full `scene-gray.png` and the MobileNet bottle box
+   [121, 62, 630, 351] with the owner. Record whether the TV is physical, shown on a
+   display, cropped, obscured or small in the image; adjudicate the bottle
+   only after inspection. The current handoff grants no private-image
+   transfer or server exposure. Obtain the existing source digest through an
+   approved route; do not invent it, recapture the scene or assume a file
+   with the same name is identical.
+2. **Make the file-only comparison reproducible.** Pin the source SHA-256,
+   code revision, model hashes, actual runtime, threshold 0.5 and warm-up
+   policy. Compare the saved 640 × 360 grayscale input with the application's
+   conversion/preprocessing path: channel replication/order, scaling,
+   crop/framing, SSD stretching, YOLOX letterboxing and mapped boxes.
+   Measure one controlled change at a time using the same source and both
+   detectors; preserve the original results. Add a focused synthetic
+   regression test only if a conversion/mapping defect is found. Do not lower
+   thresholds or select a model to make this one image pass.
+3. **Keep the evaluation limits explicit.** A `tv`-only manifest tests that
+   label's presence; no absent-label or localization accuracy is established.
+   Add factual absent labels or box annotations only after image inspection.
+   Broader accuracy needs a separately approved representative set, including
+   the earlier rug/sofa failure; new still capture is not authorized here.
+   Per-image timings are not live throughput or latency.
+4. **Reconcile lifecycle safeguards before proposing output.** The preserved
+   original checkout's HUD masking, calibration expiry, independent guardian
+   and truthful early-termination reporting are not automatically part of
+   merged main. Compare the exact capture/overlay implementations and tests,
+   retain owned copies, source/format/config validation, latest-frame and
+   stale-result behavior, and explain V4's failed cleanup before a new
+   marker/live-output proposal. Do not batch-import unrelated changes or
+   treat successful process reaping/API cleanup as physical recovery.
+   Review the session helper's continue-after-failure behavior and frame-count
+   display limits as part of that bounded-operation contract.
+5. **Keep live acceptance separate.** A future proposal needs a pinned
+   artifact, explicit source and image/display limits, an independent abort
+   path, truthful cleanup outcomes and wearer confirmation. Any HUD mapping
+   needs all observed copies/corners and conservative footprints; dimensions
+   alone cannot identify eyes or prove feedback exclusion. Blocking VR calls,
+   SIGKILL or stuck kernel I/O can leave recovery uncertain. Production
+   combined live-source/HUD authorization remains closed; no new capture,
+   device commands, camera changes, downloads, restarts or headset tests are
+   authorized by recording these results.
+
+The sole main coder prepares the focused documentation PR; the coordinator
+reviews its exact diff and checks and owns the authorized merge. Preserve
+unrelated `observation_page` work and the separate architecture-summary PR.
+Do not replay a consumed one-run approval.
+
 | Order | Deliverable | State | Acceptance |
 | --- | --- | --- | --- |
 | 1 | Bounded diagnostic for an existing SteamVR mirror | Complete for the tested view: room capture works; VR panel is included | Keep for bounded/no-display recognition and post-capture snapshots; physical source/timing unresolved; [evidence](status.md#e18-vr-panel-included-in-mirror-input) |
 | 1a | Recognition on the saved mirror still | Frame execution confirmed; rug incorrectly labeled sofa | Keep execution success separate from classification quality; [evidence](status.md#e15-saved-room-recognition-and-rug-false-positive) |
 | 1b | Bounded recognition from mirror frames | Latest Frame POC execution and inspected preview localization confirmed | 100 reads, 51 processed at 4.993 fps, 40.065 ms mean inference and clean shutdown; user confirms matching labels/boxes and normal passthrough/tracking during/after. Broader accuracy and continuous output remain separate; [E48](status.md#e48-live-mirror-recognition-poc-and-matching-preview) |
 | 1c | Check capture of our own display | Confirmed: the VR panel appears in captured output | Current composited mirror does not exclude our output; no continuous live-image panel from this source; [E18](status.md#e18-vr-panel-included-in-mirror-input) |
-| 1d | Detector quality and class coverage | Comparison harness and YOLOX-Nano candidate implemented; Frame stills needed | Include the rug false positive; select supported target classes and evaluate correct labels, boxes and misses before claiming useful accuracy; [procedure](on-device.md#compare-detectors-on-frame-stills), [cloud seed result](status.md#e50-candidate-detector-and-evaluation-harness-cloud-checks) |
+| 1d | Detector quality and class coverage | One Frame grayscale still compared; both models missed the expected TV | Inspect the saved input and preprocessing before diagnosing; preserve one-image limits and the earlier rug case; [handoff](#october-26-evening-handoff), [E61](status.md#e61-file-only-detector-comparison-on-the-evening-grayscale-still) |
 | 2 | Isolated shared-memory reader and controlled producer | Controlled x86_64 and Frame ARM64 checks passed; real provider unverified | All 14 native/supervisor tests pass on Frame; upstream writer ordering and original GPU completion remain unresolved; [E23](status.md#e23-reference-build-and-controlled-reader-on-frame) |
 | 3 | Dedicated camera provider | Initial tests, GPU query and 28 watchdog/provider/recovery tests pass on Frame; metadata-only adaptation prepared; not deployed | Producer handoff is absent in reviewed source; live reads blocked; controlled metadata-layer load/restoration and synchronized copy remain |
 | 3a | Validated image import and ownership | ARM64 build and ten synthetic tests passed; two-plane coverage added in cloud | Actual camera DMA-BUF import remains untested; [E31](status.md#e31-import-build-and-synthetic-tests-on-frame), [E32](status.md#e32-two-plane-import-fixture-cloud-checks) |

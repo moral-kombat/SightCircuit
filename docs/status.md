@@ -19,7 +19,7 @@ unknown unless explicitly recorded below.
 | Continuous live input in the Qt/VR application | Planned; current mirror includes our panel | The timed VR panel appeared in the saved mirror image; use input independent of our output before continuous VR image display; [E18](#e18-vr-panel-included-in-mirror-input) |
 | Recognition on the saved room still | Frame execution confirmed; false positive | One image processed and annotated; user identifies the `sofa`-labeled item as a rug; [E15](#e15-saved-room-recognition-and-rug-false-positive) |
 | Bounded mirror recognition | Frame POC execution and sampled preview localization confirmed | Latest run: 100 captured / 51 processed reads, 4.993 processed fps, 40.065 ms mean inference, clean shutdown; user confirms matching preview labels/boxes and normal passthrough/tracking during/after; broader accuracy and continuous display remain separate; [E48](#e48-live-mirror-recognition-poc-and-matching-preview) |
-| Candidate detector and evaluation harness | Cloud-tested; Frame evaluation pending | YOLOX-Nano (80 COCO classes, ONNX Runtime) selectable beside MobileNet-SSD; seed comparison on six outdoor images only; no rug class in either model; [E50](#e50-candidate-detector-and-evaluation-harness-cloud-checks) |
+| Candidate detector and evaluation harness | One Frame grayscale still evaluated; expected TV missed by both models | MobileNet-SSD reported bottle; YOLOX-Nano reported no detections. One-image, presence-only ground truth; no model choice or live-latency claim; [E61](#e61-file-only-detector-comparison-on-the-evening-grayscale-still), [cloud seed E50](#e50-candidate-detector-and-evaluation-harness-cloud-checks) |
 | Existing-mirror diagnostic | Frame capture confirmed; VR panel included in input | Physical-room preview and bounded inference work, but this composited view includes our overlay; physical camera identity/timing remain unknown; [E14](#e14-physical-room-visible-in-the-mirror-preview), [E18](#e18-vr-panel-included-in-mirror-input) |
 | Dedicated-camera shared-memory reader | Controlled x86_64 and Frame ARM64 tests passed | All 14 reader/supervisor tests pass on Frame; actual provider and upstream writer ordering remain unverified; [E23](#e23-reference-build-and-controlled-reader-on-frame) |
 | Native capture prerequisite report | Frame report received | aarch64 SteamOS 0.5.6, GCC 15.1.1 and Vulkan 1.4.309 development metadata/headers; no capture configuration at checked paths; [E21](#e21-capture-prerequisites-on-frame) |
@@ -1839,6 +1839,97 @@ This is the first user confirmation of the VR panel on merged `main` and of
 normal passthrough during these runs. It does not establish live-camera
 freshness, detector accuracy, or whether the desktop window appears in the
 mirror. Labelled stills and the detector comparison remain pending.
+
+### E59: Arcturus green input recurrence and operator recovery
+
+Date: 2026-10-26 at 19:07 EDT (23:07 UTC), operator report relayed by the
+coordinator. Returning to the headset, the owner found Arcturus input green again.
+Switching to native passthrough and then **back to Arcturus** restored the
+camera for this occurrence. This is a recovery workaround, not a root-cause
+diagnosis, durable fix or proof of automatic cleanup. No deliberate
+reproduction or causal link to a particular operation is established.
+
+The earlier V4 fixed-marker observation remains a separate unresolved failure:
+its saved report recorded early native termination and overall cleanup false,
+despite successful native cleanup API calls and process reaping. the owner then
+reported green Arcturus passthrough; the earlier recovery report established
+normal native passthrough after a manual switch. Those original local
+coordination records are preserved. Neither this later workaround nor the
+general wearer confirmations in [E58](#e58-user-observations-for-the-2026-10-26-runs)
+turn V4 into a successful cleanup result. Physical recovery must be reported
+separately from process exit and API cleanup.
+
+### E60: Evening source-only mirror capture and scene correspondence
+
+Date: 2026-10-26 evening EDT. Evidence is the owner's pasted Frame terminal output
+and wearer reports, relayed by the coordinator; this documentation update did
+not independently fetch the device reports or private image. Reported
+preflight: Linux aarch64, Python 3.12.3, clean Git status, HEAD
+`cbe4833cbd4f4b9aa3fa0bcbdd60fd8fc7e1d07d`, SteamVR virtual-mirror candidate
+`/dev/video99`.
+
+Exactly one approved source-only `mirror_check.py --capture` observation ran
+for five seconds, with a 15-second outer timeout and three-second kill grace.
+It requested no inference or overlay. Results were saved privately on Frame
+under `/home/steamos/framejacker/artifacts/mirror-check/evening-zZOhKZ`.
+
+| Reported field | Value |
+| --- | --- |
+| Status / exit code | `captured` / `0` |
+| Frames / read attempts | 50 / 50 |
+| Changed grayscale samples | 49 |
+| Format | RGB3, 1920 × 1080 |
+| First frame | 2.04 ms after acquisition start |
+| Acquisition elapsed | 5000.133 ms |
+| Maximum read gap / reported rate | 100.837 ms / 10 Hz |
+| Worker elapsed / exit code | 5137.837 ms / 0 |
+| Forced termination / cleanup | false / true |
+| Saved still | `scene-gray.png`, 640 × 360, gray8 |
+
+The owner confirmed normal operation during the observation and for 30 seconds
+afterward **without a source toggle**, and confirmed that the saved image
+shows the TV screen he was viewing. This establishes operator-confirmed scene
+correspondence for this sample and a clean source-only run as reported. It
+does not establish physical-camera identity, exposure freshness, camera-to-
+display latency, stereo composition or exclusion of our overlay. Read timing
+and changing samples are not exposure timestamps. This result does not resolve
+the separate [V4 cleanup failure](#e59-arcturus-green-input-recurrence-and-operator-recovery).
+
+### E61: File-only detector comparison on the evening grayscale still
+
+Date: 2026-10-26 evening EDT, following [E60](#e60-evening-source-only-mirror-capture-and-scene-correspondence).
+Separately approved file-only evaluation used that same private grayscale
+still at threshold 0.5, with no downloads, new capture or display. Evidence is
+the coordinator's relay of the owner's pasted output, not an independent raw-report
+or image inspection by this updater.
+
+The manifest expected the canonical label `tv`; it supplied no absent labels
+or box ground truth. The report status was `evaluated`, exit 0. Each model
+performed one warm-up and one measured evaluation.
+
+| Detector / runtime | TV hits / misses | Reported detections | Measured inference | Processing | Startup |
+| --- | --- | --- | --- | --- | --- |
+| MobileNet-SSD / OpenCV DNN, 20 classes | 0 / 1 | `bottle`, confidence 0.92646, box [121, 62, 630, 351] | 36.144 ms | 37.17 ms | 41.308 ms |
+| YOLOX-Nano / ONNX Runtime, 80 classes | 0 / 1 | None | 28.848 ms | 30.239 ms | 117.617 ms |
+
+Both detectors missed the expected TV on this one image. Zero absent-label
+violations and zero confusions do not establish correctness: the manifest had
+no absent labels or boxes with which to score them. The bottle result has not
+been visually adjudicated; the private image was not shared with the
+coordinator. Do not diagnose a bottle false positive or the cause of the TV
+miss from these metrics alone. These timings are not live throughput or
+end-to-end latency, and one grayscale image does not justify choosing a
+default detector or generalizing model accuracy.
+
+The reported private results directory is
+`/home/steamos/framejacker/artifacts/mirror-check/evening-zZOhKZ/detectors-uz1115/`,
+containing `manifest.json`, `report.json`, `stdout.json`, `stderr.txt`,
+`exit-code.txt` and `source-sha256.txt`. The hash file was created according
+to the user's command, but its digest was not supplied; image identity has
+not been independently hash-verified here. No private images, raw image
+payloads or credentials are committed with this record. The
+[forward handoff](live-capture.md#october-26-evening-handoff) starts with
+authorized inspection and a reproducible file-only comparison.
 
 ## Maintaining the evidence
 
