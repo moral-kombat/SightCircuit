@@ -16,10 +16,12 @@ SKIP_UPDATE=1 COUNTDOWN=15 STEP_TIMEOUT=90 \
 
 `COUNTDOWN` automates timing only; aim the headset during the countdown and
 review the generated preview and report afterward. Interactive observations
-may remain unanswered in the summary. The setup, regression, pacing and mirror
-stages have been exercised remotely on the Frame; stills, overlay and
-window-mirror remain unverified. The manifest helper has a unit test and the
-shell script syntax has been checked. Stage-to-step mapping: setup = 1,
+may remain unanswered in the summary. Setup, regression, pacing, mirror,
+replay-overlay and window-mirror commands have been exercised remotely on
+Frame. Overlay visibility and passthrough/tracking still need user confirmation;
+the window-mirror attempt was inconclusive; labelled stills and detector
+comparison remain pending. The manifest helper has a unit test and the shell
+script syntax has been checked. Stage-to-step mapping: setup = 1,
 regression + overlay = 2,
 pacing = 3, stills + evaluate = 4, window-mirror = 5 (mirror = E48 recognition).
 
@@ -28,7 +30,8 @@ activate capture layers or restart SteamVR. Commands are detailed in
 [on-device](on-device.md). Record results as new [status](status.md) entries,
 labelled device-confirmed, and keep cloud/CI results separate.
 
-1. Update and set up: `git pull --ff-only` on this branch, `bash scripts/setup_window.sh`.
+1. Update and set up: `git switch main`, `git pull --ff-only`,
+   `bash scripts/setup_window.sh`.
 2. Refactor regression ([E49](status.md#e49-shared-pipeline-and-package-refactor-cloud-checks)):
    replay window with `--overlay` as in E47, then bounded mirror recognition as in E48.
    Expect the same behavior; note any difference.

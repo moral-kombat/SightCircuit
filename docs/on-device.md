@@ -235,10 +235,16 @@ may be slower than the source recording. `--max-fps` changes that cap;
 `--threshold` changes the default 0.5 confidence threshold. No detections above
 threshold is a valid result for a scene outside the demo model's classes.
 
-`--realtime` (cloud-tested only, not yet run on Frame) paces playback by media
-time instead of processing every frame: frames more than 0.1 s behind schedule
-are dropped, and the JSON summary adds `frames_dropped`, `processed_fps`,
-`mean_processing_ms` and `max_input_age_ms`. Without it behavior is unchanged.
+`--realtime` paces playback by media time instead of processing every frame:
+frames more than 0.1 s behind schedule are dropped, and the JSON summary adds
+`frames_dropped`, `processed_fps`, `mean_processing_ms` and `max_input_age_ms`.
+If decoding stalls, the source resynchronizes after one second without an
+emitted frame. Frame measurements in
+[E51](status.md#e51-media-time-replay-pacing-unit-tested-only) and
+[E53](status.md#e53-unattended-replay-regression-and-pacing-rerun) show that
+the tested large recording is decode-bound: replay processed about 0.97 fps
+with realtime pacing versus 5.15 fps unpaced. Without `--realtime` behavior
+is unchanged.
 
 By default the prototype displays an ordinary Qt window without opening camera
 nodes, calling OpenVR, changing SteamVR or saving images. Optional `--overlay`
