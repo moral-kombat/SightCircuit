@@ -28,7 +28,8 @@ activate capture layers or restart SteamVR. Commands are detailed in
 [on-device](on-device.md). Record results as new [status](status.md) entries,
 labelled device-confirmed, and keep cloud/CI results separate.
 
-1. Update and set up: `git pull --ff-only` on this branch, `bash scripts/setup_window.sh`.
+1. Update and set up: `git switch main`, `git pull --ff-only`,
+   `bash scripts/setup_window.sh`.
 2. Refactor regression ([E49](status.md#e49-shared-pipeline-and-package-refactor-cloud-checks)):
    replay window with `--overlay` as in E47, then bounded mirror recognition as in E48.
    Expect the same behavior; note any difference.

@@ -1750,6 +1750,26 @@ observing the headset. These results are remote device-command observations,
 not user confirmation of headset display, passthrough, tracking or detector
 accuracy.
 
+### E54: Bounded mirror capture on merged main
+
+Date: 2026-10-26, Frame revision `35e144b` (`main`), run over SSH with
+`SKIP_UPDATE=1 COUNTDOWN=20 STEP_TIMEOUT=60`, stage `mirror`. The 10-second
+capture exited 0, processed 100 mirror frames and 51 detector frames
+(4.994 fps), skipped no stale inputs, generated a preview, and shut down
+without forced termination. The report listed `person`, `sofa`, and
+`tvmonitor`; the final result was `tvmonitor` at confidence 0.99972. The
+preview reviewed on the PC shows a monitor-like screen inside a large
+`tvmonitor` box.
+
+This confirms the bounded command and preview pipeline ran on merged `main`;
+it does not establish that the scene matched the user's intended target. The
+input remains identified only as a SteamVR virtual-mirror candidate, not
+verified physical-camera imagery. No user observation was available, so
+passthrough, tracking, target accuracy and headset display are unverified.
+The SSH shell had no exported display, so the replay-overlay and desktop-window
+tests were not run. Labeled private still capture and detector comparison also
+remain pending.
+
 ## Maintaining the evidence
 
 For a new result, record the execution date, platform/runtime versions,
