@@ -19,7 +19,7 @@ the [dated source review](capture-reference-review.md) explains capture choices.
 <!-- BEGIN progress-summary: generated from the progress dashboard; edit status.md or live-capture.md instead of this block -->
 Generated from the [progress
 dashboard](https://claude.ai/artifact/XNPpBHVFUy5Q8JQV9aLaKq) using `main` at
-commit `35e144b` (2026-10-25). This block only summarizes: [status](status.md)
+commit `edaa5e2` (2026-10-26). This block only summarizes: [status](status.md)
 owns evidence and [live capture](live-capture.md#current-work-order) owns
 current tasks. Counts show how far each piece has got: confirmed working on
 Frame, tested on Frame with synthetic or controlled inputs, cloud-tested only,
@@ -28,16 +28,16 @@ or not started (planned or researched). Held means paused, blocked or failed.
 | Track | Working on Frame | Tested on Frame | Cloud-tested | Not started | Held |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Input & capture | 4 | 9 | 1 | 3 | 3 |
-| Inference | 5 | 0 | 2 | 0 | 0 |
-| Presentation | 2 | 1 | 0 | 1 | 0 |
+| Inference | 5 | 2 | 0 | 0 | 0 |
+| Presentation | 2 | 2 | 0 | 1 | 1 |
 | Geometry & reconstruction | 0 | 0 | 0 | 2 | 0 |
-| **All** | 11 | 10 | 3 | 6 | 3 |
+| **All** | 11 | 13 | 1 | 6 | 4 |
 
 Milestones, from the [acceptance list](#milestones-and-acceptance-checks):
 
-1. **Replay and window:** Met on Frame; replay processing reconfirmed after the refactor. Qt window rerun needs someone wearing the headset; label accuracy not evaluated.
-2. **Live capture:** In progress, dedicated path paused. Mirror works but is composited; dedicated provider frozen per design review, blocked on sync and trial recovery.
-3. **VR panel:** Visible and controllable; not measured. Overlay rerun after the refactor needs someone wearing the headset; readability, latency and live-input measurements pending.
+1. **Replay and window:** Met on Frame; replay processing reconfirmed after the refactor. Qt window rerun inconclusive (E56); label accuracy not evaluated.
+2. **Live capture:** In progress, dedicated path paused. Mirror scene confirmed but composited; provider frozen; Arcturus green-input recurrence unresolved (E59).
+3. **VR panel:** Visible and readable on merged main (wearer-reported); not measured. Readability, latency and live-input measurements pending; V4 cleanup failure unresolved (E59).
 4. **World-space labels:** Not started. Depends on live capture and calibration.
 5. **Splat experiment (optional):** Researched. No training or headset rendering yet.
 
