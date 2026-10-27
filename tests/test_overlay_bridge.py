@@ -2,8 +2,10 @@
 import json
 import os
 from pathlib import Path
+import signal
 import struct
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -121,6 +123,50 @@ class OverlayBridgeTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "VRInitError_Init_PathRegistryNotFound"):
             client.start()
         self.assertIsNotNone(client.process.poll())
+
+
+@unittest.skipUnless(os.name == "posix", "Fake bridge uses POSIX shebangs and signals")
+class OverlayCloseTests(unittest.TestCase):
+    BODIES = {
+        "cooperative": "sys.stdin.buffer.read()\nprint(json.dumps({'exit_code': 0, 'cleanup_ok': True}), flush=True)",
+        "terminable": "time.sleep(60)",
+        "ignores_term": "signal.signal(signal.SIGTERM, signal.SIG_IGN)\ntime.sleep(60)",
+    }
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+
+    def close_fake_bridge(self, behavior):
+        path = Path(self.temporary.name) / behavior
+        path.write_text("#!" + sys.executable + "\n"
+                        "import json, signal, sys, time\n"
+                        "sys.stdout.write(json.dumps({'event': 'ready', 'validation_only': False, "
+                        "'runtime_initialized': True}) + '\\n')\n"
+                        "sys.stdout.flush()\n" + self.BODIES[behavior] + "\n")
+        path.chmod(0o755)
+        client = OverlayClient(binary=path).start()
+        return client, client.close()
+
+    def test_cooperative_exit_is_confirmed_without_forced_termination(self):
+        client, summary = self.close_fake_bridge("cooperative")
+        self.assertIsNone(summary["error"], summary)
+        self.assertFalse(summary["forced_termination"])
+        self.assertTrue(summary["cleanup_confirmed"])
+        self.assertEqual(client.process.returncode, 0)
+
+    def test_terminate_escalation_is_reported_as_forced(self):
+        client, summary = self.close_fake_bridge("terminable")
+        self.assertTrue(summary["forced_termination"], summary)
+        self.assertFalse(summary["cleanup_confirmed"])
+        self.assertIsNotNone(summary["error"])
+        self.assertEqual(client.process.returncode, -signal.SIGTERM)
+
+    def test_kill_escalation_is_reported_as_forced(self):
+        client, summary = self.close_fake_bridge("ignores_term")
+        self.assertTrue(summary["forced_termination"], summary)
+        self.assertFalse(summary["cleanup_confirmed"])
+        self.assertEqual(client.process.returncode, -signal.SIGKILL)
 
 
 class PanelLimitConsistencyTests(unittest.TestCase):
