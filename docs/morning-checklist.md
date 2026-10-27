@@ -16,10 +16,12 @@ SKIP_UPDATE=1 COUNTDOWN=15 STEP_TIMEOUT=90 \
 
 `COUNTDOWN` automates timing only; aim the headset during the countdown and
 review the generated preview and report afterward. Interactive observations
-may remain unanswered in the summary. The setup, regression, pacing and mirror
-stages have been exercised remotely on the Frame; stills, overlay and
-window-mirror remain unverified. The manifest helper has a unit test and the
-shell script syntax has been checked. Stage-to-step mapping: setup = 1,
+may remain unanswered in the summary. Setup, regression, pacing, mirror,
+replay-overlay and window-mirror commands have been exercised remotely on
+Frame. Overlay visibility and passthrough/tracking still need user confirmation;
+the window-mirror attempt was inconclusive; labelled stills and detector
+comparison remain pending. The manifest helper has a unit test and the shell
+script syntax has been checked. Stage-to-step mapping: setup = 1,
 regression + overlay = 2,
 pacing = 3, stills + evaluate = 4, window-mirror = 5 (mirror = E48 recognition).
 

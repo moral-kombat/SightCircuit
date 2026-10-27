@@ -1766,9 +1766,60 @@ it does not establish that the scene matched the user's intended target. The
 input remains identified only as a SteamVR virtual-mirror candidate, not
 verified physical-camera imagery. No user observation was available, so
 passthrough, tracking, target accuracy and headset display are unverified.
-The SSH shell had no exported display, so the replay-overlay and desktop-window
-tests were not run. Labeled private still capture and detector comparison also
-remain pending.
+At this capture the SSH shell had no exported display; the active `:0` display
+was later identified and used for E55 and E56. Labeled private still capture
+and detector comparison remain pending.
+
+### E55: Annotated replay overlay command on Frame
+
+Date: 2026-10-26, Frame revision `35e144b` (`main`), run over SSH attached to
+the active `:0` Xwayland display with `QT_QPA_PLATFORM=xcb`,
+`SKIP_UPDATE=1 COUNTDOWN=15 STEP_TIMEOUT=180`, stage `overlay`. Replay processed
+and submitted 100 annotated frames. The native bridge initialized the runtime,
+received and submitted all 100 frames, then reported `cleanup_ok: true`,
+`exit_code: 0` and no forced termination. The file replay reported 0.983 fps,
+1,386 dropped frames and 98 resyncs; its labels (`bottle`, `chair`, `sofa`)
+describe the recording, not live room objects.
+
+These are command and OpenVR API results only. The prompt asking whether the
+panel was actually visible, labels readable, and passthrough/tracking normal
+was unanswered. Headset presentation and normal passthrough/tracking remain
+unverified.
+
+### E56: Desktop-window mirror capture attempt
+
+Date: 2026-10-26, Frame revision `35e144b` (`main`), run over SSH in the same
+`:0` graphical session with `SKIP_UPDATE=1 COUNTDOWN=15 STEP_TIMEOUT=180`,
+stage `window-mirror`. The five-second mirror capture read 50 frames, saved a
+preview, and exited 0 with clean worker shutdown. The replay-window report
+exited 0 but had status `closed` after 41 of the requested 150 frames (0.923
+fps, 557 drops, 40 resyncs). Its preview reviewed on the PC shows the desktop
+monitor but no obvious replay image. The session's visual-observation prompts
+were unanswered.
+
+This attempt is inconclusive: the report does not establish whether the replay
+window was visible in the headset during capture, why it closed before its
+frame limit, or whether the desktop window is generally included in mirror
+input. Passthrough/tracking and physical-camera identity are also unverified.
+Review the device report and repeat only with a person present to confirm the
+headset view.
+
+### E57: Follow-up overlay and mirror runs
+
+Date: 2026-10-26, Frame revision `35e144b` (`main`). After the user said they
+were available, the overlay stage was rerun with a 15-second countdown. It
+again processed and submitted 100 frames; the native bridge initialized and
+closed cleanly, with exit code 0 and no forced termination. Replay ran at
+0.983 fps, dropped 1,370 frames and resynced 98 times. The recorded labels
+(`bottle`, `chair`, `diningtable`, `sofa`) are from the file, not live input.
+
+A second bounded mirror capture then read 100 frames over ten seconds and
+processed 51 frames. It exited 0 with clean cleanup; `labels_seen` contained
+`sofa` and `tvmonitor`, while the final inference had no detections. The
+preview reviewed on the PC shows desktop/game screens. Neither structured
+observation prompt produced a headset-side response, so target correctness,
+overlay visibility, passthrough and tracking remain unverified. These repeated
+commands do not substitute for visual confirmation or labeled stills.
 
 ## Maintaining the evidence
 
