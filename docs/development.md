@@ -64,7 +64,14 @@ confusable detection overlapping the object at IoU 0.3 is a confusion. Set
 `boxes_complete: true` only when every supported object is boxed, enabling
 false-positive and precision counts. Labels a detector cannot output are
 reported as unsupported. The JSON report has per-detector totals, per-image
-detections and timing; a one-line summary per detector goes to stderr.
+detections and timing; a one-line summary per detector goes to stderr. Report
+schema version 2 also records manifest and resolved image SHA-256 values,
+decoded and processed dimensions, detector model hashes, runtime versions and
+preprocessing parameters, Python/OpenCV/NumPy versions, the Git revision and
+tracked-diff hash, conversion path, and the one-image, untimed warm-up policy.
+A dirty-worktree flag means the commit alone does not identify the executed
+source; retain the exact checkout diff as well as the report. The diff hash is
+a fingerprint, not a copy of the changes.
 Private Frame stills belong in ignored `evaluation/local/`; see the
 [device procedure](on-device.md#compare-detectors-on-frame-stills).
 

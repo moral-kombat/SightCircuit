@@ -61,6 +61,21 @@ class RecognitionRecorder:
             self.next_progress = time.monotonic() + 1
 
 
+def mirror_acquirer(candidate, seconds, backend_factory=None):
+    """Build the ``MirrorSource`` acquisition callback for a verified candidate."""
+    def acquire(stop, on_frame, update):
+        try:
+            captured, _ = check.capture(candidate, seconds, stop, update,
+                                        backend_factory=backend_factory, on_frame=on_frame)
+            return captured
+        except Exception as error:
+            failed = check.new_report()
+            failed.update(status="error", reason="capture_thread_failed", error=str(error), cleanup_ok=False)
+            return failed
+
+    return acquire
+
+
 def recognize(candidate, seconds, stop, progress=lambda report: None, want_preview=False,
               *, max_fps=5, threshold=0.5, detector=DEFAULT_DETECTOR, backend_factory=None, detector_factory=None):
     """Run bounded recognition; return the report and, on success, final images.
@@ -81,17 +96,7 @@ def recognize(candidate, seconds, stop, progress=lambda report: None, want_previ
             report["status"] = "cancelled"
             return report, None
 
-        def acquire(stop, on_frame, update):
-            try:
-                captured, _ = check.capture(candidate, seconds, stop, update,
-                                            backend_factory=backend_factory, on_frame=on_frame)
-                return captured
-            except Exception as error:
-                failed = check.new_report()
-                failed.update(status="error", reason="capture_thread_failed", error=str(error), cleanup_ok=False)
-                return failed
-
-        source = MirrorSource(acquire)
+        source = MirrorSource(mirror_acquirer(candidate, seconds, backend_factory))
         pipeline = Pipeline(source, model, threshold=threshold, max_fps=max_fps, latest_only=True,
                             max_input_age_ms=MAXIMUM_INPUT_AGE_MS)
         recorder = RecognitionRecorder(report, pipeline.stats, source, progress, want_preview)

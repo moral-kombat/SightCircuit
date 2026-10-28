@@ -23,16 +23,20 @@ ROOT = Path(__file__).resolve().parents[1]
 class ReplayWorker(threading.Thread):
     """Run file replay through the shared pipeline; retain one latest result for the UI."""
     def __init__(self, path, ordinal, threshold, max_fps, max_frames, sinks=(), detector=DEFAULT_DETECTOR,
-                 realtime=False):
+                 realtime=False, source=None):
         super().__init__(daemon=True)
         self.detector_name = detector
-        self.source = ReplaySource(path, ordinal, realtime=realtime)
-        self.playing, self.restart = self.source.playing, self.source.restart
-        self.looping, self.at_end = self.source.looping, self.source.at_end
+        live = source is not None
+        self.source = source or ReplaySource(path, ordinal, realtime=realtime)
+        # Live sources have no transport; the controls become inert events.
+        self.playing = getattr(self.source, "playing", threading.Event())
+        self.restart = getattr(self.source, "restart", threading.Event())
+        self.looping = getattr(self.source, "looping", threading.Event())
+        self.at_end = getattr(self.source, "at_end", threading.Event())
         self.stopping, self.done = threading.Event(), threading.Event()
         self.results = LatestResultSink()
         self.pipeline = Pipeline(self.source, None, (self.results, *sinks), threshold=threshold,
-                                 max_fps=max_fps, latest_only=False, max_frames=max_frames)
+                                 max_fps=max_fps, latest_only=live, max_frames=max_frames)
         self.error = None
 
     @property
@@ -41,7 +45,7 @@ class ReplayWorker(threading.Thread):
 
     @property
     def stream_index(self):
-        return self.source.stream_index
+        return getattr(self.source, "stream_index", None)
 
     @property
     def limit(self):
