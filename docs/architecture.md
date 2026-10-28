@@ -19,7 +19,7 @@ the [dated source review](capture-reference-review.md) explains capture choices.
 <!-- BEGIN progress-summary: generated from the progress dashboard; edit status.md or live-capture.md instead of this block -->
 Generated from the [progress
 dashboard](https://claude.ai/artifact/XNPpBHVFUy5Q8JQV9aLaKq) using `main` at
-commit `edaa5e2` (2026-10-26). This block only summarizes: [status](status.md)
+commit `02e6065` (2026-10-27). This block only summarizes: [status](status.md)
 owns evidence and [live capture](live-capture.md#current-work-order) owns
 current tasks. Counts show how far each piece has got: confirmed working on
 Frame, tested on Frame with synthetic or controlled inputs, cloud-tested only,
@@ -28,18 +28,18 @@ or not started (planned or researched). Held means paused, blocked or failed.
 | Track | Working on Frame | Tested on Frame | Cloud-tested | Not started | Held |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Input & capture | 4 | 9 | 1 | 3 | 3 |
-| Inference | 5 | 2 | 0 | 0 | 0 |
-| Presentation | 2 | 2 | 0 | 1 | 1 |
-| Geometry & reconstruction | 0 | 0 | 0 | 2 | 0 |
-| **All** | 11 | 13 | 1 | 6 | 4 |
+| Inference | 5 | 2 | 0 | 1 | 0 |
+| Presentation | 2 | 2 | 0 | 2 | 1 |
+| Geometry & reconstruction | 0 | 0 | 0 | 4 | 0 |
+| **All** | 11 | 13 | 1 | 10 | 4 |
 
 Milestones, from the [acceptance list](#milestones-and-acceptance-checks):
 
 1. **Replay and window:** Met on Frame; replay processing reconfirmed after the refactor. Qt window rerun inconclusive (E56); label accuracy not evaluated.
-2. **Live capture:** In progress, dedicated path paused. Mirror scene confirmed but composited; provider frozen; Arcturus green-input recurrence unresolved (E59).
+2. **Live capture:** In progress, dedicated path paused. Dedicated provider deferred by the POC scope; the mirror is the POC source but is composited; Arcturus green-input recurrence unresolved (E59).
 3. **VR panel:** Visible and readable on merged main (wearer-reported); not measured. Readability, latency and live-input measurements pending; V4 cleanup failure unresolved (E59).
-4. **World-space labels:** Not started. Depends on live capture and calibration.
-5. **Splat experiment (optional):** Researched. No training or headset rendering yet.
+4. **World-space labels:** Now the POC target, with estimated distance. WP3 pose logging gates it; then WP4 projection, WP5 overlay, WP6 tracker, WP8 live loop.
+5. **Splat experiment (optional):** Deferred by the POC scope. Not planned until the world-locked label works.
 
 Critical path to milestone 2: 4 of 10 main steps done. Next: define the recovery
 command and readiness checks (exact restore command, readiness checks and
