@@ -12,7 +12,10 @@ import threading
 import unittest
 from unittest.mock import Mock, patch
 
-import cv2
+try:
+    import cv2
+except ImportError as error:
+    raise unittest.SkipTest("OpenCV is required for HUD marker observer tests") from error
 import numpy as np
 
 from scripts import hud_marker_observer as observer

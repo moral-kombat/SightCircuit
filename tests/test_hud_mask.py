@@ -8,7 +8,10 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 
-import cv2
+try:
+    import cv2
+except ImportError as error:
+    raise unittest.SkipTest("OpenCV is required for HUD mask tests") from error
 import numpy as np
 
 from scripts import hud_mask as hud
