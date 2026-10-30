@@ -19,6 +19,7 @@ unknown unless explicitly recorded below.
 | Continuous live input in the Qt/VR application | Planned; current mirror includes our panel | The timed VR panel appeared in the saved mirror image; use input independent of our output before continuous VR image display; [E18](#e18-vr-panel-included-in-mirror-input) |
 | Recognition on the saved room still | Frame execution confirmed; false positive | One image processed and annotated; user identifies the `sofa`-labeled item as a rug; [E15](#e15-saved-room-recognition-and-rug-false-positive) |
 | Bounded mirror recognition | Frame POC execution and sampled preview localization confirmed | Latest run: 100 captured / 51 processed reads, 4.993 processed fps, 40.065 ms mean inference, clean shutdown; user confirms matching preview labels/boxes and normal passthrough/tracking during/after; broader accuracy and continuous display remain separate; [E48](#e48-live-mirror-recognition-poc-and-matching-preview) |
+| Real-time recorded replay | Cloud-tested on a synthetic stand-in; Frame measurement pending | Keyframe catch-up and newest-frame inference reach a 0.94 real-time ratio where the previous version reproduced Frame's 0.97 processed fps; [E53](#e53-unattended-replay-regression-and-pacing-rerun), [E62](#e62-keyframe-catch-up-realtime-replay-cloud-checks) |
 | Candidate detector and evaluation harness | One Frame grayscale still evaluated; expected TV missed by both models | MobileNet-SSD reported bottle; YOLOX-Nano reported no detections. One-image, presence-only ground truth; no model choice or live-latency claim; [E61](#e61-file-only-detector-comparison-on-the-evening-grayscale-still), [cloud seed E50](#e50-candidate-detector-and-evaluation-harness-cloud-checks) |
 | Existing-mirror diagnostic | Frame capture confirmed; VR panel included in input | Physical-room preview and bounded inference work, but this composited view includes our overlay; physical camera identity/timing remain unknown; [E14](#e14-physical-room-visible-in-the-mirror-preview), [E18](#e18-vr-panel-included-in-mirror-input) |
 | Dedicated-camera shared-memory reader | Controlled x86_64 and Frame ARM64 tests passed | All 14 reader/supervisor tests pass on Frame; actual provider and upstream writer ordering remain unverified; [E23](#e23-reference-build-and-controlled-reader-on-frame) |
@@ -1930,6 +1931,42 @@ not been independently hash-verified here. No private images, raw image
 payloads or credentials are committed with this record. The
 [forward handoff](live-capture.md#october-26-evening-handoff) starts with
 authorized inspection and a reproducible file-only comparison.
+
+### E62: Keyframe catch-up realtime replay cloud checks
+
+Date: 2026-10-26, Linux x86_64 cloud (4 cores), Python 3.12, PyAV 16.1.0.
+`--realtime` was redesigned after E53: decoding runs on its own thread with
+FFmpeg frame and slice threading (`--decode-threads`, default 2), inference
+takes only the newest decoded frame, and when decoding is more than 0.5 s behind
+schedule, packets are skipped without decoding until the next keyframe at the
+current playback position. Pauses rebase the schedule.
+
+Stand-in clip: synthetic 2464 × 2464 HEVC at 60 fps, 10 s, one-second GOP,
+about 320 Mbit/s, which decodes at 14.8 fps with the previous decoder settings,
+close to Frame's ~13 fps on the real recording. All runs used 40 processed
+frames at a 5 fps cap with MobileNet-SSD:
+
+| Mode | Processed fps | Decode fps | Real-time ratio | Wall time |
+| --- | --- | --- | --- | --- |
+| Previous `--realtime` (main at `35e144b`) | 0.977 (39 resyncs) | n/a | n/a | 41 s |
+| New `--realtime`, 2 decoder threads | 4.682 | 12.9 | 0.942 | 9 s |
+| New `--realtime`, 4 decoder threads | 4.660 | 24.5 | 0.938 | 9 s |
+| Unpaced (every frame) | 4.727 | 4.7 | 0.077 | |
+
+The previous implementation reproduced E53's Frame result on this clip. The new
+one is limited by the 5 fps processing cap, keeps schedule lateness under
+0.5 s (494 ms maximum) and advances media time at about real-time rate; the
+remaining gap includes startup and waits for keyframes after skipping. On a
+decoder benchmark of the same clip, frame threading measured 8.5, 16.3 and
+31.6 fps with 1, 2 and 4 threads (14.8 fps for the previous 2-thread slice mode).
+Tests use a stepping fake clock to check keyframe-only catch-up, ordering and
+pause rebasing, plus an end-to-end offscreen `--realtime` run.
+
+This is a synthetic clip on cloud CPUs. The real recording's GOP length, bitrate
+and Frame's core contention with SteamVR are unknown, so real-time ratio,
+smoothness and the best thread count on Frame remain to be measured with
+`scripts/frame_session.sh pacing`, which now also runs `--decode-threads 4`.
+Longer GOPs make playback advance in larger keyframe steps.
 
 ## Maintaining the evidence
 

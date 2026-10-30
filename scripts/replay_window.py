@@ -9,6 +9,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 
 if not __package__:  # Run as a file: import this checkout's packages without installation.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -23,11 +24,11 @@ ROOT = Path(__file__).resolve().parents[1]
 class ReplayWorker(threading.Thread):
     """Run file replay through the shared pipeline; retain one latest result for the UI."""
     def __init__(self, path, ordinal, threshold, max_fps, max_frames, sinks=(), detector=DEFAULT_DETECTOR,
-                 realtime=False, source=None):
+                 realtime=False, decode_threads=2, source=None):
         super().__init__(daemon=True)
         self.detector_name = detector
         live = source is not None
-        self.source = source or ReplaySource(path, ordinal, realtime=realtime)
+        self.source = source or ReplaySource(path, ordinal, realtime=realtime, decode_threads=decode_threads)
         # Live sources have no transport; the controls become inert events.
         self.playing = getattr(self.source, "playing", threading.Event())
         self.restart = getattr(self.source, "restart", threading.Event())
@@ -35,8 +36,10 @@ class ReplayWorker(threading.Thread):
         self.at_end = getattr(self.source, "at_end", threading.Event())
         self.stopping, self.done = threading.Event(), threading.Event()
         self.results = LatestResultSink()
+        # Realtime decoding runs on its own thread and only the newest frame is
+        # processed; otherwise every decoded frame is processed in order.
         self.pipeline = Pipeline(self.source, None, (self.results, *sinks), threshold=threshold,
-                                 max_fps=max_fps, latest_only=live, max_frames=max_frames)
+                                 max_fps=max_fps, latest_only=live or realtime, max_frames=max_frames, join_timeout=5)
         self.error = None
 
     @property
@@ -73,6 +76,27 @@ class ReplayWorker(threading.Thread):
             self.done.set()
 
 
+def pacing_report(worker, args, latencies, schedule_lateness):
+    """Throughput and timing fields: decode, skipping, processing and presentation."""
+    source, stats = worker.source, worker.pipeline.stats
+    elapsed = max(stats.elapsed_s, 1e-9)
+    fields = {"realtime": args.realtime, "decode_threads": args.decode_threads,
+              "frames_decoded": source.frames_decoded, "decode_fps": round(source.frames_decoded / elapsed, 3),
+              "frames_dropped": source.frames_dropped, "frames_skipped": source.frames_skipped,
+              "catch_ups": source.catch_ups, "frames_replaced": stats.pending_replaced,
+              "media_seconds_played": round(source.media_seconds, 3),
+              "realtime_ratio": round(source.media_seconds / elapsed, 3),
+              "processed_fps": round(worker.frames_processed / elapsed, 3),
+              "mean_processing_ms": round(stats.mean_processing_ms, 3),
+              "max_input_age_ms": round(stats.max_input_age_ms, 3)}
+    if latencies:
+        fields.update(mean_presentation_latency_ms=round(sum(latencies) / len(latencies), 3),
+                      max_presentation_latency_ms=round(max(latencies), 3))
+    if schedule_lateness:
+        fields["max_schedule_lateness_ms"] = round(max(schedule_lateness), 3)
+    return fields
+
+
 def check_display_libraries(QtCore):
     """Report missing XCB libraries before Qt's native fatal-error path."""
     platform = os.environ.get("QT_QPA_PLATFORM", "").split(":")[0]
@@ -101,7 +125,9 @@ def main(argv=None):
     parser.add_argument("--max-fps", type=float, default=10, help="Processing/playback cap; default 10")
     parser.add_argument("--max-frames", type=int, default=0, help="Exit after this many processed frames; default unlimited")
     parser.add_argument("--realtime", action="store_true",
-                        help="Pace playback by media time and drop frames processing cannot keep up with")
+                        help="Follow media time: process the newest decoded frame and skip to keyframes when decoding falls behind")
+    parser.add_argument("--decode-threads", type=int, default=2,
+                        help="Decoder frame/slice threads; default 2. More decode faster but compete with inference")
     parser.add_argument("--preview", type=Path, help="Explicitly save the last displayed window as PNG")
     parser.add_argument("--report", type=Path, help="Explicitly save the final JSON summary")
     parser.add_argument("--overlay", action="store_true", help="Also show a head-relative OpenVR panel; test the native panel first")
@@ -112,6 +138,8 @@ def main(argv=None):
         parser.error("Threshold must be between zero and one")
     if not math.isfinite(args.max_fps) or not 1 <= args.max_fps <= 60:
         parser.error("Processing cap must be between 1 and 60 fps")
+    if not 1 <= args.decode_threads <= 16:
+        parser.error("Decoder threads must be between 1 and 16")
     report = {"report_kind": "annotated_file_replay", "status": "error",
               "video_stream_ordinal": args.video_stream, "frames_presented": 0,
               "labels_seen": [], "images_saved": False,
@@ -212,7 +240,7 @@ def main(argv=None):
             visible.toggled.connect(configure_panel)
             layout.addWidget(panel)
         worker = ReplayWorker(path, args.video_stream, args.threshold, args.max_fps, args.max_frames,
-                              realtime=args.realtime,
+                              realtime=args.realtime, decode_threads=args.decode_threads,
                               sinks=(OverlaySink(overlay),) if overlay else (), detector=args.detector)
 
         def toggle_pause():
@@ -234,6 +262,7 @@ def main(argv=None):
         timer = QtCore.QTimer()
         labels_seen = set()
         failures = []
+        latencies, schedule_lateness = [], []
 
         def poll():
             try:
@@ -249,6 +278,10 @@ def main(argv=None):
                                                QtGui.QImage.Format.Format_BGR888).copy()
                     canvas.update()
                     report["frames_presented"] += 1
+                    # Decode completion to presentation, including inference and UI polling.
+                    latencies.append((time.monotonic_ns() - result.frame.observed_ns) / 1e6)
+                    if "schedule_lateness_ms" in result.frame.metadata:
+                        schedule_lateness.append(result.frame.metadata["schedule_lateness_ms"])
                     labels_seen.update(result.labels)
                     media_time = result.frame.media_time
                     media = f"{media_time:.3f}s" if media_time is not None else "unknown time"
@@ -286,11 +319,7 @@ def main(argv=None):
         report.update(status="finished" if args.max_frames and worker.frames_processed >= args.max_frames else "closed",
                       frames_processed=worker.frames_processed, labels_seen=sorted(labels_seen),
                       detector=describe(worker.pipeline.detector),
-                      realtime=args.realtime, frames_dropped=worker.source.frames_dropped,
-                      resyncs=worker.source.resyncs,
-                      processed_fps=round(worker.frames_processed / max(worker.pipeline.stats.elapsed_s, 1e-9), 3),
-                      mean_processing_ms=round(worker.pipeline.stats.mean_processing_ms, 3),
-                      max_input_age_ms=round(worker.pipeline.stats.max_input_age_ms, 3),
+                      **pacing_report(worker, args, latencies, schedule_lateness),
                       container_stream_index=worker.stream_index, qt_platform=app.platformName())
     except Exception as error:
         report["error"] = str(error)

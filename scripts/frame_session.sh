@@ -91,18 +91,21 @@ stage_pacing() {
   note; note "## Realtime replay pacing"
   run replay-realtime env QT_QPA_PLATFORM=offscreen "$py" scripts/replay_window.py "${recording_args[@]}" \
     --realtime --max-frames 200 --report "$out/replay-realtime.json"
+  run replay-realtime-4threads env QT_QPA_PLATFORM=offscreen "$py" scripts/replay_window.py "${recording_args[@]}" \
+    --realtime --decode-threads 4 --max-frames 200 --report "$out/replay-realtime-4threads.json"
   run replay-unpaced env QT_QPA_PLATFORM=offscreen "$py" scripts/replay_window.py "${recording_args[@]}" \
     --max-frames 200 --report "$out/replay-unpaced.json"
   "$py" - "$out" <<'PY' >> "$summary"
 import json, sys
 from pathlib import Path
-for name in ("replay-unpaced", "replay-realtime"):
+for name in ("replay-unpaced", "replay-realtime", "replay-realtime-4threads"):
     path = Path(sys.argv[1]) / f"{name}.json"
     if not path.exists():
         print(f"- {name}: no report"); continue
     r = json.loads(path.read_text())
     print(f"- {name}: status={r.get('status')} processed={r.get('frames_processed')} "
-          f"fps={r.get('processed_fps')} dropped={r.get('frames_dropped')} "
+          f"fps={r.get('processed_fps')} realtime_ratio={r.get('realtime_ratio')} "
+          f"decode_fps={r.get('decode_fps')} catch_ups={r.get('catch_ups')} dropped={r.get('frames_dropped')} "
           f"mean_ms={r.get('mean_processing_ms')} max_age_ms={r.get('max_input_age_ms')}")
 PY
 }

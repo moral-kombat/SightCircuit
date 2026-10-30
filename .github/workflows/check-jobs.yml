@@ -195,7 +195,7 @@ jobs:
       - name: Fail if detector, pipeline, replay or mirror-recognition tests were skipped
         run: |
           .venv-replay/bin/python scripts/run_tests_no_skips.py tests/test_detection.py tests/test_evaluation.py \
-            tests/test_pipeline.py tests/test_playback_clock.py tests/test_mirror_recognize.py \
+            tests/test_pipeline.py tests/test_playback_clock.py tests/test_replay_source.py tests/test_mirror_recognize.py \
             tests/test_replay_window.py tests/test_overlay_bridge.py
       - name: Compare detectors on the seed evaluation set (runner CPU, not Frame)
         run: .venv-replay/bin/python scripts/evaluate_detectors.py --fetch --report evaluation-report.json > /dev/null

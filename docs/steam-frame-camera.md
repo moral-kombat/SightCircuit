@@ -163,6 +163,63 @@ This layer changes compositor startup. Keep it as a separately evaluated,
 optional backend, with the upstream rollback process available. It has not been
 installed in the cloud environment or on a headset as part of this project.
 
+## Community references selected for follow-up (2026-10-16)
+
+These are references 1 and 3 from the community scan, rechecked against upstream
+documentation/source. They are research leads, not Framejacker hardware
+validation, a supported SDK, or authorization to install anything. The existing
+capture-only reader plan and pinned producer remain unchanged.
+
+### 1. spyjacob: Arcturus live capture and hand tracking
+
+- [Project](https://github.com/spyjacob/steam-frame-hand-tracking),
+  [measurements and limitations](https://github.com/spyjacob/steam-frame-hand-tracking/blob/main/REPORT.md),
+  [Vulkan layer](https://github.com/spyjacob/steam-frame-hand-tracking/blob/main/capture/handcam_layer.cpp),
+  and [ptgrab consumer](https://github.com/spyjacob/steam-frame-hand-tracking/blob/main/capture/ptgrab.cpp).
+- Already cited above at a pinned revision. The layer shares imported camera
+  DMA-BUFs; a separate Vulkan process extracts downscaled luma for shared-memory
+  readers. The author reports live Arcturus capture, not built-in tracking-camera
+  capture through this route.
+- Useful next review: buffer layout, consumer synchronization and shutdown.
+  Preserve the report's estimated observation timestamps, missed-frame and
+  producer-fence limitations. Luma is not a color stream.
+- The report describes CPU contention and passthrough artifacts during inference.
+  Evaluate capture separately from inference, then measure compositor impact.
+
+### 3. Frametop: built-in camera research and related leads
+
+- [Frametop hands documentation](https://github.com/Frametop/frametop/blob/main/hands/README.md)
+  describes `ft-camd` borrowing XRService DMA-BUFs and publishing four IR
+  tracking-camera streams in a shared-memory ring, using dequeue tracepoints
+  for timing. This is a different route from spyjacob's compositor layer.
+- Upstream labels hand tracking experimental/deferred because of CPU cost.
+  The broker setup requires elevated capabilities
+  (`CAP_SYS_PTRACE`, `CAP_PERFMON`, `CAP_DAC_READ_SEARCH`); do not treat it as
+  an unprivileged drop-in reader.
+- Its known issues include unusable color frames while the headset is worn,
+  unsettled color calibration mapping, and wake-related camera failures.
+  Those are author-reported constraints, not results from our Frame.
+- Next question: could a separately audited provider supply complete, correctly
+  identified mono frames without disrupting XRService? Keep source identity,
+  timestamps, privilege requirements and restoration checks explicit.
+
+Related leads from reference 3:
+
+- [“That's how the Frame sees the world” community post](https://www.reddit.com/r/SteamFrame/comments/1x58r7b/thats_how_the_frame_sees_the_world/)
+  is visual/community context, not a documented capture API. No direct
+  implementation relationship to Frametop was established by this review.
+- [NotZoeyDev/QuestLHSync, steam-frame branch](https://github.com/NotZoeyDev/QuestLHSync/tree/steam-frame/frame)
+  contains a Frame-specific camera/driver path for Lighthouse alignment.
+  Its [README](https://github.com/NotZoeyDev/QuestLHSync/blob/steam-frame/README.md)
+  describes transmitting bright-spot positions rather than images.
+  Investigate it as a source-access/calibration lead, not an RGB frame API
+  already suitable for Framejacker. Installation changes SteamVR services/drivers
+  and is outside this documentation update.
+
+The links in this section follow moving upstream branches; re-pin an audited
+revision before implementation. Nothing here changes the project's current
+status: recorded replay works; live camera capture is still unimplemented.
+
 ## Calibration, spatial labels and Gaussian splats
 
 For 3D labels, retain camera intrinsics/distortion, per-camera extrinsics, the
