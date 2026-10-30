@@ -13,10 +13,34 @@ The panel presents a selected recording; live input follows the separate
 Bounded mirror recognition now runs on Frame with no live display. The
 [fixed-panel comparison](on-device.md#check-whether-the-vr-panel-appears-in-mirror-input)
 confirmed that the current mirror includes our VR panel. Recorded replay and
-snapshots displayed after capture closes remain useful; continuous VR image
-output needs input independent of that output, or a supported and validated
-exclusion mode. No such mirror mode has been validated. See
+snapshots displayed after capture closes remain useful. A full-scene live image
+panel would need qualified exclusion or independent input; the new edge HUD
+instead requires calibrated full-footprint masking as described below. Neither
+that masking nor a compositor exclusion mode has been device-validated. See
 [the inclusion evidence](status.md#e18-vr-panel-included-in-mirror-input).
+
+## Planned edge HUD
+
+The [fixed edge HUD decision](architecture.md#fixed-edge-hud-decision) is the
+approved live-mirror direction. A name and approximate view-relative arrow stay
+inside a fixed reserved strip; the full footprint is masked before resizing or
+inference. This is a blind region, not a world-locked annotation. Synthetic implementation and native validation passed
+([E60](status.md#e60-offline-edge-hud-and-native-mask-validation)); actual
+mapping/calibration, head-motion leakage and physical VR expiry remain pending.
+The tile is 320 x 128 with up to three names/arrows and no scene video; fixed
+geometry/opacity and expiring transport remain validation-only. The bridge rejects
+expiring packets in real output mode. The existing test panel uses different
+marker geometry and cannot qualify HUD mapping or physical expiry; synchronous
+VR calls also prevent an absolute deadline guarantee. A later separate
+[marker-only harness](status.md#e61-offline-marker-only-harness) now generates the
+matching opaque HUD marker; its offline-tested output opt-in does not enable
+production HUD frames or qualify mapping. The later
+[ARM64 cross-build and empirical observer](status.md#e62-offline-arm64-build-and-empirical-marker-observer)
+are prepared offline; the binary has not been executed. Frame runtime dependencies,
+mirror-node verification, deployment review and operator approval remain pending.
+Clean observer output stays `observed_unqualified` (exit 2), not eye-composition
+or production feedback-exclusion qualification. The replay controls and tests below do not qualify this new path or
+authorize its deployment. See the [bounded calibration checkpoint](on-device.md#bounded-edge-hud-calibration-checkpoint).
 
 ## First device test: a timed panel
 
@@ -125,6 +149,7 @@ length, and a bounded payload. It is private to these two project components.
 | `1`: frame | uint32 width, uint32 height, tightly packed RGBA bytes; each side 1–512 |
 | `2`: settings | five float32 values: width, distance, x, y, opacity; then uint32 visibility (0 or 1) |
 | `3`: quit | Empty |
+| `4`: expiring frame (validation-only) | uint64 absolute `CLOCK_MONOTONIC` nanosecond expiry, uint32 width/height, RGBA bytes |
 
 Settings ranges match the UI: width 0.25–1.5 m, distance 0.5–3 m, offsets −1–1 m,
 opacity 0.2–1. Input rejects nonfinite values and malformed lengths. The sender
@@ -137,6 +162,22 @@ out after three seconds; synchronous OpenVR calls are separate from these bounds
 explicitly mark `validation_only: true`, `runtime_initialized: false` and zero
 submitted frames. The offscreen integration test uses that mode to exercise the
 Qt controls and real anonymous-pipe transport. It cannot validate rendering.
+
+The synthetic pipeline uses opcode 4 and requires the bridge's
+`frame_expiry_supported` handshake. Expiry is derived from source observation
+time, capped at one second; already-expired arrivals are dropped. The native
+loop checks it during every input wait (20 ms polling, subject to scheduling),
+including partial-header/payload waits. Heartbeats change settings only; they
+cannot extend the deadline or revive expired content. A fresh frame replaces
+the previous expiry. `frame_expired` events and final presentation fields report
+software state; `presentation_state_scope` explicitly disclaims headset evidence.
+Expiry is separate from the three/ten-second transport timeouts.
+
+Both Python and the bridge reject opcode 4 for real output. Existing replay
+opcode 1 and paused-replay behavior remain available under their existing
+authorization. Tests of the new expiry use `--validate-stdin` exclusively; a
+stalled native process, blocked API call or stuck kernel I/O can prevent timely
+expiry, and no real-time bound or headset hide result is claimed.
 
 ```bash
 bash scripts/build_overlay_bridge.sh
