@@ -1,4 +1,5 @@
 """Real subprocess cancellation, pipe failure and owned-helper reaping."""
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,7 @@ import unittest
 from scripts import bounded_worker, recording_growth_check as growth
 
 ROOT = Path(__file__).resolve().parents[1]
+HAS_OPENCV = importlib.util.find_spec("cv2") is not None
 FIXTURE = Path(__file__).with_name("worker_failure_fixture.py")
 
 
@@ -25,7 +27,7 @@ class BoundedWorkerTests(unittest.TestCase):
     def wait_file(self, name, process):
         path = self.directory / name
         deadline = time.monotonic() + 8
-        while not path.exists():
+        while not path.exists() or not path.read_text():
             self.assertIsNone(process.poll(), "fixture exited before handshake")
             self.assertLess(time.monotonic(), deadline, "fixture handshake timed out")
             time.sleep(0.005)
@@ -177,6 +179,7 @@ class BoundedWorkerTests(unittest.TestCase):
                 self.assertTrue(report["cleanup_ok"])
                 self.assertFalse(report["worker_forced_termination"])
 
+    @unittest.skipUnless(HAS_OPENCV, "OpenCV is required for the live pipeline fixture")
     def test_cancellation_during_real_hung_detector_reaps_worker(self):
         process = self.launch("pipeline_hung_detector")
         self.wait_file("ready", process)
@@ -185,6 +188,7 @@ class BoundedWorkerTests(unittest.TestCase):
         self.assertTrue(report["worker_forced_termination"])
         self.assertFalse(report["cleanup_ok"])
 
+    @unittest.skipUnless(HAS_OPENCV, "OpenCV is required for the live pipeline fixture")
     def test_hung_source_thread_cannot_claim_cleanup(self):
         process = self.launch("pipeline_hung_source")
         self.wait_file("ready", process)
@@ -219,6 +223,7 @@ class BoundedWorkerTests(unittest.TestCase):
                 self.assertEqual(report["images_decoded"], 0)
                 self.assertEqual(report["observations"], 0)
 
+    @unittest.skipUnless(HAS_OPENCV, "OpenCV is required for the live pipeline fixture")
     def test_pipeline_cli_parent_cancellation(self):
         command = "from scripts.live_pipeline import supervise_synthetic; import json; print(json.dumps(supervise_synthetic({'seconds':30,'detector':'fixture'})))"
         process = subprocess.Popen([sys.executable, "-c", command], cwd=ROOT,

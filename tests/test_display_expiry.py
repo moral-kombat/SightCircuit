@@ -1,4 +1,5 @@
 """Independent presentation expiry using native validation, never a VR session."""
+import importlib.util
 import json
 import os
 import queue
@@ -123,6 +124,7 @@ class DisplayExpiryTests(unittest.TestCase):
             self.assertFalse(result["runtime_initialized"])
             self.assertEqual(process.wait(timeout=3), 1)
 
+    @unittest.skipUnless(importlib.util.find_spec("cv2"), "OpenCV is required for the live pipeline detector")
     def test_stalled_inference_cannot_keep_previous_result_current(self):
         blocked, release, stop = threading.Event(), threading.Event(), threading.Event()
         class Detector(live.FixtureDetector):
