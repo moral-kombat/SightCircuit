@@ -11,7 +11,8 @@ import uuid
 try:
     from . import capture_layer_trial as trial, capture_service_lifecycle as lifecycle
 except ImportError:
-    import capture_layer_trial as trial, capture_service_lifecycle as lifecycle
+    import capture_layer_trial as trial
+    import capture_service_lifecycle as lifecycle
 
 config = trial.config
 UNIT = "framejacker-service-rehearsal.service"

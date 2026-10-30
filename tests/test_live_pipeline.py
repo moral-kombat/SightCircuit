@@ -14,7 +14,7 @@ from scripts import live_pipeline as live
 class LivePipelineTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        import numpy  # Keep dependency import outside the deliberately short test run windows.
+        import numpy  # noqa: F401 Keep dependency import outside the deliberately short test run windows.
 
     def frame(self, value=1, sequence=1, source="synthetic:test", observed=None):
         import numpy as np
