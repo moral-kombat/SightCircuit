@@ -6,13 +6,63 @@ one recorded track with PyAV, runs MobileNet-SSD on CPU and presents an annotate
 image in Qt and, optionally, a native OpenVR panel. A separate bounded mirror
 recognizer now reuses that CPU detector without starting a live display; its
 first Frame trial processed about five reads per second with normal passthrough.
-Continuous display and feedback exclusion remain separate acceptance steps.
+Continuous display and feedback exclusion remain separate acceptance steps; the
+fixed edge HUD below is the approved next design.
 
 [Status and evidence](status.md) owns capability and validation results.
 [Live capture](live-capture.md#current-work-order) owns current tasks; this page
 describes design and long-term acceptance criteria. The
 [camera reference](steam-frame-camera.md) documents interface constraints and
 the [dated source review](capture-reference-review.md) explains capture choices.
+
+## Fixed edge HUD decision
+
+Approved direction on 2026-10-24: use the live composited mirror with a fixed,
+head-relative **EDGE HUD**. Show an object name and an approximate view-relative
+directional arrow entirely inside a reserved edge strip. No arrow or label may
+cross the scene; this is not a world-locked marker or a claim of spatial accuracy.
+The scene pixels covered by the strip and its mask are an explicit blind region.
+
+Before any resizing, filtering or inference, mask the **full HUD footprint at
+native mirror resolution**, including background, text, arrows and edge effects.
+Use a calibrated conservative margin and the union of both eye footprints where
+stereo composition applies. Masking only detected text, boxes or a resized image
+does not establish feedback exclusion. Maintain an owned image and its transform
+metadata through preprocessing and result delivery.
+
+The layout and capture mapping must remain fixed and versioned together. Invalid,
+missing or out-of-bounds mapping, or unexpected capture dimensions, crop, eye
+layout, orientation, source/session or HUD configuration changes must fail closed:
+stop result presentation/inference and expire prior content rather than reuse an
+old mask. Stale results must expire independently of inference and heartbeats.
+Do not silently recalibrate or enlarge the visible HUD beyond the qualified mask.
+
+The synthetic-only implementation is now offline-tested: `hud_mask.py` owns
+validated source/format/layout contracts, full per-eye footprints plus margins,
+masking before resize and a fixed 320 x 128 tile with up to three names and
+approximate view-direction arrows. Detections overlapping masked regions or
+crossing eye boundaries are rejected. No scene video or leader lines enter the
+HUD. `mirror_recognize.py` and `live_pipeline.py` integrate the owned masked
+input; `overlay_client.py` freezes geometry/opacity while permitting visibility
+changes. Existing native expiring-frame transport is reused without a new
+bridge/protocol change. Only synthetic calibration is accepted; live mirror HUD
+input is rejected before opening, and real HUD output remains blocked.
+
+The fixed panel position is a candidate, not a calibrated mirror-pixel mapping.
+Actual mapping, projection stability, head-motion leakage, latency, physical VR
+expiry and end-to-end operation remain unproven. See the
+[offline results](status.md#e60-offline-edge-hud-and-native-mask-validation), the
+[acceptance plan](live-capture.md#edge-hud-acceptance-gates) and
+[operator checkpoint](on-device.md#bounded-edge-hud-calibration-checkpoint).
+
+The later marker/observer preparation is a separate evidence path (E61/E62):
+the marker draws the fixed opaque footprint; an empirical observer finds tagged
+copies at native mirror resolution and reports their bounded motion/margins.
+It cannot establish eye composition, unseen/occluded copies or production
+exclusion. Clean observation deliberately remains `observed_unqualified` with
+exit code 2. The verified ARM64 cross-build has not run on Frame. Production
+mapping and real HUD expiry gates remain closed; see
+[E62](status.md#e62-offline-arm64-build-and-empirical-marker-observer).
 
 ## Frame processing
 
@@ -180,6 +230,14 @@ establish accuracy for a model trained on color images.
 
 ## Camera backend boundary
 
+The new [`live_pipeline.py`](../scripts/live_pipeline.py) is an offline
+integration foundation: owned BGR frames with source identity/sequence and
+observation time, a one-pending-frame slot, CPU inference, and matching output
+to headless or native-validation sinks. It is process-supervised and rejects
+unapproved non-synthetic sources. This is not an enabled camera backend or a
+live headset application. The [minimum POC plan](live-capture.md#minimum-live-poc-and-october-26-target)
+owns the input qualification, feedback and authorization gates.
+
 The standalone mirror recognizer uses the verified virtual SteamVR reader in
 a supervised process. Capture and inference run separately with one pending
 read; newer captured input replaces pending input when processing falls behind.
@@ -188,9 +246,10 @@ and BGR3 are converted explicitly, including stride padding, before the shared
 detector runs. This is composited input, with no exposure timestamps or
 verified physical-camera identity. The fixed-panel device test confirmed that
 this mirror includes our VR output. Keep it for bounded/no-display recognition
-and post-capture snapshots; continuous VR image output should use input before
-overlay composition or a supported exclusion mode verified on the device.
-No such alternate mirror mode is implemented or validated.
+and post-capture snapshots. The planned fixed edge HUD instead excludes its full
+footprint before inference, subject to calibration and device qualification below.
+The mirror still includes the overlay; masking is not a compositor exclusion mode.
+A full-scene live image panel still requires a different qualified input boundary.
 
 The metadata-only layer trial runs outside the recognition application in a
 temporary systemd user service. A separate post-exit command restores its

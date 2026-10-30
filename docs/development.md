@@ -1012,6 +1012,292 @@ See [the device procedure](on-device.md#check-existing-luma-shared-memory) for
 existing-provider usage and [evidence](status.md#e9-shared-memory-reader-cloud-checks)
 for actual validation limits.
 
+## Service-only recovery rehearsal
+
+`scripts/service_rehearsal.py` reuses the service/cgroup observer and private-file
+helpers without preparing or installing a capture layer. Its default does
+nothing; `--preflight` reads service policy and verifies absent capture targets.
+`--report RUN` and `--report-latest` read saved evidence without runtime calls.
+
+The launcher requires independent inbound SSH and an inactive trial unit. It
+checks systemd post-exit cleanup with a dummy timeout, snapshots its Python
+helpers into a private run, persists recovery intent before stopping SteamVR,
+and uses a separate transient unit with a 60-second worker limit and a
+60-second stop phase. Recovery observes an already healthy service or starts
+it only after confirmed shutdown; pending jobs and surviving compositor
+processes prevent competing starts. Service errors remain failures even when
+the runtime later recovers. No service configuration or layer files are written.
+
+The first Frame run exposed the shipped Gamescope `PartOf=steamvr.service`
+relationship and a canceled stop job. The current preflight refuses that
+relationship before scheduling anything. Keep this guard while designing a
+session-aware lifecycle; the earlier independent-service model does not fit
+this runtime. [Device evidence](status.md#e50-service-only-rehearsal-and-graphical-session-dependency)
+separates the failed rehearsal from observed runtime recovery.
+
+Run the focused Linux tests without contacting systemd or a camera:
+
+```bash
+python3 -m unittest tests.test_service_rehearsal tests.test_capture_layer_trial tests.test_capture_service_lifecycle tests.test_capture_layer_config -v
+```
+
+The rehearsal suite covers interrupted workers, command failures, pending jobs,
+surviving processes, source snapshots, repeated recovery, later configuration
+edits, SSH gating, session-policy refusal and persisted phase diagnostics. The
+observer also handles `ESRCH` when a process exits while its metadata is read,
+without treating that as proof the entire cgroup is empty. The configuration
+suite's native provider fixture may skip if it has not been built.
+
+## Platform-managed session rehearsal
+
+[`session_rehearsal.py`](../scripts/session_rehearsal.py) is a separate test of
+SteamOS Manager's `switch-to-game-mode` operation. It preserves the bare-service
+guard above and the metadata activation block. The vendor source at
+[`v26.4.1`, commit `a0d399d`](https://gitlab.steamos.cloud/holo/steamos-manager/-/blob/a0d399defebd60db30ba38325d9cf47dbda49bee/steamos-manager/src/session.rs)
+selects a temporary game-session login and stops `graphical-session.target`
+with `JobMode::Fail`. SDDM starts the next session. This does not promise a
+stable stopped interval for layer installation.
+
+The new tool defaults to no action. `--preflight` reads only the platform and
+runtime. `--prepare NEW_BUNDLE` saves an inactive, exclusive bundle of helper
+sources, hashes, platform fingerprints and baseline metadata. `--check BUNDLE`
+validates those helpers, the installed command/daemon/session files, package
+version, active D-Bus method, default game mode, absent capture configuration
+and stable baseline. It refuses changed platform files or foreign drop-ins.
+
+Only `--start BUNDLE --allow-session-logout` may request a logout, and it
+requires independent inbound SSH. It first verifies post-exit cleanup using a
+dummy systemd timeout, then creates a private run with its own source snapshot.
+Its transient unit is in `app.slice`, with no graphical-session dependencies,
+a 120-second runtime limit and a 45-second stop phase. The worker persists
+intent before issuing exactly one vendor request. Failures/timeouts are never
+retried, since they may still have initiated logout. The optional `--wait`
+waits up to 180 seconds for saved results; disconnecting does not cancel the
+independent service.
+
+Completion requires new invocation IDs for Gamescope, SteamVR and both session
+targets; all must be healthy with no pending jobs, a live compositor and an
+active SDDM. A stable identity must persist for two seconds. Unchanged or
+partially restarted sessions cannot pass. An independent post-exit observer
+waits at most 30 seconds for normal runtime. It never issues another logout or
+direct start/stop. If the platform does not recover, it saves a failure for
+inspection instead of competing with platform startup. Human confirmation of
+UI, passthrough and tracking remains separate from process-liveness evidence.
+
+```bash
+python3 -m unittest tests.test_session_rehearsal tests.test_service_rehearsal tests.test_capture_layer_trial tests.test_capture_service_lifecycle tests.test_capture_layer_config -v
+```
+
+The 21 new generated-data tests cover full/partial/no-op transitions, identity
+churn, observation deadlines, late results, request failures with later recovery,
+worker interruption, source/platform drift, conflicting units, capture-file
+preservation, session-independent launch properties and duplicate-request
+prevention. The [device checkpoint](status.md#e52-platform-session-test-completed-and-headset-confirmed)
+now has a successful real session request, healthy independent recovery and
+the user's normal-headset confirmation. Metadata activation/restoration
+remains separate work.
+
+## Metadata trial across platform sessions
+
+[`metadata_session_trial.py`](../scripts/metadata_session_trial.py) prepares a
+separate metadata-only activation/restoration trial using the validated vendor
+session request. The old bare-service runner remains blocked. Preparation
+requires a completed session-proof run on the matching platform and a verified
+v3 metadata bundle; it freezes Python helpers, the native inspector, library,
+manifest template and platform fingerprint in an exclusive private directory.
+
+The ownership strategy does not require holding SteamVR stopped:
+
+1. Each run gets a new library path. Its bytes are never replaced or removed,
+   including during failed recovery. The normal fixed library path stays absent.
+2. The implicit manifest points to that library and retains the existing opt-in
+   environment condition. The [Khronos loader contract](https://github.com/KhronosGroup/Vulkan-Loader/blob/main/docs/LoaderLayerInterface.md#layer-manifest-file-format)
+   gates implicit loading on the application environment. Current compositor
+   capture flags must be absent before preparation/activation.
+3. An exact runtime drop-in sets only `FRAMEJACKER_CAPTURE_LAYER=1` for future
+   `steamvr.service` starts. A manager reload does not modify the current
+   process's environment. The worker records cleanup intent before exposing
+   configuration, then requests one platform session cycle.
+4. After a stable new session, the inspector waits at most eight seconds for
+   provider startup, then inspects metadata for two seconds. Peer PID/start
+   identity, service cgroup, library device/inode mappings, socket ownership
+   and unchanged session generation must match. Zero candidate records is
+   a valid metadata result, not evidence of a camera source.
+5. Independent `ExecStopPost` cleanup removes only the exact trial drop-in and
+   manifest, reloads the manager and requests the normal session once. Foreign
+   edits are preserved. Existing startup jobs must settle before that request;
+   ambiguous requests are never retried.
+6. Restoration requires healthy new runtime, absent capture flags and library
+   mappings in its compositors, retirement of the identified provider, and
+   absence of the provider endpoint. A stale endpoint is removed only after
+   matching its recorded lease/PID/start/device/inode. Unknown endpoints are
+   preserved. Library/source artifacts remain for diagnosis.
+
+The transient service runs in `app.slice`, independently of the graphical
+session and initiating SSH terminal. The worker has a 150-second runtime limit;
+the stop phase has a 180-second timeout. `--wait` waits at most six minutes for
+saved results. Camera bytes, image FDs, detector and VR output are not part of
+this trial. The native v3 provider still rejects buffer requests.
+
+The new 35-test suite uses temporary files and generated session/provider
+events. It covers two cycles, interrupted/partial setup, delayed or missing
+providers, command ambiguity, later edits, source drift, peer ownership,
+mapping identity, stalled sessions, cleanup failures and duplicate requests.
+After the first real trial returned `provider_registry_changed`, the v2
+orchestrator adds bounded settling: at most four clean metadata inspections in
+12 seconds, with one-, two- and three-second gaps after invalidations, subject
+to the shared deadline. Each native attempt still requests a full two-second
+unchanged registry. Transport/protocol failures, unclean exits, session/socket/
+peer changes, changed epochs and regressing generations stop immediately.
+Every raw attempt and a settling summary are retained; later success does not
+hide earlier invalidations. A failed final snapshot is never used as stable.
+The original native inspector and provider protocol are unchanged.
+
+```bash
+python3 -m unittest tests.test_metadata_session_trial tests.test_session_rehearsal tests.test_service_rehearsal tests.test_capture_layer_trial tests.test_capture_service_lifecycle tests.test_capture_layer_config -v
+```
+
+Both operator runs loaded the provider and restored normal startup. V2 still
+invalidated every registry inspection, but the eight candidate metadata records
+match across all three saved snapshots. Its normal headset recovery is confirmed.
+See [E55](status.md#e55-v2-recovered-candidate-snapshots-compared-and-visual-check-passed).
+Do not repeat v2 unchanged; investigate scoped lifetime/version tracking offline.
+
+## Edge HUD offline test plan
+
+The separate implementation session completed the synthetic-only path;
+[E60](status.md#e60-offline-edge-hud-and-native-mask-validation) records the final
+files, saved reports and test results. Generated tests cover full-footprint native masking before resize,
+margin/stereo union, out-of-bounds and missing mappings, capture/config changes,
+fixed strip containment, owned buffers, source/result association and stale
+expiry independent of inference/settings. Use generated inputs without a headset.
+Existing lifecycle/expiry tests remain relevant but do not establish HUD mapping,
+head-motion leakage or physical hiding. Those require the separately approved
+[device checkpoint](on-device.md#bounded-edge-hud-calibration-checkpoint).
+
+For a future justified rerun in the local Linux replay/window environment:
+
+```bash
+python -m unittest tests.test_hud_mask tests.test_live_pipeline tests.test_display_expiry tests.test_mirror_recognize -v
+python -m scripts.live_pipeline --synthetic-check --synthetic-hud --validate-overlay --seconds 3
+```
+
+These use generated input and native validation only, with the existing built
+bridge and detector assets. `--synthetic-hud` requires `--synthetic-check`; it
+does not load hardware calibration or enable live input/real output. The final
+saved log passed 57 tests; this documentation update did not rerun them.
+
+The later [marker-only harness](status.md#e61-offline-marker-only-harness) adds
+`hud_marker_check.py` and native generated-marker validation. Its final saved
+Linux log passes 49 tests; the marker-only harness does not itself observe mirror
+corners, qualify mapping or demonstrate physical expiry. The later
+[ARM64 build and empirical observer](status.md#e62-offline-arm64-build-and-empirical-marker-observer)
+have offline evidence. The cross-built binary is unexecuted; a clean observer
+result stays unqualified. Observer suite counts are implementation-session reports,
+including a Windows symlink-privilege error, not an all-platform pass or an
+independently inspected standalone log. No device execution is authorized.
+
+Deployment preparation has a local eight-entry manifest (ARM64 bridge plus seven
+Python modules); all sizes/hashes were verified during documentation review.
+See the [preflight and placeholder command](on-device.md#deployment-preflight-and-command-shape-not-authorized).
+The capture ABI skip requires target UAPI/ctypes/ioctl size evidence before
+capture. Cross-compilation and Windows fixture outcomes do not establish Frame
+runtime compatibility. No install, transfer or device execution is implied.
+
+## Offline foundation for the minimum live POC
+
+[`live_pipeline.py`](../scripts/live_pipeline.py) exercises generated input,
+the shared CPU detector and a result sink. `OwnedFrame.copy_from` and the
+latest slot own contiguous BGR copies; source identity/sequence cannot regress.
+Only one frame waits for inference, and annotations remain associated with
+their source. Inputs/results older than one second are dropped. Deadlines,
+cancellation and errors close source/sink; a process supervisor terminates and
+reaps hung workers without claiming clean shutdown after forced termination.
+
+The only enabled source kind is `synthetic`. The overlay adapter only requests
+`--validate-stdin`; it cannot initialize real VR output. Preserve these gates
+until a source's ownership/publication/synchronization and feedback prerequisites
+are met and the user authorizes the concrete live test. Do not disguise a real
+source as synthetic to bypass the gate.
+
+In an existing Python 3.12 replay/window development environment:
+
+```bash
+python -m unittest tests.test_recording_growth_check tests.test_live_pipeline tests.test_bounded_worker tests.test_overlay_cleanup tests.test_display_expiry -v
+bash scripts/build_overlay_bridge.sh
+python scripts/fetch_smoke_assets.py
+python -m scripts.live_pipeline --synthetic-check --validate-overlay --seconds 3
+```
+
+These commands use generated images and native transport validation only.
+The detector/decode dependencies use the repository's existing pins; no new
+model or API credentials are required. CI has an isolated offline POC job.
+Local results and their limits are recorded in [E56](status.md#e56-offline-live-pipeline-and-headers-only-input-probe).
+
+[`recording_growth_check.py`](../scripts/recording_growth_check.py) defaults to
+no action. Its `--observe MP4` and `--watch-directory DIR` modes are explicit
+metadata-only diagnostics; neither imports a decoder or reads payloads. Both
+are bounded, identity checked and isolated in a supervised worker. The watcher
+ignores existing clips and refuses ambiguous new selections. Positive output
+is only evidence of repeated bounded fragment extents while the file grows,
+not proof of a completed payload or approved live source.
+
+The [recording operator procedure](on-device.md#proposed-recording-growth-test)
+is preserved but paused; no new recorder experiment is planned. The active
+work is the [edge HUD acceptance plan](live-capture.md#edge-hud-acceptance-gates). The vendor recorder's live publication behavior and the source's
+exclusion of our panel remain unknown.
+
+The [lifecycle audit](status.md#e57-offline-cancellation-and-cleanup-audit)
+replaces the pipeline's blocking multiprocessing report receive and the probe's
+plain `subprocess.run` with [a shared supervisor](../scripts/bounded_worker.py).
+It caps report bytes before parsing, keeps its deadline independent of report
+I/O, handles catchable SIGINT/TERM/HUP without interrupting cleanup, and verifies
+exit status against the final report. On Linux, a separate guardian now owns
+the worker process group and child subreaping, including helpers left behind by
+an exited leader. A private anonymous pipe (write end held only by the outer
+supervisor, never inherited by workers) detects abrupt supervisor loss before
+or during work. The guardian's own deadline and teardown do not depend on the
+supervisor or detector staying alive. Signal handlers and subreaper state are
+restored afterward. One supervisor must run on the main thread. Windows retains
+single-process supervision and explicitly reports parent-death containment
+unavailable; native-helper supervision requires Linux.
+
+On cancellation/timeout/parent loss the guardian permits five seconds for cooperative
+worker cleanup, then one second for group termination and one for kill/reaping,
+plus 0.2 seconds for its report reader. This is additional to the normal worker
+deadline (pipeline: 15 seconds startup + requested duration + five seconds
+normal teardown; growth: selection wait + observation + five seconds overhead).
+The outer supervisor allows a further eight seconds for guardian startup/teardown.
+If the guardian itself is unresponsive, the outer supervisor gives it eight
+seconds to stop, then one second for termination, one for kill/reaping and 0.2
+seconds for report-reader shutdown. Reports distinguish worker and guardian
+reaping/forced termination, and overall supervision time from inner worker time.
+Forced termination never establishes clean API/resource shutdown. A reaped
+worker with a still-running acquisition thread also cannot claim source cleanup.
+An unkillable process is reported unconfirmed; these software budgets are not
+guarantees about kernel scheduling or blocked kernel I/O.
+
+The new failure fixtures use local subprocesses and handshake files. They
+exercise real parent-only/repeated signals, partial and oversized JSON,
+contradictory exit status, orphaned helper pipes, a hanging detector/source,
+partial sink startup, hide/close errors and late file scans. The orphan test
+also checks that an unrelated child is untouched. A mocked KeyboardInterrupt
+alone no longer serves as evidence of process reaping.
+
+The [E58 tests](status.md#e58-independent-expiry-and-supervisor-loss-containment)
+add actual SIGKILL of the outer supervisor, a closed lifeline before startup,
+and a deliberately stopped/resumed guardian. They verify owned-worker/helper
+reaping while preserving the lack of a final supervisor cleanup report. If the
+guardian is also killed, cannot run, or a helper detaches from its group, this
+scheme cannot guarantee cleanup. No test forces real uninterruptible kernel I/O.
+
+Synthetic display frames now carry absolute monotonic expiry to the independent
+native validation process. Stalled inference, settings heartbeats and partial
+packet reads cannot renew it. Tests inspect validation events/software state,
+not a headset. Opcode 4 remains rejected for real output; actual Frame expiry,
+launcher behavior and API teardown still need separately authorized validation.
+See the [source/output contract review](live-capture.md#synthetic-input-and-feedback-contract-review).
+
 ## Native VR panel build and validation
 
 `bash scripts/build_overlay_bridge.sh` builds the native tool into ignored

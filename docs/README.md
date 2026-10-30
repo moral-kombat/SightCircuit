@@ -33,11 +33,17 @@ owns the current capture work plan.
 | Diagnose the paused trial without another restart | [Focused service-failure journal](on-device.md#read-the-service-failure-window) |
 | Inspect SteamVR dependencies and launcher paths | [Read-only service details](on-device.md#inspect-the-service-relationships-without-restarting) |
 | Review the platform start/stop hooks | [Read shipped launcher definitions without executing them](on-device.md#read-the-platform-launcher-definitions) |
+| Connect from an independent development PC | [Verified SSH access](on-device.md#verify-independent-ssh-access) |
+| Understand the canceled SteamVR stop and recovery | [Service-only rehearsal result and current guard](on-device.md#service-only-recovery-rehearsal-result) |
+| Run the prepared whole-session operator test | [One-command session test and result collection](on-device.md#prepared-platform-session-test) |
+| Run the next metadata-only activation/restoration test | [Prepared two-session trial](on-device.md#prepared-metadata-session-trial) |
 | Understand or replace the recognition model | [Recognition architecture and model candidates](architecture.md#recognition-implementation-and-model-replacement) |
 | Compare detectors on labelled stills | [Frame procedure](on-device.md#compare-detectors-on-frame-stills) and [evaluation format](development.md#detector-evaluation) |
 | Inspect existing luma input or test the isolated reader | [Shared-memory procedure](on-device.md#check-existing-luma-shared-memory) and [controlled fixture](development.md#isolated-luma-reader-and-synthetic-producer) |
 | Set up cloud or desktop development | [Development setup](development.md) |
 | Continue live capture development | [Active capture plan](live-capture.md#current-work-order) |
+| Review the minimum LIVE POC and Monday target | [Critical path, acceptance evidence and risks](live-capture.md#minimum-live-poc-and-october-26-target) |
+| Review the next proposed device checkpoint | [Bounded edge HUD calibration; separate approval required](on-device.md#bounded-edge-hud-calibration-checkpoint) |
 | Investigate camera access and upstream projects | [Camera interface reference](steam-frame-camera.md) and [dated code review](capture-reference-review.md) |
 | Understand components and frame flow | [Architecture](architecture.md) |
 | Review architecture and implementation improvements | [Dated design review](design-review.md) |
