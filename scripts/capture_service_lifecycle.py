@@ -85,7 +85,7 @@ def observe(service, group, *, cgroup_root=Path("/sys/fs/cgroup"), proc_root=Pat
                     len(after) >= 20 and after[0] not in ("Z", "X", "x", "T", "t") and
                     after[19] == fields[19] and int(fields[19]) > 0):
                 result["compositors"].append({"pid": pid, "start_ticks": int(fields[19])})
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
             continue  # A disappearing process is not a live compositor.
     return result
 

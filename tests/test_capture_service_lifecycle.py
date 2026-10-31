@@ -3,6 +3,7 @@ import copy
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from scripts import capture_service_lifecycle as lifecycle
 
@@ -57,6 +58,20 @@ class ServiceObservationTests(unittest.TestCase):
         self.assertFalse(lifecycle.stopped(self.observe()))
         (self.directory / "cgroup.events").write_text("populated 0\n")
         self.assertTrue(lifecycle.stopped(self.observe()))
+
+    def test_process_exit_with_esrch_does_not_abort_other_process_observations(self):
+        (self.directory / "cgroup.procs").write_text("44\n77\n")
+        self.process(77, ticks=456)
+        readlink = lifecycle.os.readlink
+        def exiting_process(path):
+            if Path(path).parent.name == "44":
+                raise ProcessLookupError(3, "No such process")
+            return readlink(path)
+        with patch.object(lifecycle.os, "readlink", side_effect=exiting_process):
+            observation = self.observe()
+        self.assertTrue(lifecycle.running(observation))
+        self.assertEqual(observation["compositors"], [{"pid": 77, "start_ticks": 456}])
+        self.assertTrue(observation["populated"])
 
     def test_removed_cgroup_is_empty_but_missing_events_and_unknown_hierarchy_are_not(self):
         self.service.update(ActiveState="inactive", SubState="dead", MainPID="0", ControlGroup="")

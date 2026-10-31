@@ -13,7 +13,7 @@ Start with the [documentation index](docs/README.md) for task-based navigation.
 | Area | Current summary |
 | --- | --- |
 | Recorded-video decoding, replay and VR panel | Latest POC processes/presents 576 frames and submits 576 VR images with clean shutdown; user confirms visible labels and normal passthrough; [result](docs/status.md#e47-recorded-recognition-and-vr-panel-poc-on-frame) |
-| Live input in the recognition application | Latest bounded POC reads 100 frames, processes 51 at 4.993 fps and saves an annotated preview; user confirms matching labels/boxes; [result](docs/status.md#e48-live-mirror-recognition-poc-and-matching-preview). Continuous VR image output needs input independent of our panel |
+| Live input in the recognition application | Latest bounded POC reads 100 frames, processes 51 at 4.993 fps and saves an annotated preview; user confirms matching labels/boxes; [result](docs/status.md#e48-live-mirror-recognition-poc-and-matching-preview). Fixed edge HUD/masking is implemented and offline-tested with synthetic input; device calibration and real output remain gated |
 | Detection quality, color and performance | Latest preview labels/boxes match the viewed objects; an earlier rug was mislabeled sofa, and the 20-class model has no rug class. Broader accuracy, color and latency evaluation pending |
 | Stereo depth, world-space labels and Gaussian splats | Future work; splat reconstruction is a separate recorded-data experiment |
 
@@ -72,8 +72,11 @@ camera or replay input → preprocessing → detector → annotated window / VR 
 ```
 
 The [active live-capture plan](docs/live-capture.md#current-work-order) owns the
-next tasks: prepare a dedicated camera provider and capture-only device trial,
-using the implemented isolated shared-memory reader. The
+next task: prepare and propose separately approved bounded calibration of the
+[fixed edge HUD and native-resolution mask](docs/architecture.md#fixed-edge-hud-decision),
+now implemented and offline-tested with synthetic input only. Recorder experiments are paused. The [minimum LIVE POC plan](docs/live-capture.md#minimum-live-poc-and-october-26-target)
+sets the October 26 target, acceptance evidence, risks and offline work order.
+Replay and bounded mirror demos are not the combined live-input/live-display POC. The
 [mirror diagnostic](docs/on-device.md#check-an-existing-steamvr-mirror) is
 implemented and has delivered 1920 × 1080 RGB3 frames on Frame at the diagnostic's
 10 reads/second limit. The user confirms its saved grayscale preview shows the
@@ -116,10 +119,28 @@ now pass 65 targeted tests, covering surviving processes, pending jobs and
 guarded restoration. The
 [read-only runtime baseline](docs/status.md#e46-read-only-runtime-baseline-on-frame)
 now passes on Frame, confirming service/cgroup/compositor liveness with normal
-passthrough reported during/after. Independent SSH access and actual recovery
-remain to be verified before another trial.
-Actual driver imports, camera identity and
-on-device restoration remain unvalidated. Bounded recognition and snapshots shown after
+passthrough reported during/after. Independent PC SSH is now verified. The
+[service-only rehearsal](docs/status.md#e50-service-only-rehearsal-and-graphical-session-dependency)
+recorded a canceled SteamVR stop job: the shipped Gamescope session is
+`PartOf=steamvr.service`, so the graphical session also stopped and restarted.
+Independent cleanup observed a healthy compositor afterward without another
+service command. The bare-service preflight blocks this policy. The SDDM
+restart owner and vendor session interface are now reviewed; a full-session
+test bundle and inactive metadata bundle are prepared, with 158 native/synthetic
+tests passing on Frame. The operator's platform session test has now completed
+successfully, with normal headset appearance confirmed. The new metadata-only
+activation/restoration runner loaded the provider and restored normal startup
+on its first device run. It received 20 metadata records, including eight
+candidate-profile matches, but failed because the registry changed. The v2
+bounded settling check has now run: its three snapshots contain identical
+metadata for the same eight candidate IDs, while other allocations appear and
+disappear. Full-registry inspection still failed. Software restoration and
+normal UI/passthrough/tracking are confirmed. Do not repeat v2 unchanged.
+Image access remains blocked. A local synthetic pipeline now exercises owned
+latest frames, CPU recognition and native overlay validation with clean shutdown;
+this is offline preparation, not live camera access or headset rendering.
+Actual driver imports and camera identity remain unvalidated; metadata-session
+restoration is confirmed, not GPU ownership or synchronized capture. Bounded recognition and snapshots shown after
 capture remain useful. The model's class coverage and false positives need separate work.
 The [isolated shared-memory reader](docs/on-device.md#check-existing-luma-shared-memory)
 also passes controlled x86_64 and ARM64 tests; no dedicated capture provider has

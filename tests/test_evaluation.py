@@ -5,6 +5,7 @@ import io
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 from framejacker import evaluation
@@ -90,6 +91,32 @@ class ManifestTests(unittest.TestCase):
             self.assertTrue(entry["url"].startswith("https://raw.githubusercontent.com/pjreddie/darknet/"))
 
 
+class ProvenanceTests(unittest.TestCase):
+    def test_source_revision_reports_checkout_and_dirty_state(self):
+        from scripts.evaluate_detectors import source_revision
+
+        source = source_revision()
+        if source["revision"] is None:
+            self.assertTrue(source["error"])
+            return
+        self.assertRegex(source["revision"], r"^[0-9a-f]{40,64}$")
+        self.assertIsInstance(source["working_tree_dirty"], bool)
+        self.assertRegex(source["tracked_diff_sha256"], r"^[0-9a-f]{64}$")
+        self.assertIsInstance(source["working_tree_paths"], list)
+
+    def test_detector_preprocessing_is_explicit(self):
+        from scripts.evaluate_detectors import model_preprocessing
+
+        ssd = model_preprocessing(SimpleNamespace(name="mobilenet-ssd"))
+        self.assertEqual(ssd["input_size"], [300, 300])
+        self.assertEqual(ssd["resize"], "stretch")
+        self.assertEqual(ssd["color_order"], "BGR")
+        yolox = model_preprocessing(SimpleNamespace(name="yolox-nano", size=416))
+        self.assertEqual(yolox["input_size"], [416, 416])
+        self.assertEqual(yolox["resize"], "letterbox_top_left")
+        self.assertEqual(yolox["box_mapping"], "inverse realized x/y resize ratios")
+
+
 @unittest.skipUnless(AVAILABLE and (ASSETS / "yolox_nano.onnx").is_file(), "Run scripts/setup_window.sh first")
 class CommandTests(unittest.TestCase):
     def test_compares_detectors_on_local_stills_and_refuses_overwrite(self):
@@ -105,12 +132,24 @@ class CommandTests(unittest.TestCase):
                 code = evaluate_detectors.main(["--manifest", str(manifest), "--report", str(report_path)])
             report = json.loads(output.getvalue())
             self.assertEqual(code, 0, report)
+            self.assertEqual(report["schema_version"], 2)
+            self.assertTrue(report["code"]["revision"])
+            self.assertIn("working_tree_dirty", report["code"])
+            self.assertIn(str(manifest), report["manifest_sha256"])
+            self.assertTrue(report["environment"]["opencv"])
+            self.assertTrue(report["environment"]["numpy"])
+            self.assertEqual(report["warmup"]["runs_per_detector"], 1)
+            self.assertFalse(report["warmup"]["included_in_timing"])
             self.assertEqual(json.loads(report_path.read_text()), report)
             self.assertEqual(set(report["detectors"]), {"mobilenet-ssd", "yolox-nano"})
             for result in report["detectors"].values():
                 self.assertEqual(result["totals"]["present_hits"], 2)
                 self.assertEqual(result["totals"]["true_positives"], 1)
                 self.assertGreater(result["totals"]["mean_inference_ms"], 0)
+                self.assertTrue(result["runtime_version"])
+                self.assertIn("preprocessing", result)
+                self.assertTrue(all(len(item["sha256"]) == 64 for item in result["model_files"]))
+                self.assertTrue(all(len(item["input_sha256"]) == 64 for item in result["images"]))
             with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 evaluate_detectors.main(["--manifest", str(manifest), "--report", str(report_path)])
             missing = Path(folder) / "missing.json"
