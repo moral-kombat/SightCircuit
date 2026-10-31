@@ -147,6 +147,13 @@ linked for the compile-only capture compatibility check; the query binary links
 
 ## Research references
 
+The offline [lifecycle review](docs/lifecycle-review.md) examines
+[frame-perf-overlay](https://github.com/sasaken1102r/frame-perf-overlay/tree/066a5c87b4cc57a54ce60fbaea69e9fa39ae3a94)
+at `066a5c87b4cc57a54ce60fbaea69e9fa39ae3a94` (MIT):
+`headset/vr_overlay.cpp` and `headset/vk_texture.cpp`. This is attributed source
+review of cleanup ordering and measurement patterns; no source or dependency
+was incorporated, and no upload-performance or device-compatibility claim is made.
+
 The [camera guide](docs/steam-frame-camera.md) links Valve's OpenVR SDK, Arcturus's
 Spirula fork and community capture/reconstruction projects. Those links provide
 research context. Apart from the protocol header and patches above, their code

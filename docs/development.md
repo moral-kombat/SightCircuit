@@ -51,7 +51,7 @@ mapping and gross confusions, not evidence about Frame's indoor input.
 ```bash
 .venv-replay/bin/python scripts/evaluate_detectors.py --fetch
 .venv-replay/bin/python scripts/evaluate_detectors.py --manifest evaluation/local/frame.json \
-  --detector yolox-nano --threshold 0.4 --report /tmp/evaluation.json
+  --detector yolox-nano --threshold 0.5 --report /tmp/evaluation.json
 ```
 
 Manifest entries (`schema_version: 1`) need a unique `id` and either `path`
@@ -65,15 +65,40 @@ confusable detection overlapping the object at IoU 0.3 is a confusion. Set
 false-positive and precision counts. Labels a detector cannot output are
 reported as unsupported. The JSON report has per-detector totals, per-image
 detections and timing; a one-line summary per detector goes to stderr. Report
-schema version 2 also records manifest and resolved image SHA-256 values,
+schema version 3 records manifest and resolved image SHA-256 values,
 decoded and processed dimensions, detector model hashes, runtime versions and
 preprocessing parameters, Python/OpenCV/NumPy versions, the Git revision and
-tracked-diff hash, conversion path, and the one-image, untimed warm-up policy.
+tracked-diff hash, conversion path, participating source-file SHA-256 values
+and native inference runtime artifact hashes. It also states annotation coverage explicitly: a
+presence-only manifest does not measure absent-label or localization accuracy.
+Each detector/variant performs one untimed warm-up before measured evaluation.
 A dirty-worktree flag means the commit alone does not identify the executed
 source; retain the exact checkout diff as well as the report. The diff hash is
 a fingerprint, not a copy of the changes.
 Private Frame stills belong in ignored `evaluation/local/`; see the
 [device procedure](on-device.md#compare-detectors-on-frame-stills).
+
+For an authorized existing still, audit actual decoded channels, BGR conversion,
+model tensors and inverse geometry without embedding pixel payloads. Variants
+are separate from the unchanged baseline, one controlled change at a time:
+
+```bash
+.venv-replay/bin/python scripts/evaluate_detectors.py --manifest evaluation/local/frame.json \
+  --threshold 0.5 --require-input-digests --audit-preprocessing --audit-variant swap-rb \
+  --audit-variant gray-replicated --audit-variant native-size --report /tmp/frame-audit.json
+```
+
+`--require-input-digests` requires a supplied SHA-256 for every input and
+verifies it before inference. Reports distinguish `manifest_verified` from
+`computed_only` identity; computing a digest does not establish the original
+E61 image identity. `--audit-preprocessing` adds fingerprints, channel
+statistics and coordinate transforms; `--audit-variant` is repeatable. The report path must be new. SSD
+keeps stretched 300 × 300 input and explicitly centers all three BGR channels;
+YOLOX keeps its letterbox transform. Rounded resize mapping uses each realized
+axis ratio. Synthetic regressions establish those implementation behaviors,
+not the cause of the private E61 TV miss. Reproducing E61 still needs the
+approved original still, verifiable digest and factual annotations. No detector
+default follows from seed or synthetic results alone.
 
 ## Install and run
 
@@ -1165,9 +1190,10 @@ Do not repeat v2 unchanged; investigate scoped lifetime/version tracking offline
 
 ## Edge HUD offline test plan
 
-The separate implementation session completed the synthetic-only path;
-[E69](status.md#e69-offline-edge-hud-and-native-mask-validation) records the final
-files, saved reports and test results. Generated tests cover full-footprint native masking before resize,
+The earlier implementation session reported the synthetic-only path;
+[E69](status.md#e69-offline-edge-hud-and-native-mask-validation) preserves its
+reconstructed provenance and the separate cloud recheck. The original session
+log is not committed. Generated tests cover full-footprint native masking before resize,
 margin/stereo union, out-of-bounds and missing mappings, capture/config changes,
 fixed strip containment, owned buffers, source/result association and stale
 expiry independent of inference/settings. Use generated inputs without a headset.
@@ -1184,24 +1210,29 @@ python -m scripts.live_pipeline --synthetic-check --synthetic-hud --validate-ove
 
 These use generated input and native validation only, with the existing built
 bridge and detector assets. `--synthetic-hud` requires `--synthetic-check`; it
-does not load hardware calibration or enable live input/real output. The final
-saved log passed 57 tests; this documentation update did not rerun them.
+does not load hardware calibration or enable live input/real output. The earlier
+session reported 57 tests; that absent log is not a new execution result.
 
 The later [marker-only harness](status.md#e70-offline-marker-only-harness) adds
 `hud_marker_check.py` and native generated-marker validation. Its final saved
-Linux log passes 49 tests; the marker-only harness does not itself observe mirror
+Linux log reportedly passed 49 tests; that original log is absent. The
+marker-only harness does not itself observe mirror
 corners, qualify mapping or demonstrate physical expiry. The later
 [ARM64 build and empirical observer](status.md#e71-offline-arm64-build-and-empirical-marker-observer)
-have offline evidence. The cross-built binary is unexecuted; a clean observer
-result stays unqualified. Observer suite counts are implementation-session reports,
+have offline evidence. Subsequently recovered [E75](evidence/e075.md) establishes
+that the historical V4 ARM64 binary and observer ran on Frame and were rejected;
+the software stop is explained but physical recovery remains unresolved. A
+future clean observer result stays unqualified. Observer suite counts are implementation-session reports,
 including a Windows symlink-privilege error, not an all-platform pass or an
 independently inspected standalone log. No device execution is authorized.
 
-Deployment preparation has a local eight-entry manifest (ARM64 bridge plus seven
-Python modules); all sizes/hashes were verified during documentation review.
+Earlier deployment preparation reported a local eight-entry manifest (ARM64
+bridge plus seven Python modules), with size/hash checks during that review.
+The manifest is not committed and does not pin the current implementation; a
+new reviewed artifact manifest is required for a future checkpoint.
 See the [preflight and placeholder command](on-device.md#deployment-preflight-and-command-shape-not-authorized).
-The capture ABI skip requires target UAPI/ctypes/ioctl size evidence before
-capture. Cross-compilation and Windows fixture outcomes do not establish Frame
+Target UAPI/ctypes/ioctl size evidence is still required before capture; passing
+the cloud ABI test does not establish the headset ABI. Cross-compilation and Windows fixture outcomes do not establish Frame
 runtime compatibility. No install, transfer or device execution is implied.
 
 ## Offline foundation for the minimum live POC
@@ -1231,7 +1262,8 @@ python -m scripts.live_pipeline --synthetic-check --validate-overlay --seconds 3
 
 These commands use generated images and native transport validation only.
 The detector/decode dependencies use the repository's existing pins; no new
-model or API credentials are required. CI has an isolated offline POC job.
+model or API credentials are required. The replay-window CI job on x86_64 and
+ARM64 includes these critical offline suites in its explicit no-skip gate.
 Local results and their limits are recorded in [E66](status.md#e66-offline-live-pipeline-and-headers-only-input-probe).
 
 [`recording_growth_check.py`](../scripts/recording_growth_check.py) defaults to
@@ -1311,3 +1343,24 @@ window job also builds the bridge so its validation-only mode can check actual
 RGBA forwarding and Qt control creation. This mode reports no OpenVR
 initialization and zero submitted frames. For the real hardware procedure,
 read [VR replay panel](vr-overlay.md).
+
+## Generated evidence summaries
+
+Detailed records live under [evidence](evidence/README.md); the coordinator
+allocates IDs and updates `docs/evidence/index.json`. Reviewed capability rows
+in `docs/status-data.json` generate the status matrix and the marked architecture
+progress summary. Preserve all historical evidence headings and E63–E71's
+reconstructed uncertainty. From the checkout:
+
+```bash
+python3 scripts/generate_status.py
+python3 scripts/generate_status.py --check
+python3 -m unittest tests.test_generate_status
+```
+
+The generator checks identities, provenance, missing history and evidence
+references before writing. The root README keeps short entry points; its older
+narrative and links remain in [README history](project-history.md). The
+[qualification design](hud-qualification.md) owns the proposed G4 method and
+separately scoped device-validation evidence path. These offline documents and
+schemas do not qualify a mapping or open production output.

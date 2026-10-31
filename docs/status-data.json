@@ -1,0 +1,164 @@
+{
+  "schema_version": 1,
+  "review_date": "2026-10-31",
+  "capabilities": [
+    {
+      "capability": "Linux development setup and smoke check",
+      "state": "Cloud-tested",
+      "evidence": "Linux x86_64, Python 3.12; generated repeated-image video, CPU detection and offscreen rendering; [E7](#e7-cloud-validation); current integration [E74](#e74-evidence-generation-and-offline-mapping-qualification-support)"
+    },
+    {
+      "capability": "Read-only device and recording inspection",
+      "state": "Device-confirmed",
+      "evidence": "Inventory and MP4 header reports supplied by the user; device presence does not prove capture; [E1](#e1-frame-inventory), [E4](#e4-recordings-and-container-metadata)"
+    },
+    {
+      "capability": "Vendor Arcturus app live preview and recording",
+      "state": "Device-confirmed",
+      "evidence": "User reports the vendor app works; it does not supply frames to Framejacker; [E2](#e2-vendor-app)"
+    },
+    {
+      "capability": "Selected-track HEVC decoding and RGB conversion",
+      "state": "Device-confirmed",
+      "evidence": "Three frames decoded from video ordinal 0; not full-file or stereo validation; [E5](#e5-selected-track-decode)"
+    },
+    {
+      "capability": "Annotated Qt replay window",
+      "state": "Device-confirmed",
+      "evidence": "Latest run presents/processes 576 frames and reports four labels; label accuracy remains unevaluated; [E47](#e47-recorded-recognition-and-vr-panel-poc-on-frame)"
+    },
+    {
+      "capability": "Native head-relative VR replay panel",
+      "state": "Device-confirmed, including latest POC",
+      "evidence": "User confirms visible panel/labels and normal passthrough; 576 images submitted with clean shutdown and no forced termination; [E47](#e47-recorded-recognition-and-vr-panel-poc-on-frame)"
+    },
+    {
+      "capability": "Public OpenVR tracked-camera probe",
+      "state": "Device-confirmed failure",
+      "evidence": "No frames and observed passthrough interruption; do not repeat the unchanged test; [E3](#e3-public-camera-probe)"
+    },
+    {
+      "capability": "Continuous live input in the Qt/VR application",
+      "state": "Offline fixed edge HUD only; production closed",
+      "evidence": "Mirror includes our panel; the fixed edge HUD requires qualified full-footprint native masking plus feedback/expiry acceptance; [E18](#e18-vr-panel-included-in-mirror-input), [E69](#e69-offline-edge-hud-and-native-mask-validation)"
+    },
+    {
+      "capability": "Recognition on the saved room still",
+      "state": "Frame execution confirmed; false positive",
+      "evidence": "One image processed and annotated; user identifies the `sofa`-labeled item as a rug; [E15](#e15-saved-room-recognition-and-rug-false-positive)"
+    },
+    {
+      "capability": "Bounded mirror recognition",
+      "state": "Frame POC execution and sampled preview localization confirmed",
+      "evidence": "Latest run: 100 captured / 51 processed reads, 4.993 processed fps, 40.065 ms mean inference, clean shutdown; user confirms matching preview labels/boxes and normal passthrough/tracking during/after; broader accuracy and continuous display remain separate; [E48](#e48-live-mirror-recognition-poc-and-matching-preview)"
+    },
+    {
+      "capability": "Real-time recorded replay",
+      "state": "Cloud-tested on a synthetic stand-in; Frame measurement pending",
+      "evidence": "Keyframe catch-up and newest-frame inference reach a 0.94 real-time ratio where the previous version reproduced Frame's 0.97 processed fps; [E53](#e53-unattended-replay-regression-and-pacing-rerun), [E62](#e62-keyframe-catch-up-realtime-replay-cloud-checks)"
+    },
+    {
+      "capability": "Candidate detector and evaluation harness",
+      "state": "Preprocessing audit verified offline; E61 reproduction and Frame selection blocked",
+      "evidence": "Corrected demonstrated SSD channel normalization and per-axis scoring; pinned audit variants and factual annotation coverage; original still/digest absent; no default change; [E73](#e73-reproducible-preprocessing-audit-and-ssd-channel-correction), [E61](#e61-file-only-detector-comparison-on-the-evening-grayscale-still)"
+    },
+    {
+      "capability": "Existing-mirror diagnostic",
+      "state": "Frame capture confirmed; VR panel included in input",
+      "evidence": "Physical-room preview and bounded inference work, but this composited view includes our overlay; physical camera identity/timing remain unknown; [E14](#e14-physical-room-visible-in-the-mirror-preview), [E18](#e18-vr-panel-included-in-mirror-input)"
+    },
+    {
+      "capability": "Dedicated-camera shared-memory reader",
+      "state": "Controlled x86_64 and Frame ARM64 tests passed",
+      "evidence": "All 14 reader/supervisor tests pass on Frame; actual provider and upstream writer ordering remain unverified; [E23](#e23-reference-build-and-controlled-reader-on-frame)"
+    },
+    {
+      "capability": "Native capture prerequisite report",
+      "state": "Frame report received",
+      "evidence": "aarch64 SteamOS 0.5.6, GCC 15.1.1 and Vulkan 1.4.309 development metadata/headers; no capture configuration at checked paths; [E21](#e21-capture-prerequisites-on-frame)"
+    },
+    {
+      "capability": "Pinned capture reference build",
+      "state": "Cloud and Frame ARM64 compile/link checks passed",
+      "evidence": "Unmodified upstream inspection artifacts only; no activation, runtime fixes still required; [E23](#e23-reference-build-and-controlled-reader-on-frame)"
+    },
+    {
+      "capability": "Descriptor transport adaptation",
+      "state": "Controlled cloud and Frame ARM64 checks passed",
+      "evidence": "Adapted components compile/link on Frame and fixture reports seven groups passed; live callbacks and remaining provider work unverified; [E25](#e25-descriptor-transport-on-frame)"
+    },
+    {
+      "capability": "Provider publication and loop controls",
+      "state": "Controlled cloud and Frame tests passed",
+      "evidence": "Exclusive private runtime file, ordered writer and bounded loop controls; all eight generated-data process tests passed on Frame; full GPU/provider lifecycle pending; [E27](#e27-publication-and-loop-controls-on-frame)"
+    },
+    {
+      "capability": "Bounded Vulkan capability query",
+      "state": "Frame-confirmed; queried requirements passed",
+      "evidence": "Turnip Adreno 750, target NV12 modifier has two memory planes, dedicated DMA-BUF import supported; clean query and normal passthrough; no actual FD import; [E30](#e30-vulkan-capabilities-on-frame)"
+    },
+    {
+      "capability": "Image import validation and ownership",
+      "state": "ARM64 build and ten synthetic tests passed; cloud suite now eleven",
+      "evidence": "FD/image ownership and failure paths validated with fake dispatch; added two-plane case cloud-only; real GPU import remains untested; [E31](#e31-import-build-and-synthetic-tests-on-frame), [E32](#e32-two-plane-import-fixture-cloud-checks)"
+    },
+    {
+      "capability": "Device and remaining GPU resource ownership",
+      "state": "Inspection adaptation built; nine synthetic cloud tests passed",
+      "evidence": "Startup/child lifetimes, private allocations, imported-image device retention and 57 injected failures; actual driver and ARM64 execution pending; [E33](#e33-gpu-resource-ownership-cloud-checks)"
+    },
+    {
+      "capability": "Capture watchdog, provider/layer lifecycle and exact recovery",
+      "state": "Earlier v2 milestone passed all 28 generated-data tests on Frame ARM64",
+      "evidence": "Bounded worker, metadata/GPU provenance, registry changes, owned endpoint and conditional restoration; no real driver/layer execution or device restoration; [E35](#e35-watchdog-provider-and-recovery-tests-on-frame)"
+    },
+    {
+      "capability": "Metadata-only provider and producer synchronization review",
+      "state": "v3 ARM64 build and all 24 generated-data tests passed on Frame",
+      "evidence": "E36/E37 cover generated metadata-only checks, with no layer activation in those checks; later real metadata load/restoration is recorded separately in E65. Layer retains/exports no image FDs, live image access stays blocked and the provider track remains frozen; [E36](#e36-metadata-only-provider-and-synchronization-review), [E37](#e37-metadata-only-provider-and-diagnostic-on-frame), [E65](#e65-v2-recovered-candidate-snapshots-compared-and-visual-check-passed)"
+    },
+    {
+      "capability": "Inactive v3 bundle and SteamVR service preflight",
+      "state": "Frame report received",
+      "evidence": "Bundle prepared without activation; active simple/control-group user service, 20-second stop timeout, no drop-ins; [E38](#e38-inactive-bundle-and-steamvr-service-on-frame)"
+    },
+    {
+      "capability": "Bounded metadata-layer trial and post-exit recovery",
+      "state": "Metadata-only provider loaded and restored on Frame through platform session cycles; registry inspection unstable; image access blocked",
+      "evidence": "Bare SteamVR stop refused after the session coupling was found ([E63](#e63-service-only-rehearsal-and-graphical-session-dependency)); platform session test passed with a normal headset ([E64](#e64-platform-session-test-completed-and-headset-confirmed)); two metadata trials loaded the provider and restored normal startup, with eight stable candidate records but no settled full registry ([E65](#e65-v2-recovered-candidate-snapshots-compared-and-visual-check-passed)); earlier runtime baseline [E46](#e46-read-only-runtime-baseline-on-frame)"
+    },
+    {
+      "capability": "Fixed edge HUD, marker and offline live pipeline",
+      "state": "Shared runtime verified offline; historical V4 observation rejected; production closed",
+      "evidence": "Native masking, original-frame expiry and qualification schema verified offline; recovered V4 report/source explain the software stop, while green physical outcome and G2 remain open; [E72](#e72-shared-hud-runtime-and-independent-lifecycle-fixes), [E74](#e74-evidence-generation-and-offline-mapping-qualification-support), [E75](#e75-recovered-v4-evidence-and-software-termination-analysis)"
+    },
+    {
+      "capability": "Dedicated Arcturus Vulkan capture",
+      "state": "Upstream-reported",
+      "evidence": "Community implementation reviewed; no Framejacker deployment or device capture result"
+    },
+    {
+      "capability": "Built-in passthrough camera input",
+      "state": "Unverified",
+      "evidence": "Upstream reports empty built-in-camera-sized buffers; no source-identified built-in-camera frames have been received"
+    },
+    {
+      "capability": "Stereo depth and world-space labels",
+      "state": "Deferred",
+      "evidence": "Calibration, depth and pose/timebase alignment remain unresolved"
+    },
+    {
+      "capability": "Gaussian splat reconstruction and viewing",
+      "state": "Deferred optional work",
+      "evidence": "Recorded-data workflow researched; training and headset splat rendering not validated by this project"
+    }
+  ],
+  "architecture_capabilities": [
+    "Annotated Qt replay window",
+    "Bounded mirror recognition",
+    "Candidate detector and evaluation harness",
+    "Fixed edge HUD, marker and offline live pipeline",
+    "Stereo depth and world-space labels",
+    "Gaussian splat reconstruction and viewing"
+  ]
+}

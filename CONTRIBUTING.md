@@ -64,8 +64,12 @@ with checksums instead of committing generated environments or model binaries.
 
 Update the owning document with the component change; the
 [documentation plan](docs/documentation-plan.md) assigns each topic a home.
-Put full validation evidence in [status](docs/status.md), including procedure,
-date, revision, runtime, result and limits; explicitly mark unknown fields.
+Put full validation evidence in a [per-entry record](docs/evidence/README.md),
+including procedure, date, revision, runtime, result and limits; explicitly mark
+unknown fields. The coordinator allocates its ID, adds it to the evidence index
+and updates reviewed capability rows in `docs/status-data.json`. Regenerate
+[status](docs/status.md) and the marked architecture summary with
+`python3 scripts/generate_status.py`; verify freshness with `--check`.
 Keep cloud checks, CI runs, user device reports and upstream claims distinct.
 
 Maintain the current capture backlog in [live capture](docs/live-capture.md);

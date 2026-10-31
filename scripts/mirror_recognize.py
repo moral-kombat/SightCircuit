@@ -12,6 +12,14 @@ import tempfile
 import threading
 import time
 
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from framejacker.convert import to_bgr as convert_frame
+from framejacker.errors import FrameFormatError
+from framejacker.frame import Frame
+from framejacker.latest import LatestSlot
+
 if __package__:
     from . import mirror_check as check
     from .demo_detector import DemoDetector
@@ -43,28 +51,18 @@ class ObservedFrame:
     observed_ns: int
 
 
-class LatestFrame:
+class LatestFrame(LatestSlot):
     """One pending owned read; slower inference replaces old input, never queues it."""
     def __init__(self):
-        self.condition = threading.Condition()
-        self.pending = None
-        self.replaced = 0
+        super().__init__()
         self.done = threading.Event()
         self.report = {}
 
     def publish(self, data, fmt, number, observed_ns):
-        with self.condition:
-            if self.pending is not None:
-                self.replaced += 1
-            self.pending = ObservedFrame(bytes(data), dict(fmt), number, observed_ns)
-            self.condition.notify()
+        self.put(ObservedFrame(bytes(data), dict(fmt), number, observed_ns))
 
     def take(self, timeout=0.05):
-        with self.condition:
-            if self.pending is None and not self.done.is_set():
-                self.condition.wait(timeout)
-            result, self.pending = self.pending, None
-            return result
+        return super().take(0 if self.done.is_set() else timeout)
 
     def update(self, report):
         with self.condition:
@@ -76,29 +74,23 @@ class LatestFrame:
 
 
 def to_bgr(frame, *, hud=None, source_id=None, capture_layout=None, hud_config=HUD_CONFIG):
-    import cv2
-    import numpy as np
-
     fmt = frame.format
+    native_filter = None
     if hud is not None:
         descriptor = CaptureFormat.from_mapping(fmt)
         hud.check_context(source_id, descriptor, capture_layout, hud_config)
-    if fmt["fourcc"] not in ("RGB3", "BGR3"):
-        raise MirrorError("unsupported_recognition_format", "Recognition currently accepts RGB3/BGR3 only; no format change requested")
+        def native_filter(image):
+            return hud.prepare(image, source_id=source_id, capture_format=descriptor,
+                               capture_layout=capture_layout, config=hud_config)
     if len(frame.data) < fmt["minimum_buffer_bytes"]:
         raise MirrorError("short_frame", "Incomplete mirror image")
-    image = np.ndarray((fmt["height"], fmt["width"], 3), dtype=np.uint8,
-                       buffer=frame.data, strides=(fmt["stride_bytes"], 3, 1))
-    if hud is not None:
-        # Color conversion is pointwise; masking precedes every spatial resize.
-        bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR) if fmt["fourcc"] == "RGB3" else image
-        return hud.prepare(bgr, source_id=source_id, capture_format=descriptor,
-                           capture_layout=capture_layout, config=hud_config)
-    ratio = min(1.0, 960 / max(image.shape[:2]))
-    if ratio < 1:
-        image = cv2.resize(image, (max(1, round(fmt["width"] * ratio)),
-                                   max(1, round(fmt["height"] * ratio))), interpolation=cv2.INTER_AREA)
-    return cv2.cvtColor(image, cv2.COLOR_RGB2BGR) if fmt["fourcc"] == "RGB3" else image.copy()
+    native = Frame(frame.data, fmt["fourcc"], fmt["width"], fmt["height"], fmt["stride_bytes"],
+                   source_id or "mirror:observed", frame.read_sequence, frame.observed_ns,
+                   metadata={"native_format": dict(fmt)})
+    try:
+        return convert_frame(native, native_filter=native_filter)
+    except FrameFormatError as error:
+        raise MirrorError(error.reason, str(error)) from error
 
 
 def recognize(candidate, seconds, stop, progress=lambda report: None, want_preview=False,

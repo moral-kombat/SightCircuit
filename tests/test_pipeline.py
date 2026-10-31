@@ -156,6 +156,156 @@ class PipelineTests(unittest.TestCase):
         sink.submit("two")
         self.assertEqual(sink.take(), "two")
 
+    def test_post_inference_age_check_drops_results_in_both_scheduling_modes(self):
+        for latest in (False, True):
+            runner, sink = pipeline(ListSource(1), EchoDetector(.03), latest_only=latest,
+                                    max_input_age_ms=10)
+            stats = runner.run(threading.Event())
+            self.assertEqual(stats.frames_processed, 1)
+            self.assertEqual(stats.stale_results_skipped, 1)
+            self.assertEqual(stats.frames_submitted, 0)
+            self.assertEqual(sink.items, [])
+
+    def test_context_validator_runs_again_after_detector_returns(self):
+        context = {"valid": True}
+
+        class Changing(EchoDetector):
+            def detect(self, *args):
+                result = super().detect(*args)
+                context["valid"] = False
+                return result
+
+        def validate(frame):
+            if not context["valid"]:
+                raise ValueError("mapping_expired")
+
+        runner, sink = pipeline(ListSource(1), Changing(), context_validator=validate)
+        with self.assertRaisesRegex(ValueError, "mapping_expired"):
+            runner.run(threading.Event())
+        self.assertEqual(sink.items, [])
+
+    def test_cancellation_during_inference_cannot_publish_output(self):
+        stop = threading.Event()
+
+        class Cancel(EchoDetector):
+            def detect(self, *args):
+                stop.set()
+                return super().detect(*args)
+
+        runner, sink = pipeline(ListSource(1), Cancel(), latest_only=False)
+        stats = runner.run(stop)
+        self.assertEqual(stats.stale_results_skipped, 1)
+        self.assertEqual(sink.items, [])
+
+    def test_processed_expiry_is_anchored_to_original_observation(self):
+        runner, sink = pipeline(ListSource(1), EchoDetector(.01), max_input_age_ms=1000)
+        runner.run(threading.Event())
+        self.assertEqual(len(sink.items), 1)
+        item = sink.items[0]
+        self.assertEqual(item.expires_ns, item.frame.observed_ns + 1_000_000_000)
+        self.assertGreaterEqual(item.output_age_ms, item.input_age_ms)
+
+    def test_capture_format_change_invalidates_an_in_flight_result(self):
+        entered, changed = threading.Event(), threading.Event()
+
+        class Source:
+            def run(self, emit, stop):
+                emit(frame(1))
+                if not entered.wait(2):
+                    raise AssertionError("detector did not start")
+                try:
+                    emit(Frame(2, "CHANGED", 1, 1, 1, "fixture", 2, time.monotonic_ns()))
+                finally:
+                    changed.set()
+
+        class Detector(EchoDetector):
+            def detect(self, *args):
+                entered.set()
+                if not changed.wait(2):
+                    raise AssertionError("capture did not observe changed format")
+                return super().detect(*args)
+
+        runner, sink = pipeline(Source(), Detector(), max_input_age_ms=1000)
+        with self.assertRaisesRegex(ValueError, "source_or_native_context_changed"):
+            runner.run(threading.Event())
+        self.assertEqual(sink.items, [])
+
+    def test_future_observations_are_rejected_before_detector(self):
+        for latest in (False, True):
+            runner, sink = pipeline(ListSource(1, age_ns=-2_000_000_000), EchoDetector(), latest_only=latest)
+            with self.assertRaisesRegex(ValueError, "frame_observation_is_in_the_future"):
+                runner.run(threading.Event())
+            self.assertEqual(sink.items, [])
+
+    def test_latest_capture_cannot_hide_sequence_regression_by_replacing_pending(self):
+        class Source:
+            def run(self, emit, stop):
+                emit(frame(2))
+                emit(frame(1))
+
+        runner, sink = pipeline(Source(), EchoDetector(), max_input_age_ms=1000)
+        with self.assertRaisesRegex(ValueError, "frame_sequence_regressed"):
+            runner.run(threading.Event())
+        self.assertEqual(sink.items, [])
+
+    def test_per_frame_telemetry_does_not_invalidate_native_context(self):
+        class Source:
+            def run(self, emit, stop):
+                for number in (1, 2):
+                    emit(Frame(number, "TEST", 1, 1, 1, "fixture", number, time.monotonic_ns(),
+                               metadata={"schedule_lateness_ms": number * 10}))
+
+        runner, sink = pipeline(Source(), EchoDetector(), latest_only=False, max_input_age_ms=1000)
+        runner.run(threading.Event())
+        self.assertEqual([item.frame.sequence for item in sink.items], [1, 2])
+
+    def test_qualification_context_metadata_changes_during_inference_fail_closed(self):
+        from dataclasses import replace
+
+        for key in ("recenter_epoch", "timebase_id", "orientation_degrees", "crop_xyxy", "hud_config_sha256"):
+            with self.subTest(key=key):
+                observed = replace(frame(1), metadata={key: "original"})
+
+                class Source:
+                    def run(self, emit, stop):
+                        emit(observed)
+
+                class Detector(EchoDetector):
+                    def detect(self, *args):
+                        result = super().detect(*args)
+                        observed.metadata[key] = "changed"
+                        return result
+
+                runner, sink = pipeline(Source(), Detector(), latest_only=False, max_input_age_ms=1000)
+                with self.assertRaisesRegex(ValueError, "source_or_native_context_changed"):
+                    runner.run(threading.Event())
+                self.assertEqual(sink.items, [])
+
+    def test_capture_invalidation_during_one_sink_blocks_the_next_sink(self):
+        entered, changed = threading.Event(), threading.Event()
+
+        class Source:
+            def run(self, emit, stop):
+                emit(frame(1))
+                if not entered.wait(2):
+                    raise AssertionError("first sink did not run")
+                try:
+                    emit(Frame(2, "CHANGED", 1, 1, 1, "fixture", 2, time.monotonic_ns()))
+                finally:
+                    changed.set()
+
+        class First:
+            def submit(self, processed):
+                entered.set()
+                if not changed.wait(2):
+                    raise AssertionError("capture invalidation did not run")
+
+        runner, sink = pipeline(Source(), EchoDetector(), max_input_age_ms=1000)
+        runner.sinks = (First(), sink)
+        with self.assertRaisesRegex(ValueError, "source_or_native_context_changed"):
+            runner.run(threading.Event())
+        self.assertEqual(sink.items, [])
+
     def test_mirror_source_converts_reads_and_retains_report(self):
         def acquire(stop, on_frame, progress):
             progress({"status": "acquiring"})

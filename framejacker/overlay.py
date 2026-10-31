@@ -1,9 +1,10 @@
 """Bounded anonymous-pipe transport to our native public OpenVR overlay bridge."""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import math
 import os
 from pathlib import Path
+import select
 import struct
 import subprocess
 import threading
@@ -61,6 +62,7 @@ class OverlayClient:
         self.binary, self.validation_only, self.env = Path(binary), validation_only, env
         self.condition = threading.Condition()
         self.settings = PanelSettings()
+        self._fixed_settings = None
         self.pending_frame = None
         self.ready = threading.Event()
         self.done = threading.Event()
@@ -69,6 +71,9 @@ class OverlayClient:
         self.error = None
         self.final_report = None
         self.frames_sent = 0
+        self.frame_expiry_supported = False
+        self.frame_expired = threading.Event()
+        self.last_expiry = None
         self.forced_termination = False
         self.process = self.reader = self.writer = None
 
@@ -83,6 +88,8 @@ class OverlayClient:
         mode = "--validate-stdin" if self.validation_only else "--stdin"
         self.process = subprocess.Popen([str(self.binary), mode], stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, env=self.env, bufsize=0)
+        if os.name == "posix":
+            os.set_blocking(self.process.stdin.fileno(), False)
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
         if not self.ready.wait(8) or not self.acknowledged or self.error:
@@ -108,7 +115,11 @@ class OverlayClient:
                             message.get("runtime_initialized") != (not self.validation_only)):
                         raise RuntimeError("Overlay bridge initialization mode mismatch")
                     self.acknowledged = True
+                    self.frame_expiry_supported = message.get("frame_expiry_supported") is True
                     self.ready.set()
+                if event == "frame_expired":
+                    self.last_expiry = message
+                    self.frame_expired.set()
                 if event == "error":
                     self._fail(message.get("error", "Overlay bridge failed"))
                 if "exit_code" in message:
@@ -124,9 +135,22 @@ class OverlayClient:
             self.ready.set()
 
     def _send(self, data):
+        """Bound each POSIX pipe write, including a bridge that stops reading."""
         view = memoryview(data)
+        deadline = time.monotonic() + 2
         while view:
-            count = self.process.stdin.write(view)
+            if os.name == "posix":
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RuntimeError("overlay_write_timeout")
+                if not select.select([], [self.process.stdin], [], min(remaining, .05))[1]:
+                    continue
+            try:
+                count = self.process.stdin.write(view)
+            except BlockingIOError:
+                continue
+            if count is None and os.name == "posix":
+                continue
             if not count:
                 raise RuntimeError("Overlay bridge pipe closed")
             view = view[count:]
@@ -160,18 +184,40 @@ class OverlayClient:
     def set_settings(self, settings):
         settings.encode()
         with self.condition:
+            if self._fixed_settings is not None and replace(settings, visible=False) != self._fixed_settings:
+                raise ValueError("overlay_settings_frozen")
             self.settings = settings
             self.condition.notify()
 
-    def submit_frame(self, width, height, rgba):
-        if not 0 < width <= MAX_SIDE or not 0 < height <= MAX_SIDE or len(rgba) != width * height * 4:
-            raise ValueError("Invalid RGBA overlay frame")
+    def freeze_settings(self, settings):
+        """Pin calibrated candidate geometry; only visibility may change afterward."""
+        if not self.validation_only:
+            raise ValueError("fixed_live_hud_not_approved")
+        settings.encode()
+        fixed = replace(settings, visible=False)
         with self.condition:
-            self.pending_frame = packet(1, struct.pack("<II", width, height) + rgba)
+            if self._fixed_settings is not None and self._fixed_settings != fixed:
+                raise ValueError("overlay_settings_frozen")
+            self._fixed_settings = fixed
+            self.settings = settings
             self.condition.notify()
 
-    def submit_bgr(self, image):
-        self.submit_frame(*rgba_from_bgr(image))
+    def submit_frame(self, width, height, rgba, *, expires_ns=None):
+        if not 0 < width <= MAX_SIDE or not 0 < height <= MAX_SIDE or len(rgba) != width * height * 4:
+            raise ValueError("Invalid RGBA overlay frame")
+        if expires_ns is not None:
+            if not self.validation_only or not self.frame_expiry_supported:
+                raise ValueError("expiring_live_output_not_approved_or_supported")
+            if type(expires_ns) is not int or not 0 < expires_ns <= time.monotonic_ns() + 1000000000:
+                raise ValueError("invalid_frame_expiry")
+        data = (packet(1, struct.pack("<II", width, height) + rgba) if expires_ns is None else
+                packet(4, struct.pack("<QII", expires_ns, width, height) + rgba))
+        with self.condition:
+            self.pending_frame = data
+            self.condition.notify()
+
+    def submit_bgr(self, image, *, expires_ns=None):
+        self.submit_frame(*rgba_from_bgr(image), expires_ns=expires_ns)
 
     def close(self):
         self.stopping.set()
@@ -193,13 +239,20 @@ class OverlayClient:
                 self.process.stdout.close()
             if self.forced_termination:
                 self._fail("Overlay bridge required forced termination; cleanup is unconfirmed")
-        report = self.final_report or {}
-        cleanup_confirmed = (report.get("exit_code") == 0 and report.get("cleanup_ok") is True
-                             and not self.forced_termination and self.error is None)
+            if self.process.returncode != 0:
+                self._fail("Overlay bridge exit disagrees with successful cleanup")
+        native = self.final_report or {}
+        cleanup_confirmed = (native.get("exit_code") == 0 and native.get("cleanup_ok") is True
+                             and not self.forced_termination and self.error is None
+                             and (self.process is None or self.process.returncode == 0))
         return {"requested": True, "validation_only": self.validation_only,
+                "cleanup_confirmed": cleanup_confirmed,
+                "physical_display_recovery_verified": False,
                 "frames_sent": self.frames_sent, "error": self.error,
                 "native_report": self.final_report, "forced_termination": self.forced_termination,
-                "cleanup_confirmed": cleanup_confirmed}
+                "worker_reaped": self.process is None or self.process.poll() is not None,
+                "worker_exit_code": self.process.returncode if self.process else None,
+                "transport_threads_stopped": not any(t and t.is_alive() for t in (self.writer, self.reader))}
 
     def _end_process(self, cooperative):
         if cooperative:
@@ -232,4 +285,7 @@ class OverlaySink:
         self.client = client
 
     def submit(self, processed):
-        self.client.submit_bgr(processed.image)
+        if processed.expires_ns is None:
+            self.client.submit_bgr(processed.image)
+        else:
+            self.client.submit_bgr(processed.image, expires_ns=processed.expires_ns)

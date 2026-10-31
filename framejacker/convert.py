@@ -10,7 +10,7 @@ def processing_size(width, height, max_side=MAX_PROCESSING_SIDE):
     return max(1, round(width * ratio)), max(1, round(height * ratio))
 
 
-def to_bgr(frame, max_side=MAX_PROCESSING_SIDE):
+def to_bgr(frame, max_side=MAX_PROCESSING_SIDE, *, native_filter=None):
     """Return a writable uint8 BGR image no larger than ``max_side``.
 
     An unscaled BGR24 frame is returned without copying; treat the result as
@@ -31,9 +31,15 @@ def to_bgr(frame, max_side=MAX_PROCESSING_SIDE):
     else:
         raise FrameFormatError("unsupported_recognition_format",
                                "Recognition currently accepts RGB3/BGR3 only; no format change requested")
+    if image.shape[:2] != (frame.height, frame.width):
+        raise FrameFormatError("invalid_frame", "Image dimensions do not match native frame metadata")
+    # Channel conversion is pointwise. A HUD filter receives full native BGR
+    # pixels before any resize; the shared acquisition bound is independent.
+    if frame.pixel_format == "RGB3":
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+    if native_filter is not None:
+        image = native_filter(image)
     width, height = processing_size(image.shape[1], image.shape[0], max_side)
     if (width, height) != (image.shape[1], image.shape[0]):
         image = cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)
-    if frame.pixel_format == "RGB3":
-        return cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
     return image if image.flags.writeable else image.copy()  # Raw buffers give read-only views.

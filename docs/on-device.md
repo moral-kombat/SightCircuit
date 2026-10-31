@@ -663,10 +663,12 @@ After the panel closes, inspect `feedback-check.png` and report:
 - Whether normal passthrough and tracking stayed working during and after.
 
 If the panel appears in input, this view includes our VR output and is unsuitable
-for feeding that output continuously back into itself. Continue bounded or
-non-visible recognition while preparing a dedicated input/provider or a supported
-mirror mode that excludes our output. Do not assume a crop or a hidden panel
-provides general exclusion.
+for streaming captured images continuously back into themselves. Continue
+bounded/no-display recognition and post-capture snapshots. The adopted fixed
+edge HUD instead requires its complete native footprint mask to be qualified,
+then feedback exclusion and physical expiry to pass the
+[acceptance gates](live-capture.md#edge-hud-acceptance-gates). The dedicated
+provider stays frozen. Do not assume a crop or a hidden panel proves exclusion.
 
 If it does not appear, the result supports exclusion only for that tested view,
 placement and runtime. Repeat deliberately at other poses/positions before a
@@ -674,9 +676,13 @@ general claim; ordinary Qt windows need their own check. If no panel appeared in
 the headset or it was not visible during capture, this comparison is inconclusive.
 The user observed the included panel with both tools reporting clean shutdown.
 Arcturus is now confirmed connected; the selected passthrough source remains
-unknown. The next task is the native prerequisite check below and preparing
-input independent of our output. The mirror can still provide bounded recognition
-and snapshots displayed after capture closes. This procedure does not install
+unknown. The next proposed device checkpoint is
+[bounded HUD calibration](#bounded-edge-hud-calibration-checkpoint), after its
+lifecycle prerequisites and scoped authorization; the
+[proposed qualification method](hud-qualification.md#proposed-g4-method) defines
+the additional evidence. The native provider prerequisites below are deferred
+reference material. The mirror can still provide bounded recognition and
+snapshots displayed after capture closes. This procedure does not install
 layers, switch camera sources or repeat the public tracked-camera probe.
 
 ### Record headset observations for a run
@@ -714,10 +720,13 @@ If it cannot, note the URL, the error, and the network setup in
 
 ### Bounded edge HUD calibration checkpoint
 
-This is the device step for WP9 in the [POC scope](poc-scope.md#work-packages)
-and the first check of the [fixed edge HUD](architecture.md#fixed-edge-hud-decision)
-on Frame. It has **not been run on Frame**. It needs its own approval under the
-[October 26 handoff](live-capture.md#october-26-evening-handoff); this page is
+This is the proposed device step for WP9 in the
+[POC scope](poc-scope.md#work-packages). Recovered [E75](evidence/e075.md)
+establishes that a historical five-second V4 marker/observer attempt ran on
+Frame and was rejected; G3 acceptance is still pending. Do not repeat that
+unchanged attempt. Resolve G2's physical failure/recovery prerequisites and
+review a revised bounded checkpoint before seeking its own approval under the
+[October 26 handoff](live-capture.md#october-26-evening-handoff). This page is
 the procedure, not that approval.
 
 What it does: `scripts/hud_marker_observer.py` reads the verified mirror at
@@ -1625,6 +1634,13 @@ command. **Neither the manifest nor that command is in this repository.** This
 section therefore gives no deployment command. No install, transfer or device
 execution is authorized here.
 
+That historical file list is also insufficient for the current adapters:
+`scripts/overlay_client.py` now imports `framejacker.overlay`, and the mirror
+reader imports `framejacker.errors`. A new manifest must include the complete
+package/script dependency closure and matching source revision, plus the
+target-built ARM64 bridge. This delivery's local x86_64 bridge is an offline
+validation artifact, not a device deployment candidate.
+
 Before any deployment is proposed, the preflight must establish at least:
 
 - The exact commit and a manifest listing every deployed file with its size
@@ -1632,8 +1648,9 @@ Before any deployment is proposed, the preflight must establish at least:
 - That cross-compiled or Windows-built artifacts are not taken as evidence of
   Frame runtime compatibility. The bridge used on Frame so far has been built
   on Frame with `bash scripts/build_overlay_bridge.sh`.
-- Target UAPI, `ctypes` and `ioctl` size evidence before any capture path runs
-  (the current capture ABI test is skipped without it).
+- Target ARM64 UAPI, `ctypes` and `ioctl` size execution evidence before any
+  capture path runs. The cloud ABI test passes with its own compiler/UAPI;
+  that does not establish the target headset's ABI.
 - Independent SSH, a clean checkout, and nothing else running, as in the
   [calibration checkpoint](#bounded-edge-hud-calibration-checkpoint).
 

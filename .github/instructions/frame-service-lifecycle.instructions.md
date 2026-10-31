@@ -4,20 +4,20 @@ applyTo: 'scripts/*service*.py,scripts/*session*.py,scripts/live_pipeline.py,scr
 ---
 
 The Frame's shipped `gamescope-session.service` has `PartOf=steamvr.service`:
-stopping SteamVR also ends the graphical session. The 2026-10-24 service-only
-rehearsal observed a canceled stop job and a new graphical session/SteamVR
-invocation; independent SSH and systemd cleanup survived. Before another
+stopping SteamVR also ends the graphical session. The reconstructed E63
+service-only rehearsal (execution date unknown) reported a canceled stop job
+and a new graphical session/SteamVR invocation; independent SSH and systemd cleanup survived. Before another
 service-control implementation, model the whole session lifecycle. SDDM's
 autologin and `start-gamescope-session` are now confirmed as the new session's
 launch path. Preserve the session-policy preflight guard and metadata
 activation block; do not remove platform dependencies or repeat a bare stop/start
 to collect more evidence. The separately prepared `session_rehearsal.py` uses
 the reviewed SteamOS Manager `switch-to-game-mode` interface and observes the
-whole session; preparation/check modes do not log out. The operator's
-2026-10-24 session test completed and normal headset appearance was confirmed.
+whole session; preparation/check modes do not log out. The reconstructed E64
+operator session test completed and normal headset appearance was reported; its execution date and original report are unknown.
 Never treat a successful session
 cycle as permission to stage a layer during an assumed stopped interval.
-See [the completed checkpoint](../../docs/status.md#e52-platform-session-test-completed-and-headset-confirmed).
+See [the completed checkpoint](../../docs/status.md#e64-platform-session-test-completed-and-headset-confirmed).
 
 The new `metadata_session_trial.py` avoids that assumption: each trial keeps
 an immutable library at its own private path, publishes an environment-gated
@@ -37,18 +37,27 @@ V2 recovery and normal headset operation are now confirmed. Its eight candidate
 records match across three snapshots, but full-registry checks still fail and
 continuous candidate stability/image ownership are unproven. Do not repeat v2
 unchanged; the saved comparison is complete. The current minimum LIVE POC
-target is before October 26, 2026 (America/New_York), not a guarantee. Follow
+target was October 26, 2026 (America/New_York) and was not met. Follow
 [the critical path](../../docs/live-capture.md#minimum-live-poc-and-october-26-target).
-Current authorization permits local/offline work only: no deployments, headset
-tests/restarts, credential/security changes, public publication or merges.
+This guide grants no new device operations: no deployments, headset tests or
+restarts, source switching, provider activation, private-image transfer or server
+exposure. Follow the active user request for offline changes and PR delivery;
+existing or consumed device approvals do not authorize another run.
 Recorder experiments are paused; the later 120-second watcher returned
 `no_new_recording` with clean shutdown. Do not add recorder/lifecycle diagnostics
 or repeat recorder experiments. The approved offline direction is a fixed edge
 HUD with full-footprint native-resolution masking before resizing/inference.
 The synthetic-only implementation and final offline tests are recorded in
-[E60](../../docs/status.md#e60-offline-edge-hud-and-native-mask-validation); live
-HUD input and real output remain blocked. There is no executable hardware
-calibration procedure. Keep the object name and approximate view-relative arrow inside its reserved
+[E69](../../docs/status.md#e69-offline-edge-hud-and-native-mask-validation); live
+HUD input and real output remain blocked. The marker harness and observer have
+executable, separately gated calibration preparation. Recovered
+[E75](../../docs/evidence/e075.md) records a rejected historical V4 Frame attempt
+and explains its software termination; the green physical outcome is unresolved.
+There is no accepted G3 observation, and a future clean observation stays
+`observed_unqualified`. The proposed
+[G4 method](../../docs/hud-qualification.md#proposed-g4-method) and offline candidate
+schema cannot establish qualification. Keep the object name and approximate
+view-relative arrow inside its reserved
 strip; it is a blind region, not world-locked output. Calibration, head-motion
 leakage and physical VR expiry remain unproven. Invalid mapping or unexpected
 capture/config changes must fail closed. See the current
@@ -72,10 +81,12 @@ design only: preserve the current global invalidation and producer gates.
 An inference-thread age check and settings heartbeats cannot expire stale
 content while inference stalls: use the native validation process's absolute
 monotonic per-frame deadline, which settings cannot renew, and keep the expiring
-packet blocked for real output until separately qualified. A Python finally
+packet blocked for real output until separately qualified. Derive that deadline
+from original frame observation plus maximum age (or earlier); inference,
+retransmission and heartbeats must not renew content lifetime. A Python finally
 block cannot survive SIGKILL; the guardian must independently own the worker
 group and detect parent loss through a pipe whose writer is never inherited by
 workers. Reaping after parent loss is containment evidence, not a clean API
 shutdown report from the dead parent; a stopped/killed guardian or stuck kernel
-I/O prevents an unconditional cleanup guarantee. See [E58](../../docs/status.md#e58-independent-expiry-and-supervisor-loss-containment)
+I/O prevents an unconditional cleanup guarantee. See [E68](../../docs/status.md#e68-independent-expiry-and-supervisor-loss-containment)
 for deterministic no-VR tests and the remaining limits.

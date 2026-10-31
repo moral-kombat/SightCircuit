@@ -10,7 +10,9 @@ anchors are preserved. [The index](README.md) is the starting point.
 | --- | --- | --- |
 | [Root README](../README.md) | Overview, brief status, Frame/cloud entry points | Project scope or entry points change |
 | [Documentation index](README.md) | Task-based navigation and reading order | A guide is added or its role changes |
-| [Status](status.md) | Capability matrix, device/cloud evidence and unknowns | A new result or compatibility finding is reported |
+| [Status](status.md) | Generated capability matrix and stable historical evidence anchors | Regenerate after reviewed evidence/source changes |
+| [Evidence records](evidence/README.md) | Per-entry procedure, result, provenance and unknowns; `index.json` owns identities | A coordinator records a new result |
+| `status-data.json` | Reviewed capability summaries consumed by `scripts/generate_status.py` | The evidence justifies a capability change |
 | [On-device guide](on-device.md) | Frame access, inventory, recording/replay procedures and session handoff | Device commands or operating procedures change |
 | [VR overlay](vr-overlay.md) | Panel launch, UI controls, shutdown and native transport reference | Panel behavior, options or protocol change |
 | [Development](development.md) | Cloud/desktop setup, dependency environments, builds, tests and CI | Setup, dependencies or checks change |
@@ -27,13 +29,18 @@ anchors are preserved. [The index](README.md) is the starting point.
 | This document | Ownership, organization and consolidation checklist | Documentation structure or maintenance rules change |
 
 The author changing a component updates its owning documents in the same
-change. The maintainer recording a device result updates status and checks any
+change. The maintainer recording a device result adds its evidence record, regenerates status and checks any
 brief summaries.
 
 ## Content rules
 
-- Record full evidence once in status. Other pages may retain a short summary
-  and link; keep operating warnings next to the affected command.
+- Record full evidence once under `docs/evidence/`; the coordinator adds its
+  identity/provenance to `index.json`. Update reviewed capability rows in
+  `docs/status-data.json` and run `python3 scripts/generate_status.py`. Status
+  preserves every historical heading as a link. Check generated output with
+  `python3 scripts/generate_status.py --check`; do not hand-edit the status
+  matrix or the marked architecture progress summary. Other pages may retain a
+  short linked summary; keep operating warnings next to the affected command.
 - Keep the current capture backlog in live capture. Research snapshots explain
   earlier reasoning and point to the active plan for current tasks.
 - Describe a procedure's execution location, prerequisites, commands, expected
@@ -76,7 +83,17 @@ and run `git diff --check`. Do not execute disruptive hardware procedures merely
 to check documentation. Runtime tests remain governed by their actual operating
 conditions and the [recorded probe failure](status.md#e3-public-camera-probe).
 
-For a session handoff, record new evidence in status, update completed/next work
+For a session handoff, record new evidence under `docs/evidence/`, regenerate status, update completed/next work
 in live capture, and keep the short on-device continuation prompt aligned with
 those documents. Publish related documentation with the implementation or
 device-result update so the next session reads a consistent project state.
+
+## Evidence migration (WP7)
+
+E1–E71 now live in individual files; the prior root README is retained in
+[README history](project-history.md). Old README headings and status evidence
+headings remain addressable. E63–E71 retain reconstructed provenance; their
+unknown dates, revisions and unavailable original reports have not been filled
+in. The architecture's former external dashboard snapshot is now generated
+from the same reviewed capability rows as status. This documentation migration
+is an offline change and supplies no new device acceptance evidence.

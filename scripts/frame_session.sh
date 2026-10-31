@@ -42,13 +42,13 @@ confirm() { # COUNTDOWN=N waits N seconds (with terminal bells) instead of readi
 }
 # Wall-clock limit per command (seconds); exit 124 means it timed out.
 limit="${STEP_TIMEOUT:-300}"
-run() { # run name command... -> records exit code, keeps going on failure
+run() { # run name command... -> record and propagate failures to stop the session
   local name="$1"; shift
   say "$name"
   timeout --foreground -k 10 "$limit" "$@"; local code=$?
   results[$name]=$code
   note "- \`$name\`: exit $code$([ "$code" = 124 ] && echo ' (timed out)')"
-  return 0
+  return "$code"
 }
 finish() {
   local failed=0 name
@@ -72,7 +72,7 @@ recording_args=()
 } > "$summary"
 
 stage_setup() {
-  if [ -z "${SKIP_UPDATE:-}" ]; then run git-pull git pull --ff-only; fi
+  if [ -z "${SKIP_UPDATE:-}" ]; then run git-pull git pull --ff-only || return $?; fi
   run setup-window bash scripts/setup_window.sh
   if [ "${results[setup-window]}" != 0 ]; then
     note "- Setup failed; later stages need its environment, so the session stops here."
@@ -90,11 +90,11 @@ stage_regression() {
 stage_pacing() {
   note; note "## Realtime replay pacing"
   run replay-realtime env QT_QPA_PLATFORM=offscreen "$py" scripts/replay_window.py "${recording_args[@]}" \
-    --realtime --max-frames 200 --report "$out/replay-realtime.json"
+    --realtime --max-frames 200 --report "$out/replay-realtime.json" || return $?
   run replay-realtime-4threads env QT_QPA_PLATFORM=offscreen "$py" scripts/replay_window.py "${recording_args[@]}" \
-    --realtime --decode-threads 4 --max-frames 200 --report "$out/replay-realtime-4threads.json"
+    --realtime --decode-threads 4 --max-frames 200 --report "$out/replay-realtime-4threads.json" || return $?
   run replay-unpaced env QT_QPA_PLATFORM=offscreen "$py" scripts/replay_window.py "${recording_args[@]}" \
-    --max-frames 200 --report "$out/replay-unpaced.json"
+    --max-frames 200 --report "$out/replay-unpaced.json" || return $?
   "$py" - "$out" <<'PY' >> "$summary"
 import json, sys
 from pathlib import Path
@@ -115,7 +115,9 @@ stage_overlay() {
   confirm "Put the headset on; a head-relative panel will show the replay for ~10 s." || return 0
   run replay-overlay "$py" scripts/replay_window.py "${recording_args[@]}" --overlay --realtime \
     --max-frames 100 --report "$out/replay-overlay.json"
+  local code=$?
   ask "Was the panel visible with labels, and did passthrough/tracking stay normal during and after? (y/n/notes)"
+  return "$code"
 }
 
 stage_mirror() {
@@ -123,9 +125,11 @@ stage_mirror() {
   confirm "Aim at a chair/TV/person and keep it in view for 10 s." || return 0
   run mirror-recognize "$py" scripts/mirror_recognize.py --capture --device "$device" --seconds 10 \
     --max-fps 5 --preview "$out/mirror-detections.png" > "$out/mirror-recognize.json"
+  local code=$?
   note "  report: mirror-recognize.json, preview: mirror-detections.png"
   open_image "$out/mirror-detections.png"
   ask "Do the preview boxes/labels match what was in view, and was passthrough normal? (y/n/notes)"
+  return "$code"
 }
 
 stage_stills() {
@@ -153,10 +157,13 @@ stage_stills() {
     local code=$?
     results[still-$id]=$code
     if [ "$code" = 0 ] && [ -f "$file" ]; then
-      "$py" scripts/frame_session_manifest.py --manifest evaluation/local/frame.json --id "$id-$stamp" \
-        --image "$file" --present "$present" --absent "$absent" && note "- still \`$id\`: $file added to frame.json"
+      run "manifest-$id" "$py" scripts/frame_session_manifest.py --manifest evaluation/local/frame.json --id "$id-$stamp" \
+        --image "$file" --present "$present" --absent "$absent" || return $?
+      note "- still \`$id\`: $file added to frame.json"
     else
       note "- still \`$id\`: capture failed (exit $code)"
+      if [ "$code" = 0 ]; then results[still-$id]=1; fi
+      return 1
     fi
   done
 }
@@ -165,8 +172,8 @@ stage_evaluate() {
   note; note "## Detector comparison on Frame stills"
   if [ ! -f evaluation/local/frame.json ]; then note "- skipped: no evaluation/local/frame.json"; return 0; fi
   run evaluate "$py" scripts/evaluate_detectors.py --manifest evaluation/local/frame.json \
-    --report "$out/detector-report.json"
-  note "  report: detector-report.json (choose the default detector from this)"
+    --report "$out/detector-report.json" || return $?
+  note "  report: detector-report.json (representative inspected evidence is required before choosing a default)"
 }
 
 stage_window_mirror() {
@@ -176,14 +183,22 @@ stage_window_mirror() {
     --max-frames 150 --report "$out/window-replay.json" > /dev/null 2>&1 &
   local pid=$!
   sleep 4
+  if ! kill -0 "$pid" 2>/dev/null; then
+    wait "$pid"; local early_code=$?
+    results[window-replay]=1
+    note "- \`window-replay\`: exited before mirror capture (exit $early_code). Capture was not started."
+    return 1
+  fi
   run mirror-check python3 scripts/mirror_check.py --capture --device "$device" --seconds 5 \
     --preview "$out/window-in-mirror.png"
+  local mirror_code=$?
   wait "$pid"; local replay_code=$?
   results[window-replay]=$replay_code
   note "- \`window-replay\`: exit $replay_code"
   open_image "$out/window-in-mirror.png"
   ask "Does window-in-mirror.png show the desktop replay window? (y/n)"
   ask "Was passthrough/tracking normal during and after? (y/n/notes)"
+  [ "$mirror_code" = 0 ] && [ "$replay_code" = 0 ]
 }
 
 stages=("$@")
@@ -194,5 +209,12 @@ for stage in "${stages[@]}"; do
     window-mirror) stage_window_mirror ;;
     *) echo "Unknown stage: $stage" >&2; exit 2 ;;
   esac
+  code=$?
+  if [ "$code" != 0 ]; then
+    results[stage-$stage]=$code
+    note "- Session stopped after failed stage: $stage. No later stage was started."
+    note "- Physical headset recovery is unconfirmed; inspect passthrough/tracking and preserve these reports."
+    finish
+  fi
 done
 finish

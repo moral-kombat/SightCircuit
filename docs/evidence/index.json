@@ -1,0 +1,530 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "id": "E1",
+      "title": "Frame inventory",
+      "file": "e001.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E2",
+      "title": "Vendor app",
+      "file": "e002.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E3",
+      "title": "Public camera probe",
+      "file": "e003.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E4",
+      "title": "Recordings and container metadata",
+      "file": "e004.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E5",
+      "title": "Selected-track decode",
+      "file": "e005.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E6",
+      "title": "Window and VR panel",
+      "file": "e006.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E7",
+      "title": "Cloud validation",
+      "file": "e007.md",
+      "kind": "offline",
+      "reconstructed": false
+    },
+    {
+      "id": "E8",
+      "title": "Mirror diagnostic cloud checks",
+      "file": "e008.md",
+      "kind": "offline",
+      "reconstructed": false
+    },
+    {
+      "id": "E9",
+      "title": "Shared-memory reader cloud checks",
+      "file": "e009.md",
+      "kind": "offline",
+      "reconstructed": false
+    },
+    {
+      "id": "E10",
+      "title": "Mirror discovery on Frame",
+      "file": "e010.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E11",
+      "title": "First mirror acquisition trial",
+      "file": "e011.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E12",
+      "title": "Successful mirror frame delivery",
+      "file": "e012.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E13",
+      "title": "Mirror preview publication on Frame",
+      "file": "e013.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E14",
+      "title": "Physical room visible in the mirror preview",
+      "file": "e014.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E15",
+      "title": "Saved-room recognition and rug false positive",
+      "file": "e015.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E16",
+      "title": "Bounded mirror recognition cloud checks",
+      "file": "e016.md",
+      "kind": "offline",
+      "reconstructed": false
+    },
+    {
+      "id": "E17",
+      "title": "Bounded mirror recognition on Frame",
+      "file": "e017.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E18",
+      "title": "VR panel included in mirror input",
+      "file": "e018.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E19",
+      "title": "Arcturus connection confirmed, source selection unknown",
+      "file": "e019.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E20",
+      "title": "Capture prerequisite report cloud checks",
+      "file": "e020.md",
+      "kind": "offline",
+      "reconstructed": false
+    },
+    {
+      "id": "E21",
+      "title": "Capture prerequisites on Frame",
+      "file": "e021.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E22",
+      "title": "Capture reference build cloud checks",
+      "file": "e022.md",
+      "kind": "offline",
+      "reconstructed": false
+    },
+    {
+      "id": "E23",
+      "title": "Reference build and controlled reader on Frame",
+      "file": "e023.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E24",
+      "title": "Descriptor transport adaptation cloud checks",
+      "file": "e024.md",
+      "kind": "offline",
+      "reconstructed": false
+    },
+    {
+      "id": "E25",
+      "title": "Descriptor transport on Frame",
+      "file": "e025.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E26",
+      "title": "Publication and loop controls cloud checks",
+      "file": "e026.md",
+      "kind": "offline",
+      "reconstructed": false
+    },
+    {
+      "id": "E27",
+      "title": "Publication and loop controls on Frame",
+      "file": "e027.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E28",
+      "title": "Vulkan capability query cloud checks",
+      "file": "e028.md",
+      "kind": "offline",
+      "reconstructed": false
+    },
+    {
+      "id": "E29",
+      "title": "Validated import and ownership cloud checks",
+      "file": "e029.md",
+      "kind": "offline",
+      "reconstructed": false
+    },
+    {
+      "id": "E30",
+      "title": "Vulkan capabilities on Frame",
+      "file": "e030.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E31",
+      "title": "Import build and synthetic tests on Frame",
+      "file": "e031.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E32",
+      "title": "Two-plane import fixture cloud checks",
+      "file": "e032.md",
+      "kind": "offline",
+      "reconstructed": false
+    },
+    {
+      "id": "E33",
+      "title": "GPU resource ownership cloud checks",
+      "file": "e033.md",
+      "kind": "offline",
+      "reconstructed": false
+    },
+    {
+      "id": "E34",
+      "title": "Capture watchdog, provider lifecycle and recovery cloud checks",
+      "file": "e034.md",
+      "kind": "offline",
+      "reconstructed": false
+    },
+    {
+      "id": "E35",
+      "title": "Watchdog, provider and recovery tests on Frame",
+      "file": "e035.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E36",
+      "title": "Metadata-only provider and synchronization review",
+      "file": "e036.md",
+      "kind": "offline",
+      "reconstructed": false
+    },
+    {
+      "id": "E37",
+      "title": "Metadata-only provider and diagnostic on Frame",
+      "file": "e037.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E38",
+      "title": "Inactive bundle and SteamVR service on Frame",
+      "file": "e038.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E39",
+      "title": "Controlled metadata trial and loader fallback cloud checks",
+      "file": "e039.md",
+      "kind": "offline",
+      "reconstructed": false
+    },
+    {
+      "id": "E40",
+      "title": "Restart and console access loss reported",
+      "file": "e040.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E41",
+      "title": "Frame trial report and service-control failures",
+      "file": "e041.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E42",
+      "title": "Focused service window and restart policy on Frame",
+      "file": "e042.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E43",
+      "title": "SteamVR session relationships and platform hooks",
+      "file": "e043.md",
+      "kind": "mixed",
+      "reconstructed": false
+    },
+    {
+      "id": "E44",
+      "title": "Platform launcher source and repeated-hook diagnostic fix",
+      "file": "e044.md",
+      "kind": "mixed",
+      "reconstructed": false
+    },
+    {
+      "id": "E45",
+      "title": "Offline platform lifecycle and guarded recovery",
+      "file": "e045.md",
+      "kind": "offline",
+      "reconstructed": false
+    },
+    {
+      "id": "E46",
+      "title": "Read-only runtime baseline on Frame",
+      "file": "e046.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E47",
+      "title": "Recorded recognition and VR panel POC on Frame",
+      "file": "e047.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E48",
+      "title": "Live mirror recognition POC and matching preview",
+      "file": "e048.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E49",
+      "title": "Shared pipeline and package refactor cloud checks",
+      "file": "e049.md",
+      "kind": "offline",
+      "reconstructed": false
+    },
+    {
+      "id": "E50",
+      "title": "Candidate detector and evaluation harness cloud checks",
+      "file": "e050.md",
+      "kind": "offline",
+      "reconstructed": false
+    },
+    {
+      "id": "E51",
+      "title": "Media-time replay pacing (unit-tested only)",
+      "file": "e051.md",
+      "kind": "offline",
+      "reconstructed": false
+    },
+    {
+      "id": "E52",
+      "title": "Bounded mirror stage via SSH",
+      "file": "e052.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E53",
+      "title": "Unattended replay regression and pacing rerun",
+      "file": "e053.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E54",
+      "title": "Bounded mirror capture on merged main",
+      "file": "e054.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E55",
+      "title": "Annotated replay overlay command on Frame",
+      "file": "e055.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E56",
+      "title": "Desktop-window mirror capture attempt",
+      "file": "e056.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E57",
+      "title": "Follow-up overlay and mirror runs",
+      "file": "e057.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E58",
+      "title": "User observations for the 2026-10-26 runs",
+      "file": "e058.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E59",
+      "title": "Arcturus green input recurrence and operator recovery",
+      "file": "e059.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E60",
+      "title": "Evening source-only mirror capture and scene correspondence",
+      "file": "e060.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E61",
+      "title": "File-only detector comparison on the evening grayscale still",
+      "file": "e061.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E62",
+      "title": "Keyframe catch-up realtime replay cloud checks",
+      "file": "e062.md",
+      "kind": "offline",
+      "reconstructed": false
+    },
+    {
+      "id": "E63",
+      "title": "Service-only rehearsal and graphical-session dependency",
+      "file": "e063.md",
+      "kind": "mixed",
+      "reconstructed": true
+    },
+    {
+      "id": "E64",
+      "title": "Platform session test completed and headset confirmed",
+      "file": "e064.md",
+      "kind": "mixed",
+      "reconstructed": true
+    },
+    {
+      "id": "E65",
+      "title": "V2 recovered candidate snapshots compared and visual check passed",
+      "file": "e065.md",
+      "kind": "mixed",
+      "reconstructed": true
+    },
+    {
+      "id": "E66",
+      "title": "Offline live pipeline and headers-only input probe",
+      "file": "e066.md",
+      "kind": "offline",
+      "reconstructed": true
+    },
+    {
+      "id": "E67",
+      "title": "Offline cancellation and cleanup audit",
+      "file": "e067.md",
+      "kind": "offline",
+      "reconstructed": true
+    },
+    {
+      "id": "E68",
+      "title": "Independent expiry and supervisor-loss containment",
+      "file": "e068.md",
+      "kind": "offline",
+      "reconstructed": true
+    },
+    {
+      "id": "E69",
+      "title": "Offline edge HUD and native-mask validation",
+      "file": "e069.md",
+      "kind": "offline",
+      "reconstructed": true
+    },
+    {
+      "id": "E70",
+      "title": "Offline marker-only harness",
+      "file": "e070.md",
+      "kind": "offline",
+      "reconstructed": true
+    },
+    {
+      "id": "E71",
+      "title": "Offline ARM64 build and empirical marker observer",
+      "file": "e071.md",
+      "kind": "offline",
+      "reconstructed": true
+    },
+    {
+      "id": "E72",
+      "title": "Shared HUD runtime and independent lifecycle fixes",
+      "file": "e072.md",
+      "kind": "offline",
+      "reconstructed": false
+    },
+    {
+      "id": "E73",
+      "title": "Reproducible preprocessing audit and SSD channel correction",
+      "file": "e073.md",
+      "kind": "offline",
+      "reconstructed": false
+    },
+    {
+      "id": "E74",
+      "title": "Evidence generation and offline mapping qualification support",
+      "file": "e074.md",
+      "kind": "offline",
+      "reconstructed": false
+    },
+    {
+      "id": "E75",
+      "title": "Recovered V4 evidence and software termination analysis",
+      "file": "e075.md",
+      "kind": "mixed",
+      "reconstructed": false
+    }
+  ]
+}
