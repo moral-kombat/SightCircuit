@@ -10,10 +10,12 @@ layer has been deployed by Framejacker.
 
 ### Scope decision (2026-10-27)
 
-The POC goal is narrowed to a world-locked label on a detected object, using
-the mirror source and head pose; see [POC scope](poc-scope.md). The provider
-track below stays frozen, and the handoff that follows still governs device
-authorization.
+Revised 2026-10-31: the POC goal is object names with approximate direction
+arrows in a fixed edge HUD over live mirror input, with the HUD footprint
+masked before inference; world-locked labels are deferred. See
+[POC scope](poc-scope.md).
+The provider track below stays frozen, and the handoff that follows still
+governs device authorization.
 
 ### October 26 evening handoff
 
