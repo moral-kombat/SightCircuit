@@ -79,27 +79,22 @@ or not started (planned or researched). Held means paused, blocked or failed.
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Input & capture | 6 | 8 | 1 | 3 | 2 |
 | Inference | 5 | 2 | 1 | 1 | 0 |
-| Presentation | 2 | 2 | 2 | 2 | 1 |
+| Presentation | 2 | 2 | 2 | 4 | 2 |
 | Geometry & reconstruction | 0 | 0 | 0 | 4 | 0 |
-| **All** | 13 | 12 | 4 | 10 | 3 |
+| **All** | 13 | 12 | 4 | 12 | 4 |
 
 Milestones, from the [acceptance list](#milestones-and-acceptance-checks):
 
 1. **Replay and window:** Met on Frame; replay processing reconfirmed after the refactor. Qt window rerun inconclusive (E56); label accuracy not evaluated.
 2. **Live capture:** In progress, dedicated path paused. Metadata layer loads and restores on Frame but registry inspection is unstable; image access blocked; mirror is the POC source but composited.
 3. **VR panel:** Visible and readable on merged main (wearer-reported); not measured. Readability, latency and live-input measurements pending; V4 cleanup failure unresolved (E59).
-4. **World-space labels:** Now the POC target, with estimated distance. WP3 pose logging gates it; then WP4 projection, WP5 overlay, WP6 tracker, WP8 live loop.
-5. **Splat experiment (optional):** Deferred by the POC scope. Not planned until the world-locked label works.
+4. **World-space labels:** Deferred by the edge HUD scope. World-locked labels return only after the edge HUD POC (WP3–WP6, WP8 deferred).
+5. **Splat experiment (optional):** Deferred by the POC scope. Not planned until the edge HUD POC works.
 
-Critical path to milestone 2: 5 of 10 main steps done. Next: controlled
-metadata-layer load and restore (provider loaded and normal startup restored on
-Frame; full-registry metadata inspection still fails, so investigate
-lifetime/version tracking offline). After step 5, route A runs through step 6
-(controlled metadata-layer load and restore) and step 7 (establish a safe
-frame-access contract). Route B, step 7a, would get a supported frame-sharing
-API from Valve / Arcturus and go straight to step 8. Both routes then continue
-with steps 8 to 10: owned-copy capture path on real hardware; capture-only
-device trial; close the remaining milestone 2 checks.
+Critical path to the edge HUD POC: 1 of 6 acceptance gates passed. Next:
+lifecycle and cleanup safeguards (WP10) (explain the V4 failure and reconcile
+the guardian, calibration expiry and truthful early-termination reporting, with
+tests).
 <!-- END progress-summary -->
 
 ## Frame processing
