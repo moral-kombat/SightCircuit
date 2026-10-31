@@ -11,6 +11,7 @@ import unittest
 
 from scripts import live_pipeline as live
 from scripts.overlay_client import DEFAULT_BRIDGE, OverlayClient, PanelSettings, packet
+from framejacker.overlay import OverlaySink
 
 
 @unittest.skipUnless(os.name == "posix" and DEFAULT_BRIDGE.is_file(), "Build native validation bridge on Linux")
@@ -159,6 +160,24 @@ class DisplayExpiryTests(unittest.TestCase):
         self.assertGreater(result["stale_results_dropped"], 0)
         self.assertEqual(sink.report["native_report"]["expired_frames"], 1)
         self.assertFalse(sink.report["native_report"]["runtime_initialized"])
+
+    @unittest.skipUnless(importlib.util.find_spec("cv2"), "OpenCV required for sink image conversion")
+    def test_shared_sink_forwards_original_absolute_deadline(self):
+        import numpy as np
+        from types import SimpleNamespace
+
+        client = OverlayClient(validation_only=True).start()
+        try:
+            deadline = time.monotonic_ns() + 200000000
+            processed = SimpleNamespace(image=np.zeros((1, 2, 3), dtype=np.uint8), expires_ns=deadline)
+            OverlaySink(client).submit(processed)
+            self.assertTrue(client.frame_expired.wait(3))
+            self.assertEqual(client.last_expiry["deadline_ns"], deadline)
+            self.assertFalse(client.last_expiry["content_current"])
+        finally:
+            report = client.close()
+        self.assertTrue(report["cleanup_confirmed"], report)
+        self.assertFalse(report["native_report"]["runtime_initialized"])
 
 
 class ExpiryGateTests(unittest.TestCase):

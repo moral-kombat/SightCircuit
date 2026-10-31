@@ -17,6 +17,27 @@ HAS_OPENCV = importlib.util.find_spec("cv2") is not None
 FIXTURE = Path(__file__).with_name("worker_failure_fixture.py")
 
 
+def child_pids(pid):
+    """Observe real parentage even on kernels without the proc children file."""
+    try:
+        return Path(f"/proc/{pid}/task/{pid}/children").read_text().split()
+    except FileNotFoundError:
+        # CONFIG_CHECKPOINT_RESTORE controls the children file; ordinary proc
+        # status remains available. Retain the same real-process readiness check.
+        children = []
+        for process in Path("/proc").iterdir():
+            if not process.name.isdigit():
+                continue
+            try:
+                status = (process / "status").read_text()
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+            parent = next((line.split()[1] for line in status.splitlines() if line.startswith("PPid:")), None)
+            if parent == str(pid):
+                children.append(process.name)
+        return children
+
+
 @unittest.skipUnless(sys.platform.startswith("linux"), "Frame/Linux process groups and subreaping")
 class BoundedWorkerTests(unittest.TestCase):
     def setUp(self):
@@ -233,9 +254,9 @@ class BoundedWorkerTests(unittest.TestCase):
         # Wait for the real worker's SIGTERM handler, not an arbitrary sleep.
         while True:
             self.assertIsNone(process.poll())
-            children = Path(f"/proc/{process.pid}/task/{process.pid}/children").read_text().split()
+            children = child_pids(process.pid)
             if children:
-                children = Path(f"/proc/{children[0]}/task/{children[0]}/children").read_text().split()
+                children = child_pids(children[0])
             if children:
                 status = Path(f"/proc/{children[0]}/status").read_text()
                 mask = int(next(line.split()[1] for line in status.splitlines() if line.startswith("SigCgt:")), 16)

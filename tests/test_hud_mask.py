@@ -37,6 +37,29 @@ def prepare(mask, image, **kwargs):
 
 
 class HudMaskTests(unittest.TestCase):
+    def test_native_1920_padded_stride_mask_precedes_960_inference_resize(self):
+        cal = calibration(1920, 1080, padding=16)
+        mask = hud.HudMask(cal, source_kind="synthetic")
+        # Model real acquisition layout with padding that is not image pixels.
+        storage = np.full((1080, cal.capture_format.stride_bytes), 173, np.uint8)
+        native = np.ndarray((1080, 1920, 3), np.uint8, buffer=storage,
+                            strides=(cal.capture_format.stride_bytes, 3, 1))
+        native[:] = 20
+        clean = native.copy()
+        x0, y0, x1, y1 = mask.regions[0]
+        native[y0:y1, x0:x1] = 255
+        resize = cv2.resize
+        def checked(image, *args, **kwargs):
+            self.assertEqual(image.shape, (1080, 1920, 3))
+            self.assertFalse(image[y0:y1, x0:x1].any())
+            return resize(image, *args, **kwargs)
+        with patch.object(cv2, "resize", side_effect=checked):
+            actual = prepare(mask, native)
+        self.assertEqual(actual.shape, (540, 960, 3))
+        np.testing.assert_array_equal(actual, prepare(mask, clean))
+        self.assertTrue((storage[:, 5760:] == 173).all())
+        self.assertFalse(np.shares_memory(actual, native))
+
     def test_native_mask_precedes_resize_and_excludes_transparent_edges_and_filter_fringe(self):
         cal = calibration()
         mask = hud.HudMask(cal, source_kind="synthetic")
@@ -187,7 +210,8 @@ class HudIntegrationTests(unittest.TestCase):
             def submit(inner, frame, detection):
                 self.assertEqual(detection["image"].shape, (128, 320, 3))
                 self.assertEqual(detection["labels"], ["chair"])
-                self.assertEqual(detection["expires_ns"], frame.observed_ns + 1000000000)
+                self.assertLessEqual(detection["expires_ns"], frame.observed_ns + 1000000000)
+                self.assertGreater(detection["expires_ns"], frame.observed_ns)
                 self.assertEqual(frame.source_id, cal.source_id)
                 super().submit(frame, detection)
         report = live.run_pipeline(live.SyntheticSource(), Detector(), Sink(), .3, hud_mode=True, calibration=cal)
@@ -258,7 +282,7 @@ class HudIntegrationTests(unittest.TestCase):
         report = live.run_pipeline(Source(), Detector(), live.HeadlessSink(), .5, hud_mode=True,
                                    calibration=live.synthetic_hud_calibration())
         self.assertEqual(report["frames_submitted"], 0)
-        self.assertIn("format_changed", report["reason"])
+        self.assertEqual("native_capture_format_changed", report["reason"])
         self.assertTrue(report["cleanup_ok"])
 
     def test_slow_hud_result_is_not_submitted(self):

@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import struct
 import subprocess
 import sys
@@ -137,7 +138,7 @@ class OverlayCloseTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
 
-    def close_fake_bridge(self, behavior):
+    def open_fake_bridge(self, behavior):
         path = Path(self.temporary.name) / behavior
         path.write_text("#!" + sys.executable + "\n"
                         "import json, signal, sys, time\n"
@@ -145,7 +146,10 @@ class OverlayCloseTests(unittest.TestCase):
                         "'runtime_initialized': True}) + '\\n')\n"
                         "sys.stdout.flush()\n" + self.BODIES[behavior] + "\n")
         path.chmod(0o755)
-        client = OverlayClient(binary=path).start()
+        return OverlayClient(binary=path).start()
+
+    def close_fake_bridge(self, behavior):
+        client = self.open_fake_bridge(behavior)
         return client, client.close()
 
     def test_cooperative_exit_is_confirmed_without_forced_termination(self):
@@ -167,6 +171,23 @@ class OverlayCloseTests(unittest.TestCase):
         self.assertTrue(summary["forced_termination"], summary)
         self.assertFalse(summary["cleanup_confirmed"])
         self.assertEqual(client.process.returncode, -signal.SIGKILL)
+
+    def test_full_pipe_write_has_its_own_deadline(self):
+        client = self.open_fake_bridge("terminable")
+        try:
+            started = time.monotonic()
+            client.submit_frame(MAX_SIDE, MAX_SIDE, bytes(MAX_SIDE * MAX_SIDE * 4))
+            self.assertTrue(client.writer is not None)
+            client.writer.join(timeout=3)
+            self.assertFalse(client.writer.is_alive(), "Writer stalled on a full anonymous pipe")
+            self.assertLess(time.monotonic() - started, 3)
+            self.assertEqual(client.error, "overlay_write_timeout")
+        finally:
+            report = client.close()
+        self.assertTrue(report["worker_reaped"])
+        self.assertTrue(report["transport_threads_stopped"])
+        self.assertFalse(report["cleanup_confirmed"])
+        self.assertFalse(report["physical_display_recovery_verified"])
 
 
 class PanelLimitConsistencyTests(unittest.TestCase):
@@ -193,6 +214,24 @@ class PanelSettingsTests(unittest.TestCase):
             with self.subTest(settings=settings):
                 with self.assertRaises(ValueError):
                     settings.encode()
+
+
+class SharedOverlayContractTests(unittest.TestCase):
+    def test_script_exports_shared_transport_and_frozen_settings(self):
+        from scripts import overlay_client
+
+        self.assertIs(overlay_client.OverlayClient, OverlayClient)
+        self.assertIs(overlay_client.PanelSettings, PanelSettings)
+        self.assertTrue(hasattr(OverlayClient, "freeze_settings"))
+
+    @unittest.skipUnless(shutil.which("g++"), "C++ compiler required for fake native dispatch")
+    def test_fake_dispatch_decodes_pixels_deadlines_and_cleanup_failures(self):
+        fixture = Path(__file__).resolve().parent / "fixtures/overlay_dispatch_fixture.cpp"
+        with tempfile.TemporaryDirectory() as temporary:
+            binary = Path(temporary) / "overlay-dispatch"
+            subprocess.run(["g++", "-std=c++17", "-Wall", "-Wextra", "-Wpedantic", "-Werror",
+                            str(fixture), "-o", str(binary)], check=True, capture_output=True, timeout=20)
+            subprocess.run([str(binary)], check=True, capture_output=True, timeout=3)
 
 
 if __name__ == "__main__":

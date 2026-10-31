@@ -1,6 +1,7 @@
 // Public OpenVR overlay bridge. Never requests a tracked-camera interface.
 #include <openvr.h>
 #include "json/json.h"
+#include "overlay_frame.hpp"
 #include <array>
 #include <cerrno>
 #include <chrono>
@@ -35,9 +36,6 @@ void emit(Json::Value value) {
 std::uint32_t u32(const std::uint8_t* p) {
     return std::uint32_t(p[0]) | (std::uint32_t(p[1])<<8) |
            (std::uint32_t(p[2])<<16) | (std::uint32_t(p[3])<<24);
-}
-std::uint64_t u64(const std::uint8_t* p) {
-    return std::uint64_t(u32(p)) | (std::uint64_t(u32(p+4)) << 32);
 }
 std::uint64_t monotonic_ns() {
     timespec value{};
@@ -74,6 +72,8 @@ public:
     vr::IVROverlay* api = nullptr;
     vr::VROverlayHandle_t handle = vr::k_ulOverlayHandleInvalid;
     bool active = false, has_image = false;
+    bool retirement_attempted = false, shutdown_returned = false;
+    framejacker_overlay::Retirement retirement;
     bool overlay_shown_event_seen = false, overlay_hidden_event_seen = false;
     std::uint64_t calibration_show_deadline_ns = 0;
     Settings config;
@@ -121,8 +121,8 @@ public:
         }
         else check(api->HideOverlay(handle), "HideOverlay");
     }
-    void frame(std::uint32_t w, std::uint32_t h, void* rgba) {
-        check(api->SetOverlayRaw(handle,rgba,w,h,4), "SetOverlayRaw");
+    void frame(std::uint32_t w, std::uint32_t h, const void* rgba) {
+        check(api->SetOverlayRaw(handle,const_cast<void*>(rgba),w,h,4), "SetOverlayRaw");
         has_image = true;
         visibility();
     }
@@ -162,11 +162,15 @@ public:
     bool close() noexcept {
         bool ok = true;
         if (api && handle != vr::k_ulOverlayHandleInvalid) {
-            ok = api->HideOverlay(handle) == vr::VROverlayError_None;
-            ok = (api->DestroyOverlay(handle) == vr::VROverlayError_None) && ok;
+            retirement_attempted = true;
+            retirement = framejacker_overlay::retire_overlay(
+                [&] { return api->HideOverlay(handle) == vr::VROverlayError_None; },
+                [&] { return api->ClearOverlayTexture(handle) == vr::VROverlayError_None; },
+                [&] { return api->DestroyOverlay(handle) == vr::VROverlayError_None; });
+            ok = retirement.ok();
             handle = vr::k_ulOverlayHandleInvalid;
         }
-        if (active) { vr::VR_Shutdown(); active = false; }
+        if (active) { vr::VR_Shutdown(); active = false; shutdown_returned = true; }
         system = nullptr; api = nullptr;
         return ok;
     }
@@ -241,17 +245,14 @@ void stream(Overlay& overlay, bool validate, Json::Value& report) {
             if (!validate) overlay.configure(s);
             report["settings_received"] = report["settings_received"].asUInt()+1;
         } else {
-            const unsigned offset = kind == 4 ? 8 : 0;
-            const auto w = u32(payload.data()+offset), h = u32(payload.data()+offset+4);
-            if (!w || !h || w > kMaxSide || h > kMaxSide || size != offset+8+w*h*4)
-                throw std::runtime_error("invalid_rgba_frame");
-            const auto requested_expiry = kind == 4 ? u64(payload.data()) : 0;
+            const auto frame = framejacker_overlay::decode_frame(kind, payload);
+            const auto w = frame.width, h = frame.height;
+            const auto requested_expiry = frame.expiry;
             if (kind == 4) {
                 const auto now = monotonic_ns();
-                if (!requested_expiry || requested_expiry > now+1000000000ULL)
-                    throw std::runtime_error("invalid_frame_expiry");
+                const bool current_deadline = framejacker_overlay::deadline_current(frame, now);
                 report["expiring_frames_received"] = report["expiring_frames_received"].asUInt()+1;
-                if (requested_expiry <= now) {
+                if (!current_deadline) {
                     report["stale_frames_dropped"] = report["stale_frames_dropped"].asUInt()+1;
                     continue;
                 }
@@ -259,7 +260,7 @@ void stream(Overlay& overlay, bool validate, Json::Value& report) {
             expiry = requested_expiry;
             current = true;
             report["frames_received"] = report["frames_received"].asUInt()+1;
-            if (!validate) overlay.frame(w,h,payload.data()+8);
+            if (!validate) framejacker_overlay::dispatch_frame(overlay, frame);
             if (!validate) report["frames_submitted"] = report["frames_received"];
             if (report["frames_received"].asUInt() == 1) {
                 Json::Value first;
@@ -458,6 +459,12 @@ int main(int argc, char* argv[]) {
     }
     const bool ok=overlay.close();
     if (marker) report["cleanup_returned_ns"]=Json::UInt64(monotonic_ns());
+    report["overlay_retirement_attempted"]=overlay.retirement_attempted;
+    report["hide_returned_ok"]=overlay.retirement_attempted ? Json::Value(overlay.retirement.hidden) : Json::Value();
+    report["clear_texture_returned_ok"]=overlay.retirement_attempted ? Json::Value(overlay.retirement.texture_cleared) : Json::Value();
+    report["destroy_returned_ok"]=overlay.retirement_attempted ? Json::Value(overlay.retirement.destroyed) : Json::Value();
+    report["runtime_shutdown_returned"]=overlay.shutdown_returned;
+    report["physical_display_recovery_verified"]=false;
     report["cleanup_ok"]=ok;
     if (!ok) { report["status"]="cleanup_failure"; exit_code=1; }
     report["exit_code"]=exit_code;

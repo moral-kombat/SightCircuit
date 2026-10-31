@@ -12,6 +12,8 @@ Both modes start processing at most ``max_fps`` times per second. When ``run``
 returns or raises it has set ``stop``, so the source has been told to finish.
 """
 from dataclasses import dataclass, field
+from copy import deepcopy
+import math
 import threading
 import time
 from typing import Callable, Protocol
@@ -20,6 +22,16 @@ from .convert import to_bgr
 from .detection import annotate
 from .frame import Frame, Processed
 from .latest import LatestSlot
+from .runtime.live import source_context
+
+
+CONTEXT_METADATA_KEYS = frozenset((
+    "native_format", "context", "source_id", "session_id", "runtime_id", "tracking_origin",
+    "recenter_generation", "crop", "orientation", "capture_layout", "hud_config_id", "mapping_id",
+    "calibration_id", "buffer_bytes", "minimum_buffer_bytes", "field", "colorspace_code",
+    "format_flags", "ycbcr_encoding_code", "quantization_code", "transfer_function_code",
+    "recenter_epoch", "timebase_id", "orientation_degrees", "crop_xyxy", "hud_config_sha256",
+))
 
 
 class FrameSource(Protocol):
@@ -49,6 +61,8 @@ class LatestResultSink:
 class PipelineStats:
     frames_processed: int = 0
     stale_inputs_skipped: int = 0
+    stale_results_skipped: int = 0
+    frames_submitted: int = 0
     pending_replaced: int = 0
     total_inference_ms: float = 0.0
     max_inference_ms: float = 0.0
@@ -76,7 +90,12 @@ class PipelineStats:
 
 class Pipeline:
     def __init__(self, source, detector, sinks=(), *, threshold=0.5, max_fps=5, latest_only=True,
-                 max_input_age_ms=None, max_frames=0, join_timeout=1.0, convert=to_bgr, annotator=annotate):
+                 max_input_age_ms=None, max_frames=0, join_timeout=1.0, convert=to_bgr, annotator=annotate,
+                 context_validator=None):
+        if (not math.isfinite(max_fps) or max_fps <= 0 or
+                (max_input_age_ms is not None and
+                 (not math.isfinite(max_input_age_ms) or max_input_age_ms <= 0))):
+            raise ValueError("invalid_pipeline_limits")
         self.source, self.detector, self.sinks = source, detector, tuple(sinks)
         self.convert, self.annotator = convert, annotator
         self.threshold, self.period = threshold, 1 / max_fps
@@ -85,6 +104,9 @@ class Pipeline:
         self.join_timeout = join_timeout
         self.stats = PipelineStats()
         self.capture_thread_alive = False
+        self.context_validator = context_validator
+        self.frame_context = None
+        self.last_sequence = None
 
     def run(self, stop):
         self.stats.started = time.monotonic()
@@ -100,11 +122,42 @@ class Pipeline:
     def _limit_reached(self):
         return bool(self.max_frames) and self.stats.frames_processed >= self.max_frames
 
-    def _process(self, frame, age_ms):
+    def _validate_context(self, frame):
+        if self.context_validator is not None:
+            self.context_validator(frame)
+        self._validate_native_context(frame)
+
+    def _validate_native_context(self, frame):
+        if self.max_input_age_ms is not None:
+            context = (frame.source, frame.pixel_format, frame.width, frame.height,
+                       frame.stride, deepcopy({key: value for key, value in frame.metadata.items()
+                                              if key in CONTEXT_METADATA_KEYS}), source_context(self.source))
+            if self.frame_context is None:
+                self.frame_context = context
+            elif context != self.frame_context:
+                raise ValueError("source_or_native_context_changed")
+
+    def _input_age(self, frame):
+        age_ms = (time.monotonic_ns() - frame.observed_ns) / 1e6
+        if age_ms < 0:
+            raise ValueError("frame_observation_is_in_the_future")
+        return age_ms
+
+    def _process(self, frame, age_ms, stop, capture_failure=()):
+        self._validate_context(frame)
+        if self.max_input_age_ms is not None:
+            if self.last_sequence is not None and frame.sequence <= self.last_sequence:
+                raise ValueError("frame_sequence_regressed")
+            self.last_sequence = frame.sequence
+        if self.max_input_age_ms is not None and age_ms >= self.max_input_age_ms:
+            self.stats.stale_inputs_skipped += 1
+            return
         started = time.monotonic()
         bgr = self.convert(frame)
         result = self.detector.detect(bgr, self.threshold)
         image = self.annotator(bgr, result)
+        if hasattr(image, "copy"):
+            image = image.copy()
         stats = self.stats
         stats.frames_processed += 1
         stats.total_inference_ms += result.inference_ms
@@ -113,14 +166,36 @@ class Pipeline:
         stats.labels_seen.update(result.labels)
         processing_ms = (time.monotonic() - started) * 1000
         stats.total_processing_ms += processing_ms
-        processed = Processed(frame, result, image, stats.frames_processed, age_ms, processing_ms)
+        self._validate_context(frame)
+        if capture_failure:
+            raise capture_failure[0]
+        output_age = self._input_age(frame)
+        expires_ns = (frame.observed_ns + int(self.max_input_age_ms * 1e6)
+                      if self.max_input_age_ms is not None else None)
+        if stop.is_set() or (expires_ns is not None and time.monotonic_ns() >= expires_ns):
+            stats.stale_results_skipped += 1
+            return
+        processed = Processed(frame, result, image, stats.frames_processed, age_ms, processing_ms,
+                              expires_ns, output_age,
+                              (bgr.shape[1], bgr.shape[0]) if hasattr(bgr, "shape") else None,
+                              (bgr.shape[1] / frame.width, bgr.shape[0] / frame.height)
+                              if hasattr(bgr, "shape") else None)
         for sink in self.sinks:
+            self._validate_context(frame)
+            if capture_failure:
+                raise capture_failure[0]
+            if stop.is_set() or (expires_ns is not None and time.monotonic_ns() >= expires_ns):
+                stats.stale_results_skipped += 1
+                return
             sink.submit(processed)
+        stats.frames_submitted += 1
 
     def _run_inline(self, stop):
         def emit(frame):
             started = time.monotonic()
-            self._process(frame, (time.monotonic_ns() - frame.observed_ns) / 1e6)
+            if stop.is_set():
+                return
+            self._process(frame, self._input_age(frame), stop)
             if self._limit_reached():
                 stop.set()
                 return
@@ -137,8 +212,21 @@ class Pipeline:
         failure = []
 
         def capture():
+            captured_sequence = None
             try:
-                self.source.run(slot.put, stop)
+                def publish(frame):
+                    nonlocal captured_sequence
+                    # A context change observed by capture invalidates an older
+                    # in-flight inference before it can reach any sink.
+                    self._validate_native_context(frame)
+                    if self.max_input_age_ms is not None:
+                        if type(frame.sequence) is not int or frame.sequence < 0:
+                            raise ValueError("invalid_frame_sequence")
+                        if captured_sequence is not None and frame.sequence <= captured_sequence:
+                            raise ValueError("frame_sequence_regressed")
+                        captured_sequence = frame.sequence
+                    slot.put(frame)
+                self.source.run(publish, stop)
             except BaseException as error:
                 failure.append(error)
             finally:
@@ -158,12 +246,12 @@ class Pipeline:
                     if slot.closed:
                         break
                     continue
-                age_ms = (time.monotonic_ns() - frame.observed_ns) / 1e6
+                age_ms = self._input_age(frame)
                 if self.max_input_age_ms is not None and age_ms > self.max_input_age_ms:
                     self.stats.stale_inputs_skipped += 1
                     continue
                 next_start = time.monotonic() + self.period
-                self._process(frame, age_ms)
+                self._process(frame, age_ms, stop, failure)
                 if self._limit_reached():
                     break
             self.stats.cancelled = stop.is_set()

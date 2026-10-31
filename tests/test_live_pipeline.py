@@ -45,7 +45,7 @@ class LivePipelineTests(unittest.TestCase):
 
     def test_invalid_dimensions_dtype_and_metadata_are_rejected(self):
         import numpy as np
-        for image in (np.zeros((1, 1), dtype=np.uint8), np.zeros((961, 1, 3), dtype=np.uint8),
+        for image in (np.zeros((1, 1), dtype=np.uint8), np.zeros((4097, 1, 3), dtype=np.uint8),
                       np.zeros((1, 1, 3), dtype=np.float32)):
             with self.assertRaises(ValueError):
                 live.OwnedFrame.copy_from(image, 1, 1, "synthetic:test")
@@ -58,6 +58,120 @@ class LivePipelineTests(unittest.TestCase):
         with patch.object(source, "open") as opened, self.assertRaisesRegex(ValueError, "live_image_source_not_approved"):
             live.run_pipeline(source, live.FixtureDetector(), live.HeadlessSink(), 0.1)
         opened.assert_not_called()
+
+    def test_native_padded_stride_is_owned_then_fully_masked_before_inference_resize(self):
+        import cv2
+        import numpy as np
+        from scripts.hud_mask import Calibration, CaptureFormat, Footprint
+
+        width, height, stride = 1920, 1080, 5824
+        storage = np.full((height, stride), 231, np.uint8)
+        native = np.ndarray((height, width, 3), dtype=np.uint8, buffer=storage,
+                            strides=(stride, 3, 1))
+        native[:] = 17
+        native[850:1020, 1500:1820] = 255
+        owned = live.OwnedFrame.copy_from(native, 1, time.monotonic_ns(), "synthetic:native")
+        expected_native = native.copy()
+        expected_native[842:1028, 1492:1828] = 0
+        expected = cv2.resize(expected_native, (960, 540), interpolation=cv2.INTER_AREA)
+        storage[:] = 99  # Reusing the padded acquisition buffer cannot change the owned frame.
+        self.assertEqual(owned.native_descriptor["stride_bytes"], stride)
+        self.assertEqual(owned.image.strides[0], width * 3)
+        self.assertEqual(owned.as_frame().metadata["native_format"]["stride_bytes"], stride)
+
+        class Source(live.SyntheticSource):
+            source_id = "synthetic:native"
+            sent = False
+
+            def read(self, stop, timeout=.05):
+                if self.sent:
+                    stop.wait(timeout)
+                    return None
+                self.sent = True
+                return live.OwnedFrame(owned.image, 1, time.monotonic_ns(), self.source_id,
+                                       native_format=owned.native_format)
+
+        class Detector(live.FixtureDetector):
+            def detect(detector, image, threshold):
+                np.testing.assert_array_equal(image, expected)
+                self.assertFalse(image.flags.writeable)
+                return super().detect(image, threshold)
+
+        calibration = Calibration("synthetic:native", CaptureFormat.from_mapping(owned.native_descriptor),
+                                  "mono", (Footprint(0, (1500, 850, 1820, 1020), 8),),
+                                  validated=True, provenance="synthetic_fixture")
+        report = live.run_pipeline(Source(), Detector(), live.HeadlessSink(), .5,
+                                   hud_mode=True, calibration=calibration)
+        self.assertEqual(report["frames_submitted"], 1, report)
+        self.assertTrue(report["cleanup_ok"], report)
+        self.assertEqual(report["last_result"]["native_format"]["stride_bytes"], stride)
+
+    def test_source_and_native_context_change_during_inference_fail_closed_without_hud(self):
+        for change in ("source_id", "capture_layout", "session_id", "tracking_origin",
+                       "recenter_generation", "orientation", "crop", "recenter_epoch", "timebase_id",
+                       "orientation_degrees", "crop_xyxy", "hud_config_sha256"):
+            source = live.SyntheticSource()
+
+            class Detector(live.FixtureDetector):
+                def detect(self, *args):
+                    setattr(source, change, "changed")
+                    return super().detect(*args)
+
+            report = live.run_pipeline(source, Detector(), live.HeadlessSink(), .2)
+            self.assertEqual(report["status"], "error", report)
+            self.assertEqual(report["frames_submitted"], 0)
+            self.assertTrue(report["cleanup_ok"])
+
+    def test_context_change_during_hud_render_is_checked_at_submission_boundary(self):
+        source = live.SyntheticSource(rate=1)
+        original = live.HudPipelineAdapter.render
+
+        def render(adapter, *args):
+            result = original(adapter, *args)
+            source.session_id = "changed-during-render"
+            return result
+
+        with patch.object(live.HudPipelineAdapter, "render", render):
+            report = live.run_pipeline(source, live.FixtureDetector(), live.HeadlessSink(), .2,
+                                       hud_mode=True, calibration=live.synthetic_hud_calibration())
+        self.assertEqual(report["status"], "error", report)
+        self.assertEqual(report["frames_submitted"], 0)
+        self.assertEqual(report["reason"], "source_or_session_changed")
+        self.assertTrue(report["cleanup_ok"])
+
+    def test_original_observation_and_run_deadline_bound_result_lifetime(self):
+        class Sink(live.HeadlessSink):
+            def submit(sink, frame, detection):
+                self.assertGreater(detection["expires_ns"], frame.observed_ns)
+                self.assertLessEqual(detection["expires_ns"], frame.observed_ns + 1_000_000_000)
+                sink.expiry = detection["expires_ns"]
+                super().submit(frame, detection)
+
+        sink = Sink()
+        started = time.monotonic_ns()
+        report = live.run_pipeline(live.SyntheticSource(), live.FixtureDetector(), sink, .2)
+        self.assertEqual(report["status"], "completed", report)
+        self.assertLessEqual(sink.expiry, time.monotonic_ns())
+        self.assertGreater(sink.expiry, started)
+        self.assertFalse(report["physical_recovery_confirmed"])
+        self.assertGreaterEqual(report["total_processing_ms"], report["total_inference_ms"])
+
+    def test_legacy_detector_adapter_uses_shared_inference_and_owned_annotations(self):
+        import numpy as np
+        from framejacker.frame import Detection, DetectionResult
+        from scripts.demo_detector import DemoDetector
+
+        image = np.zeros((32, 48, 3), dtype=np.uint8)
+        typed = DetectionResult((Detection("fixture", .9, (1, 1, 20, 20)),), 2.5)
+        detector = DemoDetector.__new__(DemoDetector)
+        with patch("framejacker.detection.MobileNetSSD.detect", return_value=typed) as detect:
+            result = detector.detect(image, .5)
+        detect.assert_called_once_with(image, .5)
+        self.assertEqual(result["labels"], ["fixture"])
+        self.assertEqual(result["detections"], [typed.detections[0].as_dict()])
+        self.assertEqual(result["inference_ms"], 2.5)
+        self.assertFalse(np.shares_memory(result["image"], image))
+        self.assertEqual(int(image.max()), 0)
 
     def test_pipeline_matches_each_output_to_its_own_frame_and_cleans_up(self):
         class Sink(live.HeadlessSink):
