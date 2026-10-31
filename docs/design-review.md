@@ -226,47 +226,45 @@ deferred.
 
 ### Needs the headset
 
-0. Measure the reworked realtime replay on the real recording:
-   `SKIP_UPDATE=1 YES=1 bash scripts/frame_session.sh pacing` (no headset wearer
-   needed). Record `realtime_ratio`, `processed_fps`, `decode_fps` and
-   `catch_ups` for 2 and 4 decoder threads, and pick the default thread count.
-1. Review the bounded mirror preview and report from E52 against what was
-   actually in view, and confirm passthrough/tracking remained normal. The
-   unattended run's software label is not scene verification.
-2. Run the [detector comparison](on-device.md#compare-detectors-on-frame-stills):
-   capture stills with `--still` (including the rug), describe them in
-   `evaluation/local/frame.json`, run `evaluate_detectors.py`, and record the
-   result and Frame timing as a new status entry. Choose the default detector
-   from that, not from the outdoor seed set. E53 confirms that no local Frame
-   manifest is currently available.
-3. With someone wearing the headset, run the overlay and window-mirror stages
-   and record whether the panel/window appears and whether passthrough and
-   tracking remain normal. These visual checks cannot be established by
-   unattended command output.
+These are remaining acceptance inputs, not new device authorization. The
+[October 26 handoff](live-capture.md#october-26-evening-handoff) supersedes the
+old command order: obtain approved access to the existing E61 still and its
+verifiable digest before diagnosing the miss. A representative factual Frame
+evaluation set is still needed before choosing a detector default. Do not
+recapture merely because a prior checklist mentioned `--still`.
+
+The next device checkpoint is the bounded marker/observer calibration only
+after lifecycle prerequisites and a pinned artifact manifest are ready; see
+[the proposed qualification method](hud-qualification.md) and
+[device checkpoint](on-device.md#bounded-edge-hud-calibration-checkpoint).
+Headset feedback exclusion, physical expiry and the 60-second combined live
+HUD acceptance remain separate later checks. Replay measurements are optional
+follow-up work and do not unblock those gates.
 
 ### Engineering, in order
 
-4. **Live input in the Qt window (item 5).** First test on Frame whether the
-   desktop window appears in the SteamVR mirror, as the VR panel did (E18). If
-   not, feed `MirrorSource` continuously into the replay window's sinks.
-   Keep the capture-provider track frozen: collapse `patches/mrhand/` into one
-   patch or a fork, and drop historical `build_capture_reference.sh` modes from CI.
-5. **Rug coverage.** Neither model has a rug class. If rugs matter, evaluate an
-   open-vocabulary model offline or fine-tune a small detector on labelled
-   Frame stills; keep both baselines in the evaluation.
-6. **Documentation weight (item 6).** One-screen README; per-entry evidence
-   files or raw JSON reports instead of the 1,600-line status page.
+Follow [active WPs](poc-scope.md#work-packages) and the
+[execution prompt](execution-prompt.md): complete the shared runtime and
+lifecycle safeguards, extend the existing evaluator and preprocessing audit,
+and prepare mapping qualification and validation reports offline. Keep the
+provider frozen; patch-stack consolidation, a new capture route, world-locked
+labels and alternate model integrations are outside this pass. Texture-upload
+changes need profiling evidence.
+
+WP7 now has a concise README, individual historical evidence records and a
+deterministic status/architecture summary generator. The former README
+narrative is preserved in [README history](project-history.md); the migration
+supplies no new headset evidence.
 
 ### Remaining from items 1–3
 
-- Lock file covering x86_64 and aarch64; console entry points.
-- ~~Fail CI on unexpected test skips~~ Done for the replay-window and
-  overlay-bridge jobs via `scripts/run_tests_no_skips.py`; capture-fixture jobs
-  still skip by design where a build mode is absent.
-- ~~CI runs twice per PR push~~ `push` limited to `main`.
-- Move the V4L2 mirror module and acquisition loop (`scripts/mirror_capture.py`,
-  `scripts/mirror_check.py`) into `framejacker/sources/`; reuse `LatestSlot` in
-  the overlay client; consolidate the capture supervisor's process handling.
-- ~~One source of truth for VR panel limits~~ `PANEL_LIMITS` in
-  `framejacker/overlay.py` feeds validation and the Qt spin boxes; a test checks
-  it against `tools/overlay_bridge.cpp`.
+- A lock file covering x86_64 and aarch64, console entry points and deeper
+  acquisition-module consolidation remain optional engineering follow-ups.
+- The critical CI suites use `scripts/run_tests_no_skips.py`; capture-fixture
+  jobs build their applicable native mode before running it. A skipped
+  required fixture is not successful validation.
+- Branch checks run through PRs (`push` is limited to `main`). CI on ARM64
+  checks that architecture; it is not a Frame headset result.
+- `PANEL_LIMITS` remains the Python source of panel limits; native consistency
+  is covered by tests. Keep native acquisition limits separate from detector
+  resize limits and preserve native masking before resize.

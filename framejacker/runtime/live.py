@@ -202,4 +202,3 @@ def run_pipeline(source, detector, sink, seconds, *, stop=None, max_fps=5, max_a
         if not report["cleanup_ok"] and report["exit_code"] == 0:
             report.update(status="cleanup_failed", exit_code=1)
     return report
-

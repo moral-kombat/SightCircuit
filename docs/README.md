@@ -9,7 +9,9 @@ owns the current capture work plan.
 | Task | Start here |
 | --- | --- |
 | Understand the project | [Project overview](../README.md) |
-| Check what works on Frame | [Status and evidence](status.md) |
+| Check what works on Frame | [Generated status and evidence](status.md) |
+| Record or review detailed validation evidence | [Per-entry evidence and maintenance](evidence/README.md) |
+| Review the previous long README | [Preserved README history](project-history.md) |
 | Connect to Frame and inspect a recording | [On-device guide](on-device.md) |
 | Decode a completed recording | [File decode procedure](on-device.md#decode-one-recorded-video-track) |
 | Run the annotated replay window | [Window launch procedure](on-device.md#open-the-annotated-replay-window) |
@@ -46,6 +48,7 @@ owns the current capture work plan.
 | Select upstream components for the POC and later assistant | [Ranked reuse plan, source pins and limits](poc-scope.md#upstream-reuse-plan-2026-10-31) |
 | Continue live capture development | [Active capture plan](live-capture.md#current-work-order) |
 | Review the minimum LIVE POC and Monday target | [Critical path, acceptance evidence and risks](live-capture.md#minimum-live-poc-and-october-26-target) |
+| Review mapping qualification and validation preparation | [Proposed G4 method and device-validation design](hud-qualification.md) |
 | Review the next proposed device checkpoint | [Bounded edge HUD calibration; separate approval required](on-device.md#bounded-edge-hud-calibration-checkpoint) |
 | Investigate camera access and upstream projects | [Camera interface reference](steam-frame-camera.md) and [dated code review](capture-reference-review.md) |
 | Understand components and frame flow | [Architecture](architecture.md) |

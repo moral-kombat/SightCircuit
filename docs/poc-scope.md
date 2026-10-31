@@ -41,7 +41,7 @@ no threshold or model changes to make one image pass; skipped tests fail CI.
 
 Change:
 
-- One coordinator allocates evidence IDs (E72 onward) and is the only editor of
+- One coordinator allocates evidence IDs (E75 onward after this delivery) and is the only editor of
   the `status.md` matrix; coders put evidence in their PR description and the
   coordinator records it. Parallel branches reused E50, E52 and E54–E62; those
   results are now recorded as E63–E71.
@@ -107,32 +107,35 @@ labels are taken up again after the HUD POC is accepted.
 
 [PR #10](https://github.com/moral-kombat/framejacker/pull/10) is merged.
 The implementation baseline reviewed for this checkpoint is
-`85cf53cd99bb0abfc176b72d279a46dbec52ba4f`. **WP1, WP2, WP7, WP9, WP10,
-WP11 and WP12 remain open**; WP3–WP6 and WP8 are deferred. Open means the
-package's acceptance is not yet evidenced, not that supporting code is absent.
+`85cf53cd99bb0abfc176b72d279a46dbec52ba4f`. At the prepared baseline,
+**WP1, WP2, WP7, WP9, WP10, WP11 and WP12 remained open**; WP3–WP6 and WP8 were deferred. The implementation rows below include
+subsequent offline support; final evidence and acceptance live in status. Open
+means the package's acceptance is not yet evidenced, not that supporting code
+is absent.
 
 | WP | Current position | Work that can advance offline | Remaining acceptance |
 | --- | --- | --- | --- |
-| 1 | E61 miss unresolved | Reproducible preprocessing audit and focused defect checks using approved available inputs | Original still/digest access and an evidenced defect fix or explanation |
-| 2 | Representative Frame evaluation outstanding | Existing evaluator, manifests and reporting; approved input evaluation | Representative factual labels and evidence for a detector-default decision |
-| 7 | Documentation repaired in #10; package still open | Per-entry evidence files, generated matrix, concise README and consistent scope pointers | Generated matrix and README/evidence-structure criteria met |
-| 9 | Marker/observer implemented offline; Frame observation not run | Versioned mapping/evidence schema, rejection tests and a proposed G4 qualification method | Frame observation plus the required mapping evidence; observer success alone stays unqualified |
-| 10 | V4 root cause unresolved; reliable cleanup/recovery unqualified | Reconcile runtime/overlay contracts, independent expiry, guardian and truthful reporting; investigate available evidence | Explained failure, regression coverage and reports consistent with physical recovery |
-| 11 | Device feedback exclusion and physical expiry not run | Native-mask/expiry integration tests and bounded validation instrumentation | Qualified mapping, no HUD feedback during head motion and physical expiry evidence |
-| 12 | Synthetic loop exists; production live HUD remains closed | Shared runtime integration, native-geometry handling, measurements and validation-only end-to-end checks | Combined 60-second headset acceptance run |
+| 1 | Audit implemented; two independent preprocessing/scoring defects fixed; E61 unresolved | Pinned source/model/runtime tensors and controlled variants; [E73](evidence/e073.md) | Approved original still/reference digest and inspection for E61 reproduction |
+| 2 | Annotation coverage and seed comparison verified offline | Shared evaluator distinguishes factual presence/absence/boxes; [E73](evidence/e073.md) | Representative factual Frame labels, including rug/sofa, before a detector-default decision |
+| 7 | Complete offline | 74 per-entry records, generated matrix, concise README, preserved history and checked links; [E74](evidence/e074.md) | Maintenance only; no device requirement |
+| 9 | Schema/rejections and proposed G4 method verified offline; no Frame observation | Exact context/lifetime/margin/provenance checks; [G4 method](hud-qualification.md) | Frame observation, eye/composition/all-copy/motion-limit evidence and reviewed mapping |
+| 10 | Shared lifecycle safeguards verified offline; V4 cause unresolved | Original deadlines, guarded decode, bounded cleanup and session fail-stop; [E72](evidence/e072.md) | Original V4 report/timeline/source hashes, causal account and wearer-confirmed recovery |
+| 11 | Feedback/expiry telemetry and default-off diagnostic design ready offline | Native-mask tests, bounded validation ledger and report template; [E74](evidence/e074.md) | Reviewed diagnostic implementation, qualified mapping, head-motion exclusion and physical expiry evidence |
+| 12 | Shared bounded synthetic loop verified; production closed | Native padded masking, identity/context/age checks and native validation; [E72](evidence/e072.md) | G2–G5, representative detector evidence and combined 60-second headset acceptance |
 
-[G1 passes offline; G2 is open; G3, G5 and G6 have not run; G4 has not
-started](live-capture.md#edge-hud-acceptance-gates). The G4 qualification method
-is still undefined. The critical path is **WP10 → WP9 observation → G4
-qualification → WP11 → WP12**. WP1/WP2 and WP7 can advance alongside it.
+[G1 passes offline; G2 is open; G3, G5 and G6 have not run; G4 remains
+unqualified](live-capture.md#edge-hud-acceptance-gates). A
+[proposed G4 qualification method](hud-qualification.md#proposed-g4-method) now
+defines the missing evidence; proposal/schema validation is not qualification.
+The critical path is **WP10 → WP9 observation → G4 qualification → WP11 → WP12**. WP1/WP2 and WP7 can advance alongside it.
 Offline completion does not close a package whose acceptance requires Frame.
 
 Use the [execution prompt](execution-prompt.md) to complete all unblocked
 implementation, validation and documentation work. It identifies source-level
 integration gaps without treating them as proven causes of V4, preserves the
 production gates, and requires a concrete next checkpoint after the offline
-work is finished. This status refresh records no new device result or WP
-closure.
+work is finished. This delivery records no new device result or device-dependent
+WP closure. WP7 is complete offline.
 
 ## Upstream reuse plan (2026-10-31)
 

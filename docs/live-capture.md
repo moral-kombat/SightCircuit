@@ -3,8 +3,9 @@
 This is the authoritative current capture work plan. [Status](status.md) owns
 capability and validation evidence; the [dated source review](capture-reference-review.md)
 explains the code findings behind this sequence. Every deliverable below is
-planned unless a task explicitly says otherwise. No capture
-layer has been deployed by Framejacker.
+planned unless a task explicitly says otherwise. Metadata-only layer trials
+have run ([E65](status.md#e65-v2-recovered-candidate-snapshots-compared-and-visual-check-passed));
+dedicated image access remains blocked.
 
 ## Current work order
 
@@ -79,10 +80,11 @@ POC input source.
    device commands, camera changes, downloads, restarts or headset tests are
    authorized by recording these results.
 
-The sole main coder prepares the focused documentation PR; the coordinator
-reviews its exact diff and checks and owns the authorized merge. Preserve
-unrelated `observation_page` work and the separate architecture-summary PR.
-Do not replay a consumed one-run approval.
+The coordinator owns integration, evidence IDs and exact-diff review. Current
+implementation uses the [execution prompt](execution-prompt.md); the dated
+handoff does not supersede the active user request or authorize a new device
+operation. Preserve unrelated `observation_page` work and do not replay a
+consumed one-run approval.
 
 | Order | Deliverable | State | Acceptance |
 | --- | --- | --- | --- |
@@ -92,28 +94,28 @@ Do not replay a consumed one-run approval.
 | 1c | Check capture of our own display | Confirmed: the VR panel appears in captured output | Current composited mirror does not exclude our output; no continuous live-image panel from this source; [E18](status.md#e18-vr-panel-included-in-mirror-input) |
 | 1d | Detector quality and class coverage | One Frame grayscale still compared; both models missed the expected TV | Inspect the saved input and preprocessing before diagnosing; preserve one-image limits and the earlier rug case; [handoff](#october-26-evening-handoff), [E61](status.md#e61-file-only-detector-comparison-on-the-evening-grayscale-still) |
 | 2 | Isolated shared-memory reader and controlled producer | Controlled x86_64 and Frame ARM64 checks passed; real provider unverified | All 14 native/supervisor tests pass on Frame; upstream writer ordering and original GPU completion remain unresolved; [E23](status.md#e23-reference-build-and-controlled-reader-on-frame) |
-| 3 | Dedicated camera provider | Initial tests, GPU query and 28 watchdog/provider/recovery tests pass on Frame; metadata-only adaptation prepared; not deployed | Producer handoff is absent in reviewed source; live reads blocked; controlled metadata-layer load/restoration and synchronized copy remain |
+| 3 | Dedicated camera provider | Frozen; metadata-only load/restoration reported, image access blocked | Reconsider only after a vendor frame interface or coordinated producer handoff exists; metadata is not image ownership |
 | 3a | Validated image import and ownership | ARM64 build and ten synthetic tests passed; two-plane coverage added in cloud | Actual camera DMA-BUF import remains untested; [E31](status.md#e31-import-build-and-synthetic-tests-on-frame), [E32](status.md#e32-two-plane-import-fixture-cloud-checks) |
 | 3b | Device and remaining GPU resource ownership | Inspection build and nine synthetic cloud tests pass | Native ARM64 and actual driver execution pending; no activation; [E33](status.md#e33-gpu-resource-ownership-cloud-checks) |
 | 3c | Capture watchdog, provider metadata/lifetime and configuration recovery | Earlier v2 milestone passed all 28 tests on Frame ARM64 | Generated workers/fake dispatch only; no real layer activation or device restoration; [E35](status.md#e35-watchdog-provider-and-recovery-tests-on-frame) |
-| 3d | Producer synchronization and metadata-only inspection | Review complete; earlier v3 ARM64 build and all 24 generated-data tests passed on Frame | No image FDs retained/exported by the layer; original inactive bundle/service preflight received; changed tools and actual load remain; [review](#producer-synchronization-review-and-next-checkpoint), [E37](status.md#e37-metadata-only-provider-and-diagnostic-on-frame) |
-| 3e | Controlled metadata-layer trial and recovery | Activation paused; runtime baseline passed on Frame | Service/cgroup/compositor observation works with normal passthrough reported; 65 targeted cloud tests pass. Verify independent SSH before planning actual recovery; original failed operation unresolved; [E46](status.md#e46-read-only-runtime-baseline-on-frame) |
+| 3d | Producer synchronization and metadata-only inspection | Earlier v3 ARM64 build and 24 generated-data tests passed on Frame; later metadata-only trials reported | No image FDs retained/exported; metadata does not establish synchronized ownership; track frozen; [review](#producer-synchronization-review-and-next-checkpoint), [E37](status.md#e37-metadata-only-provider-and-diagnostic-on-frame), [E65](status.md#e65-v2-recovered-candidate-snapshots-compared-and-visual-check-passed) |
+| 3e | Controlled metadata-layer trial and recovery | Later metadata trials loaded/restored the provider; full registry still unstable | Reconstructed device reports preserve unknown dates/revisions; do not repeat v2 unchanged; image access remains blocked; [E65](status.md#e65-v2-recovered-candidate-snapshots-compared-and-visual-check-passed) |
 | 4 | Capture-only device trial | Planned | Ten seconds of fresh images from one identified source, correct orientation, clean exit and working normal passthrough |
-| 5 | Continuous live input in the existing display | Planned; needs input independent of our output | Reuse detector/display after a dedicated provider or supported overlay-excluded mirror mode is validated; current mirror includes the panel |
+| 5 | Fixed edge HUD over live mirror input | Implemented offline; production closed | Qualify the full native footprint and all eye copies, then pass feedback/expiry and live acceptance gates; a captured-image panel still needs a separate exclusion solution |
 | 6 | Color, built-in camera support and later geometry | Planned | Validate each source and color conversion separately; require calibration and stronger timing evidence before stereo depth or spatial labels |
 
-The mirror is a time-boxed opportunity for a first 2D demonstration, not a
-dependency on mirror availability. If it is absent, unsuitable or includes our
-output, record the limit and continue the dedicated-camera work. Existing
-replay remains the application baseline. Record any new detection/readability
-measurements in status alongside capture results.
+The mirror is the selected fixed edge HUD input. Its inclusion of our output
+is addressed only by a qualified native-resolution footprint mask and feedback
+acceptance. If the mirror is absent or unsuitable, record the limit and stop
+live preparation; continue independent offline work and replay. This does not
+reopen the frozen provider track. Record new measurements as per-entry evidence.
 
 Both bounded POC stages now have device and visual results: recorded recognition
 in the head-relative panel ([E47](status.md#e47-recorded-recognition-and-vr-panel-poc-on-frame))
 and mirror recognition with a matching post-capture preview
 ([E48](status.md#e48-live-mirror-recognition-poc-and-matching-preview)). Continuous
-live VR output still requires input independent of our output; these separate
-demos do not remove the dedicated-capture activation/synchronization gates.
+live HUD output still requires qualified masking and feedback/expiry acceptance.
+The separate demos do not pass those gates or reopen dedicated capture.
 
 Seek a supported Arcturus/Valve frame-sharing API alongside these experiments
 and prefer it if available. The [vendor questions](#vendor-interface-questions)
@@ -213,14 +215,17 @@ Live HUD input and production HUD output stay closed in code until G4 and G5
 pass: the pipeline rejects non-synthetic sources
 (`live_image_source_not_approved`), the HUD mask rejects hardware mappings
 (`hud_hardware_mapping_not_approved`), and the bridge rejects expiring packets
-in real output mode.
+in real output mode. The separately scoped
+[device-validation design](hud-qualification.md#separately-scoped-device-validation)
+defines the G4/G5 evidence path without enabling production output. Its design
+and offline report checks do not authorize or implement a live device run.
 
 | Gate | Requires | Status |
 | --- | --- | --- |
 | G1. Synthetic mask, fail-closed mapping and expiry | Offline tests: full-footprint mask before resize, margin and eye union, fail-closed mapping and format changes, stale expiry independent of inference | Passes offline ([E69](status.md#e69-offline-edge-hud-and-native-mask-validation)) |
 | G2. Lifecycle and cleanup (WP10) | V4 failure explained; guardian, calibration expiry and truthful early-termination reporting reconciled with `main`; tests for the failure path | Open (E59) |
 | G3. Mapping observed on Frame (WP9) | [Calibration checkpoint](on-device.md#bounded-edge-hud-calibration-checkpoint) ends `observed_unqualified` with clean cleanup; normal passthrough confirmed | Not run |
-| G4. Mapping qualified | A versioned mapping and margin backed by evidence the observer cannot give: eye composition and absence of unseen or occluded copies. The method is not yet defined | Not started |
+| G4. Mapping qualified | Versioned evidence for eye composition, all HUD copies, conservative margins and bounded operating limits; see the [proposed method](hud-qualification.md#proposed-g4-method). Candidate schema validation is not qualification | Proposed method; device qualification pending |
 | G5. Feedback exclusion and physical expiry (WP11) | With the HUD visible, no detections from its footprint during head motion; stale names disappear on the headset within the expiry | Not run |
 | G6. Live HUD loop (WP12) | The [POC acceptance run](poc-scope.md#acceptance) with the evidence listed under [Acceptance evidence](#acceptance-evidence) | Not run |
 
@@ -298,9 +303,10 @@ detections despite chair/tvmonitor labels earlier in the run; model quality is
 not established by execution success. The fixed timed panel appeared both in
 the headset and in the saved mirror still; see
 [the inclusion result](status.md#e18-vr-panel-included-in-mirror-input). This
-closes the mirror feasibility branch for continuous VR image output in the
-tested mode. Keep bounded/no-display recognition and post-capture snapshots as
-the baseline. The user confirms Arcturus is physically connected, but does not
+prevents unmasked continuous captured-image panels in the tested mode. The
+fixed edge HUD instead needs qualified footprint masking and feedback acceptance.
+Keep bounded/no-display recognition and post-capture snapshots as the baseline.
+The user confirms Arcturus is physically connected, but does not
 know which passthrough source is selected. The native prerequisite report now
 shows GCC 15.1.1 and Vulkan 1.4.309 development files on SteamOS 0.5.6; see
 [E21](status.md#e21-capture-prerequisites-on-frame). The reference build and all
@@ -312,8 +318,8 @@ adaptation and all eight generated-data tests also passed on Frame; see
 now passes on Frame, with normal passthrough; see
 [E30](status.md#e30-vulkan-capabilities-on-frame). The import adaptation also
 builds and passes all ten synthetic tests on ARM64; see
-[E31](status.md#e31-import-build-and-synthetic-tests-on-frame). Continue device
-and remaining provider work before the next camera trial. GPU resource ownership
+[E31](status.md#e31-import-build-and-synthetic-tests-on-frame). These historical
+provider milestones do not reopen the frozen track. GPU resource ownership
 is implemented in a separate cloud-tested inspection adaptation. Capture
 supervision, provider metadata/lifetime and recovery passed 28 generated-data
 tests on Frame. The latest adaptation permits metadata inspection only: the
@@ -357,7 +363,9 @@ changes are diagnostic observations, not producer frame/exposure timestamps.
 
 ## Choose a frame provider
 
-For dedicated input, start with Arcturus: the vendor app provides live images
+This section preserves the dedicated-input research path, which is deferred
+and frozen for the current POC. It is not a prerequisite for the qualified-mask
+HUD. For a future supported route, the Arcturus vendor app provides live images
 according to [device evidence](status.md#e2-vendor-app), and the reviewed
 community code implements an experimental path for its passthrough pair.
 Built-in camera capture requires separate validation.
@@ -366,8 +374,8 @@ Built-in camera capture requires separate validation.
 | --- | --- |
 | Supported Arcturus/Valve interface | Prefer it if available; no public live-frame contract was found in the reviewed pages |
 | Public OpenVR tracked-camera API | Retain the [failed result](status.md#e3-public-camera-probe); do not repeat the unchanged probe |
-| Existing SteamVR composited mirror | Confirmed useful for bounded recognition; includes our VR panel, so not selected for continuous live-image output |
-| Community Vulkan layer and `ptgrab` | Use metadata-only inspection first; original buffer reads need a coordinated producer handoff or compositor-owned copy |
+| Existing SteamVR composited mirror | Selected fixed edge HUD input, conditional on qualified native masking and feedback/expiry acceptance; unmasked live captured-image panels remain unsuitable |
+| Community Vulkan layer and `ptgrab` | Frozen; original buffer reads need a supported producer handoff or compositor-owned synchronized copy before this track can resume |
 | Built-in passthrough | Verify live buffers and source identity separately; the reviewed `ptgrab` size filter and empty-buffer reports do not establish support |
 
 The [camera reference](steam-frame-camera.md) owns interface research. The
@@ -449,6 +457,10 @@ that is refused on restart. This earlier mode does not include the external
 watchdog or identity-based recovery added by the newer milestone below.
 
 ## Offline provider work while the Frame is unavailable
+
+Historical provider preparation follows for reference. New provider work remains
+frozen until a vendor interface or producer-synchronization answer exists; the
+active offline WPs are in [POC scope](poc-scope.md#work-packages).
 
 The GPU capability report and initial synthetic import suite now pass on Frame;
 see [E30](status.md#e30-vulkan-capabilities-on-frame) and
@@ -710,13 +722,16 @@ trial passed execution/cleanup and the user reports normal passthrough.
 Continuous Qt/VR integration remains pending; the bounded tool is not a live
 display backend. The fixed-panel test confirmed that our panel reappears in
 this input. Keep the current mirror for bounded/no-display recognition and
-post-capture snapshots. Prepare a dedicated provider or a supported mirror
-mode that excludes our output before streaming captured images into VR. No
-such alternate mirror mode has been validated. Ordinary Qt windows also need
-their own feedback check.
+post-capture snapshots. Streaming captured images into a panel still needs an
+independent exclusion solution; no alternate mirror exclusion mode is validated.
+The adopted fixed edge HUD uses a different, bounded path: qualify its complete
+native-resolution footprint mask, then verify feedback exclusion and physical
+expiry through the [acceptance gates](#edge-hud-acceptance-gates). Ordinary Qt
+windows need their own feedback check. The dedicated provider remains frozen.
 
-After the capture-only trial passes, extract a common frame-source boundary
-from `ReplayWorker` while preserving the replay tests. Carry image format,
+The shared `Frame`, `FrameSource`, `Pipeline` and replay adapters already exist.
+Extend their safeguards without making a dedicated capture-only trial a
+prerequisite for the HUD path. Carry image format,
 dimensions, stride, source identity, sequence, timestamp and timebase provenance
 with each frame. Add live input as an optional source feeding the same detector
 and display; mirror input additionally requires the feedback check above.
