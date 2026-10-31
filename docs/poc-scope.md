@@ -103,6 +103,111 @@ labels are taken up again after the HUD POC is accepted.
 | 6 | Tracker and smoothing across frames for a stable world-locked direction |
 | 8 | World-locked live loop: mirror input, projection, tracker and world-locked output |
 
+## Upstream reuse plan (2026-10-31)
+
+Source review identified the references below for accelerating the existing
+work packages. These are **planned reuse/evaluation tasks**, not integrated
+dependencies or new Frame compatibility results. The current work order,
+WP1/WP2 image audit and evaluation, and existing acceptance criteria still apply.
+
+Scope: this page now targets the fixed edge HUD (revised 2026-10-31), and
+WP3–WP6 and WP8 are [deferred](#deferred-work-packages). Priorities 1, 2 and 5
+below therefore apply only if world-locked labels return. Priority 3 applies to
+the HUD now, through WP10 lifecycle review and WP12 measurement. Priority 4
+stays an optional follow-up. This research addition does not authorize a
+device operation.
+
+### Priorities for the current POC
+
+| Priority | Reference and license | Work package | Planned reuse and completion check | Important limit |
+| --- | --- | --- | --- | --- |
+| 1 | **Frametop**: [pose history][frametop-pose] and [absolute overlays][frametop-overlay]. MIT. | WP3, WP4, WP5 (deferred) | Adapt a bounded timestamped pose history and declared tracking origin to the existing pipeline/bridge. Preserve frame identity and pose age; test transforms, invalid tracking and origin changes with synthetic data before device qualification. | Its nearest-pose lookup is a reference pattern. Mirror observation time is not verified exposure time; clock domains, image/pose offset, field of view and crop still need validation. |
+| 2 | **One Euro Filter**: [Python implementation][oneeuro] and [license][oneeuro-license]. BSD-3-Clause for this implementation. | WP6 (deferred) | Evaluate timestamp-aware smoothing after projection into the tracked frame. Compare angular jitter and lag on the same replay/synthetic inputs; reset on source/origin changes. | Smoothing does not supply object identity, depth or temporal alignment. Association, bounded dropout handling and stale-result expiry remain separate. |
+| 3 | **frame-perf-overlay**: [Vulkan texture upload][perf-texture], [overlay lifecycle][perf-overlay] and [placement][perf-placement]. MIT. | WP10, WP12 (previously WP5, WP8) | Review tracking-validity and cleanup handling; plan compositor frame-time, CPU/GPU, thermal and input-age measurements. Consider a texture-upload change only if profiling justifies it. | Upstream panels are head/controller attached, not world-locked object labels. Its upload fence covers its own texture work, not Arcturus producer access. |
+| 4 | **Frame Control**: [native screenshot helper][frame-shot] and [runtime observations][frame-runtime]. MIT. | Optional follow-up input adapter | Reuse the small screenshot path for requested vision-lab stills and diagnostics, retaining source/frame ID and crop metadata. Keep it outside the WP9-WP12 critical path. | Screenshots are composited and can contain our output. They do not establish raw-camera access, exposure timing, calibration or feedback exclusion. |
+| 5 | **WayVR**: [absolute transforms][wayvr-overlay] and [tracking origin/recenter handling][wayvr-origin]. GPL-3.0. | WP5 design reference (deferred) | Review origin and recenter cases for the existing overlay bridge. Prefer the MIT Frametop implementation for source reuse; retain WayVR as a reference or optional separate tool. | Steam Frame support is experimental. A world-space overlay alone does not establish calibrated camera-pixel-to-object alignment. |
+
+Frametop's [camera broker notes][frametop-hands] are useful diagnostics research,
+but its current colour path rejects problematic frames while the headset is
+worn and its colour calibration remains unresolved. Do not treat that broker as
+a qualified replacement for Arcturus RGB input. Its [gaze subsystem][frametop-gaze]
+is a later reference for selecting an object or crop, not a prerequisite for the
+first label.
+
+### Adoption order and evidence
+
+- [ ] Keep WP1's reproducible E61 still/preprocessing audit and WP2's representative
+  evaluation ahead of any detector-default decision. MobileNet-SSD and
+  YOLOX-Nano already exist; another fixed-class detector is not required by this
+  reuse plan.
+- [ ] Deferred with world-locked labels: prepare the Frametop-inspired pose-history/projection work and the One Euro
+  Filter evaluation offline, following the existing WP dependencies. Explicitly
+  record clock domain, observation time, pose sample time, age and unknown
+  image-to-pose offset; never relabel observation time as exposure time.
+- [ ] Deferred with world-locked labels: extend the existing overlay bridge with the WP5 origin/recenter behavior.
+  Reconcile the lifecycle safeguards in the current handoff before proposing
+  output. A future authorized test first checks a fixed world marker, then
+  drives it from one detection; assess rotation, translation and recenter
+  separately. Estimated distance remains visibly identified as an estimate.
+- [ ] Plan WP12 measurement and WP11 feedback exclusion together: retain the overlay-masking
+  requirement and qualify the mapping before live use; preserve matching frame/result
+  identity, latest-frame behavior, expiry,
+  independent abort and truthful cleanup reporting. Report input age and total
+  processing time separately from model inference time.
+- [ ] Before importing code or adding a dependency, record the selected immutable
+  revision, preserve applicable notices and update [third-party attribution](../THIRD_PARTY.md).
+  Pin model weights, preprocessing and runtime separately. Validate the smallest
+  reused component rather than installing an entire upstream application.
+
+These checkboxes add no new capture, private-image transfer, server exposure,
+source switching, runtime restart or headset-test permission. Device work
+continues through the [current handoff](live-capture.md#october-26-evening-handoff);
+research, offline checks and wearer-confirmed results remain distinct.
+
+### Later work and frozen-provider references
+
+| Reference | Planned use / entry point | When to reconsider | Limit |
+| --- | --- | --- | --- |
+| **Moondream 2** ([model and native query/detect/point examples][moondream2], revision `2025-06-21`, Apache-2.0) | Evaluate on-demand questions, text-described objects and pointing on a selected image/crop on a companion computer. Carry source-frame ID and ROI transform through each answer. | After the current POC, or as a separately scoped vision-lab experiment with approved input. | No measured Steam Frame throughput or accuracy. Do not silently substitute another model/version or its licensing terms. |
+| **llama.cpp** ([multimodal server][llama-multimodal], MIT runtime; model terms separate) | Optional local HTTP image-question backend for the vision lab. | When selecting the assistant's inference service. | General multimodal support does not establish Moondream's specialized detection/pointing methods. It does not solve capture. |
+| **Steam Link Native Passthrough** ([frame-continuity design][native-continuity], MIT) | Study exact buffer identity, generations, revocable leases, GPU retirement and reset/requeue behavior. | Only when a supported vendor interface or a real producer-synchronization answer permits provider work to resume. | Its controlled leases concern decoded streamed images/masks, not exported Arcturus camera pixels. The provider stays frozen. |
+| **Frame Passthrough Shortcuts** ([source][passthrough-shortcuts]) and **Frame Autopass** ([source][autopass]), MIT | Reference for a future explicit RGB/native/RGB recovery action, source-state reporting and compatibility checks. | A separately scoped recovery investigation after the current lifecycle failure is understood. | Internal SteamVR interfaces; the observed toggle is a workaround, not a green-frame root-cause fix. Automatic switching is not part of this plan. |
+
+The [existing Spyjacob capture review](capture-reference-review.md) and
+[recorded source attribution](../THIRD_PARTY.md#mrhand-protocol-header) remain the
+baseline for that already evaluated reference. Its readiness heuristic does not
+supply coordinated producer ownership. Arcturus's [developer page][arcturus-dev],
+reviewed 2026-10-31, still states that no direct camera-access API is available;
+its passthrough-blending examples do not give applications camera pixels.
+Dedicated capture, stereo depth and Gaussian splats remain deferred.
+
+### Reviewed source revisions
+
+The source links below pin the repository revisions checked on 2026-10-31.
+They identify the reviewed reference, not an adopted dependency version.
+The Moondream model revision is listed separately above; vendor documentation
+is linked with its review date.
+
+[frametop-pose]: https://github.com/Frametop/frametop/blob/adebd7d6cfc938477bf8e42a8bcb1c41a32a6f9c/gaze/ft-gaze.cpp
+[frametop-overlay]: https://github.com/Frametop/frametop/blob/adebd7d6cfc938477bf8e42a8bcb1c41a32a6f9c/screens/vr.cpp
+[frametop-hands]: https://github.com/Frametop/frametop/blob/adebd7d6cfc938477bf8e42a8bcb1c41a32a6f9c/hands/README.md
+[frametop-gaze]: https://github.com/Frametop/frametop/blob/adebd7d6cfc938477bf8e42a8bcb1c41a32a6f9c/gaze/README.md
+[oneeuro]: https://github.com/casiez/OneEuroFilter/tree/d78925584245597f2aa9c4c01a802eb0f0b77fb9/python
+[oneeuro-license]: https://github.com/casiez/OneEuroFilter/blob/d78925584245597f2aa9c4c01a802eb0f0b77fb9/python/LICENSE
+[perf-texture]: https://github.com/sasaken1102r/frame-perf-overlay/blob/066a5c87b4cc57a54ce60fbaea69e9fa39ae3a94/headset/vk_texture.cpp
+[perf-overlay]: https://github.com/sasaken1102r/frame-perf-overlay/blob/066a5c87b4cc57a54ce60fbaea69e9fa39ae3a94/headset/vr_overlay.cpp
+[perf-placement]: https://github.com/sasaken1102r/frame-perf-overlay/blob/066a5c87b4cc57a54ce60fbaea69e9fa39ae3a94/headset/placement.cpp
+[frame-shot]: https://github.com/saphid/frame-control/blob/4e1f664be47b99fcf88c84d1280126c39d6753b4/ui/frame_vrshot.py
+[frame-runtime]: https://github.com/saphid/frame-control/blob/4e1f664be47b99fcf88c84d1280126c39d6753b4/docs/how-the-frame-works.md
+[wayvr-overlay]: https://github.com/wayvr-org/wayvr/blob/ef7e5f61ebb962b2385b88a85033c48a167a046e/wayvr/src/backend/openvr/overlay.rs
+[wayvr-origin]: https://github.com/wayvr-org/wayvr/blob/ef7e5f61ebb962b2385b88a85033c48a167a046e/wayvr/src/backend/openvr/playspace.rs
+[moondream2]: https://huggingface.co/vikhyatk/moondream2
+[llama-multimodal]: https://github.com/ggml-org/llama.cpp/blob/0ec4027a2a0183de87c007069adddc06e665f7de/docs/multimodal.md
+[native-continuity]: https://github.com/McFredward/steam-link-native-passthrough/blob/5a5a90686fbed4f64ddb2e790c51116086cb40c9/docs/development/FRAME-CONTINUITY.md
+[passthrough-shortcuts]: https://github.com/KominoVR/frame-passthrough-shortcuts/tree/032841dcde61059b25d33a487bf202a30fbf58f1
+[autopass]: https://github.com/bod09/frame-autopass/tree/e580577ab1a95c546e018ccce353a9c0f57b7514
+[arcturus-dev]: https://arcturus.vision/developers
+
 ## Acceptance
 
 One real object named in the HUD for 60 seconds while the wearer turns their

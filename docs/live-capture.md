@@ -17,6 +17,10 @@ masked before inference; world-locked labels are deferred. See
 The provider track below stays frozen, and the handoff that follows still
 governs device authorization.
 
+The [upstream reuse plan](poc-scope.md#upstream-reuse-plan-2026-10-31) maps the
+2026-10-31 source review to these work packages and separates optional later
+assistant/recovery work from the current POC.
+
 ### October 26 evening handoff
 
 The latest source-only check is [E60](status.md#e60-evening-source-only-mirror-capture-and-scene-correspondence):
