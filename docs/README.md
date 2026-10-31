@@ -42,6 +42,7 @@ owns the current capture work plan.
 | Inspect existing luma input or test the isolated reader | [Shared-memory procedure](on-device.md#check-existing-luma-shared-memory) and [controlled fixture](development.md#isolated-luma-reader-and-synthetic-producer) |
 | Set up cloud or desktop development | [Development setup](development.md) |
 | Plan the next POC work packages | [POC scope: world-locked label](poc-scope.md) |
+| Select upstream components for the POC and later assistant | [Ranked reuse plan, source pins and limits](poc-scope.md#upstream-reuse-plan-2026-10-31) |
 | Continue live capture development | [Active capture plan](live-capture.md#current-work-order) |
 | Review the minimum LIVE POC and Monday target | [Critical path, acceptance evidence and risks](live-capture.md#minimum-live-poc-and-october-26-target) |
 | Review the next proposed device checkpoint | [Bounded edge HUD calibration; separate approval required](on-device.md#bounded-edge-hud-calibration-checkpoint) |
