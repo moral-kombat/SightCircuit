@@ -103,6 +103,37 @@ labels are taken up again after the HUD POC is accepted.
 | 6 | Tracker and smoothing across frames for a stable world-locked direction |
 | 8 | World-locked live loop: mirror input, projection, tracker and world-locked output |
 
+## Execution checkpoint (2026-10-31)
+
+[PR #10](https://github.com/moral-kombat/framejacker/pull/10) is merged.
+The implementation baseline reviewed for this checkpoint is
+`85cf53cd99bb0abfc176b72d279a46dbec52ba4f`. **WP1, WP2, WP7, WP9, WP10,
+WP11 and WP12 remain open**; WP3–WP6 and WP8 are deferred. Open means the
+package's acceptance is not yet evidenced, not that supporting code is absent.
+
+| WP | Current position | Work that can advance offline | Remaining acceptance |
+| --- | --- | --- | --- |
+| 1 | E61 miss unresolved | Reproducible preprocessing audit and focused defect checks using approved available inputs | Original still/digest access and an evidenced defect fix or explanation |
+| 2 | Representative Frame evaluation outstanding | Existing evaluator, manifests and reporting; approved input evaluation | Representative factual labels and evidence for a detector-default decision |
+| 7 | Documentation repaired in #10; package still open | Per-entry evidence files, generated matrix, concise README and consistent scope pointers | Generated matrix and README/evidence-structure criteria met |
+| 9 | Marker/observer implemented offline; Frame observation not run | Versioned mapping/evidence schema, rejection tests and a proposed G4 qualification method | Frame observation plus the required mapping evidence; observer success alone stays unqualified |
+| 10 | V4 root cause unresolved; reliable cleanup/recovery unqualified | Reconcile runtime/overlay contracts, independent expiry, guardian and truthful reporting; investigate available evidence | Explained failure, regression coverage and reports consistent with physical recovery |
+| 11 | Device feedback exclusion and physical expiry not run | Native-mask/expiry integration tests and bounded validation instrumentation | Qualified mapping, no HUD feedback during head motion and physical expiry evidence |
+| 12 | Synthetic loop exists; production live HUD remains closed | Shared runtime integration, native-geometry handling, measurements and validation-only end-to-end checks | Combined 60-second headset acceptance run |
+
+[G1 passes offline; G2 is open; G3, G5 and G6 have not run; G4 has not
+started](live-capture.md#edge-hud-acceptance-gates). The G4 qualification method
+is still undefined. The critical path is **WP10 → WP9 observation → G4
+qualification → WP11 → WP12**. WP1/WP2 and WP7 can advance alongside it.
+Offline completion does not close a package whose acceptance requires Frame.
+
+Use the [execution prompt](execution-prompt.md) to complete all unblocked
+implementation, validation and documentation work. It identifies source-level
+integration gaps without treating them as proven causes of V4, preserves the
+production gates, and requires a concrete next checkpoint after the offline
+work is finished. This status refresh records no new device result or WP
+closure.
+
 ## Upstream reuse plan (2026-10-31)
 
 Source review identified the references below for accelerating the existing

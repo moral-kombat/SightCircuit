@@ -16,6 +16,8 @@ anchors are preserved. [The index](README.md) is the starting point.
 | [Development](development.md) | Cloud/desktop setup, dependency environments, builds, tests and CI | Setup, dependencies or checks change |
 | [Architecture](architecture.md) | Components, frame flow, concurrency, interfaces and long-term acceptance criteria | A design or interface changes |
 | [Live capture](live-capture.md) | Current capture work order, dependencies and acceptance checks | A task is completed or the chosen path changes |
+| [POC scope](poc-scope.md) | Active/deferred work packages, completion criteria and upstream reuse priorities | Scope or work-package state changes |
+| [Execution prompt](execution-prompt.md) | Dated copy-ready handoff for completing unblocked implementation work | A new implementation handoff is prepared; refresh current sources before using it |
 | [Camera reference](steam-frame-camera.md) | Camera interfaces, compatibility research and pinned references | A source/runtime review produces new findings |
 | [Capture review](capture-reference-review.md) | Dated code analysis and the reasoning for the reviewed strategy | A factual correction is needed; later decisions belong in the active plan |
 | [Design review](design-review.md) | Dated architecture/implementation review, its work order and current next steps | A factual correction is needed; record progress in the owning documents |
