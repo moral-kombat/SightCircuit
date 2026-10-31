@@ -157,6 +157,40 @@ This does not initialize OpenVR, start or stop SteamVR, open camera device
 nodes, decode video, or modify the recording. Keep its JSON output alongside
 the playback observations when investigating a recording or runtime change.
 
+### Proposed recording growth test
+
+**Paused.** This procedure is kept for reference; no new recorder experiment
+is planned, and the active device work is the
+[edge HUD calibration checkpoint](#bounded-edge-hud-calibration-checkpoint).
+No Frame result for it is recorded in [status](status.md).
+
+The question it would answer is whether the vendor camera app publishes a
+recording while it is still being written. `scripts/recording_growth_check.py`
+reads only top-level MP4 box headers, never media payloads, and decodes no
+images. It runs bounded and identity-checked in a supervised worker. With no
+mode it does nothing (status `not_run`, exit 3). Its design and offline tests
+are in [development](development.md).
+
+If it is approved again, start the watcher first, then start a **new**
+recording in the vendor app within the wait window:
+
+```bash
+cd "$HOME/framejacker"
+python3 scripts/recording_growth_check.py \
+  --watch-directory "$HOME/Videos/ArcturusVisionCamera" \
+  --wait-for-new 30 --seconds 15
+```
+
+The watcher ignores existing clips and waits up to `--wait-for-new` seconds
+(at most 120) for exactly one new `*_stereo.mp4`; it refuses an ambiguous
+choice. It then observes that file's headers for `--seconds` (at most 30).
+`--observe FILE` observes one file the operator chose instead.
+
+A positive result only shows that fragment extents kept growing while the file
+was written. It does not prove a complete payload, a usable live source or
+that the source excludes our VR panel. Keep the JSON report and record it as a
+device-command result, separate from cloud tests.
+
 ### Decode one recorded video track
 
 Use the separate file-decoding environment on Frame's Python 3.12. This needs
@@ -677,6 +711,123 @@ Whether the headset browser can reach the printed address is not yet verified.
 If it cannot, note the URL, the error, and the network setup in
 [status](status.md) rather than assuming the page works. Record the answers in
 `observations.json` as user-reported results, not as device checks.
+
+### Bounded edge HUD calibration checkpoint
+
+This is the device step for WP9 in the [POC scope](poc-scope.md#work-packages)
+and the first check of the [fixed edge HUD](architecture.md#fixed-edge-hud-decision)
+on Frame. It has **not been run on Frame**. It needs its own approval under the
+[October 26 handoff](live-capture.md#october-26-evening-handoff); this page is
+the procedure, not that approval.
+
+What it does: `scripts/hud_marker_observer.py` reads the verified mirror at
+native resolution, at most 5 reads per second for up to 20 seconds. It first
+waits up to two seconds for two distinct marker-free frames. It then starts
+`scripts/hud_marker_check.py`'s marker through the native bridge: a fixed,
+opaque, head-relative 320 × 128 tile with four corner tags, matching the HUD
+layout. The observer finds every complete tagged copy in the mirror and reports
+its native corners, the union of the copies plus the configured margin, and the
+largest corner drift while the wearer moves.
+
+What it does not do: no inference, no saved images, no production HUD output
+and no live HUD input. A clean run ends with status `observed_unqualified` and
+exit code `2`. That is the expected result, not a failure. It does **not**
+qualify the mapping. The observer cannot assign eyes, establish how the copies
+are composited, rule out unseen or occluded copies, or prove physical expiry,
+so live HUD input stays rejected after this check.
+
+#### Before the device run
+
+Run the offline checks on the reviewed revision, in the cloud or on Frame:
+
+```bash
+cd "$HOME/framejacker"
+QT_QPA_PLATFORM=offscreen .venv-replay/bin/python -m unittest \
+  tests.test_hud_marker_check tests.test_hud_marker_observer tests.test_hud_mask
+```
+
+On Frame, confirm all of the following:
+
+- [Independent SSH](#verify-independent-ssh-access) from the PC works, so the
+  run can be stopped and inspected without the headset UI.
+- The checkout is clean at the approved revision, `.venv-replay` is set up,
+  and the bridge is built on Frame with `bash scripts/build_overlay_bridge.sh`.
+- `/dev/video99` is still the verified SteamVR mirror candidate
+  ([mirror check](#check-an-existing-steamvr-mirror)).
+- No replay window, VR panel, mirror capture or other overlay is running.
+- Someone is wearing the headset, with normal passthrough and tracking.
+  Optionally start the [observation page](#record-headset-observations-for-a-run)
+  for their answers.
+
+Then run the marker's validation mode on Frame. It uses the generated marker
+and native timer only, and never initializes VR:
+
+```bash
+cd "$HOME/framejacker"
+.venv-replay/bin/python scripts/hud_marker_check.py --validate --seconds 3
+```
+
+Expect `"status": "completed"`, `"exit_code": 0` and `"cleanup_ok": true`. Stop
+here if it reports anything else.
+
+#### Approved run
+
+Only with approval for this run. All three opt-in flags and `--device` are
+required; the tools refuse a partial opt-in. Over SSH, use the same graphical
+session environment as the overlay stage in
+[E55](status.md#e55-annotated-replay-overlay-command-on-frame), which ran
+attached to the active `:0` display.
+
+```bash
+(
+  set -e
+  cd "$HOME/framejacker"
+  test -z "$(git status --porcelain)"
+  test -x artifacts/overlay-bridge/framejacker-overlay-bridge
+  mkdir -p artifacts/hud-calibration
+  run="$(mktemp -d "$PWD/artifacts/hud-calibration/run-XXXXXX")"
+  git rev-parse HEAD > "$run/revision.txt"
+  set +e
+  .venv-replay/bin/python scripts/hud_marker_observer.py --observe-calibration \
+    --allow-mirror-observation --allow-calibration-output \
+    --device /dev/video99 --seconds 20 > "$run/observer.json"
+  echo "$?" > "$run/exit-code.txt"
+  echo "Saved $run"
+)
+```
+
+During the run, the wearer keeps passthrough visible and looks at the scene
+for the first two seconds. A completely unchanging view can end the run with
+`baseline_distinct_clear_frames_not_established`. Once the marker tile appears,
+they turn their head slowly through a small range and keep the tile in view.
+Large movements, or a change in how many copies are visible, end the run
+rejected instead of widening the footprint. Ctrl-C (or SIGTERM over SSH) stops
+both tools.
+
+#### Reading the result
+
+| Exit code and status | Meaning | Next |
+| --- | --- | --- |
+| `2`, `observed_unqualified` | Clean run: copies observed, marker closed cleanly | Record `observed_copy_count`, `footprint_union_native`, `margin_px`, `maximum_corner_drift_px`, `sample_count` and the bridge cleanup fields |
+| `1`, `rejected`, `native_failed` or `cleanup_failed` | Observation or cleanup failed; `reason` names the cause | Keep the report; do not repeat the unchanged run |
+| `130`, `cancelled` | Stopped by signal | Keep the report; note why it was stopped |
+
+Native cleanup fields in the report are process and API results. They do not
+show that the headset recovered. Ask the wearer, and record their answers as
+user-reported:
+
+- Was the marker tile visible in the headset, and where?
+- Did passthrough and tracking stay normal during the run and for 30 seconds
+  afterward, without switching the camera source?
+- Did the Arcturus input turn green at any point
+  ([E59](status.md#e59-arcturus-green-input-recurrence-and-operator-recovery))?
+
+If passthrough or tracking regresses, stop and keep the report. Switching to
+native passthrough and back is a recovery workaround, not a pass. Hand the
+saved directory and the answers to the evidence coordinator for a numbered
+entry ([POC scope rules](poc-scope.md#rules-kept-and-changed)). A clean result
+supports WP11 (feedback exclusion) planning. It does not enable live HUD input
+or production HUD output.
 
 ### Check native capture prerequisites
 
@@ -1320,6 +1471,174 @@ Share the output or connection error. If it fails, preserve the working
 headset session and diagnose remote access before any trial. Once access is
 verified, review the bounded recovery procedure before reassessing activation;
 the access check alone does not validate service restoration.
+
+### Service-only recovery rehearsal result
+
+`scripts/service_rehearsal.py` stops and restarts `steamvr.service` once,
+without preparing or installing a capture layer. Its design and tests are in
+[development](development.md#service-only-recovery-rehearsal). Independent SSH
+from the PC is verified, and the first Frame run is recorded as
+[E63](status.md#e63-service-only-rehearsal-and-graphical-session-dependency).
+
+What happened on Frame: the SteamVR stop job was **canceled**. The shipped
+Gamescope session is `PartOf=steamvr.service`, so stopping SteamVR also
+stopped the graphical session, which then restarted. Independent cleanup later
+observed a healthy compositor without issuing another service command. The
+rehearsal itself is a failure; the runtime recovered on its own.
+
+Current guard: `--preflight` (and so `--start`) now refuses to run while
+Gamescope is `PartOf` SteamVR, reporting
+`steamvr_stop_propagates_to_graphical_session`. On this runtime a bare
+SteamVR stop is not a safe recovery model. Use the
+[platform session test](#prepared-platform-session-test) for session-level
+recovery instead. Do not edit service policy to get past the guard.
+
+To confirm the guard or read the saved result, run on Frame:
+
+```bash
+cd "$HOME/framejacker"
+python3 scripts/service_rehearsal.py --preflight
+python3 scripts/service_rehearsal.py --report-latest
+```
+
+Both are read-only. With no mode the tool does nothing (status `not_run`,
+exit 3). `--start` additionally requires an inbound SSH session from another
+computer and refuses if a trial unit already exists. `--recover RUN` acts only
+on a known run after its worker has exited. Neither is needed while the guard
+holds.
+
+### Prepared platform session test
+
+`scripts/session_rehearsal.py` asks SteamOS Manager for one
+`switch-to-game-mode` session cycle (`/usr/bin/steamosctl switch-to-game-mode`)
+and observes recovery independently. It never stops or starts SteamVR
+directly and never installs a layer. Design and tests are in
+[development](development.md#platform-managed-session-rehearsal).
+
+Result: the operator's session test **completed successfully**, with healthy
+independent recovery and the wearer confirming a normal headset
+([E64](status.md#e64-platform-session-test-completed-and-headset-confirmed)).
+A completed run is also the `--session-proof` the
+[metadata session trial](#prepared-metadata-session-trial) requires.
+
+A session cycle **logs out the graphical session**: games, the replay window,
+VR panels and anything else in it close. Repeat it only for a changed platform
+(SteamOS, SteamOS Manager or Gamescope session files), and only with approval.
+
+```bash
+cd "$HOME/framejacker"
+python3 scripts/session_rehearsal.py --preflight
+bundle="artifacts/session-bundle-$(date +%Y%m%d-%H%M%S)"
+python3 scripts/session_rehearsal.py --prepare "$bundle"
+python3 scripts/session_rehearsal.py --check "$bundle"
+```
+
+`--preflight` reads only the platform and runtime. `--prepare` writes a new,
+exclusive, inactive bundle of helper sources, hashes and platform fingerprints,
+and refuses an existing path. `--check` must report `prepared_test_ready`; it
+refuses changed platform files, foreign drop-ins or existing capture
+configuration.
+
+The approved run must be started **from an SSH session on another computer**,
+so the session that is logged out is not the one running the command:
+
+```bash
+cd "$HOME/framejacker"
+python3 scripts/session_rehearsal.py --start "$bundle" --allow-session-logout --wait
+python3 scripts/session_rehearsal.py --report-latest
+```
+
+`--start` without `--allow-session-logout` is refused. The worker sends exactly
+one request and never retries, even after a failure or timeout, because the
+request may still have started a logout. `--wait` waits at most 180 seconds for
+the saved result; disconnecting does not cancel the run. Completion needs new
+invocation IDs for Gamescope, SteamVR and both session targets, all healthy
+and stable for two seconds. A partial restart cannot pass. Process liveness is
+not the wearer's check: ask whether the UI, passthrough and tracking look
+normal afterward, and record that separately.
+
+### Prepared metadata session trial
+
+`scripts/metadata_session_trial.py` runs a metadata-only provider activation
+and restoration across two platform session cycles. It uses the same vendor
+session request as the [platform session test](#prepared-platform-session-test),
+not a bare SteamVR stop. No image descriptors, camera bytes, detector or VR
+output are involved; the v3 provider still rejects buffer requests. Design,
+ownership rules and tests are in
+[development](development.md#metadata-trial-across-platform-sessions).
+
+Results so far
+([E65](status.md#e65-v2-recovered-candidate-snapshots-compared-and-visual-check-passed)):
+
+- First run: the provider loaded and normal startup was restored. It received
+  20 metadata records, including eight candidate-profile matches, but failed
+  with `provider_registry_changed`.
+- v2, with bounded settling: three snapshots held identical metadata for the
+  same eight candidate IDs, while other allocations appeared and disappeared.
+  Full-registry inspection still failed. Software restoration and normal UI,
+  passthrough and tracking were confirmed.
+
+**Do not repeat v2 unchanged.** The next step is offline work on scoped
+lifetime and version tracking. Use the commands below only for a changed
+version that has been reviewed and approved. The trial performs **two**
+session logouts, so the same warnings as the session test apply.
+
+Inputs: a verified v3 metadata bundle from
+[Prepare the metadata-layer trial](#prepare-the-metadata-layer-trial), the
+metadata inspector built with `bash scripts/build_capture_reference.sh
+--provider-fixes`, and a completed session-test run directory under
+`artifacts/session-rehearsals/` on the same platform.
+
+```bash
+cd "$HOME/framejacker"
+trial="artifacts/metadata-session-$(date +%Y%m%d-%H%M%S)"
+python3 scripts/metadata_session_trial.py --prepare "$trial" \
+  --metadata-bundle artifacts/capture-layer-plan-v3-NAME \
+  --session-proof artifacts/session-rehearsals/RUN
+python3 scripts/metadata_session_trial.py --check "$trial"
+```
+
+Replace `NAME` and `RUN` with the existing bundle and completed session run.
+`--prepare` refuses a session proof that did not complete or that came from a
+different platform. `--check` must report `metadata_session_test_ready`. The
+approved run, again from an SSH session on another computer:
+
+```bash
+cd "$HOME/framejacker"
+python3 scripts/metadata_session_trial.py --start "$trial" --allow-session-logouts --wait
+python3 scripts/metadata_session_trial.py --report-latest
+```
+
+`--wait` waits at most six minutes. Keep the whole run directory: every raw
+inspection attempt and the settling summary are saved, and a later success
+does not hide earlier invalidations. Cleanup removes only the trial's own
+drop-in and manifest and requests one normal session. Library and source
+artifacts are kept for diagnosis. Report the result, the restoration fields and
+the wearer's answers about UI, passthrough and tracking separately.
+
+### Deployment preflight and command shape (not authorized)
+
+[Development](development.md#offline-foundation-for-the-minimum-live-poc)
+refers to a local eight-entry deployment manifest (the ARM64 bridge plus seven
+Python modules) with verified sizes and hashes, and to a placeholder deployment
+command. **Neither the manifest nor that command is in this repository.** This
+section therefore gives no deployment command. No install, transfer or device
+execution is authorized here.
+
+Before any deployment is proposed, the preflight must establish at least:
+
+- The exact commit and a manifest listing every deployed file with its size
+  and SHA-256, compared on Frame before use.
+- That cross-compiled or Windows-built artifacts are not taken as evidence of
+  Frame runtime compatibility. The bridge used on Frame so far has been built
+  on Frame with `bash scripts/build_overlay_bridge.sh`.
+- Target UAPI, `ctypes` and `ioctl` size evidence before any capture path runs
+  (the current capture ABI test is skipped without it).
+- Independent SSH, a clean checkout, and nothing else running, as in the
+  [calibration checkpoint](#bounded-edge-hud-calibration-checkpoint).
+
+Commit the manifest and its preflight script, then replace this section with
+the real command shape when that work is reviewed.
 
 ### Check existing luma shared memory
 

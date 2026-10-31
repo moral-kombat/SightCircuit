@@ -51,25 +51,25 @@ input is rejected before opening, and real HUD output remains blocked.
 The fixed panel position is a candidate, not a calibrated mirror-pixel mapping.
 Actual mapping, projection stability, head-motion leakage, latency, physical VR
 expiry and end-to-end operation remain unproven. See the
-[offline results](status.md#e60-offline-edge-hud-and-native-mask-validation), the
+[offline results](status.md#e69-offline-edge-hud-and-native-mask-validation), the
 [acceptance plan](live-capture.md#edge-hud-acceptance-gates) and
 [operator checkpoint](on-device.md#bounded-edge-hud-calibration-checkpoint).
 
-The later marker/observer preparation is a separate evidence path (E61/E62):
+The later marker/observer preparation is a separate evidence path (E70/E71):
 the marker draws the fixed opaque footprint; an empirical observer finds tagged
 copies at native mirror resolution and reports their bounded motion/margins.
 It cannot establish eye composition, unseen/occluded copies or production
 exclusion. Clean observation deliberately remains `observed_unqualified` with
 exit code 2. The verified ARM64 cross-build has not run on Frame. Production
 mapping and real HUD expiry gates remain closed; see
-[E62](status.md#e62-offline-arm64-build-and-empirical-marker-observer).
+[E71](status.md#e71-offline-arm64-build-and-empirical-marker-observer).
 
 ## Progress summary
 
 <!-- BEGIN progress-summary: generated from the progress dashboard; edit status.md or live-capture.md instead of this block -->
 Generated from the [progress
 dashboard](https://claude.ai/artifact/XNPpBHVFUy5Q8JQV9aLaKq) using `main` at
-commit `35e144b` (2026-10-25). This block only summarizes: [status](status.md)
+commit `b219eac` (2026-10-30). This block only summarizes: [status](status.md)
 owns evidence and [live capture](live-capture.md#current-work-order) owns
 current tasks. Counts show how far each piece has got: confirmed working on
 Frame, tested on Frame with synthetic or controlled inputs, cloud-tested only,
@@ -77,28 +77,24 @@ or not started (planned or researched). Held means paused, blocked or failed.
 
 | Track | Working on Frame | Tested on Frame | Cloud-tested | Not started | Held |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Input & capture | 4 | 9 | 1 | 3 | 3 |
-| Inference | 5 | 0 | 2 | 0 | 0 |
-| Presentation | 2 | 1 | 0 | 1 | 0 |
-| Geometry & reconstruction | 0 | 0 | 0 | 2 | 0 |
-| **All** | 11 | 10 | 3 | 6 | 3 |
+| Input & capture | 6 | 8 | 1 | 3 | 2 |
+| Inference | 5 | 2 | 1 | 1 | 0 |
+| Presentation | 2 | 2 | 2 | 4 | 2 |
+| Geometry & reconstruction | 0 | 0 | 0 | 4 | 0 |
+| **All** | 13 | 12 | 4 | 12 | 4 |
 
 Milestones, from the [acceptance list](#milestones-and-acceptance-checks):
 
-1. **Replay and window:** Met on Frame; replay processing reconfirmed after the refactor. Qt window rerun needs someone wearing the headset; label accuracy not evaluated.
-2. **Live capture:** In progress, dedicated path paused. Mirror works but is composited; dedicated provider frozen per design review, blocked on sync and trial recovery.
-3. **VR panel:** Visible and controllable; not measured. Overlay rerun after the refactor needs someone wearing the headset; readability, latency and live-input measurements pending.
-4. **World-space labels:** Not started. Depends on live capture and calibration.
-5. **Splat experiment (optional):** Researched. No training or headset rendering yet.
+1. **Replay and window:** Met on Frame; replay processing reconfirmed after the refactor. Qt window rerun inconclusive (E56); label accuracy not evaluated.
+2. **Live capture:** In progress, dedicated path paused. Metadata layer loads and restores on Frame but registry inspection is unstable; image access blocked; mirror is the POC source but composited.
+3. **VR panel:** Visible and readable on merged main (wearer-reported); not measured. Readability, latency and live-input measurements pending; V4 cleanup failure unresolved (E59).
+4. **World-space labels:** Deferred by the edge HUD scope. World-locked labels return only after the edge HUD POC (WP3–WP6, WP8 deferred).
+5. **Splat experiment (optional):** Deferred by the POC scope. Not planned until the edge HUD POC works.
 
-Critical path to milestone 2: 4 of 10 main steps done. Next: define the recovery
-command and readiness checks (exact restore command, readiness checks and
-retained job diagnostics written down before any activation). After step 5,
-route A runs through step 6 (controlled metadata-layer load and restore) and
-step 7 (establish a safe frame-access contract). Route B, step 7a, would get a
-supported frame-sharing API from Valve / Arcturus and go straight to step 8.
-Both routes then continue with steps 8 to 10: owned-copy capture path on real
-hardware; capture-only device trial; close the remaining milestone 2 checks.
+Critical path to the edge HUD POC: 1 of 6 acceptance gates passed. Next:
+lifecycle and cleanup safeguards (WP10) (explain the V4 failure and reconcile
+the guardian, calibration expiry and truthful early-termination reporting, with
+tests).
 <!-- END progress-summary -->
 
 ## Frame processing

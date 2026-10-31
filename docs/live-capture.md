@@ -10,10 +10,12 @@ layer has been deployed by Framejacker.
 
 ### Scope decision (2026-10-27)
 
-The POC goal is narrowed to a world-locked label on a detected object, using
-the mirror source and head pose; see [POC scope](poc-scope.md). The provider
-track below stays frozen, and the handoff that follows still governs device
-authorization.
+Revised 2026-10-31: the POC goal is object names with approximate direction
+arrows in a fixed edge HUD over live mirror input, with the HUD footprint
+masked before inference; world-locked labels are deferred. See
+[POC scope](poc-scope.md).
+The provider track below stays frozen, and the handoff that follows still
+governs device authorization.
 
 The [upstream reuse plan](poc-scope.md#upstream-reuse-plan-2026-10-31) maps the
 2026-10-31 source review to these work packages and separates optional later
@@ -117,6 +119,162 @@ Seek a supported Arcturus/Valve frame-sharing API alongside these experiments
 and prefer it if available. The [vendor questions](#vendor-interface-questions)
 define the useful interface information without making a vendor reply a
 prerequisite for offline reader development.
+
+## Minimum LIVE POC and October 26 target
+
+The minimum LIVE POC is the **combined** loop: live Frame mirror input, CPU
+detection, and object names shown live in the headset, continuously, without
+our own output feeding back into detection and with normal passthrough and
+tracking. Replay with the VR panel
+([E47](status.md#e47-recorded-recognition-and-vr-panel-poc-on-frame)) has no
+live input. Bounded mirror recognition
+([E48](status.md#e48-live-mirror-recognition-poc-and-matching-preview),
+[E54](status.md#e54-bounded-mirror-capture-on-merged-main)–[E58](status.md#e58-user-observations-for-the-2026-10-26-runs))
+shows results only after capture closes. Neither is this POC.
+
+**October 26 target: not met.** The target was a working combined loop by
+Monday, October 26, 2026. At the
+[October 26 evening handoff](#october-26-evening-handoff), live input and live
+display were still separate, and production live-source and HUD output
+remained closed. The goal was narrowed on October 27 and revised on October 31
+to the fixed edge HUD (see the [scope decision](#scope-decision-2026-10-27)).
+The [POC scope](poc-scope.md) now owns scope, work packages and acceptance;
+this section keeps the critical path, evidence, risks and offline order in one
+place for capture planning.
+
+### Critical path
+
+1. **WP10 lifecycle and cleanup safeguards.** Explain the V4 cleanup failure
+   ([E59](status.md#e59-arcturus-green-input-recurrence-and-operator-recovery))
+   and reconcile cleanup reporting before any live output.
+2. **WP9 HUD mapping calibration** on Frame, using the
+   [calibration checkpoint](on-device.md#bounded-edge-hud-calibration-checkpoint).
+3. **WP11 feedback exclusion check** on Frame with the qualified mask.
+4. **WP12 live HUD loop**, behind explicit opt-in and an independent abort
+   path.
+
+WP1 (preprocessing audit) and WP2 (evaluation set) run alongside and are needed
+before any claim about detection quality. The gates each step must pass are in
+[Edge HUD acceptance gates](#edge-hud-acceptance-gates).
+
+### Acceptance evidence
+
+The POC passes on the [acceptance run](poc-scope.md#acceptance). Its report
+must carry, as one numbered evidence entry separate from cloud results:
+
+- The exact revision, source identity and capture format, and the versioned
+  HUD layout and mapping in use.
+- The native mask regions, and a count of detections inside them (which must
+  be zero).
+- Result expiry events, including a name expiring after the object leaves
+  view.
+- The supervisor, worker and native cleanup fields, reported separately from
+  physical recovery.
+- The wearer's answers on HUD visibility, arrow direction against the agreed
+  tolerance, and passthrough and tracking during and after the run.
+
+### Risks
+
+- The mirror includes our own output
+  ([E18](status.md#e18-vr-panel-included-in-mirror-input)). Only a qualified
+  native-resolution mask addresses this; masking is not a compositor
+  exclusion mode.
+- The mirror is composited. Its physical camera identity, field of view and
+  timing are unknown ([E14](status.md#e14-physical-room-visible-in-the-mirror-preview)),
+  so arrows stay approximate.
+- The V4 cleanup failure and the Arcturus green-input recurrence (E59) are
+  unresolved.
+- Detection quality is unproven on Frame input: both models missed the TV on
+  the one compared still
+  ([E61](status.md#e61-file-only-detector-comparison-on-the-evening-grayscale-still)),
+  and neither has a rug class.
+- Blocking VR calls, SIGKILL or stuck kernel I/O can leave recovery uncertain
+  (handoff item 5). Software deadlines are not guarantees.
+- About 5 processed frames per second with roughly 40 ms inference (E48)
+  limits how quickly names update.
+
+### Offline work order
+
+These need no device and no approval:
+
+1. Keep the synthetic-only gates in the
+   [contract review](#synthetic-input-and-feedback-contract-review) intact.
+2. WP10 analysis: compare the capture and overlay implementations against the
+   preserved safeguards (handoff item 4).
+3. WP1 preprocessing audit, once access to the still is approved.
+4. WP7 documentation weight.
+
+## Edge HUD acceptance gates
+
+The [fixed edge HUD](architecture.md#fixed-edge-hud-decision) reaches live use
+only through these gates, in order. Each gate's device evidence is its own
+numbered entry. A failed gate stops the sequence; do not repeat it unchanged.
+Live HUD input and production HUD output stay closed in code until G4 and G5
+pass: the pipeline rejects non-synthetic sources
+(`live_image_source_not_approved`), the HUD mask rejects hardware mappings
+(`hud_hardware_mapping_not_approved`), and the bridge rejects expiring packets
+in real output mode.
+
+| Gate | Requires | Status |
+| --- | --- | --- |
+| G1. Synthetic mask, fail-closed mapping and expiry | Offline tests: full-footprint mask before resize, margin and eye union, fail-closed mapping and format changes, stale expiry independent of inference | Passes offline ([E69](status.md#e69-offline-edge-hud-and-native-mask-validation)) |
+| G2. Lifecycle and cleanup (WP10) | V4 failure explained; guardian, calibration expiry and truthful early-termination reporting reconciled with `main`; tests for the failure path | Open (E59) |
+| G3. Mapping observed on Frame (WP9) | [Calibration checkpoint](on-device.md#bounded-edge-hud-calibration-checkpoint) ends `observed_unqualified` with clean cleanup; normal passthrough confirmed | Not run |
+| G4. Mapping qualified | A versioned mapping and margin backed by evidence the observer cannot give: eye composition and absence of unseen or occluded copies. The method is not yet defined | Not started |
+| G5. Feedback exclusion and physical expiry (WP11) | With the HUD visible, no detections from its footprint during head motion; stale names disappear on the headset within the expiry | Not run |
+| G6. Live HUD loop (WP12) | The [POC acceptance run](poc-scope.md#acceptance) with the evidence listed under [Acceptance evidence](#acceptance-evidence) | Not run |
+
+G1 can be rerun at any time without a device:
+
+```bash
+cd "$HOME/framejacker"
+QT_QPA_PLATFORM=offscreen .venv-replay/bin/python -m unittest \
+  tests.test_hud_mask tests.test_live_pipeline tests.test_display_expiry
+QT_QPA_PLATFORM=offscreen .venv-replay/bin/python -m scripts.live_pipeline \
+  --synthetic-check --synthetic-hud --validate-overlay --seconds 3
+```
+
+## Synthetic input and feedback contract review
+
+This review records what the offline live pipeline guarantees today and what
+still needs a device. Design and supervision details are in
+[development](development.md#offline-foundation-for-the-minimum-live-poc).
+
+**Input contract.** `scripts/live_pipeline.py` accepts only a `synthetic`
+source; any other kind is rejected with `live_image_source_not_approved`.
+Frames are owned contiguous BGR copies, and source identity and sequence
+cannot go backwards. One frame at most waits for inference, and inputs or
+results older than one second are dropped. Do not label a real source
+`synthetic` to get past the gate.
+
+**HUD contract.** `scripts/hud_mask.py` accepts only synthetic calibration and
+rejects hardware mappings. It masks the full HUD footprint at native
+resolution before any resize. Detections that overlap the mask or cross an eye
+boundary are rejected.
+
+**Output contract.** The overlay sink only requests the bridge's
+`--validate-stdin` mode, so it cannot initialize real VR output. Synthetic
+display frames carry an absolute monotonic expiry to the separate native
+validation process. Stalled inference, settings heartbeats and partial packet
+reads cannot renew it. The expiring-packet opcode is rejected in real output
+mode.
+
+**Supervision contract.** Workers run under the shared bounded supervisor and
+a Linux guardian that owns the worker process group. Forced termination is
+reported as such and never as a clean shutdown. An unkillable process is
+reported unconfirmed.
+
+What this does **not** establish: any real live source, actual expiry on the
+headset, launcher behavior, or API teardown on Frame. Each needs its own
+authorized device check, and the [acceptance gates](#edge-hud-acceptance-gates)
+say which. To rerun the contract tests without a device:
+
+```bash
+cd "$HOME/framejacker"
+QT_QPA_PLATFORM=offscreen .venv-replay/bin/python -m unittest \
+  tests.test_live_pipeline tests.test_display_expiry tests.test_bounded_worker \
+  tests.test_overlay_cleanup tests.test_hud_mask
+```
 
 ## Next deliverable: mirror diagnostic
 

@@ -220,8 +220,9 @@ see E52/E53 for device-command evidence and limitations.
 
 The POC scope and work packages are in [POC scope](poc-scope.md), which
 supersedes the engineering order below where they differ: the target is a
-world-locked label on a detected object, and the provider track, stereo depth
-and splats are deferred.
+fixed edge HUD of object names and direction arrows over live mirror input,
+and world-locked labels, the provider track, stereo depth and splats are
+deferred.
 
 ### Needs the headset
 

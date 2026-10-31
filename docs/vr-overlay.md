@@ -25,17 +25,17 @@ The [fixed edge HUD decision](architecture.md#fixed-edge-hud-decision) is the
 approved live-mirror direction. A name and approximate view-relative arrow stay
 inside a fixed reserved strip; the full footprint is masked before resizing or
 inference. This is a blind region, not a world-locked annotation. Synthetic implementation and native validation passed
-([E60](status.md#e60-offline-edge-hud-and-native-mask-validation)); actual
+([E69](status.md#e69-offline-edge-hud-and-native-mask-validation)); actual
 mapping/calibration, head-motion leakage and physical VR expiry remain pending.
 The tile is 320 x 128 with up to three names/arrows and no scene video; fixed
 geometry/opacity and expiring transport remain validation-only. The bridge rejects
 expiring packets in real output mode. The existing test panel uses different
 marker geometry and cannot qualify HUD mapping or physical expiry; synchronous
 VR calls also prevent an absolute deadline guarantee. A later separate
-[marker-only harness](status.md#e61-offline-marker-only-harness) now generates the
+[marker-only harness](status.md#e70-offline-marker-only-harness) now generates the
 matching opaque HUD marker; its offline-tested output opt-in does not enable
 production HUD frames or qualify mapping. The later
-[ARM64 cross-build and empirical observer](status.md#e62-offline-arm64-build-and-empirical-marker-observer)
+[ARM64 cross-build and empirical observer](status.md#e71-offline-arm64-build-and-empirical-marker-observer)
 are prepared offline; the binary has not been executed. Frame runtime dependencies,
 mirror-node verification, deployment review and operator approval remain pending.
 Clean observer output stays `observed_unqualified` (exit 2), not eye-composition

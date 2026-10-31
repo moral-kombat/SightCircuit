@@ -1,26 +1,37 @@
-# POC scope: world-locked label on a detected object
+# POC scope: fixed edge HUD on live mirror input
 
-Decision record, 2026-10-27, for planners. [Status](status.md) owns evidence;
-this page owns scope and work packages. It narrows the goal in
+Decision record for planners. First recorded 2026-10-27 with a world-locked
+label as the target; revised 2026-10-31 to the
+[fixed edge HUD](architecture.md#fixed-edge-hud-decision). [Status](status.md)
+owns evidence; this page owns scope and work packages. It narrows the goal in
 [live capture](live-capture.md#current-work-order) and does not authorize any
 device operation: every device step below needs the approval the October 26
 handoff requires.
 
 ## Decision
 
-The POC is: **detect an object in live Frame input, convert its position to a
-direction in the head-tracked frame, and show a label that stays on that
-direction as the wearer moves, without disturbing passthrough.**
+The POC is: **detect objects in live Frame mirror input and show their names,
+each with an approximate view-relative direction arrow, in a fixed
+head-relative strip at the edge of the view, without the HUD feeding back into
+detection and without disturbing passthrough.**
 
-Deferred until this works: the dedicated camera provider, stereo depth and
-Gaussian splats. The provider track stays frozen (no producer synchronization
-exists; live reads are blocked). Depth is replaced by a fixed or size-based
-distance estimate, which the label must state is an estimate.
+The HUD is a fixed edge tile, not a world-locked or scene-anchored marker, and
+it makes no claim of spatial accuracy. No label, arrow or leader line crosses
+the scene. The scene pixels under the strip and its mask margin are an explicit
+blind region.
 
-Reasons: the only live source proven on Frame is the SteamVR mirror (E48: 51
-reads at 4.993 fps, 40.065 ms mean inference); head-locked panels already work
-(E47); the unproven link between them is head pose against frame time, which is
-cheap to test and decides whether the POC is feasible.
+Deferred until this works: world-locked labels (pose logging, projection,
+tracking and a world-locked overlay mode; see
+[deferred work packages](#deferred-work-packages)), the dedicated camera
+provider, stereo depth and Gaussian splats. The provider track stays frozen (no
+producer synchronization exists; live reads are blocked).
+
+Reasons: the only live source proven on Frame is the SteamVR mirror (E48, E60),
+and head-relative panels already work on merged `main` (E55, E58). The mirror
+includes our own output (E18). A fixed strip whose full footprint is masked at
+native mirror resolution is the smallest output that can keep itself out of
+detection without a compositor exclusion mode. A world-locked label adds pose
+and frame-time alignment and a projection model, each a separate unproven link.
 
 ## Rules kept and changed
 
@@ -30,9 +41,10 @@ no threshold or model changes to make one image pass; skipped tests fail CI.
 
 Change:
 
-- One coordinator allocates evidence IDs (E63 onward) and is the only editor of
+- One coordinator allocates evidence IDs (E72 onward) and is the only editor of
   the `status.md` matrix; coders put evidence in their PR description and the
-  coordinator records it. Parallel branches reused E54.
+  coordinator records it. Parallel branches reused E50, E52 and E54–E62; those
+  results are now recorded as E63–E71.
 - Provider-track changes are rejected unless a vendor interface or a
   synchronization answer exists.
 - New evidence goes in its own file under `docs/evidence/` (WP7); do not grow
@@ -40,14 +52,27 @@ Change:
 
 ## Constraints that shape the design
 
-- The mirror includes our own VR panel (E18). Labels drawn into the scene would
-  be re-detected or feed back; the pipeline must mask or exclude our overlay
-  region before inference. Dimensions alone do not identify it (handoff item 5).
-- Mirror frames have no pose. Pose and frame time must be logged together.
-- 5 fps input needs smoothing so a world-locked label does not jitter.
+- The mirror includes our own VR panel (E18). Mask the **full HUD footprint**
+  (background, text, arrows and edge effects) at native mirror resolution
+  before any resizing, filtering or inference, with a calibrated conservative
+  margin and the union of both eye footprints where stereo composition
+  applies. Masking only detected text or a resized image does not establish
+  exclusion, and dimensions alone do not identify the footprint (handoff
+  item 5).
+- The HUD layout and capture mapping are fixed and versioned together.
+  Unexpected capture dimensions, crop, eye layout, orientation, source or
+  session, or HUD configuration changes fail closed: stop presentation and
+  inference and expire prior content. Never reuse an old mask, silently
+  recalibrate or enlarge the visible HUD beyond the qualified mask.
+- Results expire on their own clock, independently of inference and
+  heartbeats, so a stale name disappears.
+- Detections overlapping the masked region or crossing an eye boundary are
+  rejected.
 - The mirror view is composited and its physical camera identity, field of view
-  and timing are unknown (E14, E18). The pixel-to-ray mapping is therefore
-  approximate until calibrated.
+  and timing are unknown (E14, E18). Arrows are approximate view-relative
+  directions, not calibrated bearings.
+- The V4 cleanup failure and the Arcturus green-input recurrence (E59) are
+  unresolved; lifecycle safeguards must be reconciled before any live output.
 
 ## Work packages
 
@@ -55,16 +80,28 @@ Change:
 | --- | --- | --- | --- |
 | 1 | **Preprocessing audit of the E61 miss.** Reproduce the one-still result file-only, pin hashes, compare grayscale/channel replication, SSD stretch vs YOLOX letterbox and box mapping, one change at a time (live-capture handoff items 1-3). | No (needs approved access to the still) | A defect is found and fixed with a synthetic regression test, or the miss is attributed to the image/model with evidence |
 | 2 | **Evaluation set.** Approved representative Frame stills with factual labels, including the rug/sofa case; absent labels and boxes added only after inspection. | Capture needs approval | `evaluate_detectors.py` reports on Frame stills; default detector chosen from it |
-| 3 | **Pose and timestamp logging.** A bounded, read-only OpenVR pose logger beside the mirror reader, writing pose and a shared monotonic time per frame. No overlay, no layer, no service changes. | Yes, wearer | A report with frame and pose timestamps, measured skew and pose rate, and normal passthrough confirmed |
-| 4 | **Projection math (cloud).** Pixel to ray in the head frame using a configurable field of view and mirror crop, then to the tracked frame using a pose. Pure functions in `framejacker/`, synthetic tests including rotation and letterboxing. | No | Unit tests pass; documented assumptions about field of view and distance |
-| 5 | **World-locked overlay mode.** Add a world-locked option with recentering to the overlay bridge and client; limits stay in `PANEL_LIMITS`; label layer separate from the image layer. | Test with wearer | Native and Python tests pass; a fixed label stays fixed on device |
-| 6 | **Tracker and smoothing.** Associate detections across frames, smooth direction and hold briefly through misses; stale results expire. Replay-driven tests with synthetic pose. | No | Tests cover jitter, dropout and expiry |
 | 7 | **Docs weight.** Per-entry evidence files, generated status matrix, one-screen README. | No | README fits one screen; status matrix generated |
-| 8 | **Live loop integration.** `MirrorSource` into the pipeline with the overlay-region mask, projection, tracker and world-locked output, behind explicit opt-in and an independent abort path. | Yes, wearer | See acceptance |
+| 9 | **HUD mapping calibration.** A bounded run in which the HUD marker draws the fixed opaque footprint and the empirical observer finds its copies at native mirror resolution, per eye, with their motion and margins. Includes the first Frame run of the observer and marker. Procedure: [bounded edge HUD calibration checkpoint](on-device.md#bounded-edge-hud-calibration-checkpoint). | Yes, wearer | A versioned mapping and mask margin derived from observed copies on Frame, with normal passthrough confirmed. A clean observer result on its own stays `observed_unqualified` |
+| 10 | **Lifecycle and cleanup safeguards.** Explain the V4 cleanup failure; reconcile HUD masking, calibration expiry, the independent guardian and truthful early-termination reporting with merged `main` (live-capture handoff item 4). | No for analysis; device to confirm | Root cause recorded, tests cover the failure path, and cleanup reports agree with physical recovery |
+| 11 | **Feedback exclusion check.** Show the HUD on device with the qualified mask and confirm the detector never reports the HUD's own text or arrows, including during head motion. | Yes, wearer | A bounded run with the HUD visible, no detections from the masked footprint, and normal passthrough |
+| 12 | **Live HUD loop.** `MirrorSource` into `live_pipeline.py` with the native mask, detector, HUD tile and stale expiry, behind explicit opt-in and an independent abort path. Live mirror HUD input is rejected before opening today; lift that only for a qualified mapping. | Yes, wearer | See acceptance |
 
-Order: 1, 4 and 7 start now and are independent. 3 needs one approved device
-run and gates 8. 5 and 6 can run in parallel after 4. 2 is needed before any
-claim about detection quality.
+Order: 1, 7 and 10 start now and are independent. 9 needs one approved device
+run and gates 11. 12 needs 9, 10 and 11. 2 is needed before any claim about
+detection quality.
+
+### Deferred work packages
+
+These served the earlier world-locked target and return only if world-locked
+labels are taken up again after the HUD POC is accepted.
+
+| WP | Work |
+| --- | --- |
+| 3 | Pose and timestamp logging: a bounded, read-only OpenVR pose logger beside the mirror reader |
+| 4 | Projection math: pixel to ray in the head frame, then to the tracked frame using a pose |
+| 5 | World-locked overlay mode with recentering in the overlay bridge and client |
+| 6 | Tracker and smoothing across frames for a stable world-locked direction |
+| 8 | World-locked live loop: mirror input, projection, tracker and world-locked output |
 
 ## Upstream reuse plan (2026-10-31)
 
@@ -73,21 +110,22 @@ work packages. These are **planned reuse/evaluation tasks**, not integrated
 dependencies or new Frame compatibility results. The current work order,
 WP1/WP2 image audit and evaluation, and existing acceptance criteria still apply.
 
-Scope coordination: [PR #10](https://github.com/moral-kombat/framejacker/pull/10)
-separately proposes a fixed edge HUD and defers several world-locked work
-packages. The mappings below describe the published plan on this page; update
-their active/deferred status if that scope proposal is accepted. This research
-addition does not adopt that proposal or authorize a device operation.
+Scope: this page now targets the fixed edge HUD (revised 2026-10-31), and
+WP3–WP6 and WP8 are [deferred](#deferred-work-packages). Priorities 1, 2 and 5
+below therefore apply only if world-locked labels return. Priority 3 applies to
+the HUD now, through WP10 lifecycle review and WP12 measurement. Priority 4
+stays an optional follow-up. This research addition does not authorize a
+device operation.
 
 ### Priorities for the current POC
 
 | Priority | Reference and license | Work package | Planned reuse and completion check | Important limit |
 | --- | --- | --- | --- | --- |
-| 1 | **Frametop**: [pose history][frametop-pose] and [absolute overlays][frametop-overlay]. MIT. | WP3, WP4, WP5 | Adapt a bounded timestamped pose history and declared tracking origin to the existing pipeline/bridge. Preserve frame identity and pose age; test transforms, invalid tracking and origin changes with synthetic data before device qualification. | Its nearest-pose lookup is a reference pattern. Mirror observation time is not verified exposure time; clock domains, image/pose offset, field of view and crop still need validation. |
-| 2 | **One Euro Filter**: [Python implementation][oneeuro] and [license][oneeuro-license]. BSD-3-Clause for this implementation. | WP6 | Evaluate timestamp-aware smoothing after projection into the tracked frame. Compare angular jitter and lag on the same replay/synthetic inputs; reset on source/origin changes. | Smoothing does not supply object identity, depth or temporal alignment. Association, bounded dropout handling and stale-result expiry remain separate. |
-| 3 | **frame-perf-overlay**: [Vulkan texture upload][perf-texture], [overlay lifecycle][perf-overlay] and [placement][perf-placement]. MIT. | WP5, WP8 | Review tracking-validity and cleanup handling; plan compositor frame-time, CPU/GPU, thermal and input-age measurements. Consider a texture-upload change only if profiling justifies it. | Upstream panels are head/controller attached, not world-locked object labels. Its upload fence covers its own texture work, not Arcturus producer access. |
-| 4 | **Frame Control**: [native screenshot helper][frame-shot] and [runtime observations][frame-runtime]. MIT. | Optional follow-up input adapter | Reuse the small screenshot path for requested vision-lab stills and diagnostics, retaining source/frame ID and crop metadata. Keep it outside the WP3-WP8 critical path. | Screenshots are composited and can contain our output. They do not establish raw-camera access, exposure timing, calibration or feedback exclusion. |
-| 5 | **WayVR**: [absolute transforms][wayvr-overlay] and [tracking origin/recenter handling][wayvr-origin]. GPL-3.0. | WP5 design reference | Review origin and recenter cases for the existing overlay bridge. Prefer the MIT Frametop implementation for source reuse; retain WayVR as a reference or optional separate tool. | Steam Frame support is experimental. A world-space overlay alone does not establish calibrated camera-pixel-to-object alignment. |
+| 1 | **Frametop**: [pose history][frametop-pose] and [absolute overlays][frametop-overlay]. MIT. | WP3, WP4, WP5 (deferred) | Adapt a bounded timestamped pose history and declared tracking origin to the existing pipeline/bridge. Preserve frame identity and pose age; test transforms, invalid tracking and origin changes with synthetic data before device qualification. | Its nearest-pose lookup is a reference pattern. Mirror observation time is not verified exposure time; clock domains, image/pose offset, field of view and crop still need validation. |
+| 2 | **One Euro Filter**: [Python implementation][oneeuro] and [license][oneeuro-license]. BSD-3-Clause for this implementation. | WP6 (deferred) | Evaluate timestamp-aware smoothing after projection into the tracked frame. Compare angular jitter and lag on the same replay/synthetic inputs; reset on source/origin changes. | Smoothing does not supply object identity, depth or temporal alignment. Association, bounded dropout handling and stale-result expiry remain separate. |
+| 3 | **frame-perf-overlay**: [Vulkan texture upload][perf-texture], [overlay lifecycle][perf-overlay] and [placement][perf-placement]. MIT. | WP10, WP12 (previously WP5, WP8) | Review tracking-validity and cleanup handling; plan compositor frame-time, CPU/GPU, thermal and input-age measurements. Consider a texture-upload change only if profiling justifies it. | Upstream panels are head/controller attached, not world-locked object labels. Its upload fence covers its own texture work, not Arcturus producer access. |
+| 4 | **Frame Control**: [native screenshot helper][frame-shot] and [runtime observations][frame-runtime]. MIT. | Optional follow-up input adapter | Reuse the small screenshot path for requested vision-lab stills and diagnostics, retaining source/frame ID and crop metadata. Keep it outside the WP9-WP12 critical path. | Screenshots are composited and can contain our output. They do not establish raw-camera access, exposure timing, calibration or feedback exclusion. |
+| 5 | **WayVR**: [absolute transforms][wayvr-overlay] and [tracking origin/recenter handling][wayvr-origin]. GPL-3.0. | WP5 design reference (deferred) | Review origin and recenter cases for the existing overlay bridge. Prefer the MIT Frametop implementation for source reuse; retain WayVR as a reference or optional separate tool. | Steam Frame support is experimental. A world-space overlay alone does not establish calibrated camera-pixel-to-object alignment. |
 
 Frametop's [camera broker notes][frametop-hands] are useful diagnostics research,
 but its current colour path rejects problematic frames while the headset is
@@ -102,16 +140,16 @@ first label.
   evaluation ahead of any detector-default decision. MobileNet-SSD and
   YOLOX-Nano already exist; another fixed-class detector is not required by this
   reuse plan.
-- [ ] Prepare the Frametop-inspired pose-history/projection work and the One Euro
+- [ ] Deferred with world-locked labels: prepare the Frametop-inspired pose-history/projection work and the One Euro
   Filter evaluation offline, following the existing WP dependencies. Explicitly
   record clock domain, observation time, pose sample time, age and unknown
   image-to-pose offset; never relabel observation time as exposure time.
-- [ ] Extend the existing overlay bridge with the WP5 origin/recenter behavior.
+- [ ] Deferred with world-locked labels: extend the existing overlay bridge with the WP5 origin/recenter behavior.
   Reconcile the lifecycle safeguards in the current handoff before proposing
   output. A future authorized test first checks a fixed world marker, then
   drives it from one detection; assess rotation, translation and recenter
   separately. Estimated distance remains visibly identified as an estimate.
-- [ ] Plan WP8 measurement and feedback exclusion together: retain the overlay-masking
+- [ ] Plan WP12 measurement and WP11 feedback exclusion together: retain the overlay-masking
   requirement and qualify the mapping before live use; preserve matching frame/result
   identity, latest-frame behavior, expiry,
   independent abort and truthful cleanup reporting. Report input age and total
@@ -172,17 +210,19 @@ is linked with its review date.
 
 ## Acceptance
 
-One real object, one stable world-locked label for 60 seconds while the wearer
-moves their head, with the label's direction within a tolerance the wearer
-agrees to before the run, normal passthrough and tracking during and after, a
-clean shutdown with truthful cleanup reporting, and the report recorded as a
+One real object named in the HUD for 60 seconds while the wearer turns their
+head, with its arrow pointing within a tolerance the wearer agrees to before
+the run; no detections from the HUD's own footprint; the name expiring when
+the object leaves view; normal passthrough and tracking during and after; a
+clean shutdown with truthful cleanup reporting; and the report recorded as a
 numbered evidence entry separate from cloud results. Detection accuracy beyond
-that object is not claimed.
+that object, and any world position, are not claimed.
 
 ## Open questions for planners
 
-- Who authorizes device runs, and which are approved: WP3 first?
-- Acceptable direction tolerance for the label (degrees).
+- Who authorizes device runs, and is the HUD calibration (WP9) approved first?
+- Acceptable arrow tolerance, and which edge of the view holds the strip.
 - Which object for the POC (the rug has no class in either model; choose a
   class both models support, or accept a detector change).
-- Whether the head-locked panel stays as a fallback display.
+- Whether the head-locked replay panel stays as a fallback display.
+- Whether world-locked labels return after acceptance.
