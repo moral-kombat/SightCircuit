@@ -678,6 +678,123 @@ If it cannot, note the URL, the error, and the network setup in
 [status](status.md) rather than assuming the page works. Record the answers in
 `observations.json` as user-reported results, not as device checks.
 
+### Bounded edge HUD calibration checkpoint
+
+This is the device step for WP9 in the [POC scope](poc-scope.md#work-packages)
+and the first check of the [fixed edge HUD](architecture.md#fixed-edge-hud-decision)
+on Frame. It has **not been run on Frame**. It needs its own approval under the
+[October 26 handoff](live-capture.md#october-26-evening-handoff); this page is
+the procedure, not that approval.
+
+What it does: `scripts/hud_marker_observer.py` reads the verified mirror at
+native resolution, at most 5 reads per second for up to 20 seconds. It first
+waits up to two seconds for two distinct marker-free frames. It then starts
+`scripts/hud_marker_check.py`'s marker through the native bridge: a fixed,
+opaque, head-relative 320 × 128 tile with four corner tags, matching the HUD
+layout. The observer finds every complete tagged copy in the mirror and reports
+its native corners, the union of the copies plus the configured margin, and the
+largest corner drift while the wearer moves.
+
+What it does not do: no inference, no saved images, no production HUD output
+and no live HUD input. A clean run ends with status `observed_unqualified` and
+exit code `2`. That is the expected result, not a failure. It does **not**
+qualify the mapping. The observer cannot assign eyes, establish how the copies
+are composited, rule out unseen or occluded copies, or prove physical expiry,
+so live HUD input stays rejected after this check.
+
+#### Before the device run
+
+Run the offline checks on the reviewed revision, in the cloud or on Frame:
+
+```bash
+cd "$HOME/framejacker"
+QT_QPA_PLATFORM=offscreen .venv-replay/bin/python -m unittest \
+  tests.test_hud_marker_check tests.test_hud_marker_observer tests.test_hud_mask
+```
+
+On Frame, confirm all of the following:
+
+- [Independent SSH](#verify-independent-ssh-access) from the PC works, so the
+  run can be stopped and inspected without the headset UI.
+- The checkout is clean at the approved revision, `.venv-replay` is set up,
+  and the bridge is built on Frame with `bash scripts/build_overlay_bridge.sh`.
+- `/dev/video99` is still the verified SteamVR mirror candidate
+  ([mirror check](#check-an-existing-steamvr-mirror)).
+- No replay window, VR panel, mirror capture or other overlay is running.
+- Someone is wearing the headset, with normal passthrough and tracking.
+  Optionally start the [observation page](#record-headset-observations-for-a-run)
+  for their answers.
+
+Then run the marker's validation mode on Frame. It uses the generated marker
+and native timer only, and never initializes VR:
+
+```bash
+cd "$HOME/framejacker"
+.venv-replay/bin/python scripts/hud_marker_check.py --validate --seconds 3
+```
+
+Expect `"status": "completed"`, `"exit_code": 0` and `"cleanup_ok": true`. Stop
+here if it reports anything else.
+
+#### Approved run
+
+Only with approval for this run. All three opt-in flags and `--device` are
+required; the tools refuse a partial opt-in. Over SSH, use the same graphical
+session environment as the overlay stage in
+[E55](status.md#e55-annotated-replay-overlay-command-on-frame), which ran
+attached to the active `:0` display.
+
+```bash
+(
+  set -e
+  cd "$HOME/framejacker"
+  test -z "$(git status --porcelain)"
+  test -x artifacts/overlay-bridge/framejacker-overlay-bridge
+  mkdir -p artifacts/hud-calibration
+  run="$(mktemp -d "$PWD/artifacts/hud-calibration/run-XXXXXX")"
+  git rev-parse HEAD > "$run/revision.txt"
+  set +e
+  .venv-replay/bin/python scripts/hud_marker_observer.py --observe-calibration \
+    --allow-mirror-observation --allow-calibration-output \
+    --device /dev/video99 --seconds 20 > "$run/observer.json"
+  echo "$?" > "$run/exit-code.txt"
+  echo "Saved $run"
+)
+```
+
+During the run, the wearer keeps passthrough visible and looks at the scene
+for the first two seconds. A completely unchanging view can end the run with
+`baseline_distinct_clear_frames_not_established`. Once the marker tile appears,
+they turn their head slowly through a small range and keep the tile in view.
+Large movements, or a change in how many copies are visible, end the run
+rejected instead of widening the footprint. Ctrl-C (or SIGTERM over SSH) stops
+both tools.
+
+#### Reading the result
+
+| Exit code and status | Meaning | Next |
+| --- | --- | --- |
+| `2`, `observed_unqualified` | Clean run: copies observed, marker closed cleanly | Record `observed_copy_count`, `footprint_union_native`, `margin_px`, `maximum_corner_drift_px`, `sample_count` and the bridge cleanup fields |
+| `1`, `rejected`, `native_failed` or `cleanup_failed` | Observation or cleanup failed; `reason` names the cause | Keep the report; do not repeat the unchanged run |
+| `130`, `cancelled` | Stopped by signal | Keep the report; note why it was stopped |
+
+Native cleanup fields in the report are process and API results. They do not
+show that the headset recovered. Ask the wearer, and record their answers as
+user-reported:
+
+- Was the marker tile visible in the headset, and where?
+- Did passthrough and tracking stay normal during the run and for 30 seconds
+  afterward, without switching the camera source?
+- Did the Arcturus input turn green at any point
+  ([E59](status.md#e59-arcturus-green-input-recurrence-and-operator-recovery))?
+
+If passthrough or tracking regresses, stop and keep the report. Switching to
+native passthrough and back is a recovery workaround, not a pass. Hand the
+saved directory and the answers to the evidence coordinator for a numbered
+entry ([POC scope rules](poc-scope.md#rules-kept-and-changed)). A clean result
+supports WP11 (feedback exclusion) planning. It does not enable live HUD input
+or production HUD output.
+
 ### Check native capture prerequisites
 
 Use the normal Frame terminal to collect the build metadata needed for a
