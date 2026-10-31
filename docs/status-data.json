@@ -129,8 +129,8 @@
     },
     {
       "capability": "Fixed edge HUD, marker and offline live pipeline",
-      "state": "Shared runtime and qualification schema verified offline; production closed",
-      "evidence": "Native padded masking, original-frame expiry and guarded native decode; candidate records never qualify hardware; V4 and physical acceptance remain open; [E72](#e72-shared-hud-runtime-and-independent-lifecycle-fixes), [E74](#e74-evidence-generation-and-offline-mapping-qualification-support)"
+      "state": "Shared runtime verified offline; historical V4 observation rejected; production closed",
+      "evidence": "Native masking, original-frame expiry and qualification schema verified offline; recovered V4 report/source explain the software stop, while green physical outcome and G2 remain open; [E72](#e72-shared-hud-runtime-and-independent-lifecycle-fixes), [E74](#e74-evidence-generation-and-offline-mapping-qualification-support), [E75](#e75-recovered-v4-evidence-and-software-termination-analysis)"
     },
     {
       "capability": "Dedicated Arcturus Vulkan capture",

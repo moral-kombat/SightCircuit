@@ -1219,8 +1219,10 @@ Linux log reportedly passed 49 tests; that original log is absent. The
 marker-only harness does not itself observe mirror
 corners, qualify mapping or demonstrate physical expiry. The later
 [ARM64 build and empirical observer](status.md#e71-offline-arm64-build-and-empirical-marker-observer)
-have offline evidence. The cross-built binary is unexecuted; a clean observer
-result stays unqualified. Observer suite counts are implementation-session reports,
+have offline evidence. Subsequently recovered [E75](evidence/e075.md) establishes
+that the historical V4 ARM64 binary and observer ran on Frame and were rejected;
+the software stop is explained but physical recovery remains unresolved. A
+future clean observer result stays unqualified. Observer suite counts are implementation-session reports,
 including a Windows symlink-privilege error, not an all-platform pass or an
 independently inspected standalone log. No device execution is authorized.
 
@@ -1229,8 +1231,8 @@ bridge plus seven Python modules), with size/hash checks during that review.
 The manifest is not committed and does not pin the current implementation; a
 new reviewed artifact manifest is required for a future checkpoint.
 See the [preflight and placeholder command](on-device.md#deployment-preflight-and-command-shape-not-authorized).
-The capture ABI skip requires target UAPI/ctypes/ioctl size evidence before
-capture. Cross-compilation and Windows fixture outcomes do not establish Frame
+Target UAPI/ctypes/ioctl size evidence is still required before capture; passing
+the cloud ABI test does not establish the headset ABI. Cross-compilation and Windows fixture outcomes do not establish Frame
 runtime compatibility. No install, transfer or device execution is implied.
 
 ## Offline foundation for the minimum live POC

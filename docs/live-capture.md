@@ -28,9 +28,10 @@ The latest source-only check is [E60](status.md#e60-evening-source-only-mirror-c
 The owner confirmed the saved TV scene and normal operation during and 30 seconds
 afterward without a toggle. The subsequent [one-still comparison](status.md#e61-file-only-detector-comparison-on-the-evening-grayscale-still)
 ran successfully but both models missed the expected TV. The
-[green-input recurrence and V4 cleanup failure](status.md#e59-arcturus-green-input-recurrence-and-operator-recovery)
-remain unresolved. E58's general wearer confirmations remain valid within
-their original scope.
+[green-input recurrence and V4 physical cleanup failure](status.md#e59-arcturus-green-input-recurrence-and-operator-recovery)
+remain unresolved. The subsequently recovered [V4 evidence](evidence/e075.md)
+explains its early software stop and cleanup fields. E58's general wearer
+confirmations remain valid within their original scope.
 
 This checkpoint governs the next work; existing commands elsewhere are not
 authorization for another device operation. Frame/Arcturus remains the goal.
@@ -60,16 +61,16 @@ POC input source.
    Broader accuracy needs a separately approved representative set, including
    the earlier rug/sofa failure; new still capture is not authorized here.
    Per-image timings are not live throughput or latency.
-4. **Reconcile lifecycle safeguards before proposing output.** The preserved
-   original checkout's HUD masking, calibration expiry, independent guardian
-   and truthful early-termination reporting are not automatically part of
-   merged main. Compare the exact capture/overlay implementations and tests,
-   retain owned copies, source/format/config validation, latest-frame and
-   stale-result behavior, and explain V4's failed cleanup before a new
-   marker/live-output proposal. Do not batch-import unrelated changes or
-   treat successful process reaping/API cleanup as physical recovery.
-   Review the session helper's continue-after-failure behavior and frame-count
-   display limits as part of that bounded-operation contract.
+4. **Resolve physical lifecycle acceptance before proposing output.** Shared
+   masking, calibration expiry, guardian supervision, observation deadlines and
+   truthful reporting are implemented offline ([E72](evidence/e072.md),
+   [E74](evidence/e074.md)). Recovered original V4 evidence and hash-matched
+   source now explain the rejected marker callback and immediate client-requested
+   stop ([E75](evidence/e075.md)). Inspect any already-saved camera/compositor/
+   Arcturus logs and exact runtime versions covering October 24 around 22:48 EDT
+   to investigate the still-unexplained green passthrough. Record missing logs
+   as unavailable. Keep process reaping, API cleanup and wearer recovery separate;
+   do not repeat the unchanged marker test or infer physical recovery from exit 0.
 5. **Keep live acceptance separate.** A future proposal needs a pinned
    artifact, explicit source and image/display limits, an independent abort
    path, truthful cleanup outcomes and wearer confirmation. Any HUD mapping
@@ -146,9 +147,10 @@ place for capture planning.
 
 ### Critical path
 
-1. **WP10 lifecycle and cleanup safeguards.** Explain the V4 cleanup failure
-   ([E59](status.md#e59-arcturus-green-input-recurrence-and-operator-recovery))
-   and reconcile cleanup reporting before any live output.
+1. **WP10 lifecycle and cleanup safeguards.** V4's software stop and cleanup
+   fields are explained ([E75](evidence/e075.md)); its green physical outcome
+   and the later recurrence remain unresolved. Investigate existing runtime
+   evidence and establish physical recovery before any live output.
 2. **WP9 HUD mapping calibration** on Frame, using the
    [calibration checkpoint](on-device.md#bounded-edge-hud-calibration-checkpoint).
 3. **WP11 feedback exclusion check** on Frame with the qualified mask.
@@ -184,8 +186,9 @@ must carry, as one numbered evidence entry separate from cloud results:
 - The mirror is composited. Its physical camera identity, field of view and
   timing are unknown ([E14](status.md#e14-physical-room-visible-in-the-mirror-preview)),
   so arrows stay approximate.
-- The V4 cleanup failure and the Arcturus green-input recurrence (E59) are
-  unresolved.
+- V4's green physical outcome and the Arcturus green-input recurrence remain
+  unresolved; recovered [E75](evidence/e075.md) explains only software termination
+  and cleanup reporting.
 - Detection quality is unproven on Frame input: both models missed the TV on
   the one compared still
   ([E61](status.md#e61-file-only-detector-comparison-on-the-evening-grayscale-still)),
@@ -201,10 +204,11 @@ These need no device and no approval:
 
 1. Keep the synthetic-only gates in the
    [contract review](#synthetic-input-and-feedback-contract-review) intact.
-2. WP10 analysis: compare the capture and overlay implementations against the
-   preserved safeguards (handoff item 4).
+2. WP10: preserve the reconciled safeguards and recovered software account;
+   inspect existing runtime logs/version evidence for the green physical outcome
+   (handoff item 4 and [E75](evidence/e075.md)).
 3. WP1 preprocessing audit, once access to the still is approved.
-4. WP7 documentation weight.
+4. WP7 is complete offline; maintain its evidence sources and generated summaries.
 
 ## Edge HUD acceptance gates
 
@@ -223,8 +227,8 @@ and offline report checks do not authorize or implement a live device run.
 | Gate | Requires | Status |
 | --- | --- | --- |
 | G1. Synthetic mask, fail-closed mapping and expiry | Offline tests: full-footprint mask before resize, margin and eye union, fail-closed mapping and format changes, stale expiry independent of inference | Passes offline ([E69](status.md#e69-offline-edge-hud-and-native-mask-validation)) |
-| G2. Lifecycle and cleanup (WP10) | V4 failure explained; guardian, calibration expiry and truthful early-termination reporting reconciled with `main`; tests for the failure path | Open (E59) |
-| G3. Mapping observed on Frame (WP9) | [Calibration checkpoint](on-device.md#bounded-edge-hud-calibration-checkpoint) ends `observed_unqualified` with clean cleanup; normal passthrough confirmed | Not run |
+| G2. Lifecycle and cleanup (WP10) | Recovered software termination account; evidenced physical failure/recovery account; reconciled guardian, calibration expiry and truthful reporting with failure-path tests | Open: software account established, green physical failure/recovery unresolved ([E75](evidence/e075.md)) |
+| G3. Mapping observed on Frame (WP9) | [Calibration checkpoint](on-device.md#bounded-edge-hud-calibration-checkpoint) ends `observed_unqualified` with clean cleanup; normal passthrough confirmed | Historical V4 attempt rejected ([E75](evidence/e075.md)); no accepted observation |
 | G4. Mapping qualified | Versioned evidence for eye composition, all HUD copies, conservative margins and bounded operating limits; see the [proposed method](hud-qualification.md#proposed-g4-method). Candidate schema validation is not qualification | Proposed method; device qualification pending |
 | G5. Feedback exclusion and physical expiry (WP11) | With the HUD visible, no detections from its footprint during head motion; stale names disappear on the headset within the expiry | Not run |
 | G6. Live HUD loop (WP12) | The [POC acceptance run](poc-scope.md#acceptance) with the evidence listed under [Acceptance evidence](#acceptance-evidence) | Not run |

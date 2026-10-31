@@ -50,7 +50,10 @@ HUD with full-footprint native-resolution masking before resizing/inference.
 The synthetic-only implementation and final offline tests are recorded in
 [E69](../../docs/status.md#e69-offline-edge-hud-and-native-mask-validation); live
 HUD input and real output remain blocked. The marker harness and observer have
-executable, separately gated calibration preparation, but have not run on Frame; clean observation stays
+executable, separately gated calibration preparation. Recovered
+[E75](../../docs/evidence/e075.md) records a rejected historical V4 Frame attempt
+and explains its software termination; the green physical outcome is unresolved.
+There is no accepted G3 observation, and a future clean observation stays
 `observed_unqualified`. The proposed
 [G4 method](../../docs/hud-qualification.md#proposed-g4-method) and offline candidate
 schema cannot establish qualification. Keep the object name and approximate

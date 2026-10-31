@@ -60,9 +60,12 @@ the marker draws the fixed opaque footprint; an empirical observer finds tagged
 copies at native mirror resolution and reports their bounded motion/margins.
 It cannot establish eye composition, unseen/occluded copies or production
 exclusion. Clean observation deliberately remains `observed_unqualified` with
-exit code 2. The verified ARM64 cross-build has not run on Frame. Production
-mapping and real HUD expiry gates remain closed; see
-[E71](status.md#e71-offline-arm64-build-and-empirical-marker-observer).
+exit code 2. Recovered [E75](evidence/e075.md) establishes that the historical
+V4 ARM64 marker/observer attempt ran on Frame and was rejected; no accepted
+observation or qualified mapping resulted. It supersedes the earlier absence
+of device evidence in [E71](status.md#e71-offline-arm64-build-and-empirical-marker-observer).
+Current ARM64 CI is not headset validation. Production mapping and real HUD
+expiry gates remain closed.
 
 ## Progress summary
 
@@ -78,7 +81,7 @@ was a dated snapshot; this table has a reproducible repository source.
 | Annotated Qt replay window | Device-confirmed | Latest run presents/processes 576 frames and reports four labels; label accuracy remains unevaluated; [E47](status.md#e47-recorded-recognition-and-vr-panel-poc-on-frame) |
 | Bounded mirror recognition | Frame POC execution and sampled preview localization confirmed | Latest run: 100 captured / 51 processed reads, 4.993 processed fps, 40.065 ms mean inference, clean shutdown; user confirms matching preview labels/boxes and normal passthrough/tracking during/after; broader accuracy and continuous display remain separate; [E48](status.md#e48-live-mirror-recognition-poc-and-matching-preview) |
 | Candidate detector and evaluation harness | Preprocessing audit verified offline; E61 reproduction and Frame selection blocked | Corrected demonstrated SSD channel normalization and per-axis scoring; pinned audit variants and factual annotation coverage; original still/digest absent; no default change; [E73](status.md#e73-reproducible-preprocessing-audit-and-ssd-channel-correction), [E61](status.md#e61-file-only-detector-comparison-on-the-evening-grayscale-still) |
-| Fixed edge HUD, marker and offline live pipeline | Shared runtime and qualification schema verified offline; production closed | Native padded masking, original-frame expiry and guarded native decode; candidate records never qualify hardware; V4 and physical acceptance remain open; [E72](status.md#e72-shared-hud-runtime-and-independent-lifecycle-fixes), [E74](status.md#e74-evidence-generation-and-offline-mapping-qualification-support) |
+| Fixed edge HUD, marker and offline live pipeline | Shared runtime verified offline; historical V4 observation rejected; production closed | Native masking, original-frame expiry and qualification schema verified offline; recovered V4 report/source explain the software stop, while green physical outcome and G2 remain open; [E72](status.md#e72-shared-hud-runtime-and-independent-lifecycle-fixes), [E74](status.md#e74-evidence-generation-and-offline-mapping-qualification-support), [E75](status.md#e75-recovered-v4-evidence-and-software-termination-analysis) |
 | Stereo depth and world-space labels | Deferred | Calibration, depth and pose/timebase alignment remain unresolved |
 | Gaussian splat reconstruction and viewing | Deferred optional work | Recorded-data workflow researched; training and headset splat rendering not validated by this project |
 

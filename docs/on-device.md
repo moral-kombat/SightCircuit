@@ -720,10 +720,13 @@ If it cannot, note the URL, the error, and the network setup in
 
 ### Bounded edge HUD calibration checkpoint
 
-This is the device step for WP9 in the [POC scope](poc-scope.md#work-packages)
-and the first check of the [fixed edge HUD](architecture.md#fixed-edge-hud-decision)
-on Frame. It has **not been run on Frame**. It needs its own approval under the
-[October 26 handoff](live-capture.md#october-26-evening-handoff); this page is
+This is the proposed device step for WP9 in the
+[POC scope](poc-scope.md#work-packages). Recovered [E75](evidence/e075.md)
+establishes that a historical five-second V4 marker/observer attempt ran on
+Frame and was rejected; G3 acceptance is still pending. Do not repeat that
+unchanged attempt. Resolve G2's physical failure/recovery prerequisites and
+review a revised bounded checkpoint before seeking its own approval under the
+[October 26 handoff](live-capture.md#october-26-evening-handoff). This page is
 the procedure, not that approval.
 
 What it does: `scripts/hud_marker_observer.py` reads the verified mirror at

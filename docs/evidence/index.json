@@ -518,6 +518,13 @@
       "file": "e074.md",
       "kind": "offline",
       "reconstructed": false
+    },
+    {
+      "id": "E75",
+      "title": "Recovered V4 evidence and software termination analysis",
+      "file": "e075.md",
+      "kind": "mixed",
+      "reconstructed": false
     }
   ]
 }

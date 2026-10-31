@@ -35,7 +35,7 @@ remain unknown unless the evidence explicitly records them.
 | Metadata-only provider and producer synchronization review | v3 ARM64 build and all 24 generated-data tests passed on Frame | E36/E37 cover generated metadata-only checks, with no layer activation in those checks; later real metadata load/restoration is recorded separately in E65. Layer retains/exports no image FDs, live image access stays blocked and the provider track remains frozen; [E36](#e36-metadata-only-provider-and-synchronization-review), [E37](#e37-metadata-only-provider-and-diagnostic-on-frame), [E65](#e65-v2-recovered-candidate-snapshots-compared-and-visual-check-passed) |
 | Inactive v3 bundle and SteamVR service preflight | Frame report received | Bundle prepared without activation; active simple/control-group user service, 20-second stop timeout, no drop-ins; [E38](#e38-inactive-bundle-and-steamvr-service-on-frame) |
 | Bounded metadata-layer trial and post-exit recovery | Metadata-only provider loaded and restored on Frame through platform session cycles; registry inspection unstable; image access blocked | Bare SteamVR stop refused after the session coupling was found ([E63](#e63-service-only-rehearsal-and-graphical-session-dependency)); platform session test passed with a normal headset ([E64](#e64-platform-session-test-completed-and-headset-confirmed)); two metadata trials loaded the provider and restored normal startup, with eight stable candidate records but no settled full registry ([E65](#e65-v2-recovered-candidate-snapshots-compared-and-visual-check-passed)); earlier runtime baseline [E46](#e46-read-only-runtime-baseline-on-frame) |
-| Fixed edge HUD, marker and offline live pipeline | Shared runtime and qualification schema verified offline; production closed | Native padded masking, original-frame expiry and guarded native decode; candidate records never qualify hardware; V4 and physical acceptance remain open; [E72](#e72-shared-hud-runtime-and-independent-lifecycle-fixes), [E74](#e74-evidence-generation-and-offline-mapping-qualification-support) |
+| Fixed edge HUD, marker and offline live pipeline | Shared runtime verified offline; historical V4 observation rejected; production closed | Native masking, original-frame expiry and qualification schema verified offline; recovered V4 report/source explain the software stop, while green physical outcome and G2 remain open; [E72](#e72-shared-hud-runtime-and-independent-lifecycle-fixes), [E74](#e74-evidence-generation-and-offline-mapping-qualification-support), [E75](#e75-recovered-v4-evidence-and-software-termination-analysis) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
 | Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; no source-identified built-in-camera frames have been received |
 | Stereo depth and world-space labels | Deferred | Calibration, depth and pose/timebase alignment remain unresolved |
@@ -346,6 +346,10 @@ original uncertainty. No new device execution is implied by this migration.
 ### E74: Evidence generation and offline mapping qualification support
 
 [Full evidence](evidence/e074.md). Offline record.
+
+### E75: Recovered V4 evidence and software termination analysis
+
+[Full evidence](evidence/e075.md). Mixed source record.
 
 ## Maintaining the evidence
 

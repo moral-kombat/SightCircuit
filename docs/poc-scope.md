@@ -41,7 +41,7 @@ no threshold or model changes to make one image pass; skipped tests fail CI.
 
 Change:
 
-- One coordinator allocates evidence IDs (E75 onward after this delivery) and is the only editor of
+- One coordinator allocates evidence IDs (E76 onward after this delivery) and is the only editor of
   the `status.md` matrix; coders put evidence in their PR description and the
   coordinator records it. Parallel branches reused E50, E52 and E54–E62; those
   results are now recorded as E63–E71.
@@ -71,8 +71,10 @@ Change:
 - The mirror view is composited and its physical camera identity, field of view
   and timing are unknown (E14, E18). Arrows are approximate view-relative
   directions, not calibrated bearings.
-- The V4 cleanup failure and the Arcturus green-input recurrence (E59) are
-  unresolved; lifecycle safeguards must be reconciled before any live output.
+- V4's software stop and cleanup fields are explained by recovered, verified
+  evidence ([E75](evidence/e075.md)). Its green Arcturus outcome and the later
+  recurrence remain unexplained; physical recovery is still required before
+  any live output.
 
 ## Work packages
 
@@ -117,13 +119,14 @@ is absent.
 | --- | --- | --- | --- |
 | 1 | Audit implemented; two independent preprocessing/scoring defects fixed; E61 unresolved | Pinned source/model/runtime tensors and controlled variants; [E73](evidence/e073.md) | Approved original still/reference digest and inspection for E61 reproduction |
 | 2 | Annotation coverage and seed comparison verified offline | Shared evaluator distinguishes factual presence/absence/boxes; [E73](evidence/e073.md) | Representative factual Frame labels, including rug/sofa, before a detector-default decision |
-| 7 | Complete offline | 74 per-entry records, generated matrix, concise README, preserved history and checked links; [E74](evidence/e074.md) | Maintenance only; no device requirement |
-| 9 | Schema/rejections and proposed G4 method verified offline; no Frame observation | Exact context/lifetime/margin/provenance checks; [G4 method](hud-qualification.md) | Frame observation, eye/composition/all-copy/motion-limit evidence and reviewed mapping |
-| 10 | Shared lifecycle safeguards verified offline; V4 cause unresolved | Original deadlines, guarded decode, bounded cleanup and session fail-stop; [E72](evidence/e072.md) | Original V4 report/timeline/source hashes, causal account and wearer-confirmed recovery |
+| 7 | Complete offline | 75 per-entry records, generated matrix, concise README, preserved history and checked links; [E74](evidence/e074.md), [E75](evidence/e075.md) | Maintenance only; no device requirement |
+| 9 | Schema/G4 design verified offline; historical V4 device attempt rejected | Exact context/lifetime/margin/provenance checks; [G4 method](hud-qualification.md), [V4 evidence](evidence/e075.md) | An accepted bounded observation after G2, eye/composition/all-copy/motion-limit evidence and reviewed mapping |
+| 10 | V4 report/source identity recovered; software termination explained; physical failure unresolved | Verified original report, ten matched source/test files and termination timeline; [E75](evidence/e075.md); shared safeguards [E72](evidence/e072.md) | Existing camera/compositor logs and exact runtime versions for the green event; evidenced physical failure account and wearer-confirmed recovery |
 | 11 | Feedback/expiry telemetry and default-off diagnostic design ready offline | Native-mask tests, bounded validation ledger and report template; [E74](evidence/e074.md) | Reviewed diagnostic implementation, qualified mapping, head-motion exclusion and physical expiry evidence |
 | 12 | Shared bounded synthetic loop verified; production closed | Native padded masking, identity/context/age checks and native validation; [E72](evidence/e072.md) | G2–G5, representative detector evidence and combined 60-second headset acceptance |
 
-[G1 passes offline; G2 is open; G3, G5 and G6 have not run; G4 remains
+[G1 passes offline; G2 is open; G3 has a rejected historical attempt; G5/G6 have
+not run; G4 remains
 unqualified](live-capture.md#edge-hud-acceptance-gates). A
 [proposed G4 qualification method](hud-qualification.md#proposed-g4-method) now
 defines the missing evidence; proposal/schema validation is not qualification.
@@ -136,6 +139,13 @@ integration gaps without treating them as proven causes of V4, preserves the
 production gates, and requires a concrete next checkpoint after the offline
 work is finished. This delivery records no new device result or device-dependent
 WP closure. WP7 is complete offline.
+
+The recovered [V4 record](evidence/e075.md) closes the original-report and
+source-identity gaps. The next WP10 evidence action is inspection of any
+already-saved Arcturus/camera/compositor logs and exact runtime versions for
+October 24 around 22:48 EDT. Tag/bit mismatch and green passthrough causes
+remain unknown. G2 must be resolved before another marker/output proposal;
+no new device run is authorized by this plan update.
 
 ## Upstream reuse plan (2026-10-31)
 

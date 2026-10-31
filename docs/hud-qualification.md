@@ -13,9 +13,11 @@ remain authoritative.
 The existing marker observer is G3: at native resolution it reports visible
 tagged copies, unions, drift and conservative candidate margins. It does not
 assign eyes, prove capture freshness or find every unrecognizable/occluded
-copy. Successful runs remain `observed_unqualified`, exit 2, including when
-later evidence is added beside their reports. Keep their original report and
-digest unchanged.
+copy. The historical V4 device attempt ran on Frame and was rejected; it did
+not establish an accepted G3 mapping observation. [E75](evidence/e075.md) now
+records its recovered evidence. Successful observations would still remain
+`observed_unqualified`, exit 2, including when later evidence is added beside
+their reports. Keep original reports and digests unchanged.
 
 G4 requires two independent kinds of evidence. First, an inspected runtime and
 mirror composition contract must identify which eye or eyes are captured, the
@@ -213,15 +215,28 @@ G4 remains unqualified: the exact eye/compositor capture contract, evidence
 ruling out additional or occluded copies, measured motion/filter error budget,
 monitorable operating limits and a reviewed device mapping are missing. G5
 also needs the separately reviewed diagnostic implementation and independent
-physical-expiry observation method. G2's V4 cause and physical recovery remain
-unresolved; fixing a latent packet defect does not explain that failure. The
-original V4 command, exact revision/runtime, supervisor/native reports and
-wearer recovery timeline are needed before attributing a root cause.
+physical-expiry observation method. [E75](evidence/e075.md) now explains V4's
+early software termination: the frame-3 tag/bit rejection enters observer cleanup, and the writerless marker
+client immediately requests SIGTERM. Native cleanup APIs report success/exit 0;
+the Python close path retains forced-termination intent and overall cleanup
+false. The recovered 10,686-byte report matches its original SHA-256 and all
+ten source pins match. There was no outer timeout. This is separate from the
+still-unresolved green-input mechanism, tag mismatch and physical recovery, so
+G2 remains open; the latent packet fix is not their demonstrated cause.
 
-The single next device checkpoint remains the existing **G3 marker observer**,
-after G2/recovery prerequisites and a reviewed artifact manifest are ready and
-approval for that bounded run is given. Pin the final checkout/bridge/module
-hashes at delivery; do not substitute a previously built ARM64 artifact.
+The remaining evidence action is inspection of existing camera/compositor/
+Arcturus logs around 2026-10-24 at about 22:48 EDT (2026-10-25 02:48 UTC), with
+exact runtime versions and the wearer recovery timeline. The original report
+and software timeline need not be recovered again. Any changed marker-stop
+path needs focused regression coverage; physical recovery requires a later,
+separately approved bounded validation with independent abort and a wearer.
+
+The single next proposed device checkpoint is a revised **G3 marker-observer
+attempt**, after G2/recovery prerequisites, review of the changed marker-stop
+path and a complete artifact manifest are ready, with approval for that bounded
+run. V4 was a failed device attempt, not accepted G3 evidence; do not repeat it
+unchanged. Pin the final checkout/bridge/module hashes at delivery; do not
+substitute a previously built ARM64 artifact.
 `hud_marker_observer.py --help` and `hud_marker_check.py --help` confirm the
 existing flags below. This is the existing procedure for a future approved run,
 not an instruction to execute it in the current task:
