@@ -64,10 +64,11 @@ class MobileNetSSD:
         self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
 
     def detect(self, bgr, threshold):
-        cv2, np = self.cv2, self.np
+        np = self.np
         validate_input(bgr, threshold)
         height, width = bgr.shape[:2]
-        self.net.setInput(cv2.dnn.blobFromImage(bgr, 0.007843, (300, 300), 127.5))
+        blob, _ = self.prepare_input(bgr)
+        self.net.setInput(blob)
         started = time.monotonic()
         prediction = self.net.forward()
         elapsed = (time.monotonic() - started) * 1000
@@ -88,6 +89,12 @@ class MobileNetSSD:
                 continue
             detections.append(Detection(CLASSES[class_id], round(float(row[2]), 5), (x1, y1, x2, y2)))
         return DetectionResult(tuple(detections), elapsed)
+
+    def prepare_input(self, bgr):
+        """The production model input, also used by the file-only audit."""
+        # Python numeric Scalars initialize only the first OpenCV channel. Use
+        # all three means explicitly so G/R receive the same model normalization.
+        return self.cv2.dnn.blobFromImage(bgr, 0.007843, (300, 300), (127.5, 127.5, 127.5)), None
 
 
 class YoloxDetector:
@@ -150,8 +157,7 @@ class YoloxDetector:
     def detect(self, bgr, threshold):
         cv2, np = self.cv2, self.np
         validate_input(bgr, threshold)
-        image, transform = letterbox(bgr, self.size)
-        blob = np.ascontiguousarray(image.transpose(2, 0, 1)[None], dtype=np.float32)
+        blob, transform = self.prepare_input(bgr)
         started = time.monotonic()
         output = self._forward(blob)
         elapsed = (time.monotonic() - started) * 1000
@@ -179,6 +185,11 @@ class YoloxDetector:
             detections.append(Detection(self.classes[class_ids[index]], round(float(confidences[index]), 5),
                                         (x1, y1, x2, y2)))
         return DetectionResult(tuple(detections), elapsed)
+
+    def prepare_input(self, bgr):
+        """The production BGR, top-left letterboxed float32 NCHW input."""
+        image, transform = letterbox(bgr, self.size)
+        return self.np.ascontiguousarray(image.transpose(2, 0, 1)[None], dtype=self.np.float32), transform
 
 
 DETECTORS = {"mobilenet-ssd": MobileNetSSD, "yolox-nano": YoloxDetector}

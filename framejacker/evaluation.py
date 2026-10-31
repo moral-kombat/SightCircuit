@@ -14,6 +14,7 @@ A manifest lists images and what a correct detector should report:
 Labels a detector cannot produce are reported as unsupported, not as misses.
 """
 import json
+import math
 from pathlib import Path
 
 from .labels import canonical
@@ -29,20 +30,47 @@ class ManifestError(ValueError):
 def load_manifest(path):
     path = Path(path)
     manifest = json.loads(path.read_text())
-    if manifest.get("schema_version") != SCHEMA_VERSION or not isinstance(manifest.get("images"), list):
+    if (not isinstance(manifest, dict) or manifest.get("schema_version") != SCHEMA_VERSION
+            or not isinstance(manifest.get("images"), list)):
         raise ManifestError(f"{path}: expected schema_version {SCHEMA_VERSION} with an images list")
     seen = set()
     for entry in manifest["images"]:
-        if not isinstance(entry.get("id"), str) or entry["id"] in seen:
+        if (not isinstance(entry, dict) or not isinstance(entry.get("id"), str)
+                or not entry["id"] or entry["id"] in seen):
             raise ManifestError(f"{path}: every image needs a unique string id")
         seen.add(entry["id"])
         if ("path" in entry) == ("file" in entry):
             raise ManifestError(f"{path}: image {entry['id']} needs exactly one of path or file")
+        if not isinstance(entry.get("path", entry.get("file")), str):
+            raise ManifestError(f"{path}: image {entry['id']} has an invalid path")
+        digest = entry.get("sha256")
+        if digest is not None and (not isinstance(digest, str) or len(digest) != 64
+                                   or any(c not in "0123456789abcdef" for c in digest)):
+            raise ManifestError(f"{path}: image {entry['id']} has an invalid SHA-256")
+        for field in ("present", "absent"):
+            labels = entry.get(field, [])
+            if not isinstance(labels, list):
+                raise ManifestError(f"{path}: {field} must be a list")
+            for label in labels:
+                options = label if field == "present" and isinstance(label, list) else [label]
+                if not options or any(not isinstance(item, str) or not item.strip() for item in options):
+                    raise ManifestError(f"{path}: invalid {field} label")
+        if not isinstance(entry.get("boxes_complete", False), bool):
+            raise ManifestError(f"{path}: boxes_complete must be a boolean")
+        if not isinstance(entry.get("objects", []), list):
+            raise ManifestError(f"{path}: objects must be a list")
         for obj in entry.get("objects", []):
+            if not isinstance(obj, dict):
+                raise ManifestError(f"{path}: invalid object")
             box = obj.get("box_xyxy")
             if (not isinstance(obj.get("label"), str) or not isinstance(box, list) or len(box) != 4
+                    or any(isinstance(v, bool) or not isinstance(v, (int, float))
+                           or not math.isfinite(v) or v < 0 for v in box)
                     or not box[0] < box[2] or not box[1] < box[3]):
                 raise ManifestError(f"{path}: image {entry['id']} has an invalid object")
+            if (not isinstance(obj.get("confusable", []), list)
+                    or any(not isinstance(label, str) for label in obj.get("confusable", []))):
+                raise ManifestError(f"{path}: invalid confusable labels")
     manifest["_directory"] = path.parent
     return manifest
 
@@ -64,12 +92,17 @@ def iou(a, b):
 
 
 def score_image(entry, detections, vocabulary, scale=1.0, iou_threshold=0.5):
-    """Score one image. ``detections`` use processed pixels; ``scale`` maps source to processed."""
+    """Score processed-pixel detections; ``scale`` is a scalar or realized (x, y) ratios."""
+    scale_x, scale_y = scale if isinstance(scale, (tuple, list)) else (scale, scale)
     vocabulary = {canonical(label) for label in vocabulary}
     found = [(canonical(item.label), item.confidence, item.box_xyxy) for item in detections]
     reported = {label for label, _, _ in found}
     score = {"id": entry["id"], "reported": sorted(reported), "present_hits": [], "present_misses": [],
-             "unsupported": [], "absent_violations": []}
+             "unsupported": [], "absent_violations": [],
+             "annotation_coverage": {"presence_checks": len(entry.get("present", [])),
+                                     "absence_checks": len(entry.get("absent", [])),
+                                     "objects": len(entry.get("objects", [])),
+                                     "boxes_complete": bool(entry.get("boxes_complete", False))}}
     for expected in entry.get("present", []):
         options = [canonical(label) for label in (expected if isinstance(expected, list) else [expected])]
         name = "|".join(options)
@@ -85,9 +118,10 @@ def score_image(entry, detections, vocabulary, scale=1.0, iou_threshold=0.5):
         elif label in reported:
             score["absent_violations"].append(label)
 
-    objects = [dict(obj, label=canonical(obj["label"]), box=[value * scale for value in obj["box_xyxy"]])
+    objects = [dict(obj, label=canonical(obj["label"]),
+                    box=[value * ratio for value, ratio in zip(obj["box_xyxy"], (scale_x, scale_y) * 2)])
                for obj in entry.get("objects", [])]
-    if objects:
+    if objects or entry.get("boxes_complete"):
         unmatched = sorted(range(len(found)), key=lambda index: -found[index][1])
         true_positive = false_negative = 0
         for obj in objects:
@@ -120,6 +154,12 @@ def totals(scores):
               "present_misses": count("present_misses"), "absent_violations": count("absent_violations"),
               "confusions": count("confusions"), "true_positives": count("true_positives"),
               "false_negatives": count("false_negatives")}
+    result["annotation_coverage"] = {
+        "presence_checks": sum(s.get("annotation_coverage", {}).get("presence_checks", 0) for s in scores),
+        "absence_checks": sum(s.get("annotation_coverage", {}).get("absence_checks", 0) for s in scores),
+        "objects": sum(s.get("annotation_coverage", {}).get("objects", 0) for s in scores),
+        "images_with_complete_boxes": sum(bool(s.get("annotation_coverage", {}).get("boxes_complete"))
+                                          for s in scores)}
     expected = result["present_hits"] + result["present_misses"]
     result["present_recall"] = round(result["present_hits"] / expected, 4) if expected else None
     boxed = result["true_positives"] + result["false_negatives"]
