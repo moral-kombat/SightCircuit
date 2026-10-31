@@ -33,7 +33,8 @@ unknown unless explicitly recorded below.
 | Capture watchdog, provider/layer lifecycle and exact recovery | Earlier v2 milestone passed all 28 generated-data tests on Frame ARM64 | Bounded worker, metadata/GPU provenance, registry changes, owned endpoint and conditional restoration; no real driver/layer execution or device restoration; [E35](#e35-watchdog-provider-and-recovery-tests-on-frame) |
 | Metadata-only provider and producer synchronization review | v3 ARM64 build and all 24 generated-data tests passed on Frame | Layer retains/exports no image FDs; no real layer activation or live camera access; controlled load/restoration remains next; [E36](#e36-metadata-only-provider-and-synchronization-review), [E37](#e37-metadata-only-provider-and-diagnostic-on-frame) |
 | Inactive v3 bundle and SteamVR service preflight | Frame report received | Bundle prepared without activation; active simple/control-group user service, 20-second stop timeout, no drop-ins; [E38](#e38-inactive-bundle-and-steamvr-service-on-frame) |
-| Bounded metadata-layer trial and post-exit recovery | Activation paused; runtime observation passed on Frame | Service/cgroup/compositor liveness check succeeds; user confirms working passthrough during/after. Revised controller has 65 targeted cloud tests; independent SSH and actual recovery remain unverified; [E46](#e46-read-only-runtime-baseline-on-frame) |
+| Bounded metadata-layer trial and post-exit recovery | Metadata-only provider loaded and restored on Frame through platform session cycles; registry inspection unstable; image access blocked | Bare SteamVR stop refused after the session coupling was found ([E63](#e63-service-only-rehearsal-and-graphical-session-dependency)); platform session test passed with a normal headset ([E64](#e64-platform-session-test-completed-and-headset-confirmed)); two metadata trials loaded the provider and restored normal startup, with eight stable candidate records but no settled full registry ([E65](#e65-v2-recovered-candidate-snapshots-compared-and-visual-check-passed)); earlier runtime baseline [E46](#e46-read-only-runtime-baseline-on-frame) |
+| Fixed edge HUD, marker and offline live pipeline | Offline synthetic tests only; not run on Frame | Native mask, fail-closed mapping, expiry, supervision, marker and observer pass offline; live input and real HUD output stay closed in code; [E66](#e66-offline-live-pipeline-and-headers-only-input-probe)–[E71](#e71-offline-arm64-build-and-empirical-marker-observer) |
 | Dedicated Arcturus Vulkan capture | Upstream-reported | Community implementation reviewed; no Framejacker deployment or device capture result |
 | Built-in passthrough camera input | Unverified | Upstream reports empty built-in-camera-sized buffers; no source-identified built-in-camera frames have been received |
 | Stereo depth and world-space labels | Planned | Calibration, depth and pose/timebase alignment remain unresolved |
@@ -1967,6 +1968,195 @@ and Frame's core contention with SteamVR are unknown, so real-time ratio,
 smoothness and the best thread count on Frame remain to be measured with
 `scripts/frame_session.sh pacing`, which now also runs `--decode-threads 4`.
 Longer GOPs make playback advance in larger keyframe steps.
+
+### E63: Service-only rehearsal and graphical-session dependency
+
+Recorded 2026-10-31 from the docs merged in #9 (the README's design section and
+[development](development.md#service-only-recovery-rehearsal)), which cited this
+result as "E50", a number already used above. The original report was not
+committed. Execution date, Frame revision, SteamVR version and raw output are
+unknown; the run happened before the docs merged on 2026-10-30.
+
+Reported result: independent inbound SSH from the PC was verified, and
+`scripts/service_rehearsal.py --start` ran once on Frame. The SteamVR stop job
+was **canceled**. The shipped Gamescope session is `PartOf=steamvr.service`, so
+stopping SteamVR also stopped the graphical session, which then restarted.
+Independent cleanup later observed a healthy compositor without issuing another
+service command. The rehearsal is a failure; the runtime recovered on its own.
+The preflight now refuses this policy
+(`steamvr_stop_propagates_to_graphical_session`), so a bare SteamVR stop is no
+longer a supported recovery model on this runtime. See the
+[device section](on-device.md#service-only-recovery-rehearsal-result).
+
+Cloud recheck, 2026-10-31 (Linux x86_64, Python 3.12.3, branch revision
+`965af40`, whose code matches `main` `b219eac`): `tests.test_service_rehearsal`
+ran 25 tests, all passing. This is not a Frame result.
+
+### E64: Platform session test completed and headset confirmed
+
+Recorded 2026-10-31 from the docs merged in #9 (the README and
+[development](development.md#platform-managed-session-rehearsal)), which cited
+this result as "E52". The original report was not committed. Execution date,
+Frame revision and raw output are unknown.
+
+Reported preparation: the SDDM restart owner and the SteamOS Manager session
+interface (`v26.4.1`, commit `a0d399d`) were reviewed. A full-session test
+bundle and an inactive metadata bundle were prepared, with 158 native and
+synthetic tests passing on Frame.
+
+Reported result: `scripts/session_rehearsal.py --start BUNDLE
+--allow-session-logout` issued one real `switch-to-game-mode` request. The
+session cycled, independent recovery observed a healthy new runtime, and the
+user confirmed the headset looked normal. This is process-liveness evidence plus
+a user report; it does not activate a layer or read camera data. See the
+[device section](on-device.md#prepared-platform-session-test).
+
+Cloud recheck, 2026-10-31 (same environment as E63):
+`tests.test_session_rehearsal` ran 21 tests, all passing, matching the count the
+merged docs give. This is not a Frame result.
+
+### E65: V2 recovered candidate snapshots compared and visual check passed
+
+Recorded 2026-10-31 from the docs merged in #9 (the README and
+[development](development.md#metadata-trial-across-platform-sessions)), which
+cited this result as "E55". It also covers the first trial run, which those docs
+describe without a separate evidence link. The original reports were not
+committed. Execution dates, Frame revisions and raw output are unknown.
+
+Reported first run: `scripts/metadata_session_trial.py` loaded the metadata-only
+provider across platform session cycles and restored normal startup. It received
+20 metadata records, including eight candidate-profile matches, but failed with
+`provider_registry_changed`.
+
+Reported v2 run, with bounded settling: three saved snapshots held identical
+metadata for the same eight candidate IDs, while other allocations appeared and
+disappeared. Full-registry inspection still failed every time. Software
+restoration and normal UI, passthrough and tracking were confirmed by the user.
+**Do not repeat v2 unchanged**; the next step is offline work on scoped
+lifetime and version tracking. No image descriptors or camera bytes were
+requested, and a matching candidate profile does not identify Arcturus or prove
+complete frames. See the [device section](on-device.md#prepared-metadata-session-trial).
+
+Cloud recheck, 2026-10-31 (same environment as E63):
+`tests.test_metadata_session_trial` ran 35 tests, all passing, matching the
+count the merged docs give. This is not a Frame result.
+
+### E66: Offline live pipeline and headers-only input probe
+
+Recorded 2026-10-31 from
+[development](development.md#offline-foundation-for-the-minimum-live-poc),
+which cited this result as "E56". The implementation session's own logs were
+not committed.
+
+Reported scope: `scripts/live_pipeline.py` runs generated input through owned
+BGR copies, a one-pending-frame slot, the shared CPU detector and a headless or
+native-validation sink. Only the `synthetic` source kind is enabled.
+`scripts/recording_growth_check.py` reads top-level MP4 box headers only and
+never decodes payloads. Neither touches a camera or a headset.
+
+Cloud recheck, 2026-10-31 (same environment as E63):
+`tests.test_recording_growth_check` and `tests.test_live_pipeline` ran 43 tests,
+all passing. `python -m scripts.live_pipeline --synthetic-check --synthetic-hud
+--validate-overlay --seconds 3` completed with exit 0, `cleanup_ok: true`,
+source `synthetic` and 14 processed frames. This establishes no live source.
+
+### E67: Offline cancellation and cleanup audit
+
+Recorded 2026-10-31 from
+[development](development.md#offline-foundation-for-the-minimum-live-poc),
+which cited this result as "E57". The implementation session's own logs were
+not committed.
+
+Reported scope: the pipeline and probe moved to the shared bounded supervisor
+in `scripts/bounded_worker.py`. On Linux a separate guardian owns the worker
+process group and subreaps helpers. The supervisor caps report bytes, keeps its
+deadline independent of report I/O and verifies exit status against the final
+report. Forced termination never counts as a clean shutdown. Failure fixtures
+use real local subprocesses and signals. Windows keeps single-process
+supervision and reports parent-death containment as unavailable.
+
+Cloud recheck, 2026-10-31 (same environment as E63): `tests.test_bounded_worker`
+and `tests.test_overlay_cleanup` ran 14 tests, all passing. Software budgets are
+not guarantees about kernel scheduling or blocked kernel I/O.
+
+### E68: Independent expiry and supervisor-loss containment
+
+Recorded 2026-10-31 from
+[development](development.md#offline-foundation-for-the-minimum-live-poc),
+which cited this result as "E58". The implementation session's own logs were
+not committed.
+
+Reported scope: tests SIGKILL the outer supervisor, close the lifeline before
+startup and stop and resume the guardian, and check owned workers and helpers
+are reaped without claiming a final supervisor cleanup report. Synthetic display
+frames carry an absolute monotonic expiry to the separate native validation
+process; stalled inference, heartbeats and partial reads cannot renew it. The
+expiring-packet opcode is rejected in real output mode.
+
+Cloud recheck, 2026-10-31 (same environment as E63): `tests.test_display_expiry`
+ran 6 tests, all passing. Actual expiry on the headset, launcher behavior and
+API teardown on Frame remain untested.
+
+### E69: Offline edge HUD and native-mask validation
+
+Recorded 2026-10-31 from [architecture](architecture.md#fixed-edge-hud-decision),
+[development](development.md) and [VR overlay](vr-overlay.md#planned-edge-hud),
+which cited this result as "E60". The implementation session's saved log
+reported 57 passing tests across the HUD, pipeline, expiry and mirror suites;
+that log was not committed.
+
+Reported scope: `scripts/hud_mask.py` validates source, format and layout
+contracts, masks the full per-eye footprint plus margin before any resize and
+renders a fixed 320 × 128 tile with up to three names and approximate arrows.
+Detections overlapping the mask or crossing an eye boundary are rejected. Only
+synthetic calibration is accepted; hardware mappings are refused
+(`hud_hardware_mapping_not_approved`) and live mirror HUD input is rejected.
+
+Cloud recheck, 2026-10-31 (same environment as E63): `tests.test_hud_mask` ran
+24 tests, all passing, and the synthetic HUD pipeline run in E66 completed
+cleanly. Actual mapping, projection stability, head-motion leakage, latency and
+physical expiry are unproven.
+
+### E70: Offline marker-only harness
+
+Recorded 2026-10-31 from [development](development.md) and
+[VR overlay](vr-overlay.md#planned-edge-hud), which cited this result as "E61".
+The implementation session's saved Linux log reported 49 passing tests; that log
+was not committed.
+
+Reported scope: `scripts/hud_marker_check.py` and the bridge's
+`--validate-calibration-marker` / `--calibration-marker` modes draw the fixed
+opaque HUD marker for a bounded time. Real marker output needs
+`--calibrate --allow-calibration-output`; production HUD frames stay disabled.
+
+Cloud recheck, 2026-10-31 (same environment as E63, with the overlay bridge
+freshly built against OpenVR `0924064`): `tests.test_hud_marker_check` ran 13
+tests, all passing. `hud_marker_check.py --validate --seconds 3` completed with
+exit 0 and `cleanup_ok: true`. The harness does not observe mirror corners,
+qualify a mapping or show physical expiry.
+
+### E71: Offline ARM64 build and empirical marker observer
+
+Recorded 2026-10-31 from [architecture](architecture.md#fixed-edge-hud-decision),
+[development](development.md) and [VR overlay](vr-overlay.md#planned-edge-hud),
+which cited this result as "E62". The implementation session's logs were not
+committed.
+
+Reported scope: `scripts/hud_marker_observer.py` finds tagged marker copies at
+native mirror resolution and reports their bounded motion and margins. A clean
+observation deliberately stays `observed_unqualified` with exit code 2: it
+cannot establish eye composition, unseen or occluded copies, or production
+exclusion. An ARM64 bridge was cross-built but has **not been executed on
+Frame**. The reported observer test counts came from the implementation session
+and included a Windows symlink-privilege error, so they were not an
+all-platform pass. A local eight-entry deployment manifest (the ARM64 bridge
+and seven Python modules) was size- and hash-checked during documentation
+review; that manifest is not in the repository.
+
+Cloud recheck, 2026-10-31 (same environment as E63):
+`tests.test_hud_marker_observer` ran 36 tests, all passing on Linux. The
+observer has not run on Frame; see the
+[calibration checkpoint](on-device.md#bounded-edge-hud-calibration-checkpoint).
 
 ## Maintaining the evidence
 

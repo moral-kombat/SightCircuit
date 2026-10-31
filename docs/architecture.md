@@ -51,18 +51,18 @@ input is rejected before opening, and real HUD output remains blocked.
 The fixed panel position is a candidate, not a calibrated mirror-pixel mapping.
 Actual mapping, projection stability, head-motion leakage, latency, physical VR
 expiry and end-to-end operation remain unproven. See the
-[offline results](status.md#e60-offline-edge-hud-and-native-mask-validation), the
+[offline results](status.md#e69-offline-edge-hud-and-native-mask-validation), the
 [acceptance plan](live-capture.md#edge-hud-acceptance-gates) and
 [operator checkpoint](on-device.md#bounded-edge-hud-calibration-checkpoint).
 
-The later marker/observer preparation is a separate evidence path (E61/E62):
+The later marker/observer preparation is a separate evidence path (E70/E71):
 the marker draws the fixed opaque footprint; an empirical observer finds tagged
 copies at native mirror resolution and reports their bounded motion/margins.
 It cannot establish eye composition, unseen/occluded copies or production
 exclusion. Clean observation deliberately remains `observed_unqualified` with
 exit code 2. The verified ARM64 cross-build has not run on Frame. Production
 mapping and real HUD expiry gates remain closed; see
-[E62](status.md#e62-offline-arm64-build-and-empirical-marker-observer).
+[E71](status.md#e71-offline-arm64-build-and-empirical-marker-observer).
 
 ## Progress summary
 

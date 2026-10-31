@@ -120,7 +120,7 @@ guarded restoration. The
 [read-only runtime baseline](docs/status.md#e46-read-only-runtime-baseline-on-frame)
 now passes on Frame, confirming service/cgroup/compositor liveness with normal
 passthrough reported during/after. Independent PC SSH is now verified. The
-[service-only rehearsal](docs/status.md#e50-service-only-rehearsal-and-graphical-session-dependency)
+[service-only rehearsal](docs/status.md#e63-service-only-rehearsal-and-graphical-session-dependency)
 recorded a canceled SteamVR stop job: the shipped Gamescope session is
 `PartOf=steamvr.service`, so the graphical session also stopped and restarted.
 Independent cleanup observed a healthy compositor afterward without another

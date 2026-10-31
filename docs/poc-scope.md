@@ -41,10 +41,10 @@ no threshold or model changes to make one image pass; skipped tests fail CI.
 
 Change:
 
-- One coordinator allocates evidence IDs (E63 onward) and is the only editor of
+- One coordinator allocates evidence IDs (E72 onward) and is the only editor of
   the `status.md` matrix; coders put evidence in their PR description and the
-  coordinator records it. Parallel branches reused E54, and later docs link
-  E50, E52, E55 and E60–E62 to entries `status.md` does not contain.
+  coordinator records it. Parallel branches reused E50, E52 and E54–E62; those
+  results are now recorded as E63–E71.
 - Provider-track changes are rejected unless a vendor interface or a
   synchronization answer exists.
 - New evidence goes in its own file under `docs/evidence/` (WP7); do not grow

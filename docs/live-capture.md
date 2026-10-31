@@ -213,7 +213,7 @@ in real output mode.
 
 | Gate | Requires | Status |
 | --- | --- | --- |
-| G1. Synthetic mask, fail-closed mapping and expiry | Offline tests: full-footprint mask before resize, margin and eye union, fail-closed mapping and format changes, stale expiry independent of inference | Passes offline. Recorded in [development](development.md) and [architecture](architecture.md); `status.md` has no entry (the E60 link points to a missing anchor) |
+| G1. Synthetic mask, fail-closed mapping and expiry | Offline tests: full-footprint mask before resize, margin and eye union, fail-closed mapping and format changes, stale expiry independent of inference | Passes offline ([E69](status.md#e69-offline-edge-hud-and-native-mask-validation)) |
 | G2. Lifecycle and cleanup (WP10) | V4 failure explained; guardian, calibration expiry and truthful early-termination reporting reconciled with `main`; tests for the failure path | Open (E59) |
 | G3. Mapping observed on Frame (WP9) | [Calibration checkpoint](on-device.md#bounded-edge-hud-calibration-checkpoint) ends `observed_unqualified` with clean cleanup; normal passthrough confirmed | Not run |
 | G4. Mapping qualified | A versioned mapping and margin backed by evidence the observer cannot give: eye composition and absence of unseen or occluded copies. The method is not yet defined | Not started |

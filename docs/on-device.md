@@ -1477,9 +1477,8 @@ the access check alone does not validate service restoration.
 `scripts/service_rehearsal.py` stops and restarts `steamvr.service` once,
 without preparing or installing a capture layer. Its design and tests are in
 [development](development.md#service-only-recovery-rehearsal). Independent SSH
-from the PC is verified, and the first Frame run is recorded in the
-[README](../README.md) and [development](development.md); `status.md` has no
-entry for it yet (the E50 link in those pages points to a missing anchor).
+from the PC is verified, and the first Frame run is recorded as
+[E63](status.md#e63-service-only-rehearsal-and-graphical-session-dependency).
 
 What happened on Frame: the SteamVR stop job was **canceled**. The shipped
 Gamescope session is `PartOf=steamvr.service`, so stopping SteamVR also
@@ -1517,10 +1516,9 @@ directly and never installs a layer. Design and tests are in
 [development](development.md#platform-managed-session-rehearsal).
 
 Result: the operator's session test **completed successfully**, with healthy
-independent recovery and the wearer confirming a normal headset. This is
-recorded in the [README](../README.md) and [development](development.md);
-`status.md` has no entry for it yet (the E52 link points to a missing
-anchor). A completed run is also the `--session-proof` the
+independent recovery and the wearer confirming a normal headset
+([E64](status.md#e64-platform-session-test-completed-and-headset-confirmed)).
+A completed run is also the `--session-proof` the
 [metadata session trial](#prepared-metadata-session-trial) requires.
 
 A session cycle **logs out the graphical session**: games, the replay window,
@@ -1569,9 +1567,8 @@ output are involved; the v3 provider still rejects buffer requests. Design,
 ownership rules and tests are in
 [development](development.md#metadata-trial-across-platform-sessions).
 
-Results so far, recorded in the [README](../README.md) and
-[development](development.md) (`status.md` has no entry yet; the E55 link
-points to a missing anchor):
+Results so far
+([E65](status.md#e65-v2-recovered-candidate-snapshots-compared-and-visual-check-passed)):
 
 - First run: the provider loaded and normal startup was restored. It received
   20 metadata records, including eight candidate-profile matches, but failed

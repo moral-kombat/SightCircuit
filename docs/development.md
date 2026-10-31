@@ -1032,7 +1032,7 @@ The first Frame run exposed the shipped Gamescope `PartOf=steamvr.service`
 relationship and a canceled stop job. The current preflight refuses that
 relationship before scheduling anything. Keep this guard while designing a
 session-aware lifecycle; the earlier independent-service model does not fit
-this runtime. [Device evidence](status.md#e50-service-only-rehearsal-and-graphical-session-dependency)
+this runtime. [Device evidence](status.md#e63-service-only-rehearsal-and-graphical-session-dependency)
 separates the failed rehearsal from observed runtime recovery.
 
 Run the focused Linux tests without contacting systemd or a camera:
@@ -1092,7 +1092,7 @@ The 21 new generated-data tests cover full/partial/no-op transitions, identity
 churn, observation deadlines, late results, request failures with later recovery,
 worker interruption, source/platform drift, conflicting units, capture-file
 preservation, session-independent launch properties and duplicate-request
-prevention. The [device checkpoint](status.md#e52-platform-session-test-completed-and-headset-confirmed)
+prevention. The [device checkpoint](status.md#e64-platform-session-test-completed-and-headset-confirmed)
 now has a successful real session request, healthy independent recovery and
 the user's normal-headset confirmation. Metadata activation/restoration
 remains separate work.
@@ -1160,13 +1160,13 @@ python3 -m unittest tests.test_metadata_session_trial tests.test_session_rehears
 Both operator runs loaded the provider and restored normal startup. V2 still
 invalidated every registry inspection, but the eight candidate metadata records
 match across all three saved snapshots. Its normal headset recovery is confirmed.
-See [E55](status.md#e55-v2-recovered-candidate-snapshots-compared-and-visual-check-passed).
+See [E65](status.md#e65-v2-recovered-candidate-snapshots-compared-and-visual-check-passed).
 Do not repeat v2 unchanged; investigate scoped lifetime/version tracking offline.
 
 ## Edge HUD offline test plan
 
 The separate implementation session completed the synthetic-only path;
-[E60](status.md#e60-offline-edge-hud-and-native-mask-validation) records the final
+[E69](status.md#e69-offline-edge-hud-and-native-mask-validation) records the final
 files, saved reports and test results. Generated tests cover full-footprint native masking before resize,
 margin/stereo union, out-of-bounds and missing mappings, capture/config changes,
 fixed strip containment, owned buffers, source/result association and stale
@@ -1187,11 +1187,11 @@ bridge and detector assets. `--synthetic-hud` requires `--synthetic-check`; it
 does not load hardware calibration or enable live input/real output. The final
 saved log passed 57 tests; this documentation update did not rerun them.
 
-The later [marker-only harness](status.md#e61-offline-marker-only-harness) adds
+The later [marker-only harness](status.md#e70-offline-marker-only-harness) adds
 `hud_marker_check.py` and native generated-marker validation. Its final saved
 Linux log passes 49 tests; the marker-only harness does not itself observe mirror
 corners, qualify mapping or demonstrate physical expiry. The later
-[ARM64 build and empirical observer](status.md#e62-offline-arm64-build-and-empirical-marker-observer)
+[ARM64 build and empirical observer](status.md#e71-offline-arm64-build-and-empirical-marker-observer)
 have offline evidence. The cross-built binary is unexecuted; a clean observer
 result stays unqualified. Observer suite counts are implementation-session reports,
 including a Windows symlink-privilege error, not an all-platform pass or an
@@ -1232,7 +1232,7 @@ python -m scripts.live_pipeline --synthetic-check --validate-overlay --seconds 3
 These commands use generated images and native transport validation only.
 The detector/decode dependencies use the repository's existing pins; no new
 model or API credentials are required. CI has an isolated offline POC job.
-Local results and their limits are recorded in [E56](status.md#e56-offline-live-pipeline-and-headers-only-input-probe).
+Local results and their limits are recorded in [E66](status.md#e66-offline-live-pipeline-and-headers-only-input-probe).
 
 [`recording_growth_check.py`](../scripts/recording_growth_check.py) defaults to
 no action. Its `--observe MP4` and `--watch-directory DIR` modes are explicit
@@ -1247,7 +1247,7 @@ is preserved but paused; no new recorder experiment is planned. The active
 work is the [edge HUD acceptance plan](live-capture.md#edge-hud-acceptance-gates). The vendor recorder's live publication behavior and the source's
 exclusion of our panel remain unknown.
 
-The [lifecycle audit](status.md#e57-offline-cancellation-and-cleanup-audit)
+The [lifecycle audit](status.md#e67-offline-cancellation-and-cleanup-audit)
 replaces the pipeline's blocking multiprocessing report receive and the probe's
 plain `subprocess.run` with [a shared supervisor](../scripts/bounded_worker.py).
 It caps report bytes before parsing, keeps its deadline independent of report
@@ -1284,7 +1284,7 @@ partial sink startup, hide/close errors and late file scans. The orphan test
 also checks that an unrelated child is untouched. A mocked KeyboardInterrupt
 alone no longer serves as evidence of process reaping.
 
-The [E58 tests](status.md#e58-independent-expiry-and-supervisor-loss-containment)
+The [E68 tests](status.md#e68-independent-expiry-and-supervisor-loss-containment)
 add actual SIGKILL of the outer supervisor, a closed lifeline before startup,
 and a deliberately stopped/resumed guardian. They verify owned-worker/helper
 reaping while preserving the lack of a final supervisor cleanup report. If the
