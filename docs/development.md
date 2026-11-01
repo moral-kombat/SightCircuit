@@ -355,6 +355,47 @@ after capture/inference finishes. Read [the device procedure](on-device.md#run-b
 before the first Frame trial; [status](status.md#e16-bounded-mirror-recognition-cloud-checks)
 records cloud-only validation and the model-quality limitation.
 
+## Paused capture-provider track
+
+The dedicated-capture provider track is paused and frozen (see the
+[design review](design-review.md#next-steps)); its procedures below and in the
+[on-device guide](on-device.md) are kept for when it resumes. Do not activate
+layers or restart SteamVR from a cloud session. Its Python commands stay in
+`scripts/` under their documented paths and are quarantined in place:
+
+| Script | Role |
+| --- | --- |
+| `capture_layer_config.py` | Prepare an inactive layer bundle and restore exact files; never restart VR |
+| `capture_layer_trial.py` | Bounded metadata-only SteamVR trial, with systemd-owned post-exit recovery |
+| `capture_provider_check.py` | Supervise metadata inspection of an already running provider |
+| `capture_service_lifecycle.py` | Read-only cgroup observations and bounded service transitions; no VR APIs |
+| `capture_session.py` | Own a private capture run and recover only its recorded publication inode |
+| `capture_supervisor.py` | Bound an explicitly prepared native capture worker |
+| `metadata_session_trial.py` | Prepare an opt-in metadata layer trial across two platform session cycles |
+| `service_rehearsal.py` | Rehearse SteamVR stop/start over SSH without installing a capture layer |
+| `session_rehearsal.py` | Prepare and rehearse a SteamOS-managed graphical-session logout |
+
+Their tests are `tests/test_capture_layer_config.py`, `test_capture_layer_trial.py`,
+`test_capture_provider_check.py`, `test_capture_service_lifecycle.py`,
+`test_capture_supervisor.py`, `test_metadata_session_trial.py`,
+`test_service_rehearsal.py` and `test_session_rehearsal.py`. Native code lives in
+`tools/capture_*` and `patches/mrhand/`, built by `scripts/build_capture_*.sh`.
+The read-only diagnostics `shm_capture_check.py` and `capture_gpu_check.py` are
+not part of this cluster.
+
+`tests/test_scripts_boundary.py` enforces the quarantine: these modules import
+only the standard library and each other; nothing else imports them except
+their own tests; the rehearsal and trial source snapshots (`SOURCES`) name only
+cluster files; and this section lists every cluster module.
+
+A physical move is deferred until the track resumes, because it cannot be done
+without touching frozen material. A top-level directory at the same depth keeps
+the code byte-identical (`ROOT` is `parents[1]` and snapshots name sibling
+files), but `patches/mrhand/0006-block-unleased-camera-reads.patch` prints the
+`scripts/capture_provider_check.py` path, the on-device procedures and
+`.github/instructions` globs name these paths, and any bundle already prepared
+on Frame records them and would need regenerating.
+
 ## Dedicated capture build prerequisites
 
 Collect metadata on the target machine before preparing a native capture build:
