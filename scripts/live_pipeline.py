@@ -11,67 +11,11 @@ import time
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from framejacker.frame import DetectionResult, Frame
-from framejacker.hud import Calibration, CaptureFormat, Footprint, HudStage, HUD_CONFIG
+from framejacker.hud import HudStage, HUD_CONFIG
 from framejacker.overlay import OverlaySink
 from framejacker.runtime.guard import supervise
 from framejacker.runtime.live import run_pipeline as run_bounded_pipeline
-
-class SyntheticSource:
-    kind = "synthetic"
-    source_id = "synthetic:generated"
-    capture_layout = "mono"
-
-    def __init__(self, rate=30):
-        import numpy as np
-        self.np = np  # Dependency startup occurs before the bounded acquisition interval.
-        self.period = 1 / rate
-        self.sequence = 0
-        self.next_frame = 0
-        self.closed = False
-
-    def open(self):
-        self.next_frame = time.monotonic()
-
-    def read(self, stop, timeout=0.05):
-        delay = self.next_frame - time.monotonic()
-        if delay > 0:
-            stop.wait(min(timeout, delay))
-            return None
-        self.sequence += 1
-        self.next_frame = time.monotonic() + self.period
-        pixels = self.np.full((64, 96, 3), self.sequence % 255, dtype=self.np.uint8)
-        return Frame.owned_bgr(pixels, self.sequence, time.monotonic_ns(), self.source_id)
-
-    def close(self):
-        self.closed = True
-        return True
-
-
-class FixtureDetector:
-    def detect(self, image, threshold):
-        return DetectionResult((), 0.0)
-
-
-class HeadlessSink:
-    def open(self):
-        self.count = self.clears = 0
-
-    def submit(self, processed):
-        self.count += 1
-
-    def clear(self):
-        self.clears += 1
-
-    def close(self):
-        return True
-
-
-def synthetic_hud_calibration():
-    """Only for the fixed generated 96x64 source; no hardware calibration loader."""
-    return Calibration("synthetic:generated", CaptureFormat(96, 64, "BGR3", 288, 18432, 18432),
-        "mono", (Footprint(0, (68, 42, 89, 56), 3),), validated=True, provenance="synthetic_fixture")
-
+from framejacker.runtime.synthetic import FixtureDetector, HeadlessSink, SyntheticSource, synthetic_hud_calibration
 
 class HudPipelineAdapter(HudStage):
     """The shared HUD stage plus this command's fixed validation-sink contract."""

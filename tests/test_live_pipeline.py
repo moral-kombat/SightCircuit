@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from framejacker.frame import Frame, native_format
 from framejacker.overlay import OverlaySink
+from framejacker.runtime import synthetic
 from scripts import live_pipeline as live
 
 
@@ -47,7 +48,7 @@ class LivePipelineTests(unittest.TestCase):
     def test_engine_owns_published_pixels_when_a_source_reuses_its_buffer(self):
         import numpy as np
 
-        class Reusing(live.SyntheticSource):
+        class Reusing(synthetic.SyntheticSource):
             def __init__(source):
                 super().__init__(rate=100)
                 source.buffer = np.zeros((64, 96, 3), np.uint8)
@@ -59,12 +60,12 @@ class LivePipelineTests(unittest.TestCase):
                 source.buffer[:] = frame.sequence % 255
                 return replace(frame, pixels=source.buffer)
 
-        class Detector(live.FixtureDetector):
+        class Detector(synthetic.FixtureDetector):
             def detect(inner, image, threshold):
                 time.sleep(.03)  # The source overwrites its buffer meanwhile.
                 return super().detect(image, threshold)
 
-        class Sink(live.HeadlessSink):
+        class Sink(synthetic.HeadlessSink):
             def submit(sink, processed):
                 if int(processed.image[0, 0, 0]) != processed.frame.sequence % 255:
                     raise AssertionError("presented pixels do not belong to their frame")
@@ -76,7 +77,7 @@ class LivePipelineTests(unittest.TestCase):
 
     def test_source_restart_and_identity_change_are_rejected(self):
         for change, reason in (("restart", "frame_sequence_regressed"), ("identity", "source_or_session_changed")):
-            class Source(live.SyntheticSource):
+            class Source(synthetic.SyntheticSource):
                 def read(source, stop, timeout=0.05):
                     frame = super().read(stop, timeout)
                     if frame is None or frame.sequence < 2:
@@ -84,7 +85,7 @@ class LivePipelineTests(unittest.TestCase):
                     sequence, source_id = (1, frame.source) if change == "restart" else (frame.sequence, "synthetic:other")
                     return Frame.owned_bgr(frame.pixels, sequence, frame.observed_ns, source_id)
             with self.subTest(change=change):
-                report = live.run_pipeline(Source(rate=100), live.FixtureDetector(), live.HeadlessSink(), .3)
+                report = live.run_pipeline(Source(rate=100), synthetic.FixtureDetector(), synthetic.HeadlessSink(), .3)
                 self.assertEqual(report["status"], "error", report)
                 self.assertEqual(report["reason"], reason)
                 self.assertTrue(report["cleanup_ok"])
@@ -100,10 +101,10 @@ class LivePipelineTests(unittest.TestCase):
                 Frame.owned_bgr(np.zeros((1, 1, 3), dtype=np.uint8), *identity)
 
     def test_hardware_source_is_blocked_before_open(self):
-        source = live.SyntheticSource()
+        source = synthetic.SyntheticSource()
         source.kind = "live_camera"
         with patch.object(source, "open") as opened, self.assertRaisesRegex(ValueError, "live_image_source_not_approved"):
-            live.run_pipeline(source, live.FixtureDetector(), live.HeadlessSink(), 0.1)
+            live.run_pipeline(source, synthetic.FixtureDetector(), synthetic.HeadlessSink(), 0.1)
         opened.assert_not_called()
 
     def test_native_padded_stride_is_owned_then_fully_masked_before_inference_resize(self):
@@ -125,7 +126,7 @@ class LivePipelineTests(unittest.TestCase):
         self.assertEqual(native_format(owned)["stride_bytes"], stride)
         self.assertEqual((owned.pixels.strides[0], owned.stride), (width * 3, width * 3))
 
-        class Source(live.SyntheticSource):
+        class Source(synthetic.SyntheticSource):
             source_id = "synthetic:native"
             sent = False
 
@@ -136,7 +137,7 @@ class LivePipelineTests(unittest.TestCase):
                 self.sent = True
                 return replace(owned, observed_ns=time.monotonic_ns())
 
-        class Detector(live.FixtureDetector):
+        class Detector(synthetic.FixtureDetector):
             def detect(detector, image, threshold):
                 np.testing.assert_array_equal(image, expected)
                 self.assertFalse(image.flags.writeable)
@@ -145,7 +146,7 @@ class LivePipelineTests(unittest.TestCase):
         calibration = Calibration("synthetic:native", CaptureFormat.from_mapping(native_format(owned)),
                                   "mono", (Footprint(0, (1500, 850, 1820, 1020), 8),),
                                   validated=True, provenance="synthetic_fixture")
-        report = live.run_pipeline(Source(), Detector(), live.HeadlessSink(), .5,
+        report = live.run_pipeline(Source(), Detector(), synthetic.HeadlessSink(), .5,
                                    hud_mode=True, calibration=calibration)
         self.assertEqual(report["frames_submitted"], 1, report)
         self.assertTrue(report["cleanup_ok"], report)
@@ -155,20 +156,20 @@ class LivePipelineTests(unittest.TestCase):
         for change in ("source_id", "capture_layout", "session_id", "tracking_origin",
                        "recenter_generation", "orientation", "crop", "recenter_epoch", "timebase_id",
                        "orientation_degrees", "crop_xyxy", "hud_config_sha256"):
-            source = live.SyntheticSource()
+            source = synthetic.SyntheticSource()
 
-            class Detector(live.FixtureDetector):
+            class Detector(synthetic.FixtureDetector):
                 def detect(self, *args):
                     setattr(source, change, "changed")
                     return super().detect(*args)
 
-            report = live.run_pipeline(source, Detector(), live.HeadlessSink(), .2)
+            report = live.run_pipeline(source, Detector(), synthetic.HeadlessSink(), .2)
             self.assertEqual(report["status"], "error", report)
             self.assertEqual(report["frames_submitted"], 0)
             self.assertTrue(report["cleanup_ok"])
 
     def test_context_change_during_hud_render_is_checked_at_submission_boundary(self):
-        source = live.SyntheticSource(rate=1)
+        source = synthetic.SyntheticSource(rate=1)
         original = live.HudPipelineAdapter.render
 
         def render(adapter, *args):
@@ -177,15 +178,15 @@ class LivePipelineTests(unittest.TestCase):
             return result
 
         with patch.object(live.HudPipelineAdapter, "render", render):
-            report = live.run_pipeline(source, live.FixtureDetector(), live.HeadlessSink(), .2,
-                                       hud_mode=True, calibration=live.synthetic_hud_calibration())
+            report = live.run_pipeline(source, synthetic.FixtureDetector(), synthetic.HeadlessSink(), .2,
+                                       hud_mode=True, calibration=synthetic.synthetic_hud_calibration())
         self.assertEqual(report["status"], "error", report)
         self.assertEqual(report["frames_submitted"], 0)
         self.assertEqual(report["reason"], "source_or_session_changed")
         self.assertTrue(report["cleanup_ok"])
 
     def test_original_observation_and_run_deadline_bound_result_lifetime(self):
-        class Sink(live.HeadlessSink):
+        class Sink(synthetic.HeadlessSink):
             def submit(sink, processed):
                 frame = processed.frame
                 self.assertGreater(processed.expires_ns, frame.observed_ns)
@@ -195,7 +196,7 @@ class LivePipelineTests(unittest.TestCase):
 
         sink = Sink()
         started = time.monotonic_ns()
-        report = live.run_pipeline(live.SyntheticSource(), live.FixtureDetector(), sink, .2)
+        report = live.run_pipeline(synthetic.SyntheticSource(), synthetic.FixtureDetector(), sink, .2)
         self.assertEqual(report["status"], "completed", report)
         self.assertLessEqual(sink.expiry, time.monotonic_ns())
         self.assertGreater(sink.expiry, started)
@@ -208,17 +209,17 @@ class LivePipelineTests(unittest.TestCase):
 
         seen = {}
 
-        class Detector(live.FixtureDetector):
+        class Detector(synthetic.FixtureDetector):
             def detect(self, image, threshold):
                 seen["input"] = image
                 return DetectionResult((Detection("fixture", .9, (1, 1, 20, 20)),), 2.5)
 
-        class Sink(live.HeadlessSink):
+        class Sink(synthetic.HeadlessSink):
             def submit(sink, processed):
                 seen["processed"] = processed
                 super().submit(processed)
 
-        report = live.run_pipeline(live.SyntheticSource(rate=1), Detector(), Sink(), .2)
+        report = live.run_pipeline(synthetic.SyntheticSource(rate=1), Detector(), Sink(), .2)
         self.assertEqual(report["status"], "completed", report)
         processed = seen["processed"]
         self.assertIsInstance(processed, Processed)
@@ -232,14 +233,14 @@ class LivePipelineTests(unittest.TestCase):
         self.assertEqual(report["last_result"]["box_coordinate_space"], "detector_input_pixels")
 
     def test_pipeline_matches_each_output_to_its_own_frame_and_cleans_up(self):
-        class Sink(live.HeadlessSink):
+        class Sink(synthetic.HeadlessSink):
             def submit(self, processed):
                 self.test.assertEqual(int(processed.image[0, 0, 0]), processed.frame.sequence % 255)
                 super().submit(processed)
         sink = Sink()
         sink.test = self
-        source = live.SyntheticSource(rate=100)
-        report = live.run_pipeline(source, live.FixtureDetector(), sink, 0.5, max_fps=5)
+        source = synthetic.SyntheticSource(rate=100)
+        report = live.run_pipeline(source, synthetic.FixtureDetector(), sink, 0.5, max_fps=5)
         self.assertEqual(report["status"], "completed")
         self.assertTrue(report["cleanup_ok"])
         self.assertTrue(source.closed)
@@ -249,7 +250,7 @@ class LivePipelineTests(unittest.TestCase):
 
     def test_stale_input_and_future_observation_are_not_sent_to_sink(self):
         for age, expected in ((-2000000000, "no_frames"), (2000000000, "error")):
-            source = live.SyntheticSource()
+            source = synthetic.SyntheticSource()
             original = source.read
             def shifted(*args, **kwargs):
                 frame = original(*args, **kwargs)
@@ -257,17 +258,17 @@ class LivePipelineTests(unittest.TestCase):
                     return None
                 return replace(frame, observed_ns=frame.observed_ns + age)
             source.read = shifted
-            report = live.run_pipeline(source, live.FixtureDetector(), live.HeadlessSink(), 0.2)
+            report = live.run_pipeline(source, synthetic.FixtureDetector(), synthetic.HeadlessSink(), 0.2)
             self.assertEqual(report["status"], expected)
             self.assertEqual(report["frames_submitted"], 0)
             self.assertTrue(report["cleanup_ok"])
 
     def test_slow_inference_does_not_present_stale_results(self):
-        class Slow(live.FixtureDetector):
+        class Slow(synthetic.FixtureDetector):
             def detect(self, *args):
                 time.sleep(0.15)
                 return super().detect(*args)
-        report = live.run_pipeline(live.SyntheticSource(), Slow(), live.HeadlessSink(), 0.6, max_age_ms=100)
+        report = live.run_pipeline(synthetic.SyntheticSource(), Slow(), synthetic.HeadlessSink(), 0.6, max_age_ms=100)
         self.assertGreater(report["stale_results_dropped"], 0)
         self.assertEqual(report["frames_submitted"], 0)
         self.assertTrue(report["cleanup_ok"])
@@ -278,29 +279,29 @@ class LivePipelineTests(unittest.TestCase):
         for bad in ({"image": None, "labels": [], "detections": [], "inference_ms": 0.0},
                     DetectionResult([], 0.0), DetectionResult((), float("nan")), DetectionResult((), -1.0),
                     DetectionResult(({"label": "dict"},), 0.0)):
-            class Bad(live.FixtureDetector):
+            class Bad(synthetic.FixtureDetector):
                 def detect(self, *args):
                     return bad
             with self.subTest(bad=bad):
-                report = live.run_pipeline(live.SyntheticSource(), Bad(), live.HeadlessSink(), 0.2)
+                report = live.run_pipeline(synthetic.SyntheticSource(), Bad(), synthetic.HeadlessSink(), 0.2)
                 self.assertEqual(report["status"], "error")
                 self.assertEqual(report["reason"], "invalid_detection_result")
                 self.assertEqual(report["frames_submitted"], 0)
                 self.assertTrue(report["cleanup_ok"])
 
     def test_source_failure_is_reported_and_closed(self):
-        source = live.SyntheticSource()
+        source = synthetic.SyntheticSource()
         source.read = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("generated source failure"))
-        report = live.run_pipeline(source, live.FixtureDetector(), live.HeadlessSink(), 0.2)
+        report = live.run_pipeline(source, synthetic.FixtureDetector(), synthetic.HeadlessSink(), 0.2)
         self.assertEqual(report["status"], "error")
         self.assertTrue(report["source_cleanup_ok"])
 
     def test_preexisting_cancel_does_not_open_source_or_sink(self):
         stop = threading.Event()
         stop.set()
-        source, sink = live.SyntheticSource(), live.HeadlessSink()
+        source, sink = synthetic.SyntheticSource(), synthetic.HeadlessSink()
         with patch.object(source, "open") as opened, patch.object(sink, "open") as displayed:
-            report = live.run_pipeline(source, live.FixtureDetector(), sink, 0.2, stop=stop)
+            report = live.run_pipeline(source, synthetic.FixtureDetector(), sink, 0.2, stop=stop)
         opened.assert_not_called()
         displayed.assert_not_called()
         self.assertEqual(report["status"], "cancelled")
@@ -323,14 +324,14 @@ class LivePipelineTests(unittest.TestCase):
                         "transport_threads_stopped": True, "native_report": {"cleanup_ok": True,
                         "exit_code": 0, "mode": "--validate-stdin", "runtime_initialized": False}}
         sink = OverlaySink(client_factory=Client)
-        report = live.run_pipeline(live.SyntheticSource(), live.FixtureDetector(), sink, 0.3)
+        report = live.run_pipeline(synthetic.SyntheticSource(), synthetic.FixtureDetector(), sink, 0.3)
         self.assertTrue(sink.client.validation_only)
         self.assertGreater(sink.client.count, 0)
         self.assertFalse(sink.client.visible)
         self.assertTrue(report["cleanup_ok"])
 
     def test_hide_failure_still_closes_sink(self):
-        class Sink(live.HeadlessSink):
+        class Sink(synthetic.HeadlessSink):
             closed = False
             def clear(self):
                 raise OSError("hide failed")
@@ -338,7 +339,7 @@ class LivePipelineTests(unittest.TestCase):
                 self.closed = True
                 return True
         sink = Sink()
-        report = live.run_pipeline(live.SyntheticSource(), live.FixtureDetector(), sink, 0.2)
+        report = live.run_pipeline(synthetic.SyntheticSource(), synthetic.FixtureDetector(), sink, 0.2)
         self.assertTrue(sink.closed)
         self.assertTrue(report["sink_close_ok"])
         self.assertFalse(report["sink_clear_ok"])
@@ -346,15 +347,15 @@ class LivePipelineTests(unittest.TestCase):
         self.assertEqual(report["status"], "cleanup_failed")
 
     def test_late_source_close_failure_is_not_lost(self):
-        class Source(live.SyntheticSource):
+        class Source(synthetic.SyntheticSource):
             def close(self):
                 raise OSError("source close failed")
-        report = live.run_pipeline(Source(), live.FixtureDetector(), live.HeadlessSink(), 0.2)
+        report = live.run_pipeline(Source(), synthetic.FixtureDetector(), synthetic.HeadlessSink(), 0.2)
         self.assertFalse(report["cleanup_ok"])
         self.assertIn("source close failed", report["source_error"])
 
     def test_partial_sink_startup_still_attempts_both_cleanup_steps(self):
-        class Sink(live.HeadlessSink):
+        class Sink(synthetic.HeadlessSink):
             cleared = closed = False
             def open(self):
                 raise OSError("partial startup")
@@ -364,25 +365,25 @@ class LivePipelineTests(unittest.TestCase):
                 self.closed = True
                 return True
         sink = Sink()
-        report = live.run_pipeline(live.SyntheticSource(), live.FixtureDetector(), sink, 0.2)
+        report = live.run_pipeline(synthetic.SyntheticSource(), synthetic.FixtureDetector(), sink, 0.2)
         self.assertTrue(sink.cleared and sink.closed)
         self.assertEqual(report["status"], "error")
 
     def test_cancellation_during_sink_startup_does_not_open_source(self):
         stop = threading.Event()
-        class Sink(live.HeadlessSink):
+        class Sink(synthetic.HeadlessSink):
             def open(self):
                 super().open()
                 stop.set()
-        source = live.SyntheticSource()
+        source = synthetic.SyntheticSource()
         with patch.object(source, "open") as opened:
-            report = live.run_pipeline(source, live.FixtureDetector(), Sink(), 0.2, stop=stop)
+            report = live.run_pipeline(source, synthetic.FixtureDetector(), Sink(), 0.2, stop=stop)
         opened.assert_not_called()
         self.assertEqual(report["status"], "cancelled")
         self.assertTrue(report["cleanup_ok"])
 
     def test_worker_report_cannot_upgrade_hardware_or_cleanup_claims(self):
-        report = live.run_pipeline(live.SyntheticSource(), live.FixtureDetector(), live.HeadlessSink(), 0.1)
+        report = live.run_pipeline(synthetic.SyntheticSource(), synthetic.FixtureDetector(), synthetic.HeadlessSink(), 0.1)
         report["vr_runtime_initialized"] = False
         for key in ("live_input_verified", "feedback_exclusion_verified", "hardware_trial_ready",
                     "vr_runtime_initialized"):

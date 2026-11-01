@@ -9,6 +9,7 @@ import threading
 import time
 import unittest
 
+from framejacker.runtime import synthetic
 from scripts import live_pipeline as live
 from framejacker.overlay import DEFAULT_BRIDGE, OverlayClient, PanelSettings, packet
 from framejacker.overlay import OverlaySink
@@ -128,7 +129,7 @@ class DisplayExpiryTests(unittest.TestCase):
     @unittest.skipUnless(importlib.util.find_spec("cv2"), "OpenCV is required for the live pipeline detector")
     def test_stalled_inference_cannot_keep_previous_result_current(self):
         blocked, release, stop = threading.Event(), threading.Event(), threading.Event()
-        class Detector(live.FixtureDetector):
+        class Detector(synthetic.FixtureDetector):
             calls = 0
             def detect(self, *args):
                 self.calls += 1
@@ -140,7 +141,7 @@ class DisplayExpiryTests(unittest.TestCase):
         sink = OverlaySink()
         result = {}
         def run():
-            result.update(live.run_pipeline(live.SyntheticSource(), Detector(), sink, 5,
+            result.update(live.run_pipeline(synthetic.SyntheticSource(), Detector(), sink, 5,
                 stop=stop, max_fps=10, max_age_ms=500))
         worker = threading.Thread(target=run)
         worker.start()

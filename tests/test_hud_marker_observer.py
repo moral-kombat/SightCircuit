@@ -18,6 +18,7 @@ except ImportError as error:
     raise unittest.SkipTest("OpenCV is required for HUD marker observer tests") from error
 import numpy as np
 
+from framejacker.hud import observation as hud_observation
 from scripts import hud_marker_observer as observer
 from framejacker.hud import CaptureFormat, HUD_CONFIG
 from framejacker.sources import mirror as mirror_check
@@ -47,7 +48,7 @@ def clean_bridge_fixture(seconds=1):
 
 def scene(positions=((100, 100),), *, width=1000, height=600):
     image = np.full((height, width, 3), 90, np.uint8)
-    template = observer.marker_template()
+    template = hud_observation.marker_template()
     for x, y in positions:
         image[y:y+128, x:x+320] = template[:, :, None]
     return image
@@ -57,7 +58,7 @@ class MarkerGeometryTests(unittest.TestCase):
     def test_all_complete_copies_are_found_without_eye_assignment(self):
         for positions in (((100, 100),), ((70, 80), (570, 270)), ((100, 50), (100, 330))):
             with self.subTest(positions=positions):
-                copies = observer.locate_copies(scene(positions))
+                copies = hud_observation.locate_copies(scene(positions))
                 self.assertEqual(len(copies), len(positions))
                 for quad, (x, y) in zip(copies, sorted(positions)):
                     np.testing.assert_allclose(quad, [[x, y], [x+319, y], [x+319, y+127], [x, y+127]], atol=1)
@@ -67,28 +68,28 @@ class MarkerGeometryTests(unittest.TestCase):
         for target in (np.float32([[100, 100], [450, 110], [430, 270], [110, 250]]),
                        np.float32([[380, 260], [61, 260], [61, 133], [380, 133]])):
             with self.subTest(target=target.tolist()):
-                warped = cv2.warpPerspective(observer.marker_template(), cv2.getPerspectiveTransform(source, target),
+                warped = cv2.warpPerspective(hud_observation.marker_template(), cv2.getPerspectiveTransform(source, target),
                                              (800, 500), borderValue=90)
-                copies = observer.locate_copies(cv2.cvtColor(warped, cv2.COLOR_GRAY2BGR))
+                copies = hud_observation.locate_copies(cv2.cvtColor(warped, cv2.COLOR_GRAY2BGR))
                 self.assertEqual(len(copies), 1)
                 np.testing.assert_allclose(copies[0], target, atol=2)
 
     def test_resolvable_scaled_copies_at_native_1080p_and_unresolvable_codes(self):
         for scale in (.25, .4, .5, .75):
             with self.subTest(scale=scale):
-                tile = cv2.resize(observer.marker_template(), None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+                tile = cv2.resize(hud_observation.marker_template(), None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
                 h, w = tile.shape
                 image = np.full((1080, 1920, 3), 90, np.uint8)
                 for x, y in ((100, 100), (1400, 700)):
                     image[y:y+h, x:x+w] = tile[:, :, None]
                 if scale >= .5:
-                    copies = observer.locate_copies(image)
+                    copies = hud_observation.locate_copies(image)
                     self.assertEqual(len(copies), 2)
                     np.testing.assert_allclose(copies[1], [[1400, 700], [1400+w-1, 700],
                                                [1400+w-1, 700+h-1], [1400, 700+h-1]], atol=1)
                 else:
                     with self.assertRaises(ValueError):
-                        observer.EmpiricalObservation().accept(image, CaptureFormat.bgr(image), 1, 1,
+                        hud_observation.EmpiricalObservation().accept(image, CaptureFormat.bgr(image), 1, 1,
                                                                config_id=HUD_CONFIG.layout_id)
 
     def test_translucent_or_blurred_marker_does_not_establish_full_footprint(self):
@@ -96,19 +97,19 @@ class MarkerGeometryTests(unittest.TestCase):
         for image in ((original.astype(np.float32)*.5 + 45).astype(np.uint8),
                       cv2.GaussianBlur(original, (15, 15), 0)):
             with self.assertRaises(ValueError):
-                observer.EmpiricalObservation().accept(image, CaptureFormat.bgr(image), 1, 1,
+                hud_observation.EmpiricalObservation().accept(image, CaptureFormat.bgr(image), 1, 1,
                                                         config_id=HUD_CONFIG.layout_id)
 
     def test_resolvable_partial_scaled_copy_cannot_hide_beside_complete_copy(self):
         for scale in (.5, .75, 1.):
             with self.subTest(scale=scale):
                 image = scene()
-                tile = cv2.resize(observer.marker_template(), None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+                tile = cv2.resize(hud_observation.marker_template(), None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
                 h, w = tile.shape
                 image[300:300+h, 600:600+w] = tile[:, :, None]
                 image[295:300+int(40*scale), 595:600+int(40*scale)] = 90
                 with self.assertRaisesRegex(ValueError, "orphan"):
-                    observer.locate_copies(image)
+                    hud_observation.locate_copies(image)
 
     def test_missing_corner_corrupt_code_and_partial_additional_copy_reject(self):
         for mode in ("missing", "wrong_code", "partial_extra"):
@@ -122,17 +123,17 @@ class MarkerGeometryTests(unittest.TestCase):
                     image = scene(((70, 80), (570, 270)))
                     image[260:320, 560:620] = 90
                 with self.assertRaises(ValueError):
-                    observation = observer.EmpiricalObservation()
+                    observation = hud_observation.EmpiricalObservation()
                     observation.accept(image, CaptureFormat.bgr(image), 1, 1, config_id=HUD_CONFIG.layout_id)
 
     def test_no_marker_is_not_mapping_evidence(self):
         image = np.full((600, 1000, 3), 90, np.uint8)
-        self.assertEqual(observer.locate_copies(image), [])
+        self.assertEqual(hud_observation.locate_copies(image), [])
         with self.assertRaisesRegex(ValueError, "no_complete_marker"):
-            observer.EmpiricalObservation().accept(image, CaptureFormat.bgr(image), 1, 1, config_id=HUD_CONFIG.layout_id)
+            hud_observation.EmpiricalObservation().accept(image, CaptureFormat.bgr(image), 1, 1, config_id=HUD_CONFIG.layout_id)
 
     def test_empirical_union_and_margin_include_small_movement(self):
-        track = observer.EmpiricalObservation()
+        track = hud_observation.EmpiricalObservation()
         for i, offset in enumerate((0, 2, -2), 1):
             image = scene(((100+offset, 100), (600, 300)))
             track.accept(image, CaptureFormat.bgr(image), i, i, config_id=HUD_CONFIG.layout_id)
@@ -143,7 +144,7 @@ class MarkerGeometryTests(unittest.TestCase):
             self.assertFalse(evidence[key])
 
     def test_vertical_copy_assignment_survives_small_horizontal_jitter(self):
-        track = observer.EmpiricalObservation()
+        track = hud_observation.EmpiricalObservation()
         for i, positions in enumerate((((100, 50), (100, 330)), ((102, 50), (99, 330))), 1):
             image = scene(positions)
             track.accept(image, CaptureFormat.bgr(image), i, i, config_id=HUD_CONFIG.layout_id)
@@ -153,26 +154,26 @@ class MarkerGeometryTests(unittest.TestCase):
         first = scene()
         for changed, reason in ((scene(((120, 100),)), "unstable"),
                                 (scene(((100, 100), (600, 300))), "count_changed")):
-            track = observer.EmpiricalObservation()
+            track = hud_observation.EmpiricalObservation()
             track.accept(first, CaptureFormat.bgr(first), 1, 1, config_id=HUD_CONFIG.layout_id)
             with self.assertRaisesRegex(ValueError, reason):
                 track.accept(changed, CaptureFormat.bgr(changed), 2, 2, config_id=HUD_CONFIG.layout_id)
         clipped_margin = scene(((8, 8),))
         with self.assertRaisesRegex(ValueError, "margin_escapes"):
-            observer.EmpiricalObservation().accept(clipped_margin, CaptureFormat.bgr(clipped_margin), 1, 1,
+            hud_observation.EmpiricalObservation().accept(clipped_margin, CaptureFormat.bgr(clipped_margin), 1, 1,
                                                     config_id=HUD_CONFIG.layout_id)
 
     def test_format_config_sequence_and_declared_copy_count_mismatches_reject(self):
         image = scene()
         descriptor = CaptureFormat.bgr(image)
-        track = observer.EmpiricalObservation()
+        track = hud_observation.EmpiricalObservation()
         track.accept(image, descriptor, 1, 1, config_id=HUD_CONFIG.layout_id)
         for fmt, sequence, config_id in ((replace(descriptor, fourcc="RGB3"), 2, HUD_CONFIG.layout_id),
                                          (descriptor, 1, HUD_CONFIG.layout_id), (descriptor, 2, "changed")):
             with self.subTest(fmt=fmt, sequence=sequence, config=config_id), self.assertRaises(ValueError):
                 track.accept(image, fmt, sequence, 2, config_id=config_id)
         with self.assertRaisesRegex(ValueError, "expected_copy_count"):
-            observer.EmpiricalObservation(observer.ObserverConfig(expected_copies=2)).accept(
+            hud_observation.EmpiricalObservation(hud_observation.ObserverConfig(expected_copies=2)).accept(
                 image, descriptor, 1, 1, config_id=HUD_CONFIG.layout_id)
 
     def test_native_rgb_stride_conversion_preserves_pixel_geometry(self):
@@ -182,9 +183,9 @@ class MarkerGeometryTests(unittest.TestCase):
         storage[:, :3000] = rgb.reshape(600, 3000)
         fmt = dict(width=1000, height=600, fourcc="RGB3", stride_bytes=3008,
                    minimum_buffer_bytes=600*3008, buffer_bytes=600*3008)
-        prepared, _ = observer.native_bgr(storage.tobytes(), fmt)
+        prepared, _ = hud_observation.native_bgr(storage.tobytes(), fmt)
         np.testing.assert_array_equal(prepared, image)
-        self.assertEqual(len(observer.locate_copies(prepared)), 1)
+        self.assertEqual(len(hud_observation.locate_copies(prepared)), 1)
 
 
 class FakeClock:
@@ -203,10 +204,10 @@ class MarkerDiagnosticTests(unittest.TestCase):
         # Coordinates from the metadata-only Frame report; all pixels below
         # are generated locally, not a reconstruction of a saved capture.
         target = np.float32([[1309, 731], [1582, 683], [1601, 791], [1329, 839]])
-        track = observer.EmpiricalObservation()
+        track = hud_observation.EmpiricalObservation()
         refined = False
         for i, phase in enumerate((0, .25, .5, .75), 1):
-            gray = cv2.warpPerspective(observer.marker_template(), cv2.getPerspectiveTransform(source, target+phase),
+            gray = cv2.warpPerspective(hud_observation.marker_template(), cv2.getPerspectiveTransform(source, target+phase),
                                        (1920, 1080), borderValue=90)
             image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
             track.accept(image, CaptureFormat.bgr(image), i, i, config_id=HUD_CONFIG.layout_id)
@@ -214,7 +215,7 @@ class MarkerDiagnosticTests(unittest.TestCase):
             details = track.last_match_diagnostics
             refined |= details["refined_outline_count"] > 0
             for candidate in details["best_candidates"]:
-                self.assertLessEqual(candidate["refinement_shift_px"], observer.MAX_CORNER_REFINEMENT_PX)
+                self.assertLessEqual(candidate["refinement_shift_px"], hud_observation.MAX_CORNER_REFINEMENT_PX)
             x0, y0, x1, y1 = track.regions()[0]
             self.assertLessEqual(x0, (target+phase)[:, 0].min()-8)
             self.assertLessEqual(y0, (target+phase)[:, 1].min()-8)
@@ -226,22 +227,22 @@ class MarkerDiagnosticTests(unittest.TestCase):
     def test_excessive_corner_adjustment_and_each_corrupted_bit_remain_rejected(self):
         source = np.float32([[0, 0], [319, 0], [319, 127], [0, 127]])
         target = np.float32([[1309, 731], [1582, 683], [1601, 791], [1329, 839]]) + .5
-        gray = cv2.warpPerspective(observer.marker_template(), cv2.getPerspectiveTransform(source, target),
+        gray = cv2.warpPerspective(hud_observation.marker_template(), cv2.getPerspectiveTransform(source, target),
                                    (1920, 1080), borderValue=90)
         with patch.object(cv2, "cornerSubPix", side_effect=lambda image, points, *args: points+100), \
                 self.assertRaisesRegex(ValueError, "orphan"):
-            observer.locate_copies(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR))
+            hud_observation.locate_copies(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR))
         for tag in range(4):
             for bit in range(4):
                 with self.subTest(tag=tag, bit=bit):
-                    template = observer.marker_template()
+                    template = hud_observation.marker_template()
                     x = (288 if tag % 2 else 8) + 4+(bit % 2)*8
                     y = (96 if tag // 2 else 8) + 4+(bit // 2)*8
                     template[y:y+6, x:x+6] = 255-template[y:y+6, x:x+6]
                     gray = cv2.warpPerspective(template, cv2.getPerspectiveTransform(source, target),
                                                (1920, 1080), borderValue=90)
                     with self.assertRaises(ValueError):
-                        observer.locate_copies(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR))
+                        hud_observation.locate_copies(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR))
 
     def test_same_orphan_error_has_distinct_photometric_resolution_and_outline_evidence(self):
         cases = ((90, 1, .4545, {"whole_pattern_error"}),
@@ -249,14 +250,14 @@ class MarkerDiagnosticTests(unittest.TestCase):
                  (255, 1, 1, {"whole_pattern_error", "outline_brightness", "tag_pattern_error", "code_bit_error"}))
         for background, scale, gamma, failed in cases:
             with self.subTest(background=background, scale=scale, gamma=gamma):
-                template = np.round(255*(observer.marker_template().astype(np.float32)/255)**gamma).astype(np.uint8)
+                template = np.round(255*(hud_observation.marker_template().astype(np.float32)/255)**gamma).astype(np.uint8)
                 tile = cv2.resize(template, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
                 h, w = tile.shape
                 image = np.full((1080, 1920, 3), background, np.uint8)
                 image[400:400+h, 700:700+w] = tile[:, :, None]
                 details = {}
                 with self.assertRaisesRegex(ValueError, "orphan_marker_tag_or_incomplete_copy"):
-                    observer.locate_copies(image, diagnostics=details)
+                    hud_observation.locate_copies(image, diagnostics=details)
                 self.assertTrue(details["scan_complete"])
                 self.assertEqual(details["complete_copy_count"], 0)
                 self.assertGreater(details["orphan_fragment_count"], 0)
@@ -270,7 +271,7 @@ class MarkerDiagnosticTests(unittest.TestCase):
         image[260:320, 560:620] = 90
         details = {}
         with self.assertRaisesRegex(ValueError, "orphan"):
-            observer.locate_copies(image, diagnostics=details)
+            hud_observation.locate_copies(image, diagnostics=details)
         self.assertEqual(details["complete_copy_count"], 1)
         self.assertEqual(details["status"], "rejected")
         self.assertEqual(details["fragment_quads_scope"], "orphans")
@@ -280,7 +281,7 @@ class MarkerDiagnosticTests(unittest.TestCase):
 
     def test_candidate_and_fragment_metadata_are_capped_without_dropping_total_counts(self):
         image = np.full((600, 1000, 3), 90, np.uint8)
-        tag = observer.marker_template()[8:32, 8:32]
+        tag = hud_observation.marker_template()[8:32, 8:32]
         for i in range(24):
             x, y = 50+(i%8)*50, 50+(i//8)*50
             image[y:y+24, x:x+24] = tag[:, :, None]
@@ -289,12 +290,12 @@ class MarkerDiagnosticTests(unittest.TestCase):
             cv2.rectangle(image, (x, y), (x+120, y+50), (255, 255, 255), 4)
         details = {}
         with self.assertRaisesRegex(ValueError, "orphan"):
-            observer.locate_copies(image, diagnostics=details)
-        self.assertGreater(details["orphan_fragment_count"], observer.MAX_DIAGNOSTIC_FRAGMENTS)
-        self.assertEqual(len(details["fragment_quads_native"]), observer.MAX_DIAGNOSTIC_FRAGMENTS)
+            hud_observation.locate_copies(image, diagnostics=details)
+        self.assertGreater(details["orphan_fragment_count"], hud_observation.MAX_DIAGNOSTIC_FRAGMENTS)
+        self.assertEqual(len(details["fragment_quads_native"]), hud_observation.MAX_DIAGNOSTIC_FRAGMENTS)
         self.assertTrue(details["fragment_quads_truncated"])
-        self.assertGreater(details["eligible_outline_count"], observer.MAX_DIAGNOSTIC_CANDIDATES)
-        self.assertEqual(len(details["best_candidates"]), observer.MAX_DIAGNOSTIC_CANDIDATES)
+        self.assertGreater(details["eligible_outline_count"], hud_observation.MAX_DIAGNOSTIC_CANDIDATES)
+        self.assertEqual(len(details["best_candidates"]), hud_observation.MAX_DIAGNOSTIC_CANDIDATES)
         self.assertTrue(details["best_candidates_truncated"])
         self.assertLess(len(json.dumps(details, allow_nan=False)), 8192)
 
@@ -304,7 +305,7 @@ class MarkerDiagnosticTests(unittest.TestCase):
         failed[95:140, 95:140] = 90
         for image, descriptor in ((failed, CaptureFormat.bgr(failed)),
                                   (first, replace(CaptureFormat.bgr(first), fourcc="RGB3"))):
-            track = observer.EmpiricalObservation()
+            track = hud_observation.EmpiricalObservation()
             track.accept(first, CaptureFormat.bgr(first), 1, 100, config_id=HUD_CONFIG.layout_id)
             with self.assertRaises(ValueError):
                 track.accept(image, descriptor, 2, 200, config_id=HUD_CONFIG.layout_id)
@@ -322,9 +323,9 @@ class MarkerDiagnosticTests(unittest.TestCase):
                 image[y:y+2, x:x+2] = 255
         details = {}
         with self.assertRaisesRegex(ValueError, "contour_budget"):
-            observer.locate_copies(image, diagnostics=details)
+            hud_observation.locate_copies(image, diagnostics=details)
         self.assertFalse(details["scan_complete"])
-        self.assertGreater(details["contour_count"], observer.MAX_CONTOURS)
+        self.assertGreater(details["contour_count"], hud_observation.MAX_CONTOURS)
         self.assertEqual(details["best_candidates"], [])
         self.assertLess(len(json.dumps(details)), 1024)
 
@@ -348,7 +349,7 @@ class BaselineGateTests(unittest.TestCase):
         return image
 
     def test_cached_marker_then_two_distinct_clear_frames_only_establishes_content_change(self):
-        gate = observer.BaselineGate(2)
+        gate = hud_observation.BaselineGate(2)
         self.assertFalse(gate.accept(scene(), 1, 1, 0))
         self.assertFalse(gate.accept(scene(), 2, 2, .2))
         self.assertFalse(gate.accept(self.clear_image(91), 3, 3, .4))
@@ -361,7 +362,7 @@ class BaselineGateTests(unittest.TestCase):
         self.assertEqual(gate.last_diagnostics["status"], "no_complete_copy")
 
     def test_repeated_clear_frames_and_exact_deadline_cannot_start_output(self):
-        gate = observer.BaselineGate(2)
+        gate = hud_observation.BaselineGate(2)
         for i in range(10):
             self.assertFalse(gate.accept(self.clear_image(), i+1, i+1, i*.2))
         with self.assertRaisesRegex(ValueError, "baseline_distinct_clear"):
@@ -370,16 +371,16 @@ class BaselineGateTests(unittest.TestCase):
         self.assertFalse(gate.report["established"])
 
     def test_partial_marker_resets_clear_sequence_and_metadata_budgets_fail_immediately(self):
-        gate = observer.BaselineGate(2)
+        gate = hud_observation.BaselineGate(2)
         partial = scene()
         partial[95:140, 95:140] = 90
         self.assertFalse(gate.accept(self.clear_image(91), 1, 1, 0))
         self.assertFalse(gate.accept(partial, 2, 2, .2))
         self.assertFalse(gate.accept(self.clear_image(92), 3, 3, .4))
         self.assertTrue(gate.accept(self.clear_image(93), 4, 4, .6))
-        with patch.object(observer, "locate_copies", side_effect=ValueError("observer_contour_budget")), \
+        with patch.object(hud_observation, "locate_copies", side_effect=ValueError("observer_contour_budget")), \
                 self.assertRaisesRegex(ValueError, "contour_budget"):
-            observer.BaselineGate(2).accept(self.clear_image(), 1, 1, 0)
+            hud_observation.BaselineGate(2).accept(self.clear_image(), 1, 1, 0)
 
 
 class ObserverLifecycleTests(unittest.TestCase):
@@ -431,7 +432,7 @@ class ObserverLifecycleTests(unittest.TestCase):
                 if bridge_change:
                     bridge_change(report)
                 return report
-        original = observer.locate_copies
+        original = hud_observation.locate_copies
         def locate(image, **kwargs):
             result = original(image, **kwargs)
             if (slow and state["marker"]) or (baseline_slow and not state["marker"]):
@@ -439,7 +440,7 @@ class ObserverLifecycleTests(unittest.TestCase):
             return result
         with patch.object(observer.time, "monotonic", clock.monotonic), \
                 patch.object(observer.time, "monotonic_ns", clock.monotonic_ns), \
-                patch.object(observer, "locate_copies", side_effect=locate):
+                patch.object(hud_observation, "locate_copies", side_effect=locate):
             report = observer.observe({"node": "synthetic:fixture"}, seconds, stop, backend_factory=Source, marker_client=Marker())
         return report, state, clock
 

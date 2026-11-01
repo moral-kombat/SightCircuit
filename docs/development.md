@@ -23,14 +23,14 @@ development; exact tested pins remain in the `requirements-*.txt` files.
 | `framejacker/latest.py` | One-pending-item handoff; newer items replace older ones |
 | `framejacker/gates.py` | The closed approval gates (live image input, hardware mapping, live HUD output): each boundary's `require` and every report's gate claims; nothing here opens a gate |
 | `framejacker/context.py` | `CaptureContext`: pins declared source identity, frame source/native layout/session metadata and an optional HUD mask binding; `admit(frame)` fails closed and latches the first failure |
-| `framejacker/convert.py` | BGR24 and padded RGB3/BGR3 conversion to detector input of at most 960 pixels |
+| `framejacker/convert.py` | One native pixel rule (`buffer_bgr`: BGR24 arrays and padded RGB3/BGR3 buffers), `native_bgr` for frames and `to_bgr` for detector input of at most 960 pixels |
 | `framejacker/detection.py` | `Detector` interface, `MobileNetSSD` baseline, `YoloxDetector` candidate, `create_detector()`, separate `annotate()` and `require_result()` (rejects malformed detector output before any output) |
 | `framejacker/preprocess.py`, `framejacker/labels.py` | Letterbox input and inverse box mapping; COCO vocabulary and VOC-to-canonical label names |
 | `framejacker/evaluation.py`, `framejacker/assets.py` | Detector evaluation scoring; checksum-verified model/fixture download and verification |
 | `framejacker/sources/` | `ReplaySource` (PyAV); `mirror_device` (read-only V4L2 SteamVR mirror discovery and reads); `mirror` (bounded acquisition loop `capture` and `MirrorSource`); `recording` (MP4 header inspection, newest recording); `PolledSource` (adapter for `open`/`read`/`close` sources). Adapters forward the wrapped source's declared identity |
 | `framejacker/overlay.py` | Overlay bridge client and `OverlaySink`, the one panel sink: with a caller-owned client (replay's interactive panel) it only submits images; otherwise it owns a validation-only client through `open`/`clear`/`close`, optionally with the frozen HUD placement and payload contract |
-| `framejacker/hud/` | Fixed edge HUD contract, shared eye/rectangle geometry, synthetic-only native mask, tile rendering, the `HudStage` engine stage and offline mapping qualification |
-| `framejacker/runtime/` | `process` (bounded spawned workers, parent-death signalling), `guard` (owned process-group supervision with the Linux parent-loss guardian), reserve/publish of explicit image outputs, and `live.run_pipeline` (gated synthetic run on `Pipeline`, as a report) |
+| `framejacker/hud/` | Fixed edge HUD contract, shared eye/rectangle geometry, synthetic-only native mask, tile rendering, the `HudStage` engine stage, offline mapping qualification, the calibration marker client and `observation` (empirical marker-copy location in native pixels, used by `hud_marker_observer.py`) |
+| `framejacker/runtime/` | `process` (bounded spawned workers, parent-death signalling), `guard` (owned process-group supervision with the Linux parent-loss guardian), reserve/publish of explicit image outputs, `live.run_pipeline` (gated synthetic run on `Pipeline`, as a report) and `synthetic` (the generated source, its fixture calibration, `FixtureDetector` and `HeadlessSink`) |
 
 File replay uses every-frame scheduling, so each decoded frame is processed in
 order. Mirror recognition uses latest-only scheduling with a one-second input
