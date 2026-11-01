@@ -2,27 +2,20 @@
 
 The only accepted acquisition kind remains synthetic. Hardware adapters and
 production output require separate gates; moving this engine does not lift them.
+
+``hud``, when given, is an adapter exposing ``start()`` (returns report fields
+and sets ``mask``), ``check_sink()``, ``prepare(frame)`` and ``render(...)``.
+Capture-context identity, including the HUD calibration, is enforced by one
+``CaptureContext`` admitted on publish, before inference, after inference and
+before submission.
 """
 import math
-from copy import deepcopy
 import threading
 import time
 
+from ..context import CaptureContext
 from ..convert import to_bgr
 from ..latest import LatestFrameSlot as LatestSlot
-
-
-def source_context(source):
-    """Freeze declared mapping identity; missing fields remain explicitly unknown.
-
-    These fields are observation context, never a claim of camera exposure
-    timing or of qualified hardware mapping. Adapters must declare them when
-    available and production acquisition remains gated separately.
-    """
-    return tuple(deepcopy(getattr(source, name, None)) for name in (
-        "kind", "source_id", "capture_layout", "session_id", "runtime_id", "tracking_origin",
-        "recenter_generation", "orientation", "crop", "capture_format", "hud_config_id",
-        "recenter_epoch", "timebase_id", "orientation_degrees", "crop_xyxy", "hud_config_sha256"))
 
 
 def run_pipeline(source, detector, sink, seconds, *, stop=None, max_fps=5, max_age_ms=1000, threshold=0.5,
@@ -34,19 +27,12 @@ def run_pipeline(source, detector, sink, seconds, *, stop=None, max_fps=5, max_a
     stop = stop or threading.Event()
     pending, done = LatestSlot(), threading.Event()
     source_state = {"cleanup_ok": False, "frames_received": 0, "error": None}
-    expected_source = source_context(source)
-    native_context = None
+    context = None
 
-    def check_source(frame):
-        nonlocal native_context
-        if (source_context(source) != expected_source or
-                frame.source_id != expected_source[1]):
-            raise ValueError("source_or_session_changed")
-        descriptor = frame.native_descriptor
-        if native_context is None:
-            native_context = descriptor
-        elif descriptor != native_context:
-            raise ValueError("native_capture_format_changed")
+    def admit(frame):
+        context.admit(frame)
+        if hud is not None:
+            hud.check_sink()
     report = {"report_kind": "synthetic_recognition_pipeline", "status": "error", "exit_code": 1,
         "source_kind": "synthetic", "live_input_verified": False, "feedback_exclusion_verified": False,
         "hardware_trial_ready": False, "frames_processed": 0, "frames_submitted": 0,
@@ -65,6 +51,8 @@ def run_pipeline(source, detector, sink, seconds, *, stop=None, max_fps=5, max_a
     try:
         if hud is not None:
             report.update(hud.start())
+        # Pins the declared source identity before the source opens.
+        context = CaptureContext(source, mask=hud.mask if hud is not None else None)
         sink.open()
         started = time.monotonic()
         deadline = started + seconds
@@ -79,9 +67,7 @@ def run_pipeline(source, detector, sink, seconds, *, stop=None, max_fps=5, max_a
                 while not stop.is_set() and time.monotonic() < deadline:
                     frame = source.read(stop, timeout=0.05)
                     if frame is not None:
-                        check_source(frame)
-                        if hud is not None:
-                            hud.check_frame(frame)
+                        admit(frame)
                         pending.publish(frame)
                         source_state["frames_received"] += 1
             except Exception as error:
@@ -120,15 +106,13 @@ def run_pipeline(source, detector, sink, seconds, *, stop=None, max_fps=5, max_a
                 continue
             next_inference = time.monotonic() + 1 / max_fps
             processing_started = time.monotonic()
-            check_source(frame)
+            admit(frame)
             prepared = hud.prepare(frame) if hud is not None else to_bgr(frame.as_frame())
             detection = detector.detect(prepared, threshold)
             report["frames_processed"] += 1
             if source_state["error"]:
                 raise ValueError(source_state["error"])
-            check_source(frame)
-            if hud is not None:
-                hud.check_frame(frame)
+            admit(frame)
             if not math.isfinite(detection["inference_ms"]) or detection["inference_ms"] < 0:
                 raise ValueError("invalid_inference_measurement")
             if detection["image"].shape != prepared.shape or detection["image"].dtype != prepared.dtype:
@@ -145,9 +129,7 @@ def run_pipeline(source, detector, sink, seconds, *, stop=None, max_fps=5, max_a
             # Validate once more at the final output boundary.
             if source_state["error"]:
                 raise ValueError(source_state["error"])
-            check_source(frame)
-            if hud is not None:
-                hud.check_frame(frame)
+            admit(frame)
             age = (time.monotonic_ns() - frame.observed_ns) / 1e6
             report["maximum_observation_age_ms"] = max(report["maximum_observation_age_ms"], age)
             if age > max_age_ms or time.monotonic() >= deadline or stop.is_set():

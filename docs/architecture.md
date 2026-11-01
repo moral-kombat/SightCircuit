@@ -36,6 +36,9 @@ layout, orientation, source/session or HUD configuration changes must fail close
 stop result presentation/inference and expire prior content rather than reuse an
 old mask. Stale results must expire independently of inference and heartbeats.
 Do not silently recalibrate or enlarge the visible HUD beyond the qualified mask.
+`framejacker/context.py` holds this rule once: `CaptureContext.admit(frame)` is
+called on publish, before inference and before output, and its first failure
+invalidates every later admission in the run.
 
 The synthetic-only implementation is now offline-tested: `framejacker/hud/` owns
 validated source/format/layout contracts, full per-eye footprints plus margins,

@@ -10,28 +10,21 @@ Two scheduling modes keep the architecture's latency rule explicit:
 
 Both modes start processing at most ``max_fps`` times per second. When ``run``
 returns or raises it has set ``stop``, so the source has been told to finish.
+
+With ``max_input_age_ms`` set, each run binds a ``CaptureContext`` and admits
+every frame when capture publishes it, before inference and before each sink.
 """
 from dataclasses import dataclass, field
-from copy import deepcopy
 import math
 import threading
 import time
 from typing import Callable, Protocol
 
+from .context import CaptureContext
 from .convert import to_bgr
 from .detection import annotate
 from .frame import Frame, Processed
 from .latest import LatestSlot
-from .runtime.live import source_context
-
-
-CONTEXT_METADATA_KEYS = frozenset((
-    "native_format", "context", "source_id", "session_id", "runtime_id", "tracking_origin",
-    "recenter_generation", "crop", "orientation", "capture_layout", "hud_config_id", "mapping_id",
-    "calibration_id", "buffer_bytes", "minimum_buffer_bytes", "field", "colorspace_code",
-    "format_flags", "ycbcr_encoding_code", "quantization_code", "transfer_function_code",
-    "recenter_epoch", "timebase_id", "orientation_degrees", "crop_xyxy", "hud_config_sha256",
-))
 
 
 class FrameSource(Protocol):
@@ -105,10 +98,12 @@ class Pipeline:
         self.stats = PipelineStats()
         self.capture_thread_alive = False
         self.context_validator = context_validator
-        self.frame_context = None
+        self.capture_context = None
         self.last_sequence = None
 
     def run(self, stop):
+        # Live runs pin the source's declared identity before it emits anything.
+        self.capture_context = CaptureContext(self.source) if self.max_input_age_ms is not None else None
         self.stats.started = time.monotonic()
         try:
             if self.latest_only:
@@ -125,17 +120,11 @@ class Pipeline:
     def _validate_context(self, frame):
         if self.context_validator is not None:
             self.context_validator(frame)
-        self._validate_native_context(frame)
+        self._admit(frame)
 
-    def _validate_native_context(self, frame):
-        if self.max_input_age_ms is not None:
-            context = (frame.source, frame.pixel_format, frame.width, frame.height,
-                       frame.stride, deepcopy({key: value for key, value in frame.metadata.items()
-                                              if key in CONTEXT_METADATA_KEYS}), source_context(self.source))
-            if self.frame_context is None:
-                self.frame_context = context
-            elif context != self.frame_context:
-                raise ValueError("source_or_native_context_changed")
+    def _admit(self, frame):
+        if self.capture_context is not None:
+            self.capture_context.admit(frame)
 
     def _input_age(self, frame):
         age_ms = (time.monotonic_ns() - frame.observed_ns) / 1e6
@@ -216,9 +205,9 @@ class Pipeline:
             try:
                 def publish(frame):
                     nonlocal captured_sequence
-                    # A context change observed by capture invalidates an older
-                    # in-flight inference before it can reach any sink.
-                    self._validate_native_context(frame)
+                    # A context change observed by capture latches the context's
+                    # failure, so an older in-flight inference cannot reach a sink.
+                    self._admit(frame)
                     if self.max_input_age_ms is not None:
                         if type(frame.sequence) is not int or frame.sequence < 0:
                             raise ValueError("invalid_frame_sequence")

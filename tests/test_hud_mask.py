@@ -385,6 +385,32 @@ class HudIntegrationTests(unittest.TestCase):
         self.assertEqual(report["status"], "error")
         self.assertIsNone(tile)
 
+    def test_mirror_hud_source_kind_change_during_inference_blocks_output(self):
+        cal = calibration()
+        class Source:
+            kind, source_id, capture_layout = "synthetic", cal.source_id, "mono"
+            def __init__(self, _):
+                self.capabilities = {"driver": "synthetic"}
+                self.format = {key: getattr(cal.capture_format, key)
+                    for key in hud.CaptureFormat.__dataclass_fields__ if key != "metadata"}
+                self.data = bytes([63]) * cal.capture_format.buffer_bytes
+            def open(self):
+                pass
+            def read_frame(self, timeout):
+                return self.data
+            def close(self):
+                pass
+        class Detector(live.FixtureDetector):
+            def detect(inner, image, threshold):
+                Source.kind = "live_camera"  # The approved declaration is pinned at start.
+                return super().detect(image, threshold)
+        report, tile = mirror.recognize({"node": "synthetic:only"}, .3, threading.Event(), want_preview=True,
+            hud_mode=True, calibration=cal, backend_factory=Source, detector_factory=Detector)
+        self.assertEqual(report["status"], "error", report)
+        self.assertIn("source_or_session_changed", report["error"])
+        self.assertEqual(report["frames_processed"], 0)
+        self.assertIsNone(tile)
+
     def test_mirror_mailbox_owns_mutable_source_storage(self):
         mailbox = mirror.LatestFrame()
         source = bytearray(b"abc")

@@ -226,7 +226,7 @@ class PipelineTests(unittest.TestCase):
                 return super().detect(*args)
 
         runner, sink = pipeline(Source(), Detector(), max_input_age_ms=1000)
-        with self.assertRaisesRegex(ValueError, "source_or_native_context_changed"):
+        with self.assertRaisesRegex(ValueError, "native_capture_format_changed"):
             runner.run(threading.Event())
         self.assertEqual(sink.items, [])
 
@@ -277,7 +277,7 @@ class PipelineTests(unittest.TestCase):
                         return result
 
                 runner, sink = pipeline(Source(), Detector(), latest_only=False, max_input_age_ms=1000)
-                with self.assertRaisesRegex(ValueError, "source_or_native_context_changed"):
+                with self.assertRaisesRegex(ValueError, "source_or_session_changed"):
                     runner.run(threading.Event())
                 self.assertEqual(sink.items, [])
 
@@ -302,7 +302,7 @@ class PipelineTests(unittest.TestCase):
 
         runner, sink = pipeline(Source(), EchoDetector(), max_input_age_ms=1000)
         runner.sinks = (First(), sink)
-        with self.assertRaisesRegex(ValueError, "source_or_native_context_changed"):
+        with self.assertRaisesRegex(ValueError, "native_capture_format_changed"):
             runner.run(threading.Event())
         self.assertEqual(sink.items, [])
 

@@ -11,6 +11,7 @@ import time
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from framejacker.context import native_format
 from framejacker.frame import OwnedFrame  # noqa: F401 - compatibility export
 from framejacker.hud import Calibration, CaptureFormat, Footprint, HudMask, HUD_CONFIG
 from framejacker.latest import LatestFrameSlot as LatestSlot  # noqa: F401 - compatibility export
@@ -162,9 +163,9 @@ class HudPipelineAdapter:
         self.mask = None
 
     def start(self):
+        # The engine binds this mask to its CaptureContext, which checks the
+        # calibration against the source and then every admitted frame.
         self.mask = HudMask(self.calibration, self.config, source_kind=self.source.kind)
-        self.mask.check_context(self.source.source_id, self.calibration.capture_format,
-                                self.source.capture_layout, self.config)
         if isinstance(self.sink, OverlayValidationSink):
             if not isinstance(self.sink, HudValidationSink):
                 raise ValueError("hud_requires_fixed_validation_sink")
@@ -175,22 +176,14 @@ class HudPipelineAdapter:
                     world_locked=False, hud_config_id=self.config.layout_id,
                     hud_pixel_size=[self.config.width_px, self.config.height_px])
 
-    def descriptor(self, frame):
-        return (CaptureFormat.from_mapping(dict(frame.native_format)) if frame.native_format
-                else CaptureFormat.bgr(frame.image))
-
-    def check_frame(self, frame):
-        if self.source.kind != "synthetic" or self.source.source_id != frame.source_id:
-            raise ValueError("hud_source_changed")
-        self.mask.check_context(frame.source_id, self.descriptor(frame),
-                                self.source.capture_layout, self.config)
+    def check_sink(self):
+        """Output contract; capture identity is the engine's CaptureContext."""
         if isinstance(self.sink, HudValidationSink):
             self.sink.check_contract(self.config)
 
     def prepare(self, frame):
-        self.check_frame(frame)
         return self.mask.prepare(frame.image, source_id=frame.source_id,
-                                 capture_format=self.descriptor(frame),
+                                 capture_format=CaptureFormat.from_mapping(native_format(frame)),
                                  capture_layout=self.source.capture_layout, config=self.config)
 
     def render(self, detection, shape, threshold):

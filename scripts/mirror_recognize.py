@@ -15,6 +15,7 @@ import time
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from framejacker.context import CaptureContext
 from framejacker.convert import to_bgr as convert_frame
 from framejacker.errors import FrameFormatError
 from framejacker.frame import Frame
@@ -72,6 +73,14 @@ class LatestFrame(LatestSlot):
             return self.report.copy(), self.replaced
 
 
+def native_frame(frame, source_id=None):
+    """The pipeline ``Frame`` view of one observed read; pixels are not copied."""
+    fmt = frame.format
+    return Frame(frame.data, fmt["fourcc"], fmt["width"], fmt["height"], fmt["stride_bytes"],
+                 source_id or "mirror:observed", frame.read_sequence, frame.observed_ns,
+                 metadata={"native_format": dict(fmt)})
+
+
 def to_bgr(frame, *, hud=None, source_id=None, capture_layout=None, hud_config=HUD_CONFIG):
     fmt = frame.format
     native_filter = None
@@ -83,9 +92,7 @@ def to_bgr(frame, *, hud=None, source_id=None, capture_layout=None, hud_config=H
                                capture_layout=capture_layout, config=hud_config)
     if len(frame.data) < fmt["minimum_buffer_bytes"]:
         raise MirrorError("short_frame", "Incomplete mirror image")
-    native = Frame(frame.data, fmt["fourcc"], fmt["width"], fmt["height"], fmt["stride_bytes"],
-                   source_id or "mirror:observed", frame.read_sequence, frame.observed_ns,
-                   metadata={"native_format": dict(fmt)})
+    native = native_frame(frame, source_id)
     try:
         return convert_frame(native, native_filter=native_filter)
     except FrameFormatError as error:
@@ -105,15 +112,16 @@ def recognize(candidate, seconds, stop, progress=lambda report: None, want_previ
     started = None
     total_inference = max_inference = max_age = 0.0
     labels = set()
-    hud = None
+    hud = context = None
     try:
         if hud_mode:
             # No CLI/live adapter enables this: fixture backends only.
             if backend_factory is None or getattr(backend_factory, "kind", None) != "synthetic":
                 raise ValueError("hud_live_mirror_not_approved")
             hud = HudMask(calibration, hud_config, source_kind="synthetic")
-            hud.check_context(backend_factory.source_id, calibration.capture_format,
-                              backend_factory.capture_layout, hud_config)
+            # Pins the approved synthetic declaration and binds the calibration;
+            # the device mirror path (no HUD) keeps its existing checks.
+            context = CaptureContext(backend_factory, mask=hud)
             report.update(hud_mode=True, calibration_scope="synthetic_fixture_only",
                           hardware_mapping_verified=False, feedback_exclusion_verified=False,
                           stale_results_skipped=0)
@@ -122,11 +130,12 @@ def recognize(candidate, seconds, stop, progress=lambda report: None, want_previ
             report["status"] = "cancelled"
             return report, None
 
+        source_id = getattr(backend_factory, "source_id", None)
+
         def acquire():
             def publish(data, fmt, number, observed_ns):
-                if hud is not None:
-                    hud.check_context(backend_factory.source_id, CaptureFormat.from_mapping(fmt),
-                                      backend_factory.capture_layout, hud_config)
+                if context is not None:
+                    context.admit(native_frame(ObservedFrame(data, fmt, number, observed_ns), source_id))
                 latest.publish(data, fmt, number, observed_ns)
             try:
                 captured, _ = check.capture(candidate, seconds, stop, latest.update,
@@ -163,18 +172,15 @@ def recognize(candidate, seconds, stop, progress=lambda report: None, want_previ
                 report["stale_inputs_skipped"] += 1
                 continue
             next_inference = time.monotonic() + 1 / max_fps
-            if hud is not None and getattr(backend_factory, "kind", None) != "synthetic":
-                raise ValueError("hud_live_mirror_not_approved")
-            prepared = to_bgr(frame, hud=hud,
-                source_id=getattr(backend_factory, "source_id", None),
+            if context is not None:
+                context.admit(native_frame(frame, source_id))
+            prepared = to_bgr(frame, hud=hud, source_id=source_id,
                 capture_layout=getattr(backend_factory, "capture_layout", None), hud_config=hud_config)
             detected = detector.detect(prepared, threshold)
             if hud is not None:
-                if (getattr(backend_factory, "kind", None) != "synthetic" or
-                        latest.snapshot()[0].get("status") == "error"):
+                if latest.snapshot()[0].get("status") == "error":
                     raise ValueError("hud_capture_failed_or_changed")
-                hud.check_context(backend_factory.source_id, CaptureFormat.from_mapping(frame.format),
-                                  backend_factory.capture_layout, hud_config)
+                context.admit(native_frame(frame, source_id))
                 if detected["image"].shape != prepared.shape or detected["image"].dtype != prepared.dtype:
                     raise ValueError("hud_detection_image_mismatch")
                 if stop.is_set() or (time.monotonic_ns() - frame.observed_ns) / 1e6 > 1000:

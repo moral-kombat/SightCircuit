@@ -19,6 +19,7 @@ development; exact tested pins remain in the `requirements-*.txt` files.
 | `framejacker/frame.py` | `Frame` (pixels, layout, source, sequence, observation time, media time) and detection result types |
 | `framejacker/pipeline.py` | `FrameSource`/`Sink` interfaces and `Pipeline`: conversion, detection, annotation, rate cap, latest-only or every-frame scheduling |
 | `framejacker/latest.py` | One-pending-item handoff; newer items replace older ones |
+| `framejacker/context.py` | `CaptureContext`: pins declared source identity, frame source/native layout/session metadata and an optional HUD mask binding; `admit(frame)` fails closed and latches the first failure |
 | `framejacker/convert.py` | BGR24 and padded RGB3/BGR3 conversion to detector input of at most 960 pixels |
 | `framejacker/detection.py` | `Detector` interface, `MobileNetSSD` baseline, `YoloxDetector` candidate, `create_detector()` and separate `annotate()` |
 | `framejacker/preprocess.py`, `framejacker/labels.py` | Letterbox input and inverse box mapping; COCO vocabulary and VOC-to-canonical label names |
