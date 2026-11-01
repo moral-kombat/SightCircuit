@@ -25,6 +25,12 @@ class LivePipelineTests(unittest.TestCase):
         return Frame.owned_bgr(np.full((32, 48, 3), value, dtype=np.uint8), sequence,
             time.monotonic_ns() if observed is None else observed, source)
 
+    def assert_legacy_fields_follow_the_block(self, report, aliases):
+        block = report["pipeline"]
+        for name, source in aliases.items():
+            with self.subTest(field=name):
+                self.assertEqual(report[name], source(block) if callable(source) else block[source])
+
     def test_owned_copy_is_independent_read_only_and_keeps_identity(self):
         first = self.frame(1)
         first.pixels.flags.writeable = True
@@ -247,6 +253,9 @@ class LivePipelineTests(unittest.TestCase):
         self.assertGreater(report["pending_inputs_replaced"], 0)
         self.assertGreater(report["frames_received"], report["frames_submitted"])
         self.assertFalse(report["live_input_verified"])
+        from framejacker.runtime.live import LEGACY_FIELDS
+        self.assert_legacy_fields_follow_the_block(report, LEGACY_FIELDS)
+
 
     def test_stale_input_and_future_observation_are_not_sent_to_sink(self):
         for age, expected in ((-2000000000, "no_frames"), (2000000000, "error")):

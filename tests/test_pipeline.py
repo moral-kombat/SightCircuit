@@ -417,6 +417,28 @@ class Lifecycle:
         return self.close_result
 
 
+class StatsReportTests(unittest.TestCase):
+    CANONICAL = {"frames_received", "frames_processed", "frames_submitted", "stale_inputs_skipped",
+                 "stale_results_skipped", "pending_replaced", "total_inference_ms", "mean_inference_ms",
+                 "max_inference_ms", "total_processing_ms", "mean_processing_ms", "max_input_age_ms",
+                 "max_output_age_ms", "elapsed_ms", "processed_fps", "labels_seen", "cancelled",
+                 "sink_clear_ok", "sink_close_ok"}
+
+    def test_one_canonical_block_with_rounded_milliseconds(self):
+        from framejacker.pipeline import PipelineStats, report_fields
+
+        stats = PipelineStats(frames_processed=2, total_inference_ms=1.23456, max_input_age_ms=9.87654,
+                              labels_seen={"dog", "cat"}, started=10.0, finished=12.5)
+        block = stats.report()
+        self.assertEqual(set(block), self.CANONICAL)
+        self.assertEqual((block["total_inference_ms"], block["mean_inference_ms"], block["max_input_age_ms"]),
+                         (1.235, 0.617, 9.877))
+        self.assertEqual((block["elapsed_ms"], block["processed_fps"], block["labels_seen"]), (2500.0, 0.8, ["cat", "dog"]))
+        self.assertEqual(PipelineStats().report()["processed_fps"], 0.0)
+        self.assertEqual(report_fields(block, {"seen": "labels_seen", "seconds": lambda b: b["elapsed_ms"] / 1000}),
+                         {"seen": ["cat", "dog"], "seconds": 2.5})
+
+
 class EngineLifecycleTests(unittest.TestCase):
     def run_with(self, sink, source=None, detector=None, **options):
         options.setdefault("max_fps", 1000)

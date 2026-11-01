@@ -83,6 +83,8 @@ class ReplayWindowTests(unittest.TestCase):
                       "decode_fps", "mean_presentation_latency_ms", "max_schedule_lateness_ms"):
             self.assertIn(field, report)
         self.assertGreater(report["realtime_ratio"], 0)
+        self.assertEqual(report["frames_replaced"], report["pipeline"]["pending_replaced"])
+        self.assertEqual(report["processed_fps"], report["pipeline"]["processed_fps"])
         invalid = subprocess.run([sys.executable, str(SCRIPT), str(self.clip), "--decode-threads", "0"],
                                  capture_output=True, text=True, timeout=30)
         self.assertEqual(invalid.returncode, 2)

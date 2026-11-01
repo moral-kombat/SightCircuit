@@ -101,6 +101,33 @@ class PipelineStats:
     def sink_cleanup_ok(self):
         return self.sink_clear_ok and self.sink_close_ok
 
+    def report(self):
+        """Run statistics in the engine's own vocabulary; every report embeds this as "pipeline".
+
+        Durations are milliseconds rounded to three decimals. Commands keep
+        their earlier field names only as aliases of these (``report_fields``).
+        """
+        def ms(value):
+            return round(value, 3)
+        return {"frames_received": self.frames_received, "frames_processed": self.frames_processed,
+                "frames_submitted": self.frames_submitted, "stale_inputs_skipped": self.stale_inputs_skipped,
+                "stale_results_skipped": self.stale_results_skipped, "pending_replaced": self.pending_replaced,
+                "total_inference_ms": ms(self.total_inference_ms), "mean_inference_ms": ms(self.mean_inference_ms),
+                "max_inference_ms": ms(self.max_inference_ms), "total_processing_ms": ms(self.total_processing_ms),
+                "mean_processing_ms": ms(self.mean_processing_ms), "max_input_age_ms": ms(self.max_input_age_ms),
+                "max_output_age_ms": ms(self.max_output_age_ms), "elapsed_ms": ms(self.elapsed_s * 1000),
+                "processed_fps": round(self.frames_processed / max(self.elapsed_s, 1e-3), 3),
+                "labels_seen": sorted(self.labels_seen), "cancelled": self.cancelled,
+                "sink_clear_ok": self.sink_clear_ok, "sink_close_ok": self.sink_close_ok}
+
+
+def report_fields(block, aliases):
+    """A command's legacy report fields, derived from a ``PipelineStats.report()`` block.
+
+    ``aliases`` maps each legacy name to a block key, or to a function of the block.
+    """
+    return {name: source(block) if callable(source) else block[source] for name, source in aliases.items()}
+
 
 class Pipeline:
     def __init__(self, source, detector, sinks=(), *, threshold=0.5, max_fps=5, latest_only=True,

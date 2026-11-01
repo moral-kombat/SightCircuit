@@ -165,6 +165,10 @@ class RecognitionIntegrationTests(unittest.TestCase):
         self.assertEqual(last["read_sequence"], last["detections"][0]["box_xyxy"][0])
         self.assertEqual(int(image[0, 0, 0]), last["read_sequence"])
         self.assertLess(report["frames_processed"], report["capture"]["frames_read"])
+        block = report["pipeline"]
+        for name, source in live.LEGACY_FIELDS.items():
+            with self.subTest(field=name):
+                self.assertEqual(report[name], block[source])
 
     def test_empty_labels_are_successful_inference_without_image_output(self):
         report, image = live.recognize(CANDIDATE, 0.3, threading.Event(), backend_factory=MarkedMirror,
