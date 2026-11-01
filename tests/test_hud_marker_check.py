@@ -12,8 +12,9 @@ import unittest
 from unittest.mock import Mock, patch
 
 from scripts import hud_marker_check as marker
-from scripts.hud_mask import HUD_CONFIG
-from scripts.overlay_client import DEFAULT_BRIDGE, OverlayClient
+from framejacker.hud import HUD_CONFIG
+from framejacker.hud import marker as marker_client
+from framejacker.overlay import DEFAULT_BRIDGE, OverlayClient
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -91,13 +92,13 @@ class MarkerGateTests(unittest.TestCase):
 
     def test_client_requires_separate_real_opt_in_and_never_starts_image_writer(self):
         client = marker.MarkerClient(validation_only=False)
-        with patch.object(marker.subprocess, "Popen") as popen, self.assertRaises(ValueError):
+        with patch.object(marker_client.subprocess, "Popen") as popen, self.assertRaises(ValueError):
             client.start_marker(1, threading.Event())
         popen.assert_not_called()
         client.ready.set()
         client.acknowledged = True
-        with patch.object(Path, "is_file", return_value=True), patch.object(marker.os, "access", return_value=True), \
-                patch.object(marker.subprocess, "Popen") as popen, patch.object(marker.threading, "Thread"):
+        with patch.object(Path, "is_file", return_value=True), patch.object(marker_client.os, "access", return_value=True), \
+                patch.object(marker_client.subprocess, "Popen") as popen, patch.object(marker_client.threading, "Thread"):
             client.start_marker(20, threading.Event(), allow_calibration_output=True)
         self.assertEqual(popen.call_args.args[0][1:],
                          ["--calibration-marker", "--seconds", "20", "--allow-calibration-output"])

@@ -6,8 +6,16 @@ reaped, not merely killed. Never wait for or signal unrelated children.
 Linux uses a separate guardian and a private parent lifeline; catchable signals
 are not the only trigger for worker cleanup. Windows callers must be single-
 process workers (no native overlay helper) and have no parent-death guarantee.
+
+Callers pass their own module-level ``validate(report, returncode, **options)``
+from ``scripts/`` or ``framejacker/``. The guardian imports that validator by
+dotted module name from this checkout only, so it knows no command and never
+imports worker code beyond the validator's module (no detector, decoder or VR
+library is loaded at import time).
 """
 import contextlib
+import importlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -227,6 +235,53 @@ def _supervise_owned(command, base_report, timeout, validate, *, descendants=Fal
     return report
 
 
+ROOT = Path(__file__).resolve().parents[2]
+VALIDATOR_PACKAGES = ("scripts", "framejacker")
+
+
+def _dotted(name):
+    parts = name.split(".") if isinstance(name, str) else []
+    return (len(parts) >= 2 and parts[0] in VALIDATOR_PACKAGES and
+            all(part.isidentifier() for part in parts))
+
+
+def validator_reference(validate, options=None):
+    """Name a module-level validator of this checkout so the guardian can import it."""
+    module = sys.modules.get(getattr(validate, "__module__", None))
+    path = Path(getattr(module, "__file__", None) or "").resolve()
+    name = getattr(validate, "__name__", "")
+    try:
+        dotted = ".".join(path.relative_to(ROOT).with_suffix("").parts)
+    except ValueError:
+        dotted = ""
+    if (path.suffix != ".py" or not _dotted(dotted) or not name.isidentifier() or
+            getattr(module, name, None) is not validate):
+        raise ValueError("worker_validator_must_be_module_level_in_checkout")
+    return {"module": dotted, "function": name, "options": dict(options or {})}
+
+
+def load_validator(reference):
+    """Import a referenced validator from this checkout only; bind its options."""
+    module_name, function_name = reference.get("module", ""), reference.get("function", "")
+    options = reference.get("options") or {}
+    if (not _dotted(module_name) or not isinstance(function_name, str) or not function_name.isidentifier() or
+            not isinstance(options, dict)):
+        raise ValueError("unsupported_worker_validator")
+    try:
+        spec = importlib.util.find_spec(module_name)
+    except ImportError:
+        spec = None
+    allowed = tuple(ROOT / package for package in VALIDATOR_PACKAGES)
+    if (spec is None or spec.origin is None or
+            not any(Path(spec.origin).resolve().is_relative_to(base) for base in allowed)):
+        raise ValueError("unsupported_worker_validator")
+    validate = getattr(importlib.import_module(module_name), function_name)
+
+    def bound(report, returncode):
+        return validate(report, returncode, **options)
+    return bound
+
+
 def _validate_guard_report(report, returncode):
     if (not isinstance(report, dict) or report.get("report_kind") != "bounded_worker_guard" or
             type(report.get("exit_code")) is not int or report["exit_code"] != returncode or
@@ -234,9 +289,17 @@ def _validate_guard_report(report, returncode):
         raise ValueError("invalid_guardian_report")
 
 
-def supervise(command, base_report, timeout, validate, *, descendants=False):
+def supervise(command, base_report, timeout, validate, *, descendants=False, validate_options=None):
+    """Run ``command`` and accept its JSON report only if ``validate`` does.
+
+    ``validate`` must be a module-level function of a script in this directory;
+    ``validate_options`` are passed to it as keyword arguments on every platform.
+    """
+    reference = validator_reference(validate, validate_options)
     if not sys.platform.startswith("linux"):
-        report = _supervise_owned(command, base_report, timeout, validate, descendants=descendants)
+        def bound(report, returncode):
+            return validate(report, returncode, **reference["options"])
+        report = _supervise_owned(command, base_report, timeout, bound, descendants=descendants)
         report["parent_death_containment"] = "unavailable_on_this_platform"
         return report
     # Only the calling process holds the write end. Worker/helper execs cannot
@@ -244,7 +307,7 @@ def supervise(command, base_report, timeout, validate, *, descendants=False):
     read_fd, write_fd = os.pipe()
     guard_base = {"report_kind": "bounded_worker_guard"}
     options = {"command": command, "base_report": base_report, "timeout": timeout,
-               "descendants": descendants, "parent_fd": read_fd}
+               "descendants": descendants, "parent_fd": read_fd, "validator": reference}
     try:
         guarded = _supervise_owned([sys.executable, str(Path(__file__).resolve()),
                                    "--guard", json.dumps(options)], guard_base,
@@ -279,21 +342,9 @@ def supervise(command, base_report, timeout, validate, *, descendants=False):
 def _guard_main(options):
     # The guardian imports no detector, decoder or VR library, and never runs
     # worker code in this process. Its watchdog survives a stalled inference.
-    kind = options["base_report"].get("report_kind")
-    if kind == "recording_growth_headers":
-        from recording_growth_check import validate_worker_report
-    elif kind == "synthetic_recognition_pipeline":
-        from live_pipeline import validate_worker_report
-    elif kind == "hud_calibration_marker":
-        from hud_marker_check import validate_worker_report as validate_marker
-        def validate_worker_report(report, code):
-            validate_marker(report, code, validation_only=options["base_report"]["calibration_validation_only"])
-    elif kind == "hud_marker_observation":
-        from hud_marker_observer import validate_worker_report
-    else:
-        raise ValueError("unsupported_guarded_report_kind")
+    validate = load_validator(options.get("validator") or {})
     result = _supervise_owned(options["command"], options["base_report"], options["timeout"],
-                             validate_worker_report, descendants=options["descendants"],
+                             validate, descendants=options["descendants"],
                              parent_fd=options["parent_fd"])
     report = {"report_kind": "bounded_worker_guard", "status": result["status"],
               "exit_code": result["exit_code"], "cleanup_ok": result["cleanup_ok"], "result": result}
@@ -310,4 +361,6 @@ def _guard_main(options):
 if __name__ == "__main__":
     if len(sys.argv) != 3 or sys.argv[1] != "--guard":
         sys.exit(64)
+    # Run as a file: import validators as checkout packages, never as siblings of this file.
+    sys.path[0] = str(ROOT)
     sys.exit(_guard_main(json.loads(sys.argv[2])))

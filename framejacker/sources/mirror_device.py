@@ -1,4 +1,8 @@
-"""Read an explicitly verified SteamVR virtual mirror using Linux V4L2 read()."""
+"""Read an explicitly verified SteamVR virtual mirror using Linux V4L2 read().
+
+Discovery inspects sysfs metadata only; ``NativeMirror`` opens a verified
+virtual node read-only. There is no physical-camera fallback.
+"""
 import ctypes
 import errno
 import os
@@ -7,12 +11,9 @@ import platform
 import re
 import stat
 import struct
-import sys
 import zlib
 
-if not __package__:  # Run as a file: import this checkout's packages without installation.
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from framejacker.errors import FramejackerError
+from ..errors import FramejackerError
 
 
 MAX_BUFFER_BYTES = 64 * 1024 * 1024

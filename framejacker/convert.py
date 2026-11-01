@@ -10,11 +10,11 @@ def processing_size(width, height, max_side=MAX_PROCESSING_SIDE):
     return max(1, round(width * ratio)), max(1, round(height * ratio))
 
 
-def to_bgr(frame, max_side=MAX_PROCESSING_SIDE, *, native_filter=None):
-    """Return a writable uint8 BGR image no larger than ``max_side``.
+def native_bgr(frame):
+    """Validate ``frame`` and return its full native-resolution BGR pixels.
 
-    An unscaled BGR24 frame is returned without copying; treat the result as
-    read-only input. Annotation draws on its own copy.
+    The result may be a read-only view of the source buffer. Exclusion masks
+    (``framejacker.hud``) take this before any spatial resize.
     """
     import cv2
     import numpy as np
@@ -33,12 +33,22 @@ def to_bgr(frame, max_side=MAX_PROCESSING_SIDE, *, native_filter=None):
                                "Recognition currently accepts RGB3/BGR3 only; no format change requested")
     if image.shape[:2] != (frame.height, frame.width):
         raise FrameFormatError("invalid_frame", "Image dimensions do not match native frame metadata")
-    # Channel conversion is pointwise. A HUD filter receives full native BGR
-    # pixels before any resize; the shared acquisition bound is independent.
+    # Channel conversion is pointwise; the acquisition bound is independent of
+    # the detector's processing bound.
     if frame.pixel_format == "RGB3":
         image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-    if native_filter is not None:
-        image = native_filter(image)
+    return image
+
+
+def to_bgr(frame, max_side=MAX_PROCESSING_SIDE):
+    """Return a writable uint8 BGR image no larger than ``max_side``.
+
+    An unscaled BGR24 frame is returned without copying; treat the result as
+    read-only input. Annotation draws on its own copy.
+    """
+    import cv2
+
+    image = native_bgr(frame)
     width, height = processing_size(image.shape[1], image.shape[0], max_side)
     if (width, height) != (image.shape[1], image.shape[0]):
         image = cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)

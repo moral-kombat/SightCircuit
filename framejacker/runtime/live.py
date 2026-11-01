@@ -1,28 +1,45 @@
-"""Bounded latest-only recognition engine, independent of command and HUD UI.
+"""Gated, bounded synthetic recognition run on the shared ``Pipeline``, as a report.
 
 The only accepted acquisition kind remains synthetic. Hardware adapters and
-production output require separate gates; moving this engine does not lift them.
+production output require separate gates; this wrapper lifts none of them.
+
+``source`` is an ``open``/``read``/``close`` source (adapted by
+``PolledSource``); ``sink`` implements ``open``/``submit(processed)``/``clear``/
+``close``. ``hud``, when given, is a ``framejacker.hud.HudStage`` (optionally
+with ``check_sink()``, run at every admission checkpoint).
 """
-import math
-from copy import deepcopy
 import threading
-import time
 
-from ..convert import to_bgr
-from ..latest import LatestFrameSlot as LatestSlot
+from ..pipeline import Pipeline
+from ..sources.polled import PolledSource
 
 
-def source_context(source):
-    """Freeze declared mapping identity; missing fields remain explicitly unknown.
+def new_report(max_fps, seconds):
+    return {"report_kind": "synthetic_recognition_pipeline", "status": "error", "exit_code": 1,
+            "source_kind": "synthetic", "live_input_verified": False, "feedback_exclusion_verified": False,
+            "hardware_trial_ready": False, "frames_processed": 0, "frames_submitted": 0,
+            "stale_inputs_dropped": 0, "stale_results_dropped": 0, "maximum_pending_frames": 1,
+            "maximum_processing_fps": max_fps, "seconds_requested": seconds, "images_saved": False,
+            "source_cleanup_ok": False, "sink_cleanup_ok": False, "cleanup_ok": False,
+            "maximum_observation_age_ms": 0.0, "labels_seen": [],
+            "total_processing_ms": 0.0, "total_inference_ms": 0.0,
+            "physical_recovery_confirmed": False, "cleanup_scope": "owned_software_resources_only"}
 
-    These fields are observation context, never a claim of camera exposure
-    timing or of qualified hardware mapping. Adapters must declare them when
-    available and production acquisition remains gated separately.
-    """
-    return tuple(deepcopy(getattr(source, name, None)) for name in (
-        "kind", "source_id", "capture_layout", "session_id", "runtime_id", "tracking_origin",
-        "recenter_generation", "orientation", "crop", "capture_format", "hud_config_id",
-        "recenter_epoch", "timebase_id", "orientation_degrees", "crop_xyxy", "hud_config_sha256"))
+
+def last_result(processed):
+    frame = processed.frame
+    result = {"source_id": frame.source_id, "sequence": frame.sequence,
+              "observed_ns": frame.observed_ns, "media_time": frame.media_time,
+              "inference_ms": processed.result.inference_ms,
+              "observation_age_ms": round(processed.output_age_ms, 3),
+              "processing_ms": round(processed.processing_ms, 3), "expires_ns": processed.expires_ns,
+              "native_format": frame.native_descriptor,
+              "detector_input_size": list(processed.detector_input_size),
+              "native_to_inference_scale": list(processed.native_to_inference_scale),
+              "box_coordinate_space": processed.output_space}
+    if processed.hud is not None:
+        result["hud_rows"] = [row.as_dict() for row in processed.hud.rows]
+    return result
 
 
 def run_pipeline(source, detector, sink, seconds, *, stop=None, max_fps=5, max_age_ms=1000, threshold=0.5,
@@ -32,173 +49,44 @@ def run_pipeline(source, detector, sink, seconds, *, stop=None, max_fps=5, max_a
     if not (0.05 <= seconds <= 60 and 1 <= max_fps <= 10 and 0 < max_age_ms <= 1000 and 0 <= threshold <= 1):
         raise ValueError("pipeline_limits_invalid")
     stop = stop or threading.Event()
-    pending, done = LatestSlot(), threading.Event()
-    source_state = {"cleanup_ok": False, "frames_received": 0, "error": None}
-    expected_source = source_context(source)
-    native_context = None
-
-    def check_source(frame):
-        nonlocal native_context
-        if (source_context(source) != expected_source or
-                frame.source_id != expected_source[1]):
-            raise ValueError("source_or_session_changed")
-        descriptor = frame.native_descriptor
-        if native_context is None:
-            native_context = descriptor
-        elif descriptor != native_context:
-            raise ValueError("native_capture_format_changed")
-    report = {"report_kind": "synthetic_recognition_pipeline", "status": "error", "exit_code": 1,
-        "source_kind": "synthetic", "live_input_verified": False, "feedback_exclusion_verified": False,
-        "hardware_trial_ready": False, "frames_processed": 0, "frames_submitted": 0,
-        "stale_inputs_dropped": 0, "stale_results_dropped": 0, "maximum_pending_frames": 1,
-        "maximum_processing_fps": max_fps, "seconds_requested": seconds, "images_saved": False,
-        "source_cleanup_ok": False, "sink_cleanup_ok": False, "cleanup_ok": False,
-        "maximum_observation_age_ms": 0.0, "labels_seen": [],
-        "total_processing_ms": 0.0, "total_inference_ms": 0.0,
-        "physical_recovery_confirmed": False, "cleanup_scope": "owned_software_resources_only"}
-    capture = None
-    labels = set()
-    started = None
+    report = new_report(max_fps, seconds)
     if stop.is_set():
         report.update(status="cancelled", exit_code=130, source_cleanup_ok=True, sink_cleanup_ok=True, cleanup_ok=True)
         return report
+    polled = PolledSource(source)
+    check_sink = getattr(hud, "check_sink", None)
+    pipeline = Pipeline(polled, detector, (sink,), threshold=threshold, max_fps=max_fps,
+                        max_input_age_ms=max_age_ms, seconds=seconds, join_timeout=0.5, hud=hud,
+                        context_validator=(lambda _frame: check_sink()) if check_sink is not None else None)
     try:
-        if hud is not None:
-            report.update(hud.start())
-        sink.open()
-        started = time.monotonic()
-        deadline = started + seconds
-
-        def acquire():
-            if stop.is_set():
-                source_state["cleanup_ok"] = True
-                done.set()
-                return
-            try:
-                source.open()
-                while not stop.is_set() and time.monotonic() < deadline:
-                    frame = source.read(stop, timeout=0.05)
-                    if frame is not None:
-                        check_source(frame)
-                        if hud is not None:
-                            hud.check_frame(frame)
-                        pending.publish(frame)
-                        source_state["frames_received"] += 1
-            except Exception as error:
-                source_state["error"] = str(error)[:1024]
-            finally:
-                try:
-                    source_state["cleanup_ok"] = source.close() is True
-                except Exception as error:
-                    source_state["error"] = str(error)[:1024]
-                done.set()
-
-        capture = threading.Thread(target=acquire, daemon=True)
-        capture.start()
-        next_inference = started
-        displayed_ns = None
-        while not stop.is_set() and time.monotonic() < deadline:
-            if source_state["error"]:
-                raise RuntimeError(source_state["error"])
-            now_ns = time.monotonic_ns()
-            if displayed_ns is not None and (now_ns - displayed_ns) / 1e6 > max_age_ms:
-                sink.clear()
-                displayed_ns = None
-            if time.monotonic() < next_inference:
-                stop.wait(min(0.02, max(0, next_inference - time.monotonic())))
-                continue
-            frame = pending.take(timeout=min(0.05, max(0, deadline - time.monotonic())))
-            if frame is None:
-                if done.is_set():
-                    break
-                continue
-            age = (time.monotonic_ns() - frame.observed_ns) / 1e6
-            if age < 0:
-                raise ValueError("frame_observation_is_in_the_future")
-            if age > max_age_ms:
-                report["stale_inputs_dropped"] += 1
-                continue
-            next_inference = time.monotonic() + 1 / max_fps
-            processing_started = time.monotonic()
-            check_source(frame)
-            prepared = hud.prepare(frame) if hud is not None else to_bgr(frame.as_frame())
-            detection = detector.detect(prepared, threshold)
-            report["frames_processed"] += 1
-            if source_state["error"]:
-                raise ValueError(source_state["error"])
-            check_source(frame)
-            if hud is not None:
-                hud.check_frame(frame)
-            if not math.isfinite(detection["inference_ms"]) or detection["inference_ms"] < 0:
-                raise ValueError("invalid_inference_measurement")
-            if detection["image"].shape != prepared.shape or detection["image"].dtype != prepared.dtype:
-                raise ValueError("detection_image_does_not_match_source")
-            if hud is not None:
-                detection = hud.render(detection, prepared.shape[:2], threshold)
-            # Own annotations before another detector call can reuse its storage.
-            detection = dict(detection, image=detection["image"].copy(),
-                             expires_ns=min(frame.observed_ns + int(max_age_ms * 1e6), int(deadline * 1e9)))
-            processing_ms = (time.monotonic() - processing_started) * 1000
-            report["total_processing_ms"] += processing_ms
-            report["total_inference_ms"] += detection["inference_ms"]
-            # Rendering and ownership copies may invoke adapters or take time.
-            # Validate once more at the final output boundary.
-            if source_state["error"]:
-                raise ValueError(source_state["error"])
-            check_source(frame)
-            if hud is not None:
-                hud.check_frame(frame)
-            age = (time.monotonic_ns() - frame.observed_ns) / 1e6
-            report["maximum_observation_age_ms"] = max(report["maximum_observation_age_ms"], age)
-            if age > max_age_ms or time.monotonic() >= deadline or stop.is_set():
-                report["stale_results_dropped"] += 1
-                continue
-            sink.submit(frame, detection)
-            displayed_ns = frame.observed_ns
-            labels.update(detection["labels"])
-            report["frames_submitted"] += 1
-            report["last_result"] = {"source_id": frame.source_id, "sequence": frame.sequence,
-                "observed_ns": frame.observed_ns, "media_time": frame.media_time,
-                "inference_ms": detection["inference_ms"], "observation_age_ms": round(age, 3),
-                "processing_ms": round(processing_ms, 3), "expires_ns": detection["expires_ns"],
-                "native_format": frame.native_descriptor,
-                "detector_input_size": [prepared.shape[1], prepared.shape[0]],
-                "native_to_inference_scale": [prepared.shape[1] / frame.image.shape[1],
-                                               prepared.shape[0] / frame.image.shape[0]],
-                "box_coordinate_space": "approximate_image_view_direction" if hud else "detector_input_pixels"}
-            if hud is not None:
-                report["last_result"]["hud_rows"] = detection["detections"]
-        if source_state["error"]:
-            raise RuntimeError(source_state["error"])
-        if stop.is_set():
+        stats = pipeline.run(stop)
+        if stats.cancelled:
             report.update(status="cancelled", exit_code=130)
-        elif report["frames_submitted"]:
+        elif stats.frames_submitted:
             report.update(status="completed", exit_code=0)
         else:
             report.update(status="no_frames", exit_code=1)
     except Exception as error:
         report.update(status="error", exit_code=1, reason=str(error)[:1024])
-    finally:
-        stop.set()
-        if capture is not None:
-            capture.join(timeout=0.5)
-        report["source_cleanup_ok"] = capture is None or (not capture.is_alive() and source_state["cleanup_ok"])
-        report["sink_clear_ok"] = report["sink_close_ok"] = False
-        try:
-            sink.clear()
-            report["sink_clear_ok"] = True
-        except Exception as error:
-            report["sink_clear_error"] = str(error)[:1024]
-        try:
-            report["sink_close_ok"] = sink.close() is True
-        except Exception as error:
-            report["sink_close_error"] = str(error)[:1024]
-        report["sink_cleanup_ok"] = report["sink_clear_ok"] and report["sink_close_ok"]
-        if source_state["error"]:
-            report["source_error"] = source_state["error"]
-        report.update(frames_received=source_state["frames_received"], pending_inputs_replaced=pending.replaced,
-                      labels_seen=sorted(labels), elapsed_seconds=round(time.monotonic() - started, 3) if started else 0)
-        report["cleanup_ok"] = report["source_cleanup_ok"] and report["sink_cleanup_ok"]
-        if not report["cleanup_ok"] and report["exit_code"] == 0:
-            report.update(status="cleanup_failed", exit_code=1)
+    stats = pipeline.stats
+    report.update(stats.hud_report)
+    report.update(frames_processed=stats.frames_processed, frames_submitted=stats.frames_submitted,
+                  stale_inputs_dropped=stats.stale_inputs_skipped, stale_results_dropped=stats.stale_results_skipped,
+                  maximum_observation_age_ms=stats.max_output_age_ms, total_processing_ms=stats.total_processing_ms,
+                  total_inference_ms=stats.total_inference_ms, frames_received=stats.frames_received,
+                  pending_inputs_replaced=stats.pending_replaced, labels_seen=sorted(stats.labels_seen),
+                  elapsed_seconds=round(stats.elapsed_s, 3) if stats.started else 0)
+    if stats.last is not None:
+        report["last_result"] = last_result(stats.last)
+    report["source_cleanup_ok"] = (not pipeline.capture_thread_started or
+                                   (not pipeline.capture_thread_alive and polled.cleanup_ok is True))
+    report.update(sink_clear_ok=stats.sink_clear_ok, sink_close_ok=stats.sink_close_ok,
+                  sink_cleanup_ok=stats.sink_cleanup_ok)
+    for operation, message in stats.sink_errors:
+        report.setdefault(f"sink_{operation}_error", message)
+    if polled.error:
+        report["source_error"] = polled.error
+    report["cleanup_ok"] = report["source_cleanup_ok"] and report["sink_cleanup_ok"]
+    if not report["cleanup_ok"] and report["exit_code"] == 0:
+        report.update(status="cleanup_failed", exit_code=1)
     return report

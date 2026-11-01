@@ -16,7 +16,7 @@ if not __package__:  # Run as a file: import this checkout's packages without in
 from framejacker.detection import DEFAULT_DETECTOR, DETECTORS, create_detector, describe
 from framejacker.pipeline import LatestResultSink, Pipeline
 from framejacker.sources.replay import ReplaySource
-from scripts.recording_check import RecordingError, latest_recording
+from framejacker.sources.recording import RecordingError, latest_recording
 
 ROOT = Path(__file__).resolve().parents[1]
 

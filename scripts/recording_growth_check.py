@@ -10,10 +10,10 @@ import sys
 import threading
 import time
 
-if __package__:
-    from .bounded_worker import supervise
-else:
-    from bounded_worker import supervise
+if not __package__:  # Run as a file: import this checkout's packages without installation.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from framejacker.runtime.guard import supervise  # noqa: E402
 
 MAX_BOXES = 8192
 MAX_HEADER_BYTES = 2 * 1024 * 1024

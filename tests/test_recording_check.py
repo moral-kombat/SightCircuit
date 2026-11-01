@@ -9,7 +9,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from scripts import recording_check as recording
+from framejacker.sources import recording
+from scripts import recording_check as command
 
 
 def box(kind, payload=b"", *, extended=False, to_end=False):
@@ -150,7 +151,7 @@ class RecordingCheckTests(unittest.TestCase):
         self.assertEqual(recording.latest_recording(self.directory).name, "newer_stereo.mp4")
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            result = recording.main([str(self.directory / "missing.mp4")])
+            result = command.main([str(self.directory / "missing.mp4")])
         self.assertEqual(result, 1)
         self.assertEqual(json.loads(output.getvalue())["status"], "error")
 

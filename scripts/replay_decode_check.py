@@ -5,7 +5,10 @@ from pathlib import Path
 import subprocess
 import sys
 
-from recording_check import RecordingError, latest_recording
+if not __package__:  # Run as a file: import this checkout's packages without installation.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from framejacker.sources.recording import RecordingError, latest_recording  # noqa: E402
 
 
 def decode(path, video_stream, frame_limit):

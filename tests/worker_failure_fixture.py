@@ -9,7 +9,8 @@ import threading
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from scripts import bounded_worker, recording_growth_check as growth
+from framejacker.runtime import guard as bounded_worker
+from scripts import recording_growth_check as growth
 
 
 def wait_for(path):

@@ -15,18 +15,16 @@ import sys
 import threading
 import time
 
-if __package__:
-    from . import mirror_check
-    from .bounded_worker import supervise
-    from .hud_marker_check import MarkerClient, new_report as marker_report, validate_worker_report as validate_marker_report
-    from .hud_mask import CaptureFormat, HUD_CONFIG
-    from .mirror_capture import discover, select_candidate
-else:
-    import mirror_check
-    from bounded_worker import supervise
-    from hud_marker_check import MarkerClient, new_report as marker_report, validate_worker_report as validate_marker_report
-    from hud_mask import CaptureFormat, HUD_CONFIG
-    from mirror_capture import discover, select_candidate
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from framejacker.hud import CaptureFormat, HUD_CONFIG  # noqa: E402
+
+from framejacker.hud.marker import (  # noqa: E402
+    MarkerClient, new_report as marker_report, validate_worker_report as validate_marker_report)
+from framejacker.runtime.guard import supervise  # noqa: E402
+from framejacker.sources.mirror import capture  # noqa: E402
+from framejacker.sources.mirror_device import discover, select_candidate  # noqa: E402
 
 MAX_PIXELS = 8 * 1024 * 1024
 MAX_CONTOURS = 2048
@@ -436,7 +434,7 @@ def observe(candidate, seconds, stop, *, backend_factory, marker_client, config=
         def on_progress(_report):
             if not marker_started:
                 baseline.check_deadline(time.monotonic())
-        captured, _ = mirror_check.capture(candidate, seconds, stop, progress=on_progress,
+        captured, _ = capture(candidate, seconds, stop, progress=on_progress,
                                            backend_factory=backend_factory, on_frame=on_frame, max_fps=5, deadline=deadline)
         report["capture"] = captured
         if captured["status"] == "error":

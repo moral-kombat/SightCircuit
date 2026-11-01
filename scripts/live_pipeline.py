@@ -11,16 +11,11 @@ import time
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from framejacker.frame import OwnedFrame  # noqa: F401 - compatibility export
-from framejacker.latest import LatestFrameSlot as LatestSlot  # noqa: F401 - compatibility export
+from framejacker.frame import DetectionResult, OwnedFrame
+from framejacker.hud import Calibration, CaptureFormat, Footprint, HudStage, HUD_CONFIG
+from framejacker.overlay import OverlayClient, PanelSettings
+from framejacker.runtime.guard import supervise
 from framejacker.runtime.live import run_pipeline as run_bounded_pipeline
-
-if __package__:
-    from .bounded_worker import supervise
-    from .hud_mask import Calibration, CaptureFormat, Footprint, HudMask, HUD_CONFIG
-else:
-    from bounded_worker import supervise
-    from hud_mask import Calibration, CaptureFormat, Footprint, HudMask, HUD_CONFIG
 
 class SyntheticSource:
     kind = "synthetic"
@@ -55,14 +50,14 @@ class SyntheticSource:
 
 class FixtureDetector:
     def detect(self, image, threshold):
-        return {"image": image.copy(), "labels": [], "detections": [], "inference_ms": 0.0}
+        return DetectionResult((), 0.0)
 
 
 class HeadlessSink:
     def open(self):
         self.count = self.clears = 0
 
-    def submit(self, frame, detection):
+    def submit(self, processed):
         self.count += 1
 
     def clear(self):
@@ -79,19 +74,15 @@ class OverlayValidationSink:
         self.client = None
 
     def open(self):
-        if __package__:
-            from .overlay_client import OverlayClient, PanelSettings
-        else:
-            from overlay_client import OverlayClient, PanelSettings
         self.settings_type = PanelSettings
         self.client = (self.client_factory or OverlayClient)(validation_only=True)
         self.client.start()
 
-    def submit(self, frame, detection):
+    def submit(self, processed):
         if self.client.error:
             raise RuntimeError(self.client.error)
         self.client.set_settings(self.settings_type(visible=True))
-        self.client.submit_bgr(detection["image"], expires_ns=detection["expires_ns"])
+        self.client.submit_bgr(processed.image, expires_ns=processed.expires_ns)
 
     def clear(self):
         if self.client is not None:
@@ -133,15 +124,15 @@ class HudValidationSink(OverlayValidationSink):
         super().open()
         self.client.freeze_settings(self.settings(False))
 
-    def submit(self, frame, detection):
+    def submit(self, processed):
         self.check_contract(HUD_CONFIG)
         if self.client.error:
             raise RuntimeError(self.client.error)
-        if (detection.get("hud_config") != self.hud_config or
-                detection["image"].shape != (self.hud_config.height_px, self.hud_config.width_px, 3)):
+        if (processed.hud is None or processed.hud.config != self.hud_config or
+                processed.image.shape != (self.hud_config.height_px, self.hud_config.width_px, 3)):
             raise ValueError("hud_payload_contract_mismatch")
         self.client.set_settings(self.settings(True))
-        self.client.submit_bgr(detection["image"], expires_ns=detection["expires_ns"])
+        self.client.submit_bgr(processed.image, expires_ns=processed.expires_ns)
 
     def clear(self):
         if self.client is not None:
@@ -154,50 +145,25 @@ def synthetic_hud_calibration():
         "mono", (Footprint(0, (68, 42, 89, 56), 3),), validated=True, provenance="synthetic_fixture")
 
 
-class HudPipelineAdapter:
-    """Bind the shared engine to the frozen synthetic-only HUD contract."""
+class HudPipelineAdapter(HudStage):
+    """The shared HUD stage plus this command's fixed validation-sink contract."""
 
     def __init__(self, source, sink, calibration, config):
-        self.source, self.sink = source, sink
-        self.calibration, self.config = calibration, config
-        self.mask = None
+        super().__init__(source, calibration, config)
+        self.sink = sink
 
     def start(self):
-        self.mask = HudMask(self.calibration, self.config, source_kind=self.source.kind)
-        self.mask.check_context(self.source.source_id, self.calibration.capture_format,
-                                self.source.capture_layout, self.config)
+        report = super().start()
         if isinstance(self.sink, OverlayValidationSink):
             if not isinstance(self.sink, HudValidationSink):
                 raise ValueError("hud_requires_fixed_validation_sink")
             self.sink.check_contract(self.config)
-        return dict(hud_mode=True, calibration_scope="synthetic_fixture_only",
-                    hardware_mapping_verified=False, mask_stage="native_pixels_before_resize",
-                    mask_regions_native=self.mask.regions, output_kind="fixed_names_and_view_arrows",
-                    world_locked=False, hud_config_id=self.config.layout_id,
-                    hud_pixel_size=[self.config.width_px, self.config.height_px])
+        return report
 
-    def descriptor(self, frame):
-        return (CaptureFormat.from_mapping(dict(frame.native_format)) if frame.native_format
-                else CaptureFormat.bgr(frame.image))
-
-    def check_frame(self, frame):
-        if self.source.kind != "synthetic" or self.source.source_id != frame.source_id:
-            raise ValueError("hud_source_changed")
-        self.mask.check_context(frame.source_id, self.descriptor(frame),
-                                self.source.capture_layout, self.config)
+    def check_sink(self):
+        """Output contract; capture identity is the engine's CaptureContext."""
         if isinstance(self.sink, HudValidationSink):
             self.sink.check_contract(self.config)
-
-    def prepare(self, frame):
-        self.check_frame(frame)
-        return self.mask.prepare(frame.image, source_id=frame.source_id,
-                                 capture_format=self.descriptor(frame),
-                                 capture_layout=self.source.capture_layout, config=self.config)
-
-    def render(self, detection, shape, threshold):
-        tile, rows = self.mask.render(detection["detections"], shape, threshold)
-        return dict(detection, image=tile, labels=[row["label"] for row in rows],
-                    detections=rows, hud_config=self.config)
 
 
 def run_pipeline(source, detector, sink, seconds, *, stop=None, max_fps=5, max_age_ms=1000, threshold=0.5,
@@ -214,11 +180,8 @@ def _worker(options):
     try:
         source = SyntheticSource()
         if options.get("detector", "real") == "real":
-            if __package__:
-                from .demo_detector import DemoDetector
-            else:
-                from demo_detector import DemoDetector
-            detector = DemoDetector()
+            from framejacker.detection import MobileNetSSD
+            detector = MobileNetSSD()
         else:
             detector = FixtureDetector()
         def hung(*_args, **_kwargs):

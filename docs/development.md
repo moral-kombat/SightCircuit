@@ -9,28 +9,33 @@ validation evidence and compatibility limits.
 ## Python package and pipeline
 
 Reusable code lives in the `framejacker/` package; `scripts/` keeps the
-documented command-line tools. Scripts add the checkout root to `sys.path`
+documented command-line entry points. No active script imports another, and
+`framejacker/` never imports `scripts/`; `tests/test_scripts_boundary.py`
+enforces both (the paused capture-provider scripts are exempt while frozen). Scripts add the checkout root to `sys.path`
 when run as files, so headset commands need no installation step.
 `pip install -e '.[window]'` (or `uv pip install -e .`) also works for desktop
 development; exact tested pins remain in the `requirements-*.txt` files.
 
 | Module | Responsibility |
 | --- | --- |
-| `framejacker/frame.py` | `Frame` (pixels, layout, source, sequence, observation time, media time) and detection result types |
-| `framejacker/pipeline.py` | `FrameSource`/`Sink` interfaces and `Pipeline`: conversion, detection, annotation, rate cap, latest-only or every-frame scheduling |
+| `framejacker/frame.py` | `Frame`/`OwnedFrame` (pixels, layout, source, sequence, observation time, media time); `DetectionResult`, which every detector returns; `Processed`, the one record every engine submits to sinks (annotated image or HUD tile with `HudOutput` rows, expiry, sizes and coordinate space) |
+| `framejacker/pipeline.py` | `FrameSource`/`Sink` interfaces and `Pipeline`, the one engine for replay, mirror recognition and the synthetic live HUD: latest-only or every-frame scheduling, rate cap, `CaptureContext` admission, HUD stage or annotation, result expiry and deadline, optional sink `open`/`clear`/`close` with cleanup results |
 | `framejacker/latest.py` | One-pending-item handoff; newer items replace older ones |
+| `framejacker/context.py` | `CaptureContext`: pins declared source identity, frame source/native layout/session metadata and an optional HUD mask binding; `admit(frame)` fails closed and latches the first failure |
 | `framejacker/convert.py` | BGR24 and padded RGB3/BGR3 conversion to detector input of at most 960 pixels |
-| `framejacker/detection.py` | `Detector` interface, `MobileNetSSD` baseline, `YoloxDetector` candidate, `create_detector()` and separate `annotate()` |
+| `framejacker/detection.py` | `Detector` interface, `MobileNetSSD` baseline, `YoloxDetector` candidate, `create_detector()`, separate `annotate()` and `require_result()` (rejects malformed detector output before any output) |
 | `framejacker/preprocess.py`, `framejacker/labels.py` | Letterbox input and inverse box mapping; COCO vocabulary and VOC-to-canonical label names |
 | `framejacker/evaluation.py`, `framejacker/assets.py` | Detector evaluation scoring; checksum-verified model/fixture download and verification |
-| `framejacker/sources/` | `ReplaySource` (PyAV) and `MirrorSource` (adapter for the V4L2 mirror acquisition loop) |
+| `framejacker/sources/` | `ReplaySource` (PyAV); `mirror_device` (read-only V4L2 SteamVR mirror discovery and reads); `mirror` (bounded acquisition loop `capture` and `MirrorSource`); `recording` (MP4 header inspection, newest recording); `PolledSource` (adapter for `open`/`read`/`close` sources). Adapters forward the wrapped source's declared identity |
 | `framejacker/overlay.py` | Overlay bridge client and pipeline sink |
-| `framejacker/runtime/` | Bounded spawned workers, parent-death signalling, and reserve/publish of explicit image outputs |
+| `framejacker/hud/` | Fixed edge HUD contract, shared eye/rectangle geometry, synthetic-only native mask, tile rendering, the `HudStage` engine stage and offline mapping qualification |
+| `framejacker/runtime/` | `process` (bounded spawned workers, parent-death signalling), `guard` (owned process-group supervision with the Linux parent-loss guardian), reserve/publish of explicit image outputs, and `live.run_pipeline` (gated synthetic run on `Pipeline`, as a report) |
 
 File replay uses every-frame scheduling, so each decoded frame is processed in
 order. Mirror recognition uses latest-only scheduling with a one-second input
-age limit. The V4L2 mirror device module and diagnostic loop remain in
-`scripts/mirror_capture.py` and `scripts/mirror_check.py` for now.
+age limit. The V4L2 mirror device module and acquisition loop live in
+`framejacker/sources/mirror_device.py` and `framejacker/sources/mirror.py`;
+`scripts/mirror_check.py` is the diagnostic command.
 
 Lint with the configuration in `pyproject.toml`:
 
@@ -349,6 +354,47 @@ and completion, then bounded cleanup. File output is opt-in and published only
 after capture/inference finishes. Read [the device procedure](on-device.md#run-bounded-recognition-from-the-mirror)
 before the first Frame trial; [status](status.md#e16-bounded-mirror-recognition-cloud-checks)
 records cloud-only validation and the model-quality limitation.
+
+## Paused capture-provider track
+
+The dedicated-capture provider track is paused and frozen (see the
+[design review](design-review.md#next-steps)); its procedures below and in the
+[on-device guide](on-device.md) are kept for when it resumes. Do not activate
+layers or restart SteamVR from a cloud session. Its Python commands stay in
+`scripts/` under their documented paths and are quarantined in place:
+
+| Script | Role |
+| --- | --- |
+| `capture_layer_config.py` | Prepare an inactive layer bundle and restore exact files; never restart VR |
+| `capture_layer_trial.py` | Bounded metadata-only SteamVR trial, with systemd-owned post-exit recovery |
+| `capture_provider_check.py` | Supervise metadata inspection of an already running provider |
+| `capture_service_lifecycle.py` | Read-only cgroup observations and bounded service transitions; no VR APIs |
+| `capture_session.py` | Own a private capture run and recover only its recorded publication inode |
+| `capture_supervisor.py` | Bound an explicitly prepared native capture worker |
+| `metadata_session_trial.py` | Prepare an opt-in metadata layer trial across two platform session cycles |
+| `service_rehearsal.py` | Rehearse SteamVR stop/start over SSH without installing a capture layer |
+| `session_rehearsal.py` | Prepare and rehearse a SteamOS-managed graphical-session logout |
+
+Their tests are `tests/test_capture_layer_config.py`, `test_capture_layer_trial.py`,
+`test_capture_provider_check.py`, `test_capture_service_lifecycle.py`,
+`test_capture_supervisor.py`, `test_metadata_session_trial.py`,
+`test_service_rehearsal.py` and `test_session_rehearsal.py`. Native code lives in
+`tools/capture_*` and `patches/mrhand/`, built by `scripts/build_capture_*.sh`.
+The read-only diagnostics `shm_capture_check.py` and `capture_gpu_check.py` are
+not part of this cluster.
+
+`tests/test_scripts_boundary.py` enforces the quarantine: these modules import
+only the standard library and each other; nothing else imports them except
+their own tests; the rehearsal and trial source snapshots (`SOURCES`) name only
+cluster files; and this section lists every cluster module.
+
+A physical move is deferred until the track resumes, because it cannot be done
+without touching frozen material. A top-level directory at the same depth keeps
+the code byte-identical (`ROOT` is `parents[1]` and snapshots name sibling
+files), but `patches/mrhand/0006-block-unleased-camera-reads.patch` prints the
+`scripts/capture_provider_check.py` path, the on-device procedures and
+`.github/instructions` globs name these paths, and any bundle already prepared
+on Frame records them and would need regenerating.
 
 ## Dedicated capture build prerequisites
 
@@ -1281,7 +1327,7 @@ exclusion of our panel remain unknown.
 
 The [lifecycle audit](status.md#e67-offline-cancellation-and-cleanup-audit)
 replaces the pipeline's blocking multiprocessing report receive and the probe's
-plain `subprocess.run` with [a shared supervisor](../scripts/bounded_worker.py).
+plain `subprocess.run` with [a shared supervisor](../framejacker/runtime/guard.py).
 It caps report bytes before parsing, keeps its deadline independent of report
 I/O, handles catchable SIGINT/TERM/HUP without interrupting cleanup, and verifies
 exit status against the final report. On Linux, a separate guardian now owns
@@ -1292,7 +1338,20 @@ or during work. The guardian's own deadline and teardown do not depend on the
 supervisor or detector staying alive. Signal handlers and subreaper state are
 restored afterward. One supervisor must run on the main thread. Windows retains
 single-process supervision and explicitly reports parent-death containment
-unavailable; native-helper supervision requires Linux.
+unavailable; native-helper supervision requires Linux. Each command passes its
+own module-level `validate_worker_report` (and options such as
+`validation_only`); the guardian imports that validator by dotted module name
+from this checkout's `scripts/` or `framejacker/` only, so it holds no table of
+commands.
+
+Two supervision policies remain, each with one implementation:
+`framejacker/runtime/guard.py` (command workers in an owned process group under
+the Linux guardian, used by the live pipeline, HUD marker/observer and recording
+growth check) and `framejacker/runtime/process.py` (spawned Python workers that
+stream progress, with parent-death signalling and terminate/kill escalation,
+used by `mirror_check.py` and `mirror_recognize.py`). The paused capture track's
+`capture_supervisor.py` and its diagnostics keep their own copies while that
+track is frozen.
 
 On cancellation/timeout/parent loss the guardian permits five seconds for cooperative
 worker cleanup, then one second for group termination and one for kill/reaping,

@@ -10,7 +10,7 @@ import time
 import unittest
 
 from scripts import live_pipeline as live
-from scripts.overlay_client import DEFAULT_BRIDGE, OverlayClient, PanelSettings, packet
+from framejacker.overlay import DEFAULT_BRIDGE, OverlayClient, PanelSettings, packet
 from framejacker.overlay import OverlaySink
 
 

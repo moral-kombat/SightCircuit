@@ -256,7 +256,7 @@ cannot go backwards. One frame at most waits for inference, and inputs or
 results older than one second are dropped. Do not label a real source
 `synthetic` to get past the gate.
 
-**HUD contract.** `scripts/hud_mask.py` accepts only synthetic calibration and
+**HUD contract.** `HudMask` in `framejacker/hud/` accepts only synthetic calibration and
 rejects hardware mappings. It masks the full HUD footprint at native
 resolution before any resize. Detections that overlap the mask or cross an eye
 boundary are rejected.
@@ -288,7 +288,7 @@ QT_QPA_PLATFORM=offscreen .venv-replay/bin/python -m unittest \
 ## Next deliverable: mirror diagnostic
 
 The standalone diagnostic is implemented in `scripts/mirror_check.py` with
-read-only V4L2 handling in `scripts/mirror_capture.py`. It has passed controlled
+read-only V4L2 handling now in `framejacker/sources/mirror_device.py`. It has passed controlled
 cloud checks. After correcting its initial polling gate, the Frame trial
 received 100 complete 1920 × 1080 RGB3 frames from `/dev/video99` in ten seconds,
 with 99 changed grayscale samples, zero would-block/short reads and clean

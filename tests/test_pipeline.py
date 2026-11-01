@@ -204,6 +204,26 @@ class PipelineTests(unittest.TestCase):
         item = sink.items[0]
         self.assertEqual(item.expires_ns, item.frame.observed_ns + 1_000_000_000)
         self.assertGreaterEqual(item.output_age_ms, item.input_age_ms)
+        self.assertIsNone(item.hud)
+        self.assertEqual(item.output_space, "detector_input_pixels")
+        self.assertEqual(item.labels, ["fixture"])
+
+    def test_malformed_or_legacy_detector_output_never_reaches_a_sink(self):
+        class Legacy:
+            def detect(self, image, threshold):
+                return {"image": image, "labels": [], "detections": [], "inference_ms": 0.0}
+
+        class NonFinite:
+            def detect(self, image, threshold):
+                return DetectionResult((), float("inf"))
+
+        for detector in (Legacy(), NonFinite()):
+            for latest in (False, True):
+                with self.subTest(detector=type(detector).__name__, latest=latest):
+                    runner, sink = pipeline(ListSource(1), detector, latest_only=latest)
+                    with self.assertRaisesRegex(ValueError, "invalid_detection_result"):
+                        runner.run(threading.Event())
+                    self.assertEqual(sink.items, [])
 
     def test_capture_format_change_invalidates_an_in_flight_result(self):
         entered, changed = threading.Event(), threading.Event()
@@ -226,7 +246,7 @@ class PipelineTests(unittest.TestCase):
                 return super().detect(*args)
 
         runner, sink = pipeline(Source(), Detector(), max_input_age_ms=1000)
-        with self.assertRaisesRegex(ValueError, "source_or_native_context_changed"):
+        with self.assertRaisesRegex(ValueError, "native_capture_format_changed"):
             runner.run(threading.Event())
         self.assertEqual(sink.items, [])
 
@@ -277,7 +297,7 @@ class PipelineTests(unittest.TestCase):
                         return result
 
                 runner, sink = pipeline(Source(), Detector(), latest_only=False, max_input_age_ms=1000)
-                with self.assertRaisesRegex(ValueError, "source_or_native_context_changed"):
+                with self.assertRaisesRegex(ValueError, "source_or_session_changed"):
                     runner.run(threading.Event())
                 self.assertEqual(sink.items, [])
 
@@ -302,7 +322,7 @@ class PipelineTests(unittest.TestCase):
 
         runner, sink = pipeline(Source(), EchoDetector(), max_input_age_ms=1000)
         runner.sinks = (First(), sink)
-        with self.assertRaisesRegex(ValueError, "source_or_native_context_changed"):
+        with self.assertRaisesRegex(ValueError, "native_capture_format_changed"):
             runner.run(threading.Event())
         self.assertEqual(sink.items, [])
 
@@ -319,6 +339,182 @@ class PipelineTests(unittest.TestCase):
         item = frames[0]
         self.assertEqual((item.pixels, item.pixel_format, item.width, item.stride, item.sequence, item.observed_ns),
                          (b"abcdef", "RGB3", 2, 6, 7, 123))
+        self.assertEqual(item.metadata["native_format"]["fourcc"], "RGB3")
+
+    def test_mirror_source_owns_reads_declares_identity_and_raises_on_failed_capture(self):
+        storage = bytearray(b"abc")
+        identity = type("Backend", (), dict(kind="synthetic", source_id="synthetic:mirror", capture_layout="mono"))
+
+        def acquire(stop, on_frame, progress):
+            on_frame(storage, {"fourcc": "RGB3", "width": 1, "height": 1, "stride_bytes": 3}, 1, 1)
+            storage[:] = b"xyz"
+            return {"status": "error", "reason": "close_failed", "error": "controlled"}
+
+        frames = []
+        source = MirrorSource(acquire, "synthetic:mirror", identity=identity)
+        self.assertEqual((source.kind, source.source_id, source.capture_layout, source.session_id),
+                         ("synthetic", "synthetic:mirror", "mono", None))
+        with self.assertRaisesRegex(Exception, "controlled") as raised:
+            source.run(frames.append, threading.Event())
+        self.assertEqual(raised.exception.reason, "close_failed")
+        self.assertEqual(frames[0].pixels, b"abc")
+        self.assertEqual(source.report["status"], "error")
+
+
+class Lifecycle:
+    """Sink recording the optional lifecycle calls in order."""
+
+    def __init__(self, close_result=True, clear_error=None):
+        self.calls, self.items = [], []
+        self.close_result, self.clear_error = close_result, clear_error
+
+    def open(self):
+        self.calls.append("open")
+
+    def submit(self, processed):
+        self.calls.append("submit")
+        self.items.append(processed)
+
+    def clear(self):
+        self.calls.append("clear")
+        if self.clear_error:
+            raise RuntimeError(self.clear_error)
+
+    def close(self):
+        self.calls.append("close")
+        return self.close_result
+
+
+class EngineLifecycleTests(unittest.TestCase):
+    def run_with(self, sink, source=None, detector=None, **options):
+        options.setdefault("max_fps", 1000)
+        runner = Pipeline(source or ListSource(1), detector or EchoDetector(), (sink,),
+                          convert=lambda item: item.pixels, annotator=lambda image, result: image, **options)
+        return runner, runner.run(threading.Event())
+
+    def test_sinks_open_before_frames_and_always_clear_and_close(self):
+        sink = Lifecycle()
+        _, stats = self.run_with(sink)
+        self.assertEqual(sink.calls, ["open", "submit", "clear", "close"])
+        self.assertTrue(stats.sink_cleanup_ok)
+
+        class Failing(EchoDetector):
+            def detect(self, *args):
+                raise RuntimeError("detector failed")
+
+        sink = Lifecycle()
+        runner = Pipeline(ListSource(1), Failing(), (sink,), convert=lambda item: item.pixels)
+        with self.assertRaisesRegex(RuntimeError, "detector failed"):
+            runner.run(threading.Event())
+        self.assertEqual(sink.calls, ["open", "clear", "close"])
+
+    def test_sink_cleanup_failures_are_recorded_not_hidden(self):
+        sink = Lifecycle(close_result=None, clear_error="clear failed")
+        _, stats = self.run_with(sink)
+        self.assertFalse(stats.sink_clear_ok)
+        self.assertFalse(stats.sink_close_ok)
+        self.assertFalse(stats.sink_cleanup_ok)
+        self.assertEqual(stats.sink_errors, [("clear", "clear failed")])
+
+    def test_expired_presented_result_is_cleared_while_waiting_for_newer_input(self):
+        class Paused:
+            def run(self, emit, stop):
+                emit(frame(1))
+                stop.wait(.3)
+
+        sink = Lifecycle()
+        _, stats = self.run_with(sink, Paused(), max_input_age_ms=100, seconds=.25)
+        self.assertEqual(stats.frames_submitted, 1)
+        self.assertEqual(sink.calls[:3], ["open", "submit", "clear"])
+        self.assertEqual(sink.calls[-2:], ["clear", "close"])
+        self.assertEqual(sink.calls.count("clear"), 2)
+
+    def test_deadline_ends_the_run_without_cancelling_and_bounds_expiry(self):
+        class Endless:
+            def run(self, emit, stop):
+                number = 0
+                while not stop.is_set():
+                    number += 1
+                    emit(frame(number))
+                    stop.wait(.01)
+
+        sink = Lifecycle()
+        started = time.monotonic_ns()
+        runner, stats = self.run_with(sink, Endless(), max_fps=20, max_input_age_ms=10_000, seconds=.2)
+        self.assertFalse(stats.cancelled)
+        self.assertGreater(stats.frames_submitted, 0)
+        self.assertLess(stats.elapsed_s, 1.5)
+        self.assertLessEqual(max(item.expires_ns for item in sink.items), started + 1_000_000_000)
+        self.assertGreaterEqual(stats.frames_received, stats.frames_submitted)
+
+    def test_hud_requires_latest_only_bounded_age(self):
+        for options in ({}, {"max_input_age_ms": 100, "latest_only": False}):
+            with self.subTest(options=options), self.assertRaisesRegex(ValueError, "hud_requires"):
+                Pipeline(ListSource(1), EchoDetector(), hud=object(), **options)
+
+
+class PolledSourceTests(unittest.TestCase):
+    class Source:
+        kind, source_id, capture_layout = "synthetic", "synthetic:polled", "mono"
+
+        def __init__(self, frames=(), read_error=None, close_result=True, close_error=None):
+            self.frames, self.read_error = list(frames), read_error
+            self.close_result, self.close_error = close_result, close_error
+            self.opened = self.closed = False
+
+        def open(self):
+            self.opened = True
+
+        def read(self, stop, timeout=0.05):
+            if self.read_error:
+                raise RuntimeError(self.read_error)
+            if not self.frames:
+                stop.set()
+                return None
+            return self.frames.pop(0)
+
+        def close(self):
+            self.closed = True
+            if self.close_error:
+                raise RuntimeError(self.close_error)
+            return self.close_result
+
+    def test_emits_until_stopped_and_forwards_declared_identity(self):
+        from framejacker.sources.polled import PolledSource
+
+        inner = self.Source([frame(1), frame(2)])
+        polled = PolledSource(inner)
+        self.assertEqual((polled.kind, polled.source_id, polled.capture_layout, polled.session_id),
+                         ("synthetic", "synthetic:polled", "mono", None))
+        inner.session_id = "changed"
+        self.assertEqual(polled.session_id, "changed")
+        emitted = []
+        polled.run(emitted.append, threading.Event())
+        self.assertEqual([item.sequence for item in emitted], [1, 2])
+        self.assertTrue(inner.closed)
+        self.assertIs(polled.cleanup_ok, True)
+
+    def test_read_and_close_failures_are_kept_and_never_skip_close(self):
+        from framejacker.sources.polled import PolledSource
+
+        stopped = threading.Event()
+        stopped.set()
+        untouched = self.Source()
+        polled = PolledSource(untouched)
+        polled.run(lambda item: None, stopped)
+        self.assertFalse(untouched.opened)
+        self.assertIs(polled.cleanup_ok, True)
+        for inner, message in ((self.Source(read_error="read failed", close_error="close failed"), "read failed"),
+                               (self.Source(close_error="close failed"), "close failed")):
+            polled = PolledSource(inner)
+            with self.subTest(message=message), self.assertRaisesRegex(RuntimeError, message):
+                polled.run(lambda item: None, threading.Event())
+            self.assertTrue(inner.closed)
+            self.assertIs(polled.cleanup_ok, False)
+            self.assertEqual(polled.error, message)
+        polled = PolledSource(self.Source(close_result=None))
+        polled.run(lambda item: None, threading.Event())
+        self.assertIs(polled.cleanup_ok, False)
 
 
 class OutputTests(unittest.TestCase):

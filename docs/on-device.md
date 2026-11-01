@@ -1635,8 +1635,9 @@ section therefore gives no deployment command. No install, transfer or device
 execution is authorized here.
 
 That historical file list is also insufficient for the current adapters:
-`scripts/overlay_client.py` now imports `framejacker.overlay`, and the mirror
-reader imports `framejacker.errors`. A new manifest must include the complete
+shared code now lives only in `framejacker/` (for example the mirror reader in
+`framejacker/sources/mirror_device.py` and the guardian in
+`framejacker/runtime/guard.py`); `scripts/` holds entry points. A new manifest must include the complete
 package/script dependency closure and matching source revision, plus the
 target-built ARM64 bridge. This delivery's local x86_64 bridge is an offline
 validation artifact, not a device deployment candidate.

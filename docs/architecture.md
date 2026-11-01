@@ -36,14 +36,17 @@ layout, orientation, source/session or HUD configuration changes must fail close
 stop result presentation/inference and expire prior content rather than reuse an
 old mask. Stale results must expire independently of inference and heartbeats.
 Do not silently recalibrate or enlarge the visible HUD beyond the qualified mask.
+`framejacker/context.py` holds this rule once: `CaptureContext.admit(frame)` is
+called on publish, before inference and before output, and its first failure
+invalidates every later admission in the run.
 
-The synthetic-only implementation is now offline-tested: `hud_mask.py` owns
+The synthetic-only implementation is now offline-tested: `framejacker/hud/` owns
 validated source/format/layout contracts, full per-eye footprints plus margins,
 masking before resize and a fixed 320 x 128 tile with up to three names and
 approximate view-direction arrows. Detections overlapping masked regions or
 crossing eye boundaries are rejected. No scene video or leader lines enter the
 HUD. `mirror_recognize.py` and `live_pipeline.py` integrate the owned masked
-input; `overlay_client.py` freezes geometry/opacity while permitting visibility
+input; `framejacker.overlay` freezes geometry/opacity while permitting visibility
 changes. Existing native expiring-frame transport is reused without a new
 bridge/protocol change. Only synthetic calibration is accepted; live mirror HUD
 input is rejected before opening, and real HUD output remains blocked.
@@ -107,8 +110,11 @@ flowchart LR
 
 These stages are implemented as the `framejacker` package's `FrameSource`,
 `convert.to_bgr`, `Detector`, `annotate` and `Sink` interfaces, connected by
-`Pipeline`. Live sources use its latest-only mode (the bounded latest-frame
-queue); file replay uses every-frame mode. See
+`Pipeline`, the one recognition engine. File replay uses its every-frame mode;
+the bounded mirror recognizer (`MirrorSource`) and the synthetic live HUD run
+(`PolledSource`, `HudStage`) use its latest-only mode (the bounded latest-frame
+queue), `CaptureContext` admission, result expiry and sink lifecycle. Command
+scripts translate its statistics into their reports. See
 [development](development.md#python-package-and-pipeline) for the module layout.
 
 Keep capture, inference, and presentation separate so a new camera backend does

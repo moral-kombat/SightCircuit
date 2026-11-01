@@ -6,9 +6,11 @@ particular, supplied JSON and artifact digests cannot prove eye composition,
 coverage of hidden copies, physical visibility, or wearer recovery.
 """
 from dataclasses import dataclass
-import hashlib
 import json
 import math
+
+from .contract import HUD_CONFIG, Calibration, CaptureFormat, Footprint, HudConfig, config_digest
+from .geometry import LAYOUTS, contains, expand, eye_viewports, overlaps, within_blind_budget
 
 
 MAX_RECORD_BYTES = 128 * 1024
@@ -61,18 +63,12 @@ def validate_context(context):
     fmt = context["native_format"]
     _object(fmt, ("width", "height", "fourcc", "stride_bytes", "buffer_bytes", "minimum_buffer_bytes"),
             "native_format")
-    for key in ("width", "height"):
-        _integer(fmt[key], 1, 4096, key)
-    _integer(fmt["stride_bytes"], fmt["width"] * 3, 48 * 1024 * 1024, "stride")
-    minimum = fmt["stride_bytes"] * fmt["height"]
-    _integer(fmt["minimum_buffer_bytes"], minimum, minimum, "minimum_buffer_bytes")
-    _integer(fmt["buffer_bytes"], minimum, 48 * 1024 * 1024, "buffer_bytes")
-    if fmt["fourcc"] not in ("RGB3", "BGR3"):
-        raise ValueError("hud_fourcc_invalid")
+    # The runtime mask's own format rule; a record cannot describe a layout it would reject.
+    CaptureFormat.from_mapping(fmt).validate()
     _rect(context["crop_xyxy"], (0, 0, fmt["width"], fmt["height"]), "crop")
     if type(context["orientation_degrees"]) is not int or context["orientation_degrees"] not in (0, 90, 180, 270):
         raise ValueError("hud_orientation_invalid")
-    if context["capture_layout"] not in ("mono", "stereo_sbs", "stereo_tb"):
+    if context["capture_layout"] not in LAYOUTS:
         raise ValueError("hud_capture_layout_invalid")
     x0, y0, x1, y1 = context["crop_xyxy"]
     if ((context["capture_layout"] == "stereo_sbs" and (x1-x0) % 2) or
@@ -81,38 +77,8 @@ def validate_context(context):
 
 
 def _viewports(context):
-    x0, y0, x1, y1 = context["crop_xyxy"]
-    if context["capture_layout"] == "stereo_sbs":
-        middle = (x0+x1)//2
-        return ((x0, y0, middle, y1), (middle, y0, x1, y1))
-    if context["capture_layout"] == "stereo_tb":
-        middle = (y0+y1)//2
-        return ((x0, y0, x1, middle), (x0, middle, x1, y1))
-    return ((x0, y0, x1, y1),)
-
-
-def _union_area(rectangles):
-    # At most four rectangles: exact native-pixel union without image allocation.
-    xs = sorted({coordinate for rect in rectangles for coordinate in (rect[0], rect[2])})
-    area = 0
-    for left, right in zip(xs, xs[1:]):
-        intervals = sorted((rect[1], rect[3]) for rect in rectangles if rect[0] < right and left < rect[2])
-        end, height = -1, 0
-        for low, high in intervals:
-            height += max(0, high-max(low, end))
-            end = max(end, high)
-        area += (right-left)*height
-    return area
-
-
-def config_digest(config):
-    """Pin all HUD fields, not merely the human-readable layout name."""
-    from dataclasses import asdict, is_dataclass
-    value = asdict(config) if is_dataclass(config) else config
-    if type(value) is not dict:
-        raise ValueError("hud_config_fields_invalid")
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"),
-                                     allow_nan=False).encode()).hexdigest()
+    """Eye regions inside the declared crop, by the runtime mask's partition rule."""
+    return eye_viewports(tuple(context["crop_xyxy"]), context["capture_layout"])
 
 
 @dataclass(frozen=True, init=False)
@@ -165,15 +131,13 @@ class MappingCandidate:
             required_margin = math.ceil(sum(copy[key] for key in
                                            ("maximum_drift_px", "localization_error_px", "filter_support_px"))) + 2
             _integer(copy["margin_px"], max(8, required_margin), 128, "conservative_margin")
-            x0, y0, x1, y1 = copy["rect_native"]
-            margin = copy["margin_px"]
-            expanded = [x0-margin, y0-margin, x1+margin, y1+margin]
+            expanded = list(expand(copy["rect_native"], copy["margin_px"]))
             _rect(expanded, eye, "expanded_copy")
             regions_by_eye[copy["declared_eye"]].append(expanded)
         if eyes != set(range(len(viewports))):
             raise ValueError("hud_missing_declared_eye")
         for eye, regions in zip(viewports, regions_by_eye):
-            if _union_area(regions) > (eye[2]-eye[0]) * (eye[3]-eye[1]) / 4:
+            if not within_blind_budget(regions, eye):
                 raise ValueError("hud_blind_region_budget_exceeded")
         evidence = record["evidence"]
         if type(evidence) is not list or not 1 <= len(evidence) <= 12:
@@ -219,6 +183,33 @@ class MappingCandidate:
                 "evidence_contents_verified": False, "physical_expiry_verified": False,
                 "missing_evidence_roles": [role for role in EVIDENCE_ROLES if role not in roles],
                 "scope": "Schema and declared context only; artifact references do not qualify hardware"}
+
+    def calibration(self, config=HUD_CONFIG):
+        """Express this candidate's geometry as a runtime ``Calibration``.
+
+        The result is always unvalidated with ``observed_unqualified``
+        provenance, so ``HudMask`` rejects it: this never enables masking,
+        inference or output from a hardware mapping. Conditions the runtime
+        mask cannot represent fail closed here instead of being dropped.
+        """
+        if not isinstance(config, HudConfig):
+            raise ValueError("hud_config_fields_invalid")
+        record = self.as_dict()
+        context = record["context"]
+        if context["hud_config_sha256"] != config_digest(config):
+            raise ValueError("hud_config_changed")
+        fmt = CaptureFormat.from_mapping(context["native_format"])
+        if tuple(context["crop_xyxy"]) != fmt.bounds:
+            raise ValueError("hud_runtime_crop_unsupported")
+        if context["orientation_degrees"] != 0:
+            raise ValueError("hud_runtime_orientation_unsupported")
+        copies = sorted(record["copies"], key=lambda copy: copy["declared_eye"])
+        if len({copy["declared_eye"] for copy in copies}) != len(copies):
+            raise ValueError("hud_runtime_multiple_copies_per_eye_unsupported")
+        footprints = tuple(Footprint(copy["declared_eye"], tuple(copy["rect_native"]), copy["margin_px"])
+                           for copy in copies)
+        return Calibration(context["source_id"], fmt, context["capture_layout"], footprints, config,
+                           validated=False, provenance="observed_unqualified")
 
     def require_production_qualification(self):
         raise ValueError("hud_hardware_mapping_not_approved")
@@ -277,13 +268,10 @@ class ValidationLedger:
         viewports = _viewports(context)
         for box in boxes:
             _rect(box, context["crop_xyxy"], "native_detection_box")
-            if sum(eye[0] <= box[0] < box[2] <= eye[2] and eye[1] <= box[1] < box[3] <= eye[3]
-                   for eye in viewports) != 1:
+            if sum(contains(eye, box) for eye in viewports) != 1:
                 raise ValueError("hud_validation_cross_eye_detection")
             for copy in record["copies"]:
-                x0, y0, x1, y1 = copy["rect_native"]
-                margin = copy["margin_px"]
-                if box[0] < x1+margin and x0-margin < box[2] and box[1] < y1+margin and y0-margin < box[3]:
+                if overlaps(box, expand(copy["rect_native"], copy["margin_px"])):
                     raise ValueError("hud_validation_mask_overlap")
         self.results += 1
         self.last_sequence, self.last_observed_ns = sequence, observed

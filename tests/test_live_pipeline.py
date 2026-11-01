@@ -21,27 +21,61 @@ class LivePipelineTests(unittest.TestCase):
         return live.OwnedFrame.copy_from(np.full((32, 48, 3), value, dtype=np.uint8), sequence,
             time.monotonic_ns() if observed is None else observed, source)
 
-    def test_owned_copy_survives_source_reuse_and_slot_replaces_old_input(self):
-        slot = live.LatestSlot()
+    def test_owned_copy_is_independent_read_only_and_keeps_identity(self):
         first = self.frame(1)
-        second = self.frame(2, 2)
-        slot.publish(first)
-        slot.publish(second)
-        second.image.flags.writeable = True
-        second.image[:] = 99
-        result = slot.take()
-        self.assertEqual(result.sequence, 2)
-        self.assertEqual(int(result.image[0, 0, 0]), 2)
-        self.assertFalse(result.image.flags.writeable)
-        self.assertEqual(slot.replaced, 1)
-        self.assertIsNone(slot.take(timeout=0))
+        first.image.flags.writeable = True
+        copied = first.copy()
+        first.image[:] = 99
+        self.assertEqual(int(copied.image[0, 0, 0]), 1)
+        self.assertFalse(copied.image.flags.writeable)
+        self.assertEqual((copied.sequence, copied.observed_ns, copied.source_id, copied.native_format),
+                         (first.sequence, first.observed_ns, first.source_id, first.native_format))
+
+    def test_engine_owns_published_pixels_when_a_source_reuses_its_buffer(self):
+        import numpy as np
+
+        class Reusing(live.SyntheticSource):
+            def __init__(source):
+                super().__init__(rate=100)
+                source.buffer = np.zeros((64, 96, 3), np.uint8)
+
+            def read(source, stop, timeout=0.05):
+                frame = super().read(stop, timeout)
+                if frame is None:
+                    return None
+                source.buffer[:] = frame.sequence % 255
+                return live.OwnedFrame(source.buffer, frame.sequence, frame.observed_ns, frame.source_id,
+                                       native_format=frame.native_format)
+
+        class Detector(live.FixtureDetector):
+            def detect(inner, image, threshold):
+                time.sleep(.03)  # The source overwrites its buffer meanwhile.
+                return super().detect(image, threshold)
+
+        class Sink(live.HeadlessSink):
+            def submit(sink, processed):
+                if int(processed.image[0, 0, 0]) != processed.frame.sequence % 255:
+                    raise AssertionError("presented pixels do not belong to their frame")
+                super().submit(processed)
+
+        report = live.run_pipeline(Reusing(), Detector(), Sink(), .4)
+        self.assertEqual(report["status"], "completed", report)
+        self.assertGreater(report["frames_submitted"], 1)
 
     def test_source_restart_and_identity_change_are_rejected(self):
-        slot = live.LatestSlot()
-        slot.publish(self.frame(sequence=2))
-        for frame in (self.frame(sequence=1), self.frame(sequence=3, source="synthetic:other")):
-            with self.assertRaisesRegex(ValueError, "source_changed_or_sequence_regressed"):
-                slot.publish(frame)
+        for change, reason in (("restart", "frame_sequence_regressed"), ("identity", "source_or_session_changed")):
+            class Source(live.SyntheticSource):
+                def read(source, stop, timeout=0.05):
+                    frame = super().read(stop, timeout)
+                    if frame is None or frame.sequence < 2:
+                        return frame
+                    sequence, source_id = (1, frame.source_id) if change == "restart" else (frame.sequence, "synthetic:other")
+                    return live.OwnedFrame.copy_from(frame.image, sequence, frame.observed_ns, source_id)
+            with self.subTest(change=change):
+                report = live.run_pipeline(Source(rate=100), live.FixtureDetector(), live.HeadlessSink(), .3)
+                self.assertEqual(report["status"], "error", report)
+                self.assertEqual(report["reason"], reason)
+                self.assertTrue(report["cleanup_ok"])
 
     def test_invalid_dimensions_dtype_and_metadata_are_rejected(self):
         import numpy as np
@@ -62,7 +96,7 @@ class LivePipelineTests(unittest.TestCase):
     def test_native_padded_stride_is_owned_then_fully_masked_before_inference_resize(self):
         import cv2
         import numpy as np
-        from scripts.hud_mask import Calibration, CaptureFormat, Footprint
+        from framejacker.hud import Calibration, CaptureFormat, Footprint
 
         width, height, stride = 1920, 1080, 5824
         storage = np.full((height, stride), 231, np.uint8)
@@ -141,11 +175,12 @@ class LivePipelineTests(unittest.TestCase):
 
     def test_original_observation_and_run_deadline_bound_result_lifetime(self):
         class Sink(live.HeadlessSink):
-            def submit(sink, frame, detection):
-                self.assertGreater(detection["expires_ns"], frame.observed_ns)
-                self.assertLessEqual(detection["expires_ns"], frame.observed_ns + 1_000_000_000)
-                sink.expiry = detection["expires_ns"]
-                super().submit(frame, detection)
+            def submit(sink, processed):
+                frame = processed.frame
+                self.assertGreater(processed.expires_ns, frame.observed_ns)
+                self.assertLessEqual(processed.expires_ns, frame.observed_ns + 1_000_000_000)
+                sink.expiry = processed.expires_ns
+                super().submit(processed)
 
         sink = Sink()
         started = time.monotonic_ns()
@@ -156,28 +191,40 @@ class LivePipelineTests(unittest.TestCase):
         self.assertFalse(report["physical_recovery_confirmed"])
         self.assertGreaterEqual(report["total_processing_ms"], report["total_inference_ms"])
 
-    def test_legacy_detector_adapter_uses_shared_inference_and_owned_annotations(self):
+    def test_engine_annotates_an_owned_copy_and_submits_one_processed_record(self):
         import numpy as np
-        from framejacker.frame import Detection, DetectionResult
-        from scripts.demo_detector import DemoDetector
+        from framejacker.frame import Detection, DetectionResult, Processed
 
-        image = np.zeros((32, 48, 3), dtype=np.uint8)
-        typed = DetectionResult((Detection("fixture", .9, (1, 1, 20, 20)),), 2.5)
-        detector = DemoDetector.__new__(DemoDetector)
-        with patch("framejacker.detection.MobileNetSSD.detect", return_value=typed) as detect:
-            result = detector.detect(image, .5)
-        detect.assert_called_once_with(image, .5)
-        self.assertEqual(result["labels"], ["fixture"])
-        self.assertEqual(result["detections"], [typed.detections[0].as_dict()])
-        self.assertEqual(result["inference_ms"], 2.5)
-        self.assertFalse(np.shares_memory(result["image"], image))
-        self.assertEqual(int(image.max()), 0)
+        seen = {}
+
+        class Detector(live.FixtureDetector):
+            def detect(self, image, threshold):
+                seen["input"] = image
+                return DetectionResult((Detection("fixture", .9, (1, 1, 20, 20)),), 2.5)
+
+        class Sink(live.HeadlessSink):
+            def submit(sink, processed):
+                seen["processed"] = processed
+                super().submit(processed)
+
+        report = live.run_pipeline(live.SyntheticSource(rate=1), Detector(), Sink(), .2)
+        self.assertEqual(report["status"], "completed", report)
+        processed = seen["processed"]
+        self.assertIsInstance(processed, Processed)
+        self.assertEqual(processed.labels, ["fixture"])
+        self.assertEqual(processed.result.inference_ms, 2.5)
+        self.assertEqual(processed.output_space, "detector_input_pixels")
+        self.assertIsNone(processed.hud)
+        self.assertEqual(processed.image.shape, seen["input"].shape)
+        self.assertFalse(np.shares_memory(processed.image, seen["input"]))
+        self.assertGreater(int(processed.image.max()), int(seen["input"].max()))
+        self.assertEqual(report["last_result"]["box_coordinate_space"], "detector_input_pixels")
 
     def test_pipeline_matches_each_output_to_its_own_frame_and_cleans_up(self):
         class Sink(live.HeadlessSink):
-            def submit(self, frame, detection):
-                self.test.assertEqual(int(detection["image"][0, 0, 0]), frame.sequence % 255)
-                super().submit(frame, detection)
+            def submit(self, processed):
+                self.test.assertEqual(int(processed.image[0, 0, 0]), processed.frame.sequence % 255)
+                super().submit(processed)
         sink = Sink()
         sink.test = self
         source = live.SyntheticSource(rate=100)
@@ -214,16 +261,21 @@ class LivePipelineTests(unittest.TestCase):
         self.assertEqual(report["frames_submitted"], 0)
         self.assertTrue(report["cleanup_ok"])
 
-    def test_detector_shape_failure_still_closes_source_and_sink(self):
-        class Bad(live.FixtureDetector):
-            def detect(self, *args):
-                result = super().detect(*args)
-                result["image"] = result["image"][:1]
-                return result
-        report = live.run_pipeline(live.SyntheticSource(), Bad(), live.HeadlessSink(), 0.2)
-        self.assertEqual(report["status"], "error")
-        self.assertIn("does_not_match_source", report["reason"])
-        self.assertTrue(report["cleanup_ok"])
+    def test_malformed_detector_result_still_closes_source_and_sink(self):
+        from framejacker.frame import DetectionResult
+
+        for bad in ({"image": None, "labels": [], "detections": [], "inference_ms": 0.0},
+                    DetectionResult([], 0.0), DetectionResult((), float("nan")), DetectionResult((), -1.0),
+                    DetectionResult(({"label": "dict"},), 0.0)):
+            class Bad(live.FixtureDetector):
+                def detect(self, *args):
+                    return bad
+            with self.subTest(bad=bad):
+                report = live.run_pipeline(live.SyntheticSource(), Bad(), live.HeadlessSink(), 0.2)
+                self.assertEqual(report["status"], "error")
+                self.assertEqual(report["reason"], "invalid_detection_result")
+                self.assertEqual(report["frames_submitted"], 0)
+                self.assertTrue(report["cleanup_ok"])
 
     def test_source_failure_is_reported_and_closed(self):
         source = live.SyntheticSource()

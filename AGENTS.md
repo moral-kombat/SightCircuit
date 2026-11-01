@@ -10,7 +10,11 @@ user-reported headset results distinct, and record evidence in status.
 
 - `framejacker/`: library (frames, `Pipeline`, sources, detectors, evaluation,
   runtime helpers). See [development](docs/development.md#python-package-and-pipeline).
-- `scripts/`: documented commands; they import the checkout without installation.
+- `scripts/`: documented command entry points only; they import the checkout
+  without installation. Shared code goes in `framejacker/`; no active script
+  imports another (`tests/test_scripts_boundary.py`). The paused capture-provider
+  scripts are quarantined in place; see
+  [the capture track](docs/development.md#paused-capture-provider-track).
 - `tools/`, `patches/`: native OpenVR and capture-provider code (provider track
   is paused; do not activate layers or restart SteamVR from a cloud session).
 - `evaluation/seed.json`: outdoor regression set; private Frame stills go in

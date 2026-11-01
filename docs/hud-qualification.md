@@ -96,11 +96,19 @@ extended by rewriting a timestamp.
 
 ## Offline candidate records
 
-`framejacker/hud_qualification.py` provides `MappingCandidate.from_mapping()`
+`framejacker/hud/qualification.py` provides `MappingCandidate.from_mapping()`
 and `check_context(current, now_ns)` to reject malformed, changed or expired
 candidate records. This validates structure and context; it supplies no
 production adapter or device authorization. Every accepted candidate remains
 `observed_unqualified`, including when every evidence role is filled.
+
+Records and the runtime mask share one contract in `framejacker/hud/`: the
+native format rule, the eye partition (`geometry.eye_viewports`) and the
+per-eye blind-region budget. `MappingCandidate.calibration()` expresses a
+candidate as a runtime `Calibration` that is always unvalidated with
+`observed_unqualified` provenance, so `HudMask` rejects it. Conditions the
+runtime mask cannot yet represent fail closed there: a crop other than the
+full frame, a nonzero orientation and more than one copy per eye.
 
 The version 1 record carries:
 

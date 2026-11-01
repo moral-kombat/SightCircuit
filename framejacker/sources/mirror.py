@@ -1,25 +1,139 @@
-"""Adapter from a callback-driven raw acquisition loop to pipeline frames.
+"""SteamVR mirror acquisition: the bounded read loop and its pipeline source.
 
-The SteamVR mirror's V4L2 handling and bounded acquisition loop live in
-``scripts/mirror_capture.py`` and ``scripts/mirror_check.py``. This adapter
-keeps that device code behind the source boundary: it turns each raw read into
-an owned ``Frame`` and retains the acquisition report for the caller.
+``capture`` reads a verified virtual mirror (``mirror_device.NativeMirror`` or
+an injected fixture backend) at a bounded rate until its deadline, reporting
+progress and passing each complete read to ``on_frame``. ``MirrorSource`` turns
+those reads into owned ``Frame``s carrying their ``native_format`` and retains
+the acquisition report; a report with status ``error`` raises, so the pipeline
+stops presenting results from a failed capture.
 """
+import hashlib
+import math
 import threading
+import time
 
+from ..context import SOURCE_FIELDS
+from ..errors import FramejackerError
 from ..frame import Frame
+from .mirror_device import NativeMirror, grayscale_sample
+
+
+def new_capture_report():
+    return {"report_kind": "steamvr_mirror_check", "schema_version": 1,
+            "status": "not_started", "images_saved": False,
+            "device_open_attempted": False, "acquisition_started": False,
+            "frames_read": 0, "grayscale_sample_changes": 0,
+            "read_attempts": 0, "would_block_reads": 0, "interrupted_reads": 0,
+            "reader_method": "nonblocking_read_without_poll_gate",
+            "unchanged_sample_reads": 0, "short_reads": 0,
+            "maximum_reads_per_second": 10, "cleanup_ok": True,
+            "sample_change_proves_live_camera": False,
+            "scope": "Composited mirror only; live passthrough, camera identity and image freshness require device observations",
+            "physical_camera_identity": "unverified", "camera_timestamps_available": False}
+
+
+def capture(candidate, seconds, stop, progress=lambda report: None, want_preview=False,
+            backend_factory=None, on_frame=None, *, max_fps=10, deadline=None):
+    """Acquisition loop; injectable backend permits real lifecycle/failure tests."""
+    if not math.isfinite(max_fps) or not 0 < max_fps <= 10 or (deadline is not None and not math.isfinite(deadline)):
+        raise ValueError("invalid_capture_pacing_or_deadline")
+    report = new_capture_report()
+    report.update(status="opening", candidate=candidate, seconds_requested=seconds)
+    report["maximum_reads_per_second"] = max_fps
+    progress(report.copy())
+    backend = None
+    last_frame = None
+    last_digest = None
+    started = last_read = None
+    max_gap = 0.0
+    try:
+        if stop.is_set() or (deadline is not None and time.monotonic() >= deadline):
+            report["status"] = "cancelled" if stop.is_set() else "deadline_expired"
+            return report, None
+        backend = (backend_factory or NativeMirror)(candidate)
+        report["device_open_attempted"] = True
+        backend.open()
+        report.update(acquisition_started=True, status="acquiring",
+                      capabilities=backend.capabilities, format=backend.format)
+        progress(report.copy())
+        started = time.monotonic()
+        deadline = min(started + seconds, deadline) if deadline is not None else started + seconds
+        next_read, next_progress = started, started + 1
+        while not stop.is_set() and time.monotonic() < deadline:
+            now = time.monotonic()
+            if now < next_read:
+                stop.wait(min(next_read - now, deadline - now, 0.05))
+                continue
+            next_read = now + 1 / max_fps
+            report["read_attempts"] += 1
+            frame = backend.read_frame(min(0.05, deadline - now))
+            report.update(getattr(backend, "read_diagnostics", {}))
+            if frame is not None:
+                if len(frame) < backend.format["minimum_buffer_bytes"]:
+                    report["short_reads"] += 1
+                    continue
+                _, _, sample = grayscale_sample(frame, backend.format, 32)
+                digest = hashlib.blake2b(sample, digest_size=16).digest()
+                if last_digest is not None:
+                    report["grayscale_sample_changes" if digest != last_digest else "unchanged_sample_reads"] += 1
+                last_digest = digest
+                report["frames_read"] += 1
+                observed = time.monotonic()
+                if last_read is None:
+                    report["first_frame_after_ms"] = round((observed - started) * 1000, 3)
+                else:
+                    max_gap = max(max_gap, observed - last_read)
+                last_read = observed
+                if on_frame is not None:
+                    on_frame(frame, backend.format, report["frames_read"], time.monotonic_ns())
+                if want_preview:
+                    last_frame = frame
+            if time.monotonic() >= next_progress:
+                progress(report.copy())
+                next_progress = time.monotonic() + 1
+        report["status"] = "cancelled" if stop.is_set() else ("captured" if report["frames_read"] else "no_frames")
+    except Exception as error:
+        report.update(status="error", reason=getattr(error, "reason", "acquisition_failed"), error=str(error))
+    finally:
+        if backend is not None:
+            report.update(getattr(backend, "read_diagnostics", {}))
+            if backend.capabilities is not None:
+                report["capabilities"] = backend.capabilities
+            if getattr(backend, "observed_format", None) is not None:
+                report["observed_format"] = backend.observed_format
+            try:
+                backend.close()
+            except Exception as error:
+                report.update(status="error", cleanup_ok=False, reason="close_failed", error=str(error))
+        if started is not None:
+            elapsed = time.monotonic() - started
+            report["acquisition_elapsed_ms"] = round(elapsed * 1000, 3)
+            report["observed_read_rate_hz"] = round(report["frames_read"] / max(elapsed, 0.001), 3)
+            report["maximum_read_gap_ms"] = round(max(max_gap, time.monotonic() - last_read if last_read else elapsed) * 1000, 3)
+    # This is sampled image change, not a producer sequence or exposure check.
+    preview = None
+    if report["status"] == "captured" and last_frame is not None:
+        preview = grayscale_sample(last_frame, backend.format, 640)
+    return report, preview
 
 
 class MirrorSource:
-    def __init__(self, acquire, source="steamvr-mirror"):
+    def __init__(self, acquire, source="steamvr-mirror", *, identity=None):
         """``acquire(stop, on_frame, progress)`` reads until done and returns its report.
 
-        ``on_frame(data, fmt, number, observed_ns)`` receives owned bytes and the
+        ``on_frame(data, fmt, number, observed_ns)`` receives the read bytes and the
         validated V4L2 format dictionary; ``progress(report)`` receives snapshots.
+        ``identity``, when given, declares ``SOURCE_FIELDS`` (for example a fixture
+        backend's kind, source_id and capture_layout) to ``CaptureContext``.
         """
-        self.acquire, self.source = acquire, source
+        self.acquire, self.source, self.identity = acquire, source, identity
         self.lock = threading.Lock()
         self._report = {}
+
+    def __getattr__(self, name):
+        if name in SOURCE_FIELDS:
+            return getattr(self.__dict__.get("identity"), name, None)
+        raise AttributeError(name)
 
     @property
     def report(self):
@@ -33,6 +147,9 @@ class MirrorSource:
     def run(self, emit, stop):
         def on_frame(data, fmt, number, observed_ns):
             emit(Frame(bytes(data), fmt["fourcc"], fmt["width"], fmt["height"], fmt["stride_bytes"],
-                       self.source, number, observed_ns, metadata=dict(fmt)))
+                       self.source, number, observed_ns, metadata={"native_format": dict(fmt)}))
 
-        self._update(self.acquire(stop, on_frame, self._update))
+        report = self.acquire(stop, on_frame, self._update)
+        self._update(report)
+        if report.get("status") == "error":
+            raise FramejackerError(report.get("reason", "capture_failed"), report.get("error", "Capture failed"))

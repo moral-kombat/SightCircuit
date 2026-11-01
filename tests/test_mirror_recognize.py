@@ -11,8 +11,12 @@ import time
 import unittest
 from unittest.mock import patch
 
-from scripts import mirror_capture as device
-from scripts import mirror_check as check
+from dataclasses import replace
+
+from framejacker.convert import to_bgr
+from framejacker.errors import FrameFormatError
+from framejacker.frame import Detection, DetectionResult
+from framejacker.sources import mirror_device as device
 from scripts import mirror_recognize as live
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,8 +66,7 @@ class MarkedDetector:
     def detect(self, image, threshold):
         value = int(image[0, 0, 0])
         time.sleep(self.delay)
-        return {"image": image.copy(), "labels": ["fixture"], "inference_ms": self.delay * 1000,
-                "detections": [{"label": "fixture", "confidence": 1.0, "box_xyxy": [value, 0, value + 1, 1]}]}
+        return DetectionResult((Detection("fixture", 1.0, (value, 0, value + 1, 1)),), self.delay * 1000)
 
 
 class SlowDetector(MarkedDetector):
@@ -72,9 +75,7 @@ class SlowDetector(MarkedDetector):
 
 class EmptyDetector(MarkedDetector):
     def detect(self, image, threshold):
-        result = super().detect(image, threshold)
-        result.update(labels=[], detections=[])
-        return result
+        return DetectionResult((), super().detect(image, threshold).inference_ms)
 
 
 class EmptyMirror(MarkedMirror):
@@ -116,8 +117,8 @@ class RecognitionGuardTests(unittest.TestCase):
     def test_discovery_does_not_load_model_or_open_device(self):
         output = io.StringIO()
         with patch.object(live, "discover", return_value=DISCOVERY), \
-                patch.object(live, "DemoDetector", side_effect=AssertionError("model must not load")), \
-                patch.object(check, "run_bounded", side_effect=AssertionError("worker must not start")), redirect_stdout(output):
+                patch.object(live, "MobileNetSSD", side_effect=AssertionError("model must not load")), \
+                patch.object(live.process, "run_bounded", side_effect=AssertionError("worker must not start")), redirect_stdout(output):
             self.assertEqual(live.main([]), 0)
         report = json.loads(output.getvalue())
         self.assertEqual(report["status"], "discovery_only")
@@ -135,28 +136,24 @@ class RecognitionGuardTests(unittest.TestCase):
             self.assertEqual(live.main(["--capture"]), 1)
         self.assertEqual(json.loads(output.getvalue())["status"], "unavailable")
 
-    def test_mailbox_replaces_old_input_and_preserves_association(self):
-        latest = live.LatestFrame()
-        latest.publish(b"first", {"width": 1}, 1, 10)
-        latest.publish(b"second", {"width": 2}, 2, 20)
-        selected = latest.take()
-        self.assertEqual((selected.data, selected.read_sequence, selected.observed_ns), (b"second", 2, 20))
-        self.assertEqual(latest.replaced, 1)
-        self.assertIsNone(latest.take(0))
 
 
 @unittest.skipUnless(AVAILABLE, "Run scripts/setup_window.sh for mirror/inference checks")
 class RecognitionIntegrationTests(unittest.TestCase):
     def test_rgb_order_padding_and_explicit_unsupported_format(self):
-        raw = bytes([255, 0, 0, 0, 0, 255, 99, 99]) * 2
-        fmt = device.validate_format(2, 2, "RGB3", 8, 16)
-        frame = live.ObservedFrame(raw, fmt, 1, time.monotonic_ns())
-        image = live.to_bgr(frame)
+        def mirror_frame(raw, fmt):
+            frames = []
+            source = live.MirrorSource(lambda stop, on_frame, progress: on_frame(raw, fmt, 1, time.monotonic_ns())
+                                       or {"status": "captured"})
+            source.run(frames.append, threading.Event())
+            return frames[0]
+
+        image = to_bgr(mirror_frame(bytes([255, 0, 0, 0, 0, 255, 99, 99]) * 2,
+                                    device.validate_format(2, 2, "RGB3", 8, 16)))
         self.assertEqual(image[0].tolist(), [[0, 0, 255], [255, 0, 0]])
         self.assertTrue(image.flags.writeable)
-        frame = live.ObservedFrame(bytes(4), device.validate_format(2, 2, "GREY", 2, 4), 1, 0)
-        with self.assertRaisesRegex(device.MirrorError, "RGB3/BGR3"):
-            live.to_bgr(frame)
+        with self.assertRaisesRegex(FrameFormatError, "RGB3/BGR3"):
+            to_bgr(mirror_frame(bytes(4), device.validate_format(2, 2, "GREY", 2, 4)))
 
     def test_slow_inference_discards_old_input_and_keeps_boxes_on_its_frame(self):
         report, image = live.recognize(CANDIDATE, 0.8, threading.Event(), want_preview=True,
@@ -208,12 +205,11 @@ class RecognitionIntegrationTests(unittest.TestCase):
         self.assertIsNone(image)
 
     def test_old_selected_frames_are_skipped(self):
-        publish = live.LatestFrame.publish
+        class OldMirrorSource(live.MirrorSource):
+            def run(self, emit, stop):
+                return super().run(lambda frame: emit(replace(frame, observed_ns=frame.observed_ns - 2000000000)), stop)
 
-        def old_publish(mailbox, data, fmt, number, observed):
-            return publish(mailbox, data, fmt, number, observed - 2000000000)
-
-        with patch.object(live.LatestFrame, "publish", old_publish):
+        with patch.object(live, "MirrorSource", OldMirrorSource):
             report, image = live.recognize(CANDIDATE, 0.3, threading.Event(), backend_factory=MarkedMirror,
                                             detector_factory=MarkedDetector)
         self.assertEqual(report["status"], "stale_input", report)

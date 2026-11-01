@@ -18,7 +18,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from scripts import mirror_capture as device
+from framejacker.sources import mirror as acquisition
+from framejacker.sources import mirror_device as device
 from scripts import mirror_check as check
 
 
@@ -68,7 +69,7 @@ class ErrorMirror(FakeMirror):
 
 
 def changing_worker(candidate, seconds, preview_temp, sender, stop, parent):
-    check.NativeMirror = FakeMirror
+    acquisition.NativeMirror = FakeMirror
     real_encoder = check.grayscale_png
 
     def encode_after_close(*args):
@@ -281,7 +282,7 @@ class MirrorFrameTests(unittest.TestCase):
         for factory, expected in ((FakeMirror, "captured"), (StaticMirror, "captured"),
                                   (EmptyMirror, "no_frames"), (ShortMirror, "no_frames"), (ErrorMirror, "error")):
             with self.subTest(factory=factory.__name__):
-                report, preview = check.capture(CANDIDATE, 0.22, threading.Event(),
+                report, preview = acquisition.capture(CANDIDATE, 0.22, threading.Event(),
                                                  want_preview=True, backend_factory=factory)
                 self.assertEqual(report["status"], expected, report)
                 self.assertTrue(factory.closed)
@@ -297,8 +298,8 @@ class MirrorFrameTests(unittest.TestCase):
                     self.assertGreater(report["short_reads"], 0)
         stop = threading.Event()
         stop.set()
-        with patch.object(check, "NativeMirror") as native:
-            report, preview = check.capture(CANDIDATE, 1, stop)
+        with patch.object(acquisition, "NativeMirror") as native:
+            report, preview = acquisition.capture(CANDIDATE, 1, stop)
             native.assert_not_called()
         self.assertEqual(report["status"], "cancelled")
         self.assertFalse(report["device_open_attempted"])
@@ -310,7 +311,7 @@ class MirrorWorkerTests(unittest.TestCase):
 sys.path[:0] = sys.argv[1:3]
 from scripts import mirror_check as check
 from test_mirror_check import CANDIDATE, stuck_worker
-signal.signal(signal.SIGTERM, check._stop_signal)
+signal.signal(signal.SIGTERM, check.stop_on_signal)
 report = check.run_bounded(dict(CANDIDATE, ready_file=sys.argv[3]), 10, worker=stuck_worker)
 print(json.dumps(report), flush=True)
 sys.exit(report['exit_code'])

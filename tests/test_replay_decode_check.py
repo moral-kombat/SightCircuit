@@ -7,7 +7,7 @@ import sys
 import tempfile
 import unittest
 
-from scripts.recording_check import inspect_recording
+from framejacker.sources.recording import inspect_recording
 
 
 ROOT = Path(__file__).resolve().parents[1]

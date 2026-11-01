@@ -52,8 +52,8 @@ adapters and shared primitives over a wholesale rewrite.
 3. WP10 and WP12: complete the offline runtime work
 
 Audit and reconcile framejacker/frame.py, framejacker/pipeline.py, framejacker/overlay.py,
-scripts/mirror_recognize.py, scripts/live_pipeline.py, scripts/overlay_client.py,
-scripts/hud_mask.py, scripts/bounded_worker.py, tools/overlay_bridge.cpp and their tests.
+scripts/mirror_recognize.py, scripts/live_pipeline.py, framejacker/overlay.py,
+framejacker/hud/, framejacker/runtime/guard.py, tools/overlay_bridge.cpp and their tests.
 
 - Converge on maintained shared frame, detector, pipeline and overlay contracts in
   framejacker/, retaining compatible command wrappers in scripts/. The package pipeline does

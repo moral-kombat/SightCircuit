@@ -1,6 +1,7 @@
 """Proposed mapping envelopes and generated telemetry, never hardware evidence."""
 import contextlib
 from copy import deepcopy
+from dataclasses import replace
 import io
 import json
 from pathlib import Path
@@ -8,7 +9,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from framejacker.hud_qualification import MappingCandidate, ValidationLedger, config_digest
+from framejacker.hud import HUD_CONFIG, HudMask, viewports
+from framejacker.hud.geometry import eye_viewports
+from framejacker.hud.qualification import MappingCandidate, ValidationLedger, config_digest
 from scripts.hud_validation_report import main, read_record
 
 
@@ -209,6 +212,70 @@ class ValidationLedgerTests(unittest.TestCase):
         self.assertFalse(report["production_hud_enabled"])
         with self.assertRaisesRegex(ValueError, "result_budget"):
             ledger.record_result(**self.result(frame_sequence=2, result_sequence=2, observed_ns=101))
+
+
+class RuntimeCalibrationTests(unittest.TestCase):
+    """One geometry for qualification and the runtime mask; no gate is lifted."""
+
+    def record(self):
+        record = candidate_record()
+        record["context"]["hud_config_sha256"] = config_digest(HUD_CONFIG)
+        return record
+
+    def test_candidate_calibration_is_unvalidated_and_rejected_by_runtime_mask(self):
+        calibration = MappingCandidate.from_mapping(self.record()).calibration()
+        self.assertIs(calibration.validated, False)
+        self.assertEqual(calibration.provenance, "observed_unqualified")
+        with self.assertRaisesRegex(ValueError, "calibration_unvalidated"):
+            HudMask(calibration, source_kind="synthetic")
+        # Even a forged validation flag cannot pass the hardware-mapping gate.
+        with self.assertRaisesRegex(ValueError, "hardware_mapping_not_approved"):
+            HudMask(replace(calibration, validated=True), source_kind="synthetic")
+
+    def test_candidate_geometry_equals_runtime_mask_regions_and_eye_partition(self):
+        record = self.record()
+        calibration = MappingCandidate.from_mapping(record).calibration()
+        # Test-only relabelling as a synthetic fixture checks geometry agreement,
+        # not approval: the runtime mask accepts every qualified-schema region.
+        mask = HudMask(replace(calibration, validated=True, provenance="synthetic_fixture"),
+                       source_kind="synthetic")
+        expected = tuple((x0-copy["margin_px"], y0-copy["margin_px"], x1+copy["margin_px"], y1+copy["margin_px"])
+                         for copy in record["copies"] for x0, y0, x1, y1 in [copy["rect_native"]])
+        self.assertEqual(mask.regions, expected)
+        context = record["context"]
+        self.assertEqual(viewports(calibration.capture_format, calibration.capture_layout),
+                         eye_viewports(tuple(context["crop_xyxy"]), context["capture_layout"]))
+        self.assertEqual(viewports(calibration.capture_format, calibration.capture_layout),
+                         ((0, 0, 960, 1080), (960, 0, 1920, 1080)))
+
+    def test_conditions_the_runtime_mask_cannot_represent_fail_closed(self):
+        cases = []
+        record = candidate_record(); cases.append((record, "hud_config_changed"))
+        record = self.record(); record["context"]["crop_xyxy"] = [0, 0, 1918, 1080]
+        cases.append((record, "runtime_crop_unsupported"))
+        record = self.record(); record["context"]["orientation_degrees"] = 180
+        cases.append((record, "runtime_orientation_unsupported"))
+        record = self.record(); record["context"]["capture_layout"] = "mono"
+        for copy, rect in zip(record["copies"], ([100, 100, 300, 200], [1100, 100, 1300, 200])):
+            copy.update(declared_eye=0, rect_native=rect)
+        cases.append((record, "multiple_copies_per_eye_unsupported"))
+        for index, (record, reason) in enumerate(cases):
+            candidate = MappingCandidate.from_mapping(record)
+            with self.subTest(index=index), self.assertRaisesRegex(ValueError, reason):
+                candidate.calibration()
+        candidate = MappingCandidate.from_mapping(self.record())
+        with self.assertRaisesRegex(ValueError, "hud_config_changed"):
+            candidate.calibration(replace(HUD_CONFIG, x_m=0.4))
+        with self.assertRaisesRegex(ValueError, "config_fields_invalid"):
+            candidate.calibration({"layout_id": "fixed-edge-hud-v1"})
+
+    def test_odd_eye_split_is_rejected_by_both_consumers(self):
+        record = self.record()
+        record["context"]["crop_xyxy"] = [0, 0, 1919, 1080]
+        with self.assertRaisesRegex(ValueError, "eye_partition_invalid"):
+            MappingCandidate.from_mapping(record)
+        with self.assertRaisesRegex(ValueError, "capture_layout_invalid"):
+            eye_viewports((0, 0, 1919, 1080), "stereo_sbs")
 
 
 if __name__ == "__main__":
