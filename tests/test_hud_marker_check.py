@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from scripts import hud_marker_check as marker
-from scripts.hud_mask import HUD_CONFIG
+from framejacker.hud import HUD_CONFIG
 from scripts.overlay_client import DEFAULT_BRIDGE, OverlayClient
 
 ROOT = Path(__file__).resolve().parents[1]

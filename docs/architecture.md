@@ -37,7 +37,7 @@ stop result presentation/inference and expire prior content rather than reuse an
 old mask. Stale results must expire independently of inference and heartbeats.
 Do not silently recalibrate or enlarge the visible HUD beyond the qualified mask.
 
-The synthetic-only implementation is now offline-tested: `hud_mask.py` owns
+The synthetic-only implementation is now offline-tested: `framejacker/hud/` owns
 validated source/format/layout contracts, full per-eye footprints plus margins,
 masking before resize and a fixed 320 x 128 tile with up to three names and
 approximate view-direction arrows. Detections overlapping masked regions or

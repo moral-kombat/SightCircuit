@@ -19,7 +19,7 @@ except ImportError as error:
 import numpy as np
 
 from scripts import hud_marker_observer as observer
-from scripts.hud_mask import CaptureFormat, HUD_CONFIG
+from framejacker.hud import CaptureFormat, HUD_CONFIG
 from scripts import mirror_check
 from scripts.overlay_client import DEFAULT_BRIDGE
 

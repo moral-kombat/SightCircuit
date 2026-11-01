@@ -18,18 +18,17 @@ if not __package__:
 from framejacker.convert import to_bgr as convert_frame
 from framejacker.errors import FrameFormatError
 from framejacker.frame import Frame
+from framejacker.hud import CaptureFormat, HudMask, HUD_CONFIG
 from framejacker.latest import LatestSlot
 
 if __package__:
     from . import mirror_check as check
     from .demo_detector import DemoDetector
     from .mirror_capture import MirrorError, discover, select_candidate
-    from .hud_mask import CaptureFormat, HudMask, HUD_CONFIG
 else:
     import mirror_check as check
     from demo_detector import DemoDetector
     from mirror_capture import MirrorError, discover, select_candidate
-    from hud_mask import CaptureFormat, HudMask, HUD_CONFIG
 
 
 def new_report():

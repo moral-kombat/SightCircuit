@@ -14,7 +14,7 @@ except ImportError as error:
     raise unittest.SkipTest("OpenCV is required for HUD mask tests") from error
 import numpy as np
 
-from scripts import hud_mask as hud
+from framejacker import hud
 from scripts import live_pipeline as live
 from scripts import mirror_recognize as mirror
 from scripts.overlay_client import DEFAULT_BRIDGE, OverlayClient, PanelSettings, rgba_from_bgr

@@ -256,7 +256,7 @@ cannot go backwards. One frame at most waits for inference, and inputs or
 results older than one second are dropped. Do not label a real source
 `synthetic` to get past the gate.
 
-**HUD contract.** `scripts/hud_mask.py` accepts only synthetic calibration and
+**HUD contract.** `HudMask` in `framejacker/hud/` accepts only synthetic calibration and
 rejects hardware mappings. It masks the full HUD footprint at native
 resolution before any resize. Detections that overlap the mask or cross an eye
 boundary are rejected.

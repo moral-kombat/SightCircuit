@@ -25,6 +25,7 @@ development; exact tested pins remain in the `requirements-*.txt` files.
 | `framejacker/evaluation.py`, `framejacker/assets.py` | Detector evaluation scoring; checksum-verified model/fixture download and verification |
 | `framejacker/sources/` | `ReplaySource` (PyAV) and `MirrorSource` (adapter for the V4L2 mirror acquisition loop) |
 | `framejacker/overlay.py` | Overlay bridge client and pipeline sink |
+| `framejacker/hud/` | Fixed edge HUD contract, shared eye/rectangle geometry, synthetic-only native mask, tile rendering and offline mapping qualification |
 | `framejacker/runtime/` | Bounded spawned workers, parent-death signalling, and reserve/publish of explicit image outputs |
 
 File replay uses every-frame scheduling, so each decoded frame is processed in

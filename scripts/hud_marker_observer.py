@@ -15,17 +15,20 @@ import sys
 import threading
 import time
 
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from framejacker.hud import CaptureFormat, HUD_CONFIG  # noqa: E402
+
 if __package__:
     from . import mirror_check
     from .bounded_worker import supervise
     from .hud_marker_check import MarkerClient, new_report as marker_report, validate_worker_report as validate_marker_report
-    from .hud_mask import CaptureFormat, HUD_CONFIG
     from .mirror_capture import discover, select_candidate
 else:
     import mirror_check
     from bounded_worker import supervise
     from hud_marker_check import MarkerClient, new_report as marker_report, validate_worker_report as validate_marker_report
-    from hud_mask import CaptureFormat, HUD_CONFIG
     from mirror_capture import discover, select_candidate
 
 MAX_PIXELS = 8 * 1024 * 1024

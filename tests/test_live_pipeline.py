@@ -62,7 +62,7 @@ class LivePipelineTests(unittest.TestCase):
     def test_native_padded_stride_is_owned_then_fully_masked_before_inference_resize(self):
         import cv2
         import numpy as np
-        from scripts.hud_mask import Calibration, CaptureFormat, Footprint
+        from framejacker.hud import Calibration, CaptureFormat, Footprint
 
         width, height, stride = 1920, 1080, 5824
         storage = np.full((height, stride), 231, np.uint8)

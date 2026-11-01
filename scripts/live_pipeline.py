@@ -12,15 +12,14 @@ if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from framejacker.frame import OwnedFrame  # noqa: F401 - compatibility export
+from framejacker.hud import Calibration, CaptureFormat, Footprint, HudMask, HUD_CONFIG
 from framejacker.latest import LatestFrameSlot as LatestSlot  # noqa: F401 - compatibility export
 from framejacker.runtime.live import run_pipeline as run_bounded_pipeline
 
 if __package__:
     from .bounded_worker import supervise
-    from .hud_mask import Calibration, CaptureFormat, Footprint, HudMask, HUD_CONFIG
 else:
     from bounded_worker import supervise
-    from hud_mask import Calibration, CaptureFormat, Footprint, HudMask, HUD_CONFIG
 
 class SyntheticSource:
     kind = "synthetic"
