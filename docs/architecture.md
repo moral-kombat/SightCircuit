@@ -110,8 +110,11 @@ flowchart LR
 
 These stages are implemented as the `framejacker` package's `FrameSource`,
 `convert.to_bgr`, `Detector`, `annotate` and `Sink` interfaces, connected by
-`Pipeline`. Live sources use its latest-only mode (the bounded latest-frame
-queue); file replay uses every-frame mode. See
+`Pipeline`, the one recognition engine. File replay uses its every-frame mode;
+the bounded mirror recognizer (`MirrorSource`) and the synthetic live HUD run
+(`PolledSource`, `HudStage`) use its latest-only mode (the bounded latest-frame
+queue), `CaptureContext` admission, result expiry and sink lifecycle. Command
+scripts translate its statistics into their reports. See
 [development](development.md#python-package-and-pipeline) for the module layout.
 
 Keep capture, inference, and presentation separate so a new camera backend does

@@ -60,6 +60,11 @@ class OwnedFrame:
         owned.flags.writeable = False
         return cls(owned, sequence, observed_ns, source_id, media_time, tuple(sorted(descriptor.items())))
 
+    def copy(self):
+        """An independent read-only copy with the same identity and acquisition layout."""
+        return OwnedFrame.copy_from(self.image, self.sequence, self.observed_ns, self.source_id, self.media_time,
+                                    dict(self.native_format) if self.native_format is not None else None)
+
     @property
     def native_descriptor(self):
         if self.native_format is not None:
@@ -96,6 +101,26 @@ class Frame:
     observed_ns: int
     media_time: float | None = None
     metadata: dict = field(default_factory=dict)
+
+
+def native_format(frame):
+    """The acquisition format a frame declares, as a V4L2-style mapping."""
+    if isinstance(frame, OwnedFrame):
+        return frame.native_descriptor
+    if isinstance(frame, Frame):
+        fmt = (frame.metadata or {}).get("native_format")
+        if isinstance(fmt, dict):
+            return dict(fmt)
+    raise ValueError("native_format_undeclared")
+
+
+def frame_source_id(frame):
+    return frame.source_id if isinstance(frame, OwnedFrame) else frame.source
+
+
+def frame_view(frame):
+    """The ``Frame`` view the converters and detectors consume; pixels are not copied."""
+    return frame.as_frame() if isinstance(frame, OwnedFrame) else frame
 
 
 @dataclass(frozen=True)

@@ -11,10 +11,8 @@ import time
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from framejacker.context import native_format
 from framejacker.frame import DetectionResult, OwnedFrame  # noqa: F401 - OwnedFrame: compatibility export
-from framejacker.hud import Calibration, CaptureFormat, Footprint, HudMask, HudOutput, HUD_CONFIG
-from framejacker.latest import LatestFrameSlot as LatestSlot  # noqa: F401 - compatibility export
+from framejacker.hud import Calibration, CaptureFormat, Footprint, HudStage, HUD_CONFIG
 from framejacker.runtime.live import run_pipeline as run_bounded_pipeline
 
 if __package__:
@@ -154,41 +152,25 @@ def synthetic_hud_calibration():
         "mono", (Footprint(0, (68, 42, 89, 56), 3),), validated=True, provenance="synthetic_fixture")
 
 
-class HudPipelineAdapter:
-    """Bind the shared engine to the frozen synthetic-only HUD contract."""
+class HudPipelineAdapter(HudStage):
+    """The shared HUD stage plus this command's fixed validation-sink contract."""
 
     def __init__(self, source, sink, calibration, config):
-        self.source, self.sink = source, sink
-        self.calibration, self.config = calibration, config
-        self.mask = None
+        super().__init__(source, calibration, config)
+        self.sink = sink
 
     def start(self):
-        # The engine binds this mask to its CaptureContext, which checks the
-        # calibration against the source and then every admitted frame.
-        self.mask = HudMask(self.calibration, self.config, source_kind=self.source.kind)
+        report = super().start()
         if isinstance(self.sink, OverlayValidationSink):
             if not isinstance(self.sink, HudValidationSink):
                 raise ValueError("hud_requires_fixed_validation_sink")
             self.sink.check_contract(self.config)
-        return dict(hud_mode=True, calibration_scope="synthetic_fixture_only",
-                    hardware_mapping_verified=False, mask_stage="native_pixels_before_resize",
-                    mask_regions_native=self.mask.regions, output_kind="fixed_names_and_view_arrows",
-                    world_locked=False, hud_config_id=self.config.layout_id,
-                    hud_pixel_size=[self.config.width_px, self.config.height_px])
+        return report
 
     def check_sink(self):
         """Output contract; capture identity is the engine's CaptureContext."""
         if isinstance(self.sink, HudValidationSink):
             self.sink.check_contract(self.config)
-
-    def prepare(self, frame):
-        return self.mask.prepare(frame.image, source_id=frame.source_id,
-                                 capture_format=CaptureFormat.from_mapping(native_format(frame)),
-                                 capture_layout=self.source.capture_layout, config=self.config)
-
-    def render(self, result, shape, threshold):
-        tile, rows = self.mask.render(result.detections, shape, threshold)
-        return tile, HudOutput(rows, self.config)
 
 
 def run_pipeline(source, detector, sink, seconds, *, stop=None, max_fps=5, max_age_ms=1000, threshold=0.5,

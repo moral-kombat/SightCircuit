@@ -17,17 +17,17 @@ development; exact tested pins remain in the `requirements-*.txt` files.
 | Module | Responsibility |
 | --- | --- |
 | `framejacker/frame.py` | `Frame`/`OwnedFrame` (pixels, layout, source, sequence, observation time, media time); `DetectionResult`, which every detector returns; `Processed`, the one record every engine submits to sinks (annotated image or HUD tile with `HudOutput` rows, expiry, sizes and coordinate space) |
-| `framejacker/pipeline.py` | `FrameSource`/`Sink` interfaces and `Pipeline`: conversion, detection, annotation, rate cap, latest-only or every-frame scheduling |
+| `framejacker/pipeline.py` | `FrameSource`/`Sink` interfaces and `Pipeline`, the one engine for replay, mirror recognition and the synthetic live HUD: latest-only or every-frame scheduling, rate cap, `CaptureContext` admission, HUD stage or annotation, result expiry and deadline, optional sink `open`/`clear`/`close` with cleanup results |
 | `framejacker/latest.py` | One-pending-item handoff; newer items replace older ones |
 | `framejacker/context.py` | `CaptureContext`: pins declared source identity, frame source/native layout/session metadata and an optional HUD mask binding; `admit(frame)` fails closed and latches the first failure |
 | `framejacker/convert.py` | BGR24 and padded RGB3/BGR3 conversion to detector input of at most 960 pixels |
 | `framejacker/detection.py` | `Detector` interface, `MobileNetSSD` baseline, `YoloxDetector` candidate, `create_detector()`, separate `annotate()` and `require_result()` (rejects malformed detector output before any output) |
 | `framejacker/preprocess.py`, `framejacker/labels.py` | Letterbox input and inverse box mapping; COCO vocabulary and VOC-to-canonical label names |
 | `framejacker/evaluation.py`, `framejacker/assets.py` | Detector evaluation scoring; checksum-verified model/fixture download and verification |
-| `framejacker/sources/` | `ReplaySource` (PyAV) and `MirrorSource` (adapter for the V4L2 mirror acquisition loop) |
+| `framejacker/sources/` | `ReplaySource` (PyAV), `MirrorSource` (adapter for the V4L2 mirror acquisition loop) and `PolledSource` (adapter for `open`/`read`/`close` sources); adapters forward the wrapped source's declared identity |
 | `framejacker/overlay.py` | Overlay bridge client and pipeline sink |
-| `framejacker/hud/` | Fixed edge HUD contract, shared eye/rectangle geometry, synthetic-only native mask, tile rendering and offline mapping qualification |
-| `framejacker/runtime/` | Bounded spawned workers, parent-death signalling, and reserve/publish of explicit image outputs |
+| `framejacker/hud/` | Fixed edge HUD contract, shared eye/rectangle geometry, synthetic-only native mask, tile rendering, the `HudStage` engine stage and offline mapping qualification |
+| `framejacker/runtime/` | Bounded spawned workers, parent-death signalling, reserve/publish of explicit image outputs, and `live.run_pipeline` (gated synthetic run on `Pipeline`, as a report) |
 
 File replay uses every-frame scheduling, so each decoded frame is processed in
 order. Mirror recognition uses latest-only scheduling with a one-second input

@@ -26,8 +26,11 @@ check or approves a source; approval gates stay with the callers.
 from copy import copy, deepcopy
 import threading
 
-from .frame import Frame, OwnedFrame
+from .frame import Frame, OwnedFrame, native_format
 from .hud.contract import CaptureFormat
+
+__all__ = ("CaptureContext", "FORMAT_CHANGED", "FORMAT_METADATA_KEYS", "SESSION_METADATA_KEYS",
+           "SOURCE_CHANGED", "SOURCE_FIELDS", "declared_identity", "frame_identity", "native_format")
 
 SOURCE_CHANGED = "source_or_session_changed"
 FORMAT_CHANGED = "native_capture_format_changed"
@@ -64,17 +67,6 @@ def frame_identity(frame):
         session = deepcopy({key: value for key, value in metadata.items() if key in SESSION_METADATA_KEYS})
         return frame.source, layout, session
     raise ValueError("capture_frame_type_unsupported")
-
-
-def native_format(frame):
-    """The acquisition format a frame declares, as a V4L2-style mapping."""
-    if isinstance(frame, OwnedFrame):
-        return frame.native_descriptor
-    if isinstance(frame, Frame):
-        fmt = (frame.metadata or {}).get("native_format")
-        if isinstance(fmt, dict):
-            return dict(fmt)
-    raise ValueError("native_format_undeclared")
 
 
 class CaptureContext:

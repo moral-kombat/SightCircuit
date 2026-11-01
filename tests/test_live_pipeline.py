@@ -21,27 +21,61 @@ class LivePipelineTests(unittest.TestCase):
         return live.OwnedFrame.copy_from(np.full((32, 48, 3), value, dtype=np.uint8), sequence,
             time.monotonic_ns() if observed is None else observed, source)
 
-    def test_owned_copy_survives_source_reuse_and_slot_replaces_old_input(self):
-        slot = live.LatestSlot()
+    def test_owned_copy_is_independent_read_only_and_keeps_identity(self):
         first = self.frame(1)
-        second = self.frame(2, 2)
-        slot.publish(first)
-        slot.publish(second)
-        second.image.flags.writeable = True
-        second.image[:] = 99
-        result = slot.take()
-        self.assertEqual(result.sequence, 2)
-        self.assertEqual(int(result.image[0, 0, 0]), 2)
-        self.assertFalse(result.image.flags.writeable)
-        self.assertEqual(slot.replaced, 1)
-        self.assertIsNone(slot.take(timeout=0))
+        first.image.flags.writeable = True
+        copied = first.copy()
+        first.image[:] = 99
+        self.assertEqual(int(copied.image[0, 0, 0]), 1)
+        self.assertFalse(copied.image.flags.writeable)
+        self.assertEqual((copied.sequence, copied.observed_ns, copied.source_id, copied.native_format),
+                         (first.sequence, first.observed_ns, first.source_id, first.native_format))
+
+    def test_engine_owns_published_pixels_when_a_source_reuses_its_buffer(self):
+        import numpy as np
+
+        class Reusing(live.SyntheticSource):
+            def __init__(source):
+                super().__init__(rate=100)
+                source.buffer = np.zeros((64, 96, 3), np.uint8)
+
+            def read(source, stop, timeout=0.05):
+                frame = super().read(stop, timeout)
+                if frame is None:
+                    return None
+                source.buffer[:] = frame.sequence % 255
+                return live.OwnedFrame(source.buffer, frame.sequence, frame.observed_ns, frame.source_id,
+                                       native_format=frame.native_format)
+
+        class Detector(live.FixtureDetector):
+            def detect(inner, image, threshold):
+                time.sleep(.03)  # The source overwrites its buffer meanwhile.
+                return super().detect(image, threshold)
+
+        class Sink(live.HeadlessSink):
+            def submit(sink, processed):
+                if int(processed.image[0, 0, 0]) != processed.frame.sequence % 255:
+                    raise AssertionError("presented pixels do not belong to their frame")
+                super().submit(processed)
+
+        report = live.run_pipeline(Reusing(), Detector(), Sink(), .4)
+        self.assertEqual(report["status"], "completed", report)
+        self.assertGreater(report["frames_submitted"], 1)
 
     def test_source_restart_and_identity_change_are_rejected(self):
-        slot = live.LatestSlot()
-        slot.publish(self.frame(sequence=2))
-        for frame in (self.frame(sequence=1), self.frame(sequence=3, source="synthetic:other")):
-            with self.assertRaisesRegex(ValueError, "source_changed_or_sequence_regressed"):
-                slot.publish(frame)
+        for change, reason in (("restart", "frame_sequence_regressed"), ("identity", "source_or_session_changed")):
+            class Source(live.SyntheticSource):
+                def read(source, stop, timeout=0.05):
+                    frame = super().read(stop, timeout)
+                    if frame is None or frame.sequence < 2:
+                        return frame
+                    sequence, source_id = (1, frame.source_id) if change == "restart" else (frame.sequence, "synthetic:other")
+                    return live.OwnedFrame.copy_from(frame.image, sequence, frame.observed_ns, source_id)
+            with self.subTest(change=change):
+                report = live.run_pipeline(Source(rate=100), live.FixtureDetector(), live.HeadlessSink(), .3)
+                self.assertEqual(report["status"], "error", report)
+                self.assertEqual(report["reason"], reason)
+                self.assertTrue(report["cleanup_ok"])
 
     def test_invalid_dimensions_dtype_and_metadata_are_rejected(self):
         import numpy as np

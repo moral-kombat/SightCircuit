@@ -15,7 +15,7 @@ except ImportError as error:
 import numpy as np
 
 from framejacker import hud
-from framejacker.frame import Detection, DetectionResult
+from framejacker.frame import Detection, DetectionResult, Frame
 from scripts import live_pipeline as live
 from scripts import mirror_recognize as mirror
 from scripts.overlay_client import DEFAULT_BRIDGE, OverlayClient, PanelSettings, rgba_from_bgr
@@ -323,14 +323,20 @@ class HudIntegrationTests(unittest.TestCase):
         pixels = np.full((720, cal.capture_format.stride_bytes), 199, dtype=np.uint8)
         image = np.ndarray((720, 1280, 3), dtype=np.uint8, buffer=pixels, strides=(cal.capture_format.stride_bytes, 3, 1))
         image[:] = (10, 20, 30)
-        frame = mirror.ObservedFrame(pixels.tobytes(), fmt, 1, time.monotonic_ns())
-        mask = hud.HudMask(cal, source_kind="synthetic")
-        result = mirror.to_bgr(frame, hud=mask, source_id=cal.source_id, capture_layout="mono")
+        source = type("Source", (), dict(kind="synthetic", source_id=cal.source_id, capture_layout="mono"))()
+        stage = hud.HudStage(source, cal)
+        stage.start()
+        frame = Frame(pixels.tobytes(), "RGB3", 1280, 720, cal.capture_format.stride_bytes, cal.source_id, 1,
+                      time.monotonic_ns(), metadata={"native_format": fmt})
+        result = stage.prepare(frame)
         self.assertEqual(result[0, 0].tolist(), [30, 20, 10])
         self.assertEqual(result.shape, (540, 960, 3))
-        changed = mirror.ObservedFrame(frame.data, dict(fmt, colorspace_code=1), 2, frame.observed_ns)
+        self.assertFalse(result.flags.writeable)
+        x0, y0, x1, y1 = (round(value * 0.75) for value in stage.mask.regions[0])
+        self.assertFalse(result[y0 + 1:y1 - 1, x0 + 1:x1 - 1].any())
+        changed = replace(frame, metadata={"native_format": dict(fmt, colorspace_code=1)})
         with self.assertRaisesRegex(ValueError, "format_changed"):
-            mirror.to_bgr(changed, hud=mask, source_id=cal.source_id, capture_layout="mono")
+            stage.prepare(changed)
 
     def test_mirror_hud_mode_refuses_default_live_backend_before_model_or_open(self):
         factory = Mock()
@@ -415,15 +421,8 @@ class HudIntegrationTests(unittest.TestCase):
             hud_mode=True, calibration=cal, backend_factory=Source, detector_factory=Detector)
         self.assertEqual(report["status"], "error", report)
         self.assertIn("source_or_session_changed", report["error"])
-        self.assertEqual(report["frames_processed"], 0)
+        self.assertNotIn("last_result", report)
         self.assertIsNone(tile)
-
-    def test_mirror_mailbox_owns_mutable_source_storage(self):
-        mailbox = mirror.LatestFrame()
-        source = bytearray(b"abc")
-        mailbox.publish(source, {"width": 1}, 1, 1)
-        source[:] = b"xyz"
-        self.assertEqual(mailbox.take().data, b"abc")
 
     def test_frozen_transport_rejects_geometry_changes_before_queueing(self):
         client = OverlayClient(validation_only=True)
