@@ -18,6 +18,7 @@ import time
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from framejacker.gates import HARDWARE_MAPPING, claims  # noqa: E402
 from framejacker.hud import CaptureFormat, HUD_CONFIG  # noqa: E402
 
 from framejacker.hud.marker import (  # noqa: E402
@@ -349,15 +350,14 @@ class EmpiricalObservation:
                 "last_detected_corners": self.last_corners,
                 "last_match_diagnostics": self.last_match_diagnostics,
                 "eye_identity_assigned": False, "composition_verified": False,
-                "unseen_or_occluded_copies_established": False, "mapping_qualified": False}
+                "unseen_or_occluded_copies_established": False, **claims(HARDWARE_MAPPING)}
 
 
 def new_report(validation_only=False):
     return {"report_kind": "hud_marker_observation", "status": "not_run", "exit_code": 3,
             "calibration_validation_only": validation_only,
             "cleanup_ok": True, "images_saved": False, "inference_started": False,
-            "production_live_input_enabled": False, "production_hud_enabled": False,
-            "mapping_qualified": False, "physical_display_recovery_verified": False,
+            **claims(), "physical_display_recovery_verified": False,
             "camera_freshness_verified": False,
             "scope": "Empirical visible-copy bounds only; unknown composition cannot qualify production masking"}
 
@@ -531,8 +531,8 @@ def validate_worker_report(report, returncode):
             type(report.get("calibration_validation_only")) is not bool or
             type(report.get("seconds_requested")) is not int or not 1 <= report["seconds_requested"] <= 20 or
             report.get("maximum_processing_fps") != 5 or
-            any(report.get(key) is not False for key in ("mapping_qualified", "images_saved", "inference_started",
-                "production_live_input_enabled", "production_hud_enabled", "physical_display_recovery_verified",
+            any(report.get(key) is not False for key in (*claims(), "images_saved", "inference_started",
+                "physical_display_recovery_verified",
                 "eye_identity_assigned", "composition_verified", "unseen_or_occluded_copies_established",
                 "camera_freshness_verified")) or
             (report["exit_code"] == 2 and (report.get("status") != "observed_unqualified" or not report["cleanup_ok"] or

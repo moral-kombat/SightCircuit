@@ -21,6 +21,7 @@ development; exact tested pins remain in the `requirements-*.txt` files.
 | `framejacker/frame.py` | `Frame`/`OwnedFrame` (pixels, layout, source, sequence, observation time, media time); `DetectionResult`, which every detector returns; `Processed`, the one record every engine submits to sinks (annotated image or HUD tile with `HudOutput` rows, expiry, sizes and coordinate space) |
 | `framejacker/pipeline.py` | `FrameSource`/`Sink` interfaces and `Pipeline`, the one engine for replay, mirror recognition and the synthetic live HUD: latest-only or every-frame scheduling, rate cap, `CaptureContext` admission, HUD stage or annotation, result expiry and deadline, optional sink `open`/`clear`/`close` with cleanup results |
 | `framejacker/latest.py` | One-pending-item handoff; newer items replace older ones |
+| `framejacker/gates.py` | The closed approval gates (live image input, hardware mapping, live HUD output): each boundary's `require` and every report's gate claims; nothing here opens a gate |
 | `framejacker/context.py` | `CaptureContext`: pins declared source identity, frame source/native layout/session metadata and an optional HUD mask binding; `admit(frame)` fails closed and latches the first failure |
 | `framejacker/convert.py` | BGR24 and padded RGB3/BGR3 conversion to detector input of at most 960 pixels |
 | `framejacker/detection.py` | `Detector` interface, `MobileNetSSD` baseline, `YoloxDetector` candidate, `create_detector()`, separate `annotate()` and `require_result()` (rejects malformed detector output before any output) |

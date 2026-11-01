@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from framejacker.gates import claims  # noqa: E402
 from framejacker.hud.qualification import MAX_RECORD_BYTES, MappingCandidate  # noqa: E402
 
 
@@ -50,9 +51,7 @@ def main(argv=None):
         report = candidate.report()
     except (OSError, ValueError, TypeError, OverflowError) as error:
         report = {"report_kind": "hud_mapping_schema_check", "schema_version": 1,
-                  "status": "rejected", "exit_code": 1, "reason": str(error)[:512],
-                  "mapping_qualified": False, "production_hud_enabled": False,
-                  "production_live_input_enabled": False}
+                  "status": "rejected", "exit_code": 1, "reason": str(error)[:512], **claims()}
     print(json.dumps(report, indent=2, sort_keys=True))
     return report["exit_code"]
 

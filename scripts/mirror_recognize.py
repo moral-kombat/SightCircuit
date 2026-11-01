@@ -17,6 +17,7 @@ if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from framejacker.detection import MobileNetSSD
+from framejacker.gates import LIVE_IMAGE_INPUT
 from framejacker.hud import HUD_CONFIG, HudStage
 from framejacker.pipeline import Pipeline
 from framejacker.runtime import process
@@ -81,8 +82,8 @@ def recognize(candidate, seconds, stop, progress=lambda report: None, want_previ
     try:
         if hud_mode:
             # No CLI/live adapter enables this: fixture backends only.
-            if backend_factory is None or getattr(backend_factory, "kind", None) != "synthetic":
-                raise ValueError("hud_live_mirror_not_approved")
+            LIVE_IMAGE_INPUT.require(backend_factory is not None and getattr(backend_factory, "kind", None) == "synthetic",
+                                     "hud_live_mirror_not_approved")
             # Validate the calibration before the model loads or the source opens.
             stage = HudStage(backend_factory, calibration, hud_config)
             stage.start()

@@ -10,6 +10,7 @@ with ``check_sink()``, run at every admission checkpoint).
 """
 import threading
 
+from ..gates import LIVE_IMAGE_INPUT
 from ..pipeline import Pipeline
 from ..sources.polled import PolledSource
 
@@ -44,8 +45,7 @@ def last_result(processed):
 
 def run_pipeline(source, detector, sink, seconds, *, stop=None, max_fps=5, max_age_ms=1000, threshold=0.5,
                  hud=None):
-    if getattr(source, "kind", None) != "synthetic":
-        raise ValueError("live_image_source_not_approved")
+    LIVE_IMAGE_INPUT.require(getattr(source, "kind", None) == "synthetic", "live_image_source_not_approved")
     if not (0.05 <= seconds <= 60 and 1 <= max_fps <= 10 and 0 < max_age_ms <= 1000 and 0 <= threshold <= 1):
         raise ValueError("pipeline_limits_invalid")
     stop = stop or threading.Event()

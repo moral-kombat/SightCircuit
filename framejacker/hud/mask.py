@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import math
 
 from ..frame import Detection
+from ..gates import HARDWARE_MAPPING
 from .contract import HUD_CONFIG, Calibration, CaptureFormat, Footprint, HudConfig, HudRow, viewports
 from .geometry import contains, expand, overlaps, within_blind_budget
 from .render import draw_tile
@@ -30,10 +31,10 @@ class HudMask:
             raise ValueError("hud_calibration_required")
         if cal.validated is not True:
             raise ValueError("hud_calibration_unvalidated")
-        if (self.source_kind != "synthetic" or cal.provenance != "synthetic_fixture" or
-                not isinstance(cal.source_id, str) or not cal.source_id.startswith("synthetic:") or
-                len(cal.source_id) > 96):
-            raise ValueError("hud_hardware_mapping_not_approved")
+        HARDWARE_MAPPING.require(
+            self.source_kind == "synthetic" and cal.provenance == "synthetic_fixture" and
+            isinstance(cal.source_id, str) and cal.source_id.startswith("synthetic:") and len(cal.source_id) <= 96,
+            "hud_hardware_mapping_not_approved")
         if self.config != HUD_CONFIG or cal.config != self.config:
             raise ValueError("hud_config_changed")
         if not isinstance(cal.capture_format, CaptureFormat):

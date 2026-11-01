@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import json
 import math
 
+from ..gates import HARDWARE_MAPPING, LIVE_HUD_OUTPUT, claims
 from .contract import HUD_CONFIG, Calibration, CaptureFormat, Footprint, HudConfig, config_digest
 from .geometry import LAYOUTS, contains, expand, eye_viewports, overlaps, within_blind_budget
 
@@ -178,8 +179,7 @@ class MappingCandidate:
         roles = {item["role"] for item in record["evidence"]}
         return {"report_kind": "hud_mapping_schema_check", "schema_version": 1,
                 "status": "candidate_valid_unqualified", "exit_code": 2,
-                "mapping_id": record["mapping_id"], "mapping_qualified": False,
-                "production_hud_enabled": False, "production_live_input_enabled": False,
+                "mapping_id": record["mapping_id"], **claims(),
                 "evidence_contents_verified": False, "physical_expiry_verified": False,
                 "missing_evidence_roles": [role for role in EVIDENCE_ROLES if role not in roles],
                 "scope": "Schema and declared context only; artifact references do not qualify hardware"}
@@ -212,7 +212,8 @@ class MappingCandidate:
                            validated=False, provenance="observed_unqualified")
 
     def require_production_qualification(self):
-        raise ValueError("hud_hardware_mapping_not_approved")
+        # No qualified mapping exists in this checkout; the candidate is never one.
+        HARDWARE_MAPPING.require(False, "hud_hardware_mapping_not_approved")
 
 
 class ValidationLedger:
@@ -280,7 +281,7 @@ class ValidationLedger:
 
     def report(self):
         return {"report_kind": "hud_offline_validation_ledger", "status": "invalidated" if self.invalidated_reason
-                else "telemetry_checked_unqualified", "mapping_qualified": False, "production_hud_enabled": False,
+                else "telemetry_checked_unqualified", **claims(HARDWARE_MAPPING, LIVE_HUD_OUTPUT),
                 "results_checked": self.results, "results_rejected": self.rejected,
                 "invalidated_reason": self.invalidated_reason, "maximum_input_age_ns": self.maximum_input_age_ns,
                 "physical_expiry_verified": False, "wearer_recovery_verified": False,

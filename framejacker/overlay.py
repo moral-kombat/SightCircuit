@@ -10,6 +10,8 @@ import subprocess
 import threading
 import time
 
+from .gates import LIVE_HUD_OUTPUT
+
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BRIDGE = ROOT / "artifacts/overlay-bridge/framejacker-overlay-bridge"
 MAX_SIDE = 512
@@ -191,8 +193,7 @@ class OverlayClient:
 
     def freeze_settings(self, settings):
         """Pin calibrated candidate geometry; only visibility may change afterward."""
-        if not self.validation_only:
-            raise ValueError("fixed_live_hud_not_approved")
+        LIVE_HUD_OUTPUT.require(self.validation_only is True, "fixed_live_hud_not_approved")
         settings.encode()
         fixed = replace(settings, visible=False)
         with self.condition:
@@ -206,8 +207,9 @@ class OverlayClient:
         if not 0 < width <= MAX_SIDE or not 0 < height <= MAX_SIDE or len(rgba) != width * height * 4:
             raise ValueError("Invalid RGBA overlay frame")
         if expires_ns is not None:
-            if not self.validation_only or not self.frame_expiry_supported:
-                raise ValueError("expiring_live_output_not_approved_or_supported")
+            # Expiring frames are permitted only on a validation bridge that supports expiry.
+            LIVE_HUD_OUTPUT.require(self.validation_only is True and self.frame_expiry_supported is True,
+                                    "expiring_live_output_not_approved_or_supported")
             if type(expires_ns) is not int or not 0 < expires_ns <= time.monotonic_ns() + 1000000000:
                 raise ValueError("invalid_frame_expiry")
         data = (packet(1, struct.pack("<II", width, height) + rgba) if expires_ns is None else
