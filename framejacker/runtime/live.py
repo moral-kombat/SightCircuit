@@ -10,6 +10,7 @@ with ``check_sink()``, run at every admission checkpoint).
 """
 import threading
 
+from ..frame import native_format
 from ..gates import LIVE_IMAGE_INPUT
 from ..pipeline import Pipeline
 from ..sources.polled import PolledSource
@@ -29,12 +30,12 @@ def new_report(max_fps, seconds):
 
 def last_result(processed):
     frame = processed.frame
-    result = {"source_id": frame.source_id, "sequence": frame.sequence,
+    result = {"source_id": frame.source, "sequence": frame.sequence,
               "observed_ns": frame.observed_ns, "media_time": frame.media_time,
               "inference_ms": processed.result.inference_ms,
               "observation_age_ms": round(processed.output_age_ms, 3),
               "processing_ms": round(processed.processing_ms, 3), "expires_ns": processed.expires_ns,
-              "native_format": frame.native_descriptor,
+              "native_format": native_format(frame),
               "detector_input_size": list(processed.detector_input_size),
               "native_to_inference_scale": list(processed.native_to_inference_scale),
               "box_coordinate_space": processed.output_space}

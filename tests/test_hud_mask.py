@@ -220,7 +220,7 @@ class HudIntegrationTests(unittest.TestCase):
                 self.assertEqual(processed.output_space, "approximate_image_view_direction")
                 self.assertLessEqual(processed.expires_ns, frame.observed_ns + 1000000000)
                 self.assertGreater(processed.expires_ns, frame.observed_ns)
-                self.assertEqual(frame.source_id, cal.source_id)
+                self.assertEqual(frame.source, cal.source_id)
                 super().submit(processed)
         report = live.run_pipeline(live.SyntheticSource(), Detector(), Sink(), .3, hud_mode=True, calibration=cal)
         self.assertEqual(report["status"], "completed", report)
@@ -275,8 +275,7 @@ class HudIntegrationTests(unittest.TestCase):
         class Source(live.SyntheticSource):
             def read(self, *args, **kwargs):
                 if entered.is_set():
-                    return live.OwnedFrame.copy_from(np.zeros((32, 96, 3), np.uint8), 2,
-                                                    time.monotonic_ns(), self.source_id)
+                    return Frame.owned_bgr(np.zeros((32, 96, 3), np.uint8), 2, time.monotonic_ns(), self.source_id)
                 return super().read(*args, **kwargs)
             def close(self):
                 closed.set()

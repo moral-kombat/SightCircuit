@@ -11,7 +11,7 @@ import time
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from framejacker.frame import DetectionResult, OwnedFrame
+from framejacker.frame import DetectionResult, Frame
 from framejacker.hud import Calibration, CaptureFormat, Footprint, HudStage, HUD_CONFIG
 from framejacker.overlay import OverlayClient, PanelSettings
 from framejacker.runtime.guard import supervise
@@ -41,7 +41,7 @@ class SyntheticSource:
         self.sequence += 1
         self.next_frame = time.monotonic() + self.period
         pixels = self.np.full((64, 96, 3), self.sequence % 255, dtype=self.np.uint8)
-        return OwnedFrame.copy_from(pixels, self.sequence, time.monotonic_ns(), self.source_id)
+        return Frame.owned_bgr(pixels, self.sequence, time.monotonic_ns(), self.source_id)
 
     def close(self):
         self.closed = True

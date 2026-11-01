@@ -326,6 +326,38 @@ class PipelineTests(unittest.TestCase):
             runner.run(threading.Event())
         self.assertEqual(sink.items, [])
 
+    def test_padded_array_frames_are_owned_before_any_checkpoint(self):
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("NumPy required for array frames")
+        storage = np.zeros((2, 16), np.uint8)
+        view = np.ndarray((2, 4, 3), np.uint8, buffer=storage, strides=(16, 3, 1))
+
+        class Source:
+            def run(self, emit, stop):
+                for number in (1, 2, 3):
+                    view[:] = number  # The source reuses one padded buffer.
+                    emit(Frame(view, "BGR24", 4, 2, 16, "fixture", number, time.monotonic_ns(),
+                               metadata={"native_format": {"stride_bytes": 16}}))
+                    time.sleep(.02)
+
+        class Detector:
+            def detect(self, image, threshold):
+                time.sleep(.03)
+                return DetectionResult((), 0.0)
+
+        seen = []
+        runner = Pipeline(Source(), Detector(), [Recorder()], max_fps=1000, max_input_age_ms=1000,
+                          convert=lambda item: seen.append(item) or item.pixels,
+                          annotator=lambda image, result: image)
+        stats = runner.run(threading.Event())
+        self.assertGreater(stats.frames_submitted, 0)
+        for item in seen:
+            self.assertEqual(item.stride, 12)
+            self.assertFalse(np.shares_memory(item.pixels, storage))
+            self.assertEqual(int(item.pixels[0, 0, 0]), item.sequence)
+
     def test_mirror_source_converts_reads_and_retains_report(self):
         def acquire(stop, on_frame, progress):
             progress({"status": "acquiring"})

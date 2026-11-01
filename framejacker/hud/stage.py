@@ -6,7 +6,7 @@ approximate view directions afterwards. ``HudMask`` still accepts synthetic
 fixture calibrations only; this stage approves nothing.
 """
 from ..convert import native_bgr
-from ..frame import frame_source_id, frame_view, native_format
+from ..frame import native_format
 from .contract import HUD_CONFIG, CaptureFormat, HudOutput
 from .mask import HudMask
 
@@ -28,7 +28,7 @@ class HudStage:
 
     def prepare(self, frame):
         """Read-only masked detector input at the calibrated inference size."""
-        return self.mask.prepare(native_bgr(frame_view(frame)), source_id=frame_source_id(frame),
+        return self.mask.prepare(native_bgr(frame), source_id=frame.source,
                                  capture_format=CaptureFormat.from_mapping(native_format(frame)),
                                  capture_layout=getattr(self.source, "capture_layout", None), config=self.config)
 

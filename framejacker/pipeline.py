@@ -33,7 +33,7 @@ from typing import Callable, Protocol
 from .context import CaptureContext
 from .convert import to_bgr
 from .detection import annotate, require_result
-from .frame import Frame, OwnedFrame, Processed, frame_view
+from .frame import Frame, Processed
 from .latest import LatestSlot
 
 
@@ -212,7 +212,7 @@ class Pipeline:
     def _prepare(self, frame):
         if self.hud is not None:
             return self.hud.prepare(frame)
-        return self.convert(frame_view(frame))
+        return self.convert(frame)
 
     def _present(self, bgr, result):
         if self.hud is not None:
@@ -254,12 +254,11 @@ class Pipeline:
         if self._expired(expires_ns, stop):
             stats.stale_results_skipped += 1
             return
-        view = frame_view(frame)
         shape = getattr(bgr, "shape", None)
         processed = Processed(frame, result, image, stats.frames_processed, age_ms, processing_ms,
                               expires_ns, output_age,
                               (shape[1], shape[0]) if shape is not None else None,
-                              (shape[1] / view.width, shape[0] / view.height) if shape is not None else None,
+                              (shape[1] / frame.width, shape[0] / frame.height) if shape is not None else None,
                               hud=hud_output)
         for sink in self.sinks:
             if capture_failure:
@@ -300,6 +299,9 @@ class Pipeline:
             try:
                 def publish(frame):
                     nonlocal captured_sequence
+                    # The slot holds a private copy, so a source cannot change a queued
+                    # frame and every checkpoint sees the same pixels and layout.
+                    frame = frame.owned()
                     # A context change observed by capture latches the context's
                     # failure, so an older in-flight inference cannot reach a sink.
                     self._admit(frame)
@@ -309,8 +311,7 @@ class Pipeline:
                         if captured_sequence is not None and frame.sequence <= captured_sequence:
                             raise ValueError("frame_sequence_regressed")
                         captured_sequence = frame.sequence
-                    # Owned frames are copied so a source cannot reuse their pixels.
-                    slot.put(frame.copy() if isinstance(frame, OwnedFrame) else frame)
+                    slot.put(frame)
                     self.stats.frames_received += 1
                 self.source.run(publish, stop)
             except BaseException as error:

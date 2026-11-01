@@ -1,5 +1,6 @@
 """Owned-frame and bounded-process tests using generated images only."""
 import contextlib
+from dataclasses import replace
 import importlib.util
 import io
 import threading
@@ -7,6 +8,7 @@ import time
 import unittest
 from unittest.mock import patch
 
+from framejacker.frame import Frame, native_format
 from scripts import live_pipeline as live
 
 
@@ -18,18 +20,28 @@ class LivePipelineTests(unittest.TestCase):
 
     def frame(self, value=1, sequence=1, source="synthetic:test", observed=None):
         import numpy as np
-        return live.OwnedFrame.copy_from(np.full((32, 48, 3), value, dtype=np.uint8), sequence,
+        return Frame.owned_bgr(np.full((32, 48, 3), value, dtype=np.uint8), sequence,
             time.monotonic_ns() if observed is None else observed, source)
 
     def test_owned_copy_is_independent_read_only_and_keeps_identity(self):
         first = self.frame(1)
-        first.image.flags.writeable = True
-        copied = first.copy()
-        first.image[:] = 99
-        self.assertEqual(int(copied.image[0, 0, 0]), 1)
-        self.assertFalse(copied.image.flags.writeable)
-        self.assertEqual((copied.sequence, copied.observed_ns, copied.source_id, copied.native_format),
-                         (first.sequence, first.observed_ns, first.source_id, first.native_format))
+        first.pixels.flags.writeable = True
+        copied = first.owned()
+        first.pixels[:] = 99
+        first.metadata["native_format"]["width"] = 0
+        self.assertEqual(int(copied.pixels[0, 0, 0]), 1)
+        self.assertFalse(copied.pixels.flags.writeable)
+        self.assertEqual(native_format(copied)["width"], 48)
+        self.assertEqual((copied.sequence, copied.observed_ns, copied.source, copied.pixel_format, copied.stride),
+                         (first.sequence, first.observed_ns, first.source, "BGR24", 48 * 3))
+
+    def test_owned_keeps_immutable_bytes_and_freezes_mutable_buffers(self):
+        raw = Frame(b"abc", "RGB3", 1, 1, 3, "mirror:observed", 1, 1)
+        self.assertIs(raw.owned().pixels, raw.pixels)
+        storage = bytearray(b"abc")
+        frozen = replace(raw, pixels=storage).owned()
+        storage[:] = b"xyz"
+        self.assertEqual(frozen.pixels, b"abc")
 
     def test_engine_owns_published_pixels_when_a_source_reuses_its_buffer(self):
         import numpy as np
@@ -44,8 +56,7 @@ class LivePipelineTests(unittest.TestCase):
                 if frame is None:
                     return None
                 source.buffer[:] = frame.sequence % 255
-                return live.OwnedFrame(source.buffer, frame.sequence, frame.observed_ns, frame.source_id,
-                                       native_format=frame.native_format)
+                return replace(frame, pixels=source.buffer)
 
         class Detector(live.FixtureDetector):
             def detect(inner, image, threshold):
@@ -69,8 +80,8 @@ class LivePipelineTests(unittest.TestCase):
                     frame = super().read(stop, timeout)
                     if frame is None or frame.sequence < 2:
                         return frame
-                    sequence, source_id = (1, frame.source_id) if change == "restart" else (frame.sequence, "synthetic:other")
-                    return live.OwnedFrame.copy_from(frame.image, sequence, frame.observed_ns, source_id)
+                    sequence, source_id = (1, frame.source) if change == "restart" else (frame.sequence, "synthetic:other")
+                    return Frame.owned_bgr(frame.pixels, sequence, frame.observed_ns, source_id)
             with self.subTest(change=change):
                 report = live.run_pipeline(Source(rate=100), live.FixtureDetector(), live.HeadlessSink(), .3)
                 self.assertEqual(report["status"], "error", report)
@@ -82,9 +93,10 @@ class LivePipelineTests(unittest.TestCase):
         for image in (np.zeros((1, 1), dtype=np.uint8), np.zeros((4097, 1, 3), dtype=np.uint8),
                       np.zeros((1, 1, 3), dtype=np.float32)):
             with self.assertRaises(ValueError):
-                live.OwnedFrame.copy_from(image, 1, 1, "synthetic:test")
-        with self.assertRaises(ValueError):
-            live.OwnedFrame.copy_from(np.zeros((1, 1, 3), dtype=np.uint8), 0, 1, "synthetic:test")
+                Frame.owned_bgr(image, 1, 1, "synthetic:test")
+        for identity in ((0, 1, "synthetic:test"), (1, -1, "synthetic:test"), (1, 1, ""), (1, 1, "s" * 97)):
+            with self.subTest(identity=identity), self.assertRaises(ValueError):
+                Frame.owned_bgr(np.zeros((1, 1, 3), dtype=np.uint8), *identity)
 
     def test_hardware_source_is_blocked_before_open(self):
         source = live.SyntheticSource()
@@ -104,14 +116,13 @@ class LivePipelineTests(unittest.TestCase):
                             strides=(stride, 3, 1))
         native[:] = 17
         native[850:1020, 1500:1820] = 255
-        owned = live.OwnedFrame.copy_from(native, 1, time.monotonic_ns(), "synthetic:native")
+        owned = Frame.owned_bgr(native, 1, time.monotonic_ns(), "synthetic:native")
         expected_native = native.copy()
         expected_native[842:1028, 1492:1828] = 0
         expected = cv2.resize(expected_native, (960, 540), interpolation=cv2.INTER_AREA)
         storage[:] = 99  # Reusing the padded acquisition buffer cannot change the owned frame.
-        self.assertEqual(owned.native_descriptor["stride_bytes"], stride)
-        self.assertEqual(owned.image.strides[0], width * 3)
-        self.assertEqual(owned.as_frame().metadata["native_format"]["stride_bytes"], stride)
+        self.assertEqual(native_format(owned)["stride_bytes"], stride)
+        self.assertEqual((owned.pixels.strides[0], owned.stride), (width * 3, width * 3))
 
         class Source(live.SyntheticSource):
             source_id = "synthetic:native"
@@ -122,8 +133,7 @@ class LivePipelineTests(unittest.TestCase):
                     stop.wait(timeout)
                     return None
                 self.sent = True
-                return live.OwnedFrame(owned.image, 1, time.monotonic_ns(), self.source_id,
-                                       native_format=owned.native_format)
+                return replace(owned, observed_ns=time.monotonic_ns())
 
         class Detector(live.FixtureDetector):
             def detect(detector, image, threshold):
@@ -131,7 +141,7 @@ class LivePipelineTests(unittest.TestCase):
                 self.assertFalse(image.flags.writeable)
                 return super().detect(image, threshold)
 
-        calibration = Calibration("synthetic:native", CaptureFormat.from_mapping(owned.native_descriptor),
+        calibration = Calibration("synthetic:native", CaptureFormat.from_mapping(native_format(owned)),
                                   "mono", (Footprint(0, (1500, 850, 1820, 1020), 8),),
                                   validated=True, provenance="synthetic_fixture")
         report = live.run_pipeline(Source(), Detector(), live.HeadlessSink(), .5,
@@ -244,7 +254,7 @@ class LivePipelineTests(unittest.TestCase):
                 frame = original(*args, **kwargs)
                 if frame is None:
                     return None
-                return live.OwnedFrame(frame.image, frame.sequence, frame.observed_ns + age, frame.source_id)
+                return replace(frame, observed_ns=frame.observed_ns + age)
             source.read = shifted
             report = live.run_pipeline(source, live.FixtureDetector(), live.HeadlessSink(), 0.2)
             self.assertEqual(report["status"], expected)

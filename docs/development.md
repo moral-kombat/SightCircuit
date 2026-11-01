@@ -18,7 +18,7 @@ development; exact tested pins remain in the `requirements-*.txt` files.
 
 | Module | Responsibility |
 | --- | --- |
-| `framejacker/frame.py` | `Frame`/`OwnedFrame` (pixels, layout, source, sequence, observation time, media time); `DetectionResult`, which every detector returns; `Processed`, the one record every engine submits to sinks (annotated image or HUD tile with `HudOutput` rows, expiry, sizes and coordinate space) |
+| `framejacker/frame.py` | `Frame`, the only frame type (pixels, layout, source, sequence, observation time, media time, declared `native_format`), with `Frame.owned_bgr` (validated private BGR copy) and `owned()` (the engine's copy on publish); `DetectionResult`, which every detector returns; `Processed`, the one record every engine submits to sinks (annotated image or HUD tile with `HudOutput` rows, expiry, sizes and coordinate space) |
 | `framejacker/pipeline.py` | `FrameSource`/`Sink` interfaces and `Pipeline`, the one engine for replay, mirror recognition and the synthetic live HUD: latest-only or every-frame scheduling, rate cap, `CaptureContext` admission, HUD stage or annotation, result expiry and deadline, optional sink `open`/`clear`/`close` with cleanup results |
 | `framejacker/latest.py` | One-pending-item handoff; newer items replace older ones |
 | `framejacker/gates.py` | The closed approval gates (live image input, hardware mapping, live HUD output): each boundary's `require` and every report's gate claims; nothing here opens a gate |
@@ -1285,8 +1285,8 @@ runtime compatibility. No install, transfer or device execution is implied.
 ## Offline foundation for the minimum live POC
 
 [`live_pipeline.py`](../scripts/live_pipeline.py) exercises generated input,
-the shared CPU detector and a result sink. `OwnedFrame.copy_from` and the
-latest slot own contiguous BGR copies; source identity/sequence cannot regress.
+the shared CPU detector and a result sink. `Frame.owned_bgr` and the engine's
+copy on publish own contiguous BGR copies; source identity/sequence cannot regress.
 Only one frame waits for inference, and annotations remain associated with
 their source. Inputs/results older than one second are dropped. Deadlines,
 cancellation and errors close source/sink; a process supervisor terminates and
