@@ -102,10 +102,13 @@ class PipelineStats:
         return self.sink_clear_ok and self.sink_close_ok
 
     def report(self):
-        """Run statistics in the engine's own vocabulary; every report embeds this as "pipeline".
+        """Run statistics in the engine's own vocabulary, embedded in reports as "pipeline".
 
-        Durations are milliseconds rounded to three decimals. Commands keep
-        their earlier field names only as aliases of these (``report_fields``).
+        Durations are milliseconds rounded to three decimals; ``processed_fps``
+        divides by at least 1 ms. Commands keep their earlier field names only
+        as aliases of these (``report_fields``). A report that ends before the
+        engine runs (cancelled, refused or failed setup) has no block and keeps
+        its legacy defaults.
         """
         def ms(value):
             return round(value, 3)
@@ -327,8 +330,10 @@ class Pipeline:
                 def publish(frame):
                     nonlocal captured_sequence
                     # The slot holds a private copy, so a source cannot change a queued
-                    # frame and every checkpoint sees the same pixels and layout.
-                    frame = frame.owned()
+                    # frame and every checkpoint sees the same pixels and layout. Anything
+                    # else goes to admission as-is, which rejects it with the context's reason.
+                    if isinstance(frame, Frame):
+                        frame = frame.owned()
                     # A context change observed by capture latches the context's
                     # failure, so an older in-flight inference cannot reach a sink.
                     self._admit(frame)

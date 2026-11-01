@@ -80,17 +80,24 @@ class Frame:
         """This frame with pixels and metadata no other code holds.
 
         Array pixels become a private read-only copy, so a source that reuses its
-        buffer cannot change a queued frame; byte strings are immutable already.
-        Identity is not re-validated here (replay labels may exceed 96 characters).
+        buffer cannot change a queued frame; a BGR24 image's ``stride`` becomes
+        the copy's row stride, while a raw buffer keeps its declared ``stride``.
+        Any other buffer (``bytearray``, ``memoryview``, ``array``, ``mmap``)
+        becomes ``bytes``; byte strings are immutable already. Identity is not
+        re-validated here (replay labels may exceed 96 characters).
         """
         pixels, stride = self.pixels, self.stride
         if hasattr(pixels, "flags") and hasattr(pixels, "strides"):  # NumPy array
             import numpy as np
             pixels = np.array(pixels, order="C", copy=True)
             pixels.flags.writeable = False
-            stride = pixels.strides[0]
-        elif isinstance(pixels, (bytearray, memoryview)):
-            pixels = bytes(pixels)
+            if self.pixel_format == "BGR24":
+                stride = pixels.strides[0]
+        elif not isinstance(pixels, bytes):
+            try:
+                pixels = memoryview(pixels).tobytes()
+            except TypeError:  # Not a buffer: nothing a source could rewrite in place.
+                pass
         return replace(self, pixels=pixels, stride=stride, metadata=deepcopy(self.metadata))
 
 

@@ -274,6 +274,11 @@ class SharedOverlayContractTests(unittest.TestCase):
         self.assertEqual((sink.client.sent, sink.client.settings.visible), ([tile], True))
         sink.clear()
         self.assertEqual(sink.client.settings, sink.placement(False))
+        # A failed transport is reported before a payload mismatch, and nothing more is sent.
+        sink.client.error = "Overlay bridge disconnected without a final cleanup report"
+        with self.assertRaisesRegex(RuntimeError, "Overlay bridge disconnected"):
+            sink.submit(SimpleNamespace(hud=None, image=tile, expires_ns=1))
+        self.assertEqual((sink.client.sent, sink.client.settings.visible), ([tile], False))
 
     @unittest.skipUnless(shutil.which("g++"), "C++ compiler required for fake native dispatch")
     def test_fake_dispatch_decodes_pixels_deadlines_and_cleanup_failures(self):

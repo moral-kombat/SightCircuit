@@ -264,6 +264,20 @@ class LivePipelineTests(unittest.TestCase):
         # Rounded once from the stats; the block's rounded milliseconds agree within that rounding.
         self.assertAlmostEqual(report["elapsed_seconds"], report["pipeline"]["elapsed_ms"] / 1000, delta=0.001)
 
+    def test_elapsed_seconds_is_rounded_once_from_the_stats(self):
+        from framejacker.pipeline import Pipeline
+
+        def run(pipeline, stop):
+            # 1.0014996 s: rounding the block's 1001.5 ms again would give 1.002.
+            pipeline.stats.started, pipeline.stats.finished = 10.0, 11.0014996
+            pipeline.stats.frames_submitted = 1
+            return pipeline.stats
+        with patch.object(Pipeline, "run", run):
+            report = live.run_pipeline(synthetic.SyntheticSource(), synthetic.FixtureDetector(),
+                                       synthetic.HeadlessSink(), 0.2)
+        self.assertEqual(report["status"], "completed", report)
+        self.assertEqual(report["pipeline"]["elapsed_ms"], 1001.5)
+        self.assertEqual(report["elapsed_seconds"], 1.001)
 
     def test_stale_input_and_future_observation_are_not_sent_to_sink(self):
         for age, expected in ((-2000000000, "no_frames"), (2000000000, "error")):

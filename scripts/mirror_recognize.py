@@ -72,9 +72,10 @@ class ReportSink:
             self.image = processed.image
         if time.monotonic() >= self.next_progress:
             block = self.pipeline.stats.report()
+            # Sinks run before the engine records this result's labels; the snapshot includes them,
+            # so the legacy alias still comes from the block it embeds.
+            block["labels_seen"] = sorted(set(block["labels_seen"]) | set(processed.labels))
             self.report.update(report_fields(block, LEGACY_FIELDS), pipeline=block, capture=self.source.report)
-            # Sinks run before the engine records this result's labels.
-            self.report["labels_seen"] = sorted(set(block["labels_seen"]) | set(processed.labels))
             self.progress(self.report.copy())
             self.next_progress = time.monotonic() + 1
 

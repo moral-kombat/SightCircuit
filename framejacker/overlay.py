@@ -328,14 +328,15 @@ class OverlaySink:
             self.client.freeze_settings(self.placement(False))
 
     def submit(self, processed):
+        # Order matters for the reported reason: contract, then transport error, then payload.
         if self.hud is not None:
             self.check_contract(HUD_CONFIG)
-            if (processed.hud is None or processed.hud.config != self.hud or
-                    processed.image.shape != (self.hud.height_px, self.hud.width_px, 3)):
-                raise ValueError("hud_payload_contract_mismatch")
+        if self.owns_client and self.client.error:
+            raise RuntimeError(self.client.error)
+        if self.hud is not None and (processed.hud is None or processed.hud.config != self.hud or
+                                     processed.image.shape != (self.hud.height_px, self.hud.width_px, 3)):
+            raise ValueError("hud_payload_contract_mismatch")
         if self.owns_client:
-            if self.client.error:
-                raise RuntimeError(self.client.error)
             self.client.set_settings(self.placement(True))
         if processed.expires_ns is None:
             self.client.submit_bgr(processed.image)

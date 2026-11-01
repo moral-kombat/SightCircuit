@@ -70,6 +70,9 @@ class GateUsageTests(unittest.TestCase):
                                if isinstance(key, ast.Constant) and isinstance(value, ast.Constant)]
                 elif isinstance(node, ast.Call):
                     written = [keyword.arg for keyword in node.keywords if isinstance(keyword.value, ast.Constant)]
+                elif isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
+                    written = [target.slice.value for target in node.targets
+                               if isinstance(target, ast.Subscript) and isinstance(target.slice, ast.Constant)]
                 with self.subTest(source=str(path.relative_to(ROOT)), line=getattr(node, "lineno", 0)):
                     self.assertFalse(CLAIMS & set(written), "use gates.claims()")
 

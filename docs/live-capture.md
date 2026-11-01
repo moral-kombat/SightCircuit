@@ -221,12 +221,15 @@ pass: the pipeline rejects non-synthetic sources
 (`hud_hardware_mapping_not_approved`), and the bridge rejects expiring packets
 in real output mode. [`framejacker/gates.py`](../framejacker/gates.py) is the
 single table of these closed gates (live image input, hardware mapping, live
-HUD output) and the rows that lift each one. Every Python refusal goes through
-a gate's `require`, every report's `production_*_enabled`/`mapping_qualified`
-claim comes from `gates.claims()`, and `tests/test_gates.py` rejects any
-hand-written `not_approved` refusal or gate claim in `framejacker/` and
-`scripts/`. The native bridge keeps its own `expiring_frames_validation_only`
-refusal as defence in depth; the test does not scan native code. Nothing in the
+HUD output) and the rows that lift each one. Every Python `*_not_approved`
+refusal goes through a gate's `require`, every report's
+`production_*_enabled`/`mapping_qualified` claim comes from `gates.claims()`,
+and `tests/test_gates.py` rejects a hand-written `not_approved` refusal or a
+gate claim written as a constant (dictionary entry, keyword argument or
+subscript assignment) in `framejacker/` and `scripts/`. The HUD sink's own
+contract checks (`hud_sink_*`, `hud_requires_fixed_validation_sink`) and the
+native bridge's `expiring_frames_validation_only` refusal stay hand-written as
+defence in depth; the test does not scan native code. Nothing in the
 table can open a gate; lifting one is a reviewed change after its rows pass on
 the headset. The separately scoped
 [device-validation design](hud-qualification.md#separately-scoped-device-validation)

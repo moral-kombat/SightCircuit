@@ -358,6 +358,50 @@ class PipelineTests(unittest.TestCase):
             self.assertFalse(np.shares_memory(item.pixels, storage))
             self.assertEqual(int(item.pixels[0, 0, 0]), item.sequence)
 
+    def test_raw_buffers_keep_their_declared_stride_and_are_frozen(self):
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("NumPy required for array frames")
+        from array import array
+        flat = np.arange(32, dtype=np.uint8)
+        writable = array("B", range(32))
+        for pixels in (np.frombuffer(bytes(range(32)), np.uint8), flat, writable, bytearray(range(32))):
+            with self.subTest(kind=type(pixels).__name__):
+                owned = Frame(pixels, "RGB3", 4, 2, 16, "fixture", 1, 1).owned()
+                self.assertEqual(owned.stride, 16)
+                self.assertEqual(bytes(owned.pixels), bytes(range(32)))
+                if not hasattr(owned.pixels, "strides"):
+                    self.assertIs(type(owned.pixels), bytes)
+                writable[0] = flat[0] = 99  # The source rewrites its buffer.
+                self.assertEqual(bytes(owned.pixels)[0], 0)
+                writable[0] = flat[0] = 0
+
+        class Source:
+            def run(self, emit, stop):
+                for number in (1, 2):
+                    emit(Frame(np.frombuffer(bytes(32), np.uint8), "RGB3", 4, 2, 16, "fixture", number,
+                               time.monotonic_ns()))
+
+        class Detector:
+            def detect(self, image, threshold):
+                return DetectionResult((), 0.0)
+
+        # The real converter reads the raw buffer with the frame's declared stride.
+        stats = Pipeline(Source(), Detector(), [Recorder()], max_fps=1000, max_input_age_ms=1000,
+                         annotator=lambda image, result: image).run(threading.Event())
+        self.assertGreater(stats.frames_submitted, 0)
+
+    def test_publishing_a_non_frame_latches_the_context_reason(self):
+        class Source:
+            def run(self, emit, stop):
+                emit({"pixels": b""})
+
+        runner = Pipeline(Source(), EchoDetector(), [Recorder()], max_input_age_ms=1000)
+        with self.assertRaisesRegex(ValueError, "capture_frame_type_unsupported"):
+            runner.run(threading.Event())
+        self.assertEqual(runner.capture_context.failure, "capture_frame_type_unsupported")
+
     def test_mirror_source_converts_reads_and_retains_report(self):
         def acquire(stop, on_frame, progress):
             progress({"status": "acquiring"})
