@@ -279,6 +279,11 @@ class SharedOverlayContractTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Overlay bridge disconnected"):
             sink.submit(SimpleNamespace(hud=None, image=tile, expires_ns=1))
         self.assertEqual((sink.client.sent, sink.client.settings.visible), ([tile], False))
+        # A changed contract is reported before the transport error.
+        sink.client.validation_only = False
+        with self.assertRaisesRegex(ValueError, "hud_sink_mode_or_placement_changed"):
+            sink.submit(SimpleNamespace(hud=None, image=tile, expires_ns=1))
+        self.assertEqual(sink.client.sent, [tile])
 
     @unittest.skipUnless(shutil.which("g++"), "C++ compiler required for fake native dispatch")
     def test_fake_dispatch_decodes_pixels_deadlines_and_cleanup_failures(self):

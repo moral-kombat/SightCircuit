@@ -106,9 +106,8 @@ class PipelineStats:
 
         Durations are milliseconds rounded to three decimals; ``processed_fps``
         divides by at least 1 ms. Commands keep their earlier field names only
-        as aliases of these (``report_fields``). A report that ends before the
-        engine runs (cancelled, refused or failed setup) has no block and keeps
-        its legacy defaults.
+        as aliases of these (``report_fields``). Which reports embed the block,
+        and when, is up to each command; see ``docs/development.md``.
         """
         def ms(value):
             return round(value, 3)
@@ -331,7 +330,8 @@ class Pipeline:
                     nonlocal captured_sequence
                     # The slot holds a private copy, so a source cannot change a queued
                     # frame and every checkpoint sees the same pixels and layout. Anything
-                    # else goes to admission as-is, which rejects it with the context's reason.
+                    # else is left as-is: a capture context, when present, rejects it with
+                    # its own reason, and otherwise the frame fails later as before.
                     if isinstance(frame, Frame):
                         frame = frame.owned()
                     # A context change observed by capture latches the context's
@@ -364,6 +364,7 @@ class Pipeline:
                     continue
                 remaining = self.deadline - now if self.deadline is not None else 0.05
                 frame = slot.take(timeout=max(0, min(0.05, remaining)))
+                self.stats.pending_replaced = slot.replaced  # Current for progress snapshots.
                 if frame is None:
                     if slot.closed:
                         break

@@ -79,25 +79,35 @@ class Frame:
     def owned(self):
         """This frame with pixels and metadata no other code holds.
 
-        Array pixels become a private read-only copy, so a source that reuses its
-        buffer cannot change a queued frame; a BGR24 image's ``stride`` becomes
-        the copy's row stride, while a raw buffer keeps its declared ``stride``.
-        Any other buffer (``bytearray``, ``memoryview``, ``array``, ``mmap``)
-        becomes ``bytes``; byte strings are immutable already. Identity is not
+        A source that reuses its buffer cannot change a queued frame. A BGR24
+        image becomes a contiguous read-only copy whose row stride replaces
+        ``stride``. A raw buffer keeps its declared ``stride``: a contiguous
+        run of single bytes (``bytearray``, ``memoryview``, ``mmap``,
+        ``array("B")``) becomes ``bytes``, and any other contiguous buffer a
+        read-only array with the same item count and shape, so the converter
+        accepts exactly what it would accept from the original. A
+        non-contiguous raw buffer is left as given, and the converter rejects
+        it as before; byte strings are immutable already. Identity is not
         re-validated here (replay labels may exceed 96 characters).
         """
         pixels, stride = self.pixels, self.stride
-        if hasattr(pixels, "flags") and hasattr(pixels, "strides"):  # NumPy array
+        if self.pixel_format == "BGR24" and hasattr(pixels, "strides"):  # NumPy image
             import numpy as np
             pixels = np.array(pixels, order="C", copy=True)
             pixels.flags.writeable = False
-            if self.pixel_format == "BGR24":
-                stride = pixels.strides[0]
+            stride = pixels.strides[0]
         elif not isinstance(pixels, bytes):
             try:
-                pixels = memoryview(pixels).tobytes()
+                view = memoryview(pixels)
             except TypeError:  # Not a buffer: nothing a source could rewrite in place.
-                pass
+                view = None
+            if view is not None and view.c_contiguous:
+                if view.ndim == 1 and view.itemsize == 1 and not hasattr(pixels, "strides"):
+                    pixels = view.tobytes()
+                else:
+                    import numpy as np
+                    pixels = np.array(view, copy=True)
+                    pixels.flags.writeable = False
         return replace(self, pixels=pixels, stride=stride, metadata=deepcopy(self.metadata))
 
 
