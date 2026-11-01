@@ -1,10 +1,8 @@
 """Discover a SteamVR virtual mirror; opt in to bounded, read-only acquisition."""
 import argparse
-import ctypes
 import hashlib
 import json
 import math
-import multiprocessing
 import os
 from pathlib import Path
 import signal
@@ -12,17 +10,18 @@ import sys
 import tempfile
 import time
 
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from framejacker.runtime import process  # noqa: E402
+from framejacker.runtime.process import StopRequested, stop_on_signal  # noqa: E402,F401 - StopRequested: shared export
+
 if __package__:
     from .mirror_capture import (MirrorError, NativeMirror, discover, grayscale_png,
                                  grayscale_sample, select_candidate)
 else:
     from mirror_capture import (MirrorError, NativeMirror, discover, grayscale_png,
                                 grayscale_sample, select_candidate)
-
-
-class StopRequested(BaseException):
-    def __init__(self, number):
-        self.number = number
 
 
 def new_report():
@@ -125,20 +124,14 @@ def capture(candidate, seconds, stop, progress=lambda report: None, want_preview
 
 
 def _worker(candidate, seconds, preview_temp, sender, stop, expected_parent):
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
-    signal.signal(signal.SIGTERM, signal.SIG_DFL)
-
     def send(report, event="progress"):
-        sender.send_bytes(json.dumps({"event": event, "report": report}).encode())
+        process.send_report(sender, report, event)
 
     report = new_report()
     report["candidate"] = candidate
     try:
         # Prevent a stranded worker if its launcher is killed during a driver call.
-        libc = ctypes.CDLL(None, use_errno=True)
-        if libc.prctl(1, signal.SIGTERM, 0, 0, 0) != 0:
-            raise OSError(ctypes.get_errno(), "Could not enable parent-death signaling")
-        if os.getppid() != expected_parent:
+        if not process.enter_worker(expected_parent):
             return
         report, preview = capture(candidate, seconds, stop, send, bool(preview_temp))
         if preview is not None and preview_temp:
@@ -169,74 +162,10 @@ def _worker(candidate, seconds, preview_temp, sender, stop, expected_parent):
 
 def run_bounded(candidate, seconds, preview_temp=None, *, worker=_worker, timeout=None,
                 report_factory=new_report, success_status="captured"):
-    ctx = multiprocessing.get_context("spawn")
-    receiver, sender = ctx.Pipe(duplex=False)
-    stop = ctx.Event()
-    process = ctx.Process(target=worker, args=(candidate, seconds, preview_temp, sender, stop, os.getpid()), daemon=True)
-    report = report_factory()
-    report.update(candidate=candidate, seconds_requested=seconds)
-    result_seen = False
-    forced = False
-    interrupted = None
-    started = time.monotonic()
-    deadline = started + (seconds + 3 if timeout is None else timeout)
-    try:
-        process.start()
-        report["worker_pid"] = process.pid
-        sender.close()
-        while time.monotonic() < deadline:
-            if receiver.poll(min(0.05, max(0, deadline - time.monotonic()))):
-                try:
-                    message = json.loads(receiver.recv_bytes(16384))
-                except EOFError:
-                    break
-                report.update(message["report"])
-                if message["event"] == "result":
-                    result_seen = True
-                    break
-            if not process.is_alive():
-                if receiver.poll():
-                    continue
-                break
-        if not result_seen:
-            expired = time.monotonic() >= deadline
-            report.update(status="timed_out" if expired else "error",
-                          reason="worker_deadline" if expired else "worker_exited_without_result")
-    except (KeyboardInterrupt, StopRequested) as error:
-        interrupted = error.number if isinstance(error, StopRequested) else signal.SIGINT
-        report.update(status="cancelled", reason="signal", signal=interrupted)
-    except Exception as error:
-        report.update(status="error", reason="worker_failed", error=str(error))
-    finally:
-        stop.set()
-        if process.pid is not None:
-            process.join(timeout=0.5)
-            if process.is_alive():
-                forced = True
-                process.terminate()
-                process.join(timeout=1)
-            if process.is_alive():
-                process.kill()
-                process.join(timeout=1)
-            if process.is_alive():
-                report.update(status="error", reason="worker_did_not_exit")
-            report["worker_exit_code"] = process.exitcode
-            if result_seen and process.exitcode != 0:
-                report.update(status="error", reason="worker_exit_failure", worker_exit_code=process.exitcode)
-            if not process.is_alive():
-                process.close()
-        sender.close()
-        receiver.close()
-    report.update(worker_forced_termination=forced, worker_elapsed_ms=round((time.monotonic() - started) * 1000, 3))
-    if forced or not result_seen:
-        report["cleanup_ok"] = False  # OS closes FDs, but cooperative close was not confirmed.
-    report["exit_code"] = (128 + interrupted if interrupted else
-                           0 if report["status"] == success_status and report["cleanup_ok"] else 1)
-    return report
-
-
-def _stop_signal(number, _frame):
-    raise StopRequested(number)
+    """Run ``worker`` under the shared bounded-process supervisor; the report names its candidate."""
+    return process.run_bounded(candidate, seconds, preview_temp, worker=worker, timeout=timeout,
+                               report_factory=lambda: dict(report_factory(), candidate=candidate),
+                               success_status=success_status)
 
 
 def main(argv=None):
@@ -255,7 +184,7 @@ def main(argv=None):
         print(json.dumps(report, indent=2))
         return 0
     temporary = None
-    old_term = signal.signal(signal.SIGTERM, _stop_signal)
+    old_term = signal.signal(signal.SIGTERM, stop_on_signal)
     try:
         candidate = select_candidate(discovery, args.device)
         if args.preview:

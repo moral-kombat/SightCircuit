@@ -4,7 +4,6 @@ Runs the shared ``framejacker.pipeline.Pipeline`` over ``MirrorSource``: latest
 input only, one-second input/result age limit and capture-context admission.
 """
 import argparse
-import ctypes
 import json
 import math
 import os
@@ -20,6 +19,8 @@ if not __package__:
 from framejacker.detection import MobileNetSSD
 from framejacker.hud import HUD_CONFIG, HudStage
 from framejacker.pipeline import Pipeline
+from framejacker.runtime import process
+from framejacker.runtime.process import StopRequested, stop_on_signal
 from framejacker.sources.mirror import MirrorSource
 
 if __package__:
@@ -147,18 +148,12 @@ def recognize(candidate, seconds, stop, progress=lambda report: None, want_previ
 
 
 def _worker(job, seconds, preview_temp, sender, stop, expected_parent, *, backend_factory=None, detector_factory=None):
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
-    signal.signal(signal.SIGTERM, signal.SIG_DFL)
-
     def send(report, event="progress"):
-        sender.send_bytes(json.dumps({"event": event, "report": report}).encode())
+        process.send_report(sender, report, event)
 
     report = new_report()
     try:
-        libc = ctypes.CDLL(None, use_errno=True)
-        if libc.prctl(1, signal.SIGTERM, 0, 0, 0) != 0:
-            raise OSError(ctypes.get_errno(), "Could not enable parent-death signaling")
-        if os.getppid() != expected_parent:
+        if not process.enter_worker(expected_parent):
             return
         report, image = recognize(job["candidate"], seconds, stop, send, bool(preview_temp),
                                   max_fps=job["max_fps"], threshold=job["threshold"],
@@ -216,7 +211,7 @@ def main(argv=None):
         print(json.dumps(report, indent=2))
         return 0
     temporary = None
-    old_term = signal.signal(signal.SIGTERM, check._stop_signal)
+    old_term = signal.signal(signal.SIGTERM, stop_on_signal)
     try:
         candidate = select_candidate(discovery, args.device)
         if args.preview:
@@ -228,8 +223,8 @@ def main(argv=None):
             os.close(fd)
             temporary = {"path": name, "identity": [info.st_dev, info.st_ino]}
         job = {"candidate": candidate, "max_fps": args.max_fps, "threshold": args.threshold}
-        report = check.run_bounded(job, args.seconds, temporary, worker=_worker,
-                                   report_factory=new_report, success_status="recognized", timeout=args.seconds + 15)
+        report = process.run_bounded(job, args.seconds, temporary, worker=_worker,
+                                     report_factory=new_report, success_status="recognized", timeout=args.seconds + 15)
         report.update(discovery=discovery, candidate=candidate)
         if temporary and report.get("preview_ready") and report["exit_code"] == 0:
             os.link(temporary["path"], target, follow_symlinks=False)
@@ -237,8 +232,8 @@ def main(argv=None):
     except (MirrorError, OSError, ValueError) as error:
         report.update(status="unavailable" if getattr(error, "reason", None) == "mirror_unavailable" else "error",
                       reason=getattr(error, "reason", "output_or_launch_failed"), error=str(error), exit_code=1)
-    except (KeyboardInterrupt, check.StopRequested) as error:
-        number = error.number if isinstance(error, check.StopRequested) else signal.SIGINT
+    except (KeyboardInterrupt, StopRequested) as error:
+        number = error.number if isinstance(error, StopRequested) else signal.SIGINT
         report.update(status="cancelled", reason="signal", signal=number, exit_code=128 + number)
     finally:
         if temporary:

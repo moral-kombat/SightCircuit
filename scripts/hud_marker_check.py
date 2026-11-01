@@ -186,8 +186,10 @@ def main(argv=None):
         if args.validate or args.calibrate:
             options = {"seconds": args.seconds, "validation_only": args.validate,
                        "allow_calibration_output": args.allow_calibration_output}
+            base = new_report(args.validate)
             report = supervise([sys.executable, str(Path(__file__).resolve()), "--worker", json.dumps(options)],
-                new_report(args.validate), args.seconds + 12, validate_worker_report, descendants=True)
+                base, args.seconds + 12, validate_worker_report, descendants=True,
+                validate_options={"validation_only": base["calibration_validation_only"]})
     print(json.dumps(report, indent=2))
     return report["exit_code"]
 

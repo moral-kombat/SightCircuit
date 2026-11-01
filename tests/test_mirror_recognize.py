@@ -17,7 +17,6 @@ from framejacker.convert import to_bgr
 from framejacker.errors import FrameFormatError
 from framejacker.frame import Detection, DetectionResult
 from scripts import mirror_capture as device
-from scripts import mirror_check as check
 from scripts import mirror_recognize as live
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -119,7 +118,7 @@ class RecognitionGuardTests(unittest.TestCase):
         output = io.StringIO()
         with patch.object(live, "discover", return_value=DISCOVERY), \
                 patch.object(live, "MobileNetSSD", side_effect=AssertionError("model must not load")), \
-                patch.object(check, "run_bounded", side_effect=AssertionError("worker must not start")), redirect_stdout(output):
+                patch.object(live.process, "run_bounded", side_effect=AssertionError("worker must not start")), redirect_stdout(output):
             self.assertEqual(live.main([]), 0)
         report = json.loads(output.getvalue())
         self.assertEqual(report["status"], "discovery_only")

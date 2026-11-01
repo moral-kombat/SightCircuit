@@ -1294,7 +1294,19 @@ or during work. The guardian's own deadline and teardown do not depend on the
 supervisor or detector staying alive. Signal handlers and subreaper state are
 restored afterward. One supervisor must run on the main thread. Windows retains
 single-process supervision and explicitly reports parent-death containment
-unavailable; native-helper supervision requires Linux.
+unavailable; native-helper supervision requires Linux. Each command passes its
+own module-level `validate_worker_report` (and options such as
+`validation_only`); the guardian imports that validator by module name from
+`scripts/` only, so it holds no table of commands.
+
+Two supervision policies remain, each with one implementation:
+`scripts/bounded_worker.py` (command workers in an owned process group under
+the Linux guardian, used by the live pipeline, HUD marker/observer and recording
+growth check) and `framejacker/runtime/process.py` (spawned Python workers that
+stream progress, with parent-death signalling and terminate/kill escalation,
+used by `mirror_check.py` and `mirror_recognize.py`). The paused capture track's
+`capture_supervisor.py` and its diagnostics keep their own copies while that
+track is frozen.
 
 On cancellation/timeout/parent loss the guardian permits five seconds for cooperative
 worker cleanup, then one second for group termination and one for kill/reaping,

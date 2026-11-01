@@ -310,7 +310,7 @@ class MirrorWorkerTests(unittest.TestCase):
 sys.path[:0] = sys.argv[1:3]
 from scripts import mirror_check as check
 from test_mirror_check import CANDIDATE, stuck_worker
-signal.signal(signal.SIGTERM, check._stop_signal)
+signal.signal(signal.SIGTERM, check.stop_on_signal)
 report = check.run_bounded(dict(CANDIDATE, ready_file=sys.argv[3]), 10, worker=stuck_worker)
 print(json.dumps(report), flush=True)
 sys.exit(report['exit_code'])

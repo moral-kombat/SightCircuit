@@ -1,4 +1,11 @@
-"""Bounded worker processes: parent-death signalling, cancellation and reaping."""
+"""Bounded spawned Python workers: parent-death signalling, cancellation and reaping.
+
+Used by the SteamVR mirror commands (``mirror_check``, ``mirror_recognize``),
+whose workers stream progress reports. Command workers that need an owned
+process group and the Linux parent-loss guardian use ``scripts/bounded_worker.py``.
+``StopRequested``/``stop_on_signal`` are the shared cancellation pair: a launcher
+must install ``stop_on_signal`` so ``run_bounded`` recognises the cancellation.
+"""
 import ctypes
 import json
 import multiprocessing
