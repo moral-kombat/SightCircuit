@@ -204,6 +204,26 @@ class PipelineTests(unittest.TestCase):
         item = sink.items[0]
         self.assertEqual(item.expires_ns, item.frame.observed_ns + 1_000_000_000)
         self.assertGreaterEqual(item.output_age_ms, item.input_age_ms)
+        self.assertIsNone(item.hud)
+        self.assertEqual(item.output_space, "detector_input_pixels")
+        self.assertEqual(item.labels, ["fixture"])
+
+    def test_malformed_or_legacy_detector_output_never_reaches_a_sink(self):
+        class Legacy:
+            def detect(self, image, threshold):
+                return {"image": image, "labels": [], "detections": [], "inference_ms": 0.0}
+
+        class NonFinite:
+            def detect(self, image, threshold):
+                return DetectionResult((), float("inf"))
+
+        for detector in (Legacy(), NonFinite()):
+            for latest in (False, True):
+                with self.subTest(detector=type(detector).__name__, latest=latest):
+                    runner, sink = pipeline(ListSource(1), detector, latest_only=latest)
+                    with self.assertRaisesRegex(ValueError, "invalid_detection_result"):
+                        runner.run(threading.Event())
+                    self.assertEqual(sink.items, [])
 
     def test_capture_format_change_invalidates_an_in_flight_result(self):
         entered, changed = threading.Event(), threading.Event()

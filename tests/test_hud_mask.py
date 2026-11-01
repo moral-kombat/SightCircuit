@@ -15,6 +15,7 @@ except ImportError as error:
 import numpy as np
 
 from framejacker import hud
+from framejacker.frame import Detection, DetectionResult
 from scripts import live_pipeline as live
 from scripts import mirror_recognize as mirror
 from scripts.overlay_client import DEFAULT_BRIDGE, OverlayClient, PanelSettings, rgba_from_bgr
@@ -28,6 +29,10 @@ def calibration(width=1280, height=720, *, layout="mono", fourcc="BGR3", padding
         footprints.append(hud.Footprint(index, (x1 - 100, y1 - 70, x1 - 20, y1 - 20), 8))
     return hud.Calibration("synthetic:mirror", fmt, layout, tuple(footprints),
                            validated=True, provenance="synthetic_fixture")
+
+
+def detected(label, confidence, box):
+    return Detection(label, confidence, tuple(box))
 
 
 def prepare(mask, image, **kwargs):
@@ -147,43 +152,43 @@ class HudMaskTests(unittest.TestCase):
         x0, y0, x1, y1 = mask.regions[0]
         scale = w / mask.calibration.capture_format.width
         box = [x0 * scale, y0 * scale, (x0 + 2) * scale, (y0 + 2) * scale]
-        inputs = [{"label": "mask", "confidence": 1, "box_xyxy": box},
-            {"label": "cross-eye", "confidence": 1, "box_xyxy": [w/2-10, 5, w/2+10, 20]},
-            {"label": "low", "confidence": .1, "box_xyxy": [10, 10, 20, 20]},
-            {"label": "bad", "confidence": float("nan"), "box_xyxy": [10, 10, 20, 20]},
-            {"label": "outside", "confidence": 1, "box_xyxy": [-1, 0, 20, 20]},
-            {"label": "good", "confidence": .9, "box_xyxy": [10, 10, 20, 20]}]
+        inputs = [detected("mask", 1, box),
+            detected("cross-eye", 1, [w/2-10, 5, w/2+10, 20]),
+            detected("low", .1, [10, 10, 20, 20]),
+            detected("bad", float("nan"), [10, 10, 20, 20]),
+            detected("outside", 1, [-1, 0, 20, 20]),
+            {"label": "untyped", "confidence": 1, "box_xyxy": [10, 10, 20, 20]},
+            detected("good", .9, [10, 10, 20, 20])]
         rows = mask.rows_for(inputs, (h, w), .5)
-        self.assertEqual([row["label"] for row in rows], ["good"])
-        self.assertEqual(rows[0]["direction"], (-1, -1))
+        self.assertEqual([row.label for row in rows], ["good"])
+        self.assertEqual(rows[0].direction, (-1, -1))
         with self.assertRaises(ValueError):
             mask.rows_for(inputs, (h, w + 1), .5)
 
     def test_hud_is_bounded_metadata_only_and_has_no_stale_label_memory(self):
         mask = hud.HudMask(calibration(), source_kind="synthetic")
-        detections = [{"label": "W" * 100 + "\n<scene>", "confidence": .99, "box_xyxy": [5, 5, 50, 50]},
-                      {"label": "chair", "confidence": .9, "box_xyxy": [450, 240, 480, 280]},
-                      {"label": "bottle", "confidence": .8, "box_xyxy": [800, 20, 830, 50]},
-                      {"label": "person", "confidence": .7, "box_xyxy": [20, 350, 50, 380]}]
+        detections = [detected("W" * 100 + "\n<scene>", .99, [5, 5, 50, 50]),
+                      detected("chair", .9, [450, 240, 480, 280]),
+                      detected("bottle", .8, [800, 20, 830, 50]),
+                      detected("person", .7, [20, 350, 50, 380])]
         tile, rows = mask.render(detections, mask.inference_shape(), .5)
         self.assertEqual(tile.shape, (128, 320, 3))
         self.assertEqual(len(rows), 3)
-        self.assertTrue(all(len(row["label"]) <= 20 for row in rows))
+        self.assertTrue(all(isinstance(row, hud.HudRow) and len(row.label) <= 20 for row in rows))
         self.assertFalse(tile[:4].any() or tile[-4:].any() or tile[:, :4].any() or tile[:, -4:].any())
         self.assertFalse(tile.flags.writeable)
         w, h, rgba = rgba_from_bgr(tile)
         self.assertEqual((w, h), (320, 128))
         self.assertTrue(all(alpha == 255 for alpha in rgba[3::4]))
         empty, current = mask.render([], mask.inference_shape(), .5)
-        self.assertEqual(current, [])
+        self.assertEqual(current, ())
         self.assertFalse(empty[25:].any())
 
     def test_eye_relative_directions_deduplicate_without_world_geometry(self):
         mask = hud.HudMask(calibration(layout="stereo_sbs"), source_kind="synthetic")
-        detections = [{"label": "chair", "confidence": .8, "box_xyxy": [10, 10, 20, 20]},
-                      {"label": "chair", "confidence": .9, "box_xyxy": [490, 10, 500, 20]}]
+        detections = [detected("chair", .8, [10, 10, 20, 20]), detected("chair", .9, [490, 10, 500, 20])]
         self.assertEqual(mask.rows_for(detections, mask.inference_shape(), .5),
-                         [{"label": "chair", "confidence": .9, "direction": (-1, -1)}])
+                         (hud.HudRow("chair", .9, (-1, -1)),))
 
 
 class HudIntegrationTests(unittest.TestCase):
@@ -204,16 +209,19 @@ class HudIntegrationTests(unittest.TestCase):
             def detect(inner, image, threshold):
                 self.assertFalse(image[39:59, 65:92].any())
                 self.assertFalse(image.flags.writeable)
-                result = super().detect(image, threshold)
-                return dict(result, detections=[{"label": "chair", "confidence": .9, "box_xyxy": [10, 10, 20, 20]}])
+                return DetectionResult((detected("chair", .9, [10, 10, 20, 20]),), 0.0)
         class Sink(live.HeadlessSink):
-            def submit(inner, frame, detection):
-                self.assertEqual(detection["image"].shape, (128, 320, 3))
-                self.assertEqual(detection["labels"], ["chair"])
-                self.assertLessEqual(detection["expires_ns"], frame.observed_ns + 1000000000)
-                self.assertGreater(detection["expires_ns"], frame.observed_ns)
+            def submit(inner, processed):
+                frame = processed.frame
+                self.assertEqual(processed.image.shape, (128, 320, 3))
+                self.assertEqual(processed.labels, ["chair"])
+                self.assertEqual(processed.hud.rows, (hud.HudRow("chair", .9, (-1, -1)),))
+                self.assertEqual(processed.hud.config, hud.HUD_CONFIG)
+                self.assertEqual(processed.output_space, "approximate_image_view_direction")
+                self.assertLessEqual(processed.expires_ns, frame.observed_ns + 1000000000)
+                self.assertGreater(processed.expires_ns, frame.observed_ns)
                 self.assertEqual(frame.source_id, cal.source_id)
-                super().submit(frame, detection)
+                super().submit(processed)
         report = live.run_pipeline(live.SyntheticSource(), Detector(), Sink(), .3, hud_mode=True, calibration=cal)
         self.assertEqual(report["status"], "completed", report)
         self.assertTrue(report["cleanup_ok"])
@@ -365,8 +373,7 @@ class HudIntegrationTests(unittest.TestCase):
                 self.assertEqual(image.shape, (540, 960, 3))
                 self.assertFalse(image[490:520, 890:940].any())
                 self.assertEqual(int(image[0, 0, 0]), 63)
-                return dict(super().detect(image, threshold),
-                    detections=[{"label": "chair", "confidence": .9, "box_xyxy": [10, 10, 20, 20]}])
+                return DetectionResult((detected("chair", .9, [10, 10, 20, 20]),), 0.0)
         detector = Detector()
         report, tile = mirror.recognize({"node": "synthetic:only"}, .3, threading.Event(),
             want_preview=True, hud_mode=True, calibration=cal, backend_factory=Source,

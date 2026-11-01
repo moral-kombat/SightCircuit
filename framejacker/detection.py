@@ -34,6 +34,17 @@ def verify_model():
     return assets.verify(MODEL_FILES)
 
 
+def require_result(result):
+    """Reject anything but a well-formed ``DetectionResult`` before it reaches output."""
+    inference_ms = getattr(result, "inference_ms", None)
+    if (not isinstance(result, DetectionResult) or type(result.detections) is not tuple or
+            any(not isinstance(item, Detection) for item in result.detections) or
+            isinstance(inference_ms, bool) or not isinstance(inference_ms, (int, float)) or
+            not math.isfinite(inference_ms) or inference_ms < 0):
+        raise ValueError("invalid_detection_result")
+    return result
+
+
 def validate_input(bgr, threshold):
     import numpy as np
 

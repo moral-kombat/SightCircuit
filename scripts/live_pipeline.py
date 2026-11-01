@@ -12,8 +12,8 @@ if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from framejacker.context import native_format
-from framejacker.frame import OwnedFrame  # noqa: F401 - compatibility export
-from framejacker.hud import Calibration, CaptureFormat, Footprint, HudMask, HUD_CONFIG
+from framejacker.frame import DetectionResult, OwnedFrame  # noqa: F401 - OwnedFrame: compatibility export
+from framejacker.hud import Calibration, CaptureFormat, Footprint, HudMask, HudOutput, HUD_CONFIG
 from framejacker.latest import LatestFrameSlot as LatestSlot  # noqa: F401 - compatibility export
 from framejacker.runtime.live import run_pipeline as run_bounded_pipeline
 
@@ -55,14 +55,14 @@ class SyntheticSource:
 
 class FixtureDetector:
     def detect(self, image, threshold):
-        return {"image": image.copy(), "labels": [], "detections": [], "inference_ms": 0.0}
+        return DetectionResult((), 0.0)
 
 
 class HeadlessSink:
     def open(self):
         self.count = self.clears = 0
 
-    def submit(self, frame, detection):
+    def submit(self, processed):
         self.count += 1
 
     def clear(self):
@@ -87,11 +87,11 @@ class OverlayValidationSink:
         self.client = (self.client_factory or OverlayClient)(validation_only=True)
         self.client.start()
 
-    def submit(self, frame, detection):
+    def submit(self, processed):
         if self.client.error:
             raise RuntimeError(self.client.error)
         self.client.set_settings(self.settings_type(visible=True))
-        self.client.submit_bgr(detection["image"], expires_ns=detection["expires_ns"])
+        self.client.submit_bgr(processed.image, expires_ns=processed.expires_ns)
 
     def clear(self):
         if self.client is not None:
@@ -133,15 +133,15 @@ class HudValidationSink(OverlayValidationSink):
         super().open()
         self.client.freeze_settings(self.settings(False))
 
-    def submit(self, frame, detection):
+    def submit(self, processed):
         self.check_contract(HUD_CONFIG)
         if self.client.error:
             raise RuntimeError(self.client.error)
-        if (detection.get("hud_config") != self.hud_config or
-                detection["image"].shape != (self.hud_config.height_px, self.hud_config.width_px, 3)):
+        if (processed.hud is None or processed.hud.config != self.hud_config or
+                processed.image.shape != (self.hud_config.height_px, self.hud_config.width_px, 3)):
             raise ValueError("hud_payload_contract_mismatch")
         self.client.set_settings(self.settings(True))
-        self.client.submit_bgr(detection["image"], expires_ns=detection["expires_ns"])
+        self.client.submit_bgr(processed.image, expires_ns=processed.expires_ns)
 
     def clear(self):
         if self.client is not None:
@@ -186,10 +186,9 @@ class HudPipelineAdapter:
                                  capture_format=CaptureFormat.from_mapping(native_format(frame)),
                                  capture_layout=self.source.capture_layout, config=self.config)
 
-    def render(self, detection, shape, threshold):
-        tile, rows = self.mask.render(detection["detections"], shape, threshold)
-        return dict(detection, image=tile, labels=[row["label"] for row in rows],
-                    detections=rows, hud_config=self.config)
+    def render(self, result, shape, threshold):
+        tile, rows = self.mask.render(result.detections, shape, threshold)
+        return tile, HudOutput(rows, self.config)
 
 
 def run_pipeline(source, detector, sink, seconds, *, stop=None, max_fps=5, max_age_ms=1000, threshold=0.5,
@@ -206,11 +205,8 @@ def _worker(options):
     try:
         source = SyntheticSource()
         if options.get("detector", "real") == "real":
-            if __package__:
-                from .demo_detector import DemoDetector
-            else:
-                from demo_detector import DemoDetector
-            detector = DemoDetector()
+            from framejacker.detection import MobileNetSSD
+            detector = MobileNetSSD()
         else:
             detector = FixtureDetector()
         def hung(*_args, **_kwargs):

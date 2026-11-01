@@ -6,6 +6,10 @@ import math
 MAX_NATIVE_SIDE = 4096
 MAX_NATIVE_BYTES = 48 * 1024 * 1024
 
+# What a presented result's coordinates mean.
+DETECTOR_PIXELS = "detector_input_pixels"
+VIEW_DIRECTION = "approximate_image_view_direction"
+
 
 @dataclass(frozen=True)
 class OwnedFrame:
@@ -117,10 +121,14 @@ class DetectionResult:
 
 @dataclass(frozen=True)
 class Processed:
-    """A frame, its detections and the owned annotated image derived from it.
+    """The one output record every engine delivers to its sinks.
 
-    Annotations always belong to ``frame``; consumers never pair them with a
-    newer image. ``index`` counts frames processed by the pipeline run.
+    ``result`` is the detector's output in its input pixel space. ``image`` is
+    what is presented: boxes annotated on an owned copy of the detector input,
+    or, when ``hud`` is set, the fixed HUD tile drawn from ``hud.rows`` alone.
+    Annotations always belong to ``frame`` (a ``Frame`` or ``OwnedFrame``);
+    consumers never pair them with a newer image. ``index`` counts frames
+    processed by the run.
     """
     frame: Frame
     result: DetectionResult
@@ -132,7 +140,13 @@ class Processed:
     output_age_ms: float | None = None
     detector_input_size: tuple[int, int] | None = None
     native_to_inference_scale: tuple[float, float] | None = None
+    hud: object = None  # framejacker.hud.HudOutput when ``image`` is the HUD tile.
 
     @property
     def labels(self):
-        return self.result.labels
+        return self.hud.labels if self.hud is not None else self.result.labels
+
+    @property
+    def output_space(self):
+        """Coordinate meaning of what is presented: boxes or view directions."""
+        return VIEW_DIRECTION if self.hud is not None else DETECTOR_PIXELS

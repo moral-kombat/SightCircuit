@@ -96,6 +96,28 @@ class Calibration:
     provenance: str = "unvalidated"
 
 
+@dataclass(frozen=True)
+class HudRow:
+    """One HUD line: a sanitized name and an approximate view direction, never a position."""
+    label: str
+    confidence: float
+    direction: tuple  # (dx, dy), each -1, 0 or 1 relative to the eye's view centre.
+
+    def as_dict(self):
+        return {"label": self.label, "confidence": self.confidence, "direction": list(self.direction)}
+
+
+@dataclass(frozen=True)
+class HudOutput:
+    """What one result contributes to the fixed HUD, and the layout it was drawn for."""
+    rows: tuple
+    config: HudConfig
+
+    @property
+    def labels(self):
+        return [row.label for row in self.rows]
+
+
 def viewports(fmt, layout):
     """Eye rectangles of a full, uncropped capture; the runtime mask's frame."""
     return eye_viewports(fmt.bounds, layout)

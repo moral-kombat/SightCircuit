@@ -16,12 +16,12 @@ development; exact tested pins remain in the `requirements-*.txt` files.
 
 | Module | Responsibility |
 | --- | --- |
-| `framejacker/frame.py` | `Frame` (pixels, layout, source, sequence, observation time, media time) and detection result types |
+| `framejacker/frame.py` | `Frame`/`OwnedFrame` (pixels, layout, source, sequence, observation time, media time); `DetectionResult`, which every detector returns; `Processed`, the one record every engine submits to sinks (annotated image or HUD tile with `HudOutput` rows, expiry, sizes and coordinate space) |
 | `framejacker/pipeline.py` | `FrameSource`/`Sink` interfaces and `Pipeline`: conversion, detection, annotation, rate cap, latest-only or every-frame scheduling |
 | `framejacker/latest.py` | One-pending-item handoff; newer items replace older ones |
 | `framejacker/context.py` | `CaptureContext`: pins declared source identity, frame source/native layout/session metadata and an optional HUD mask binding; `admit(frame)` fails closed and latches the first failure |
 | `framejacker/convert.py` | BGR24 and padded RGB3/BGR3 conversion to detector input of at most 960 pixels |
-| `framejacker/detection.py` | `Detector` interface, `MobileNetSSD` baseline, `YoloxDetector` candidate, `create_detector()` and separate `annotate()` |
+| `framejacker/detection.py` | `Detector` interface, `MobileNetSSD` baseline, `YoloxDetector` candidate, `create_detector()`, separate `annotate()` and `require_result()` (rejects malformed detector output before any output) |
 | `framejacker/preprocess.py`, `framejacker/labels.py` | Letterbox input and inverse box mapping; COCO vocabulary and VOC-to-canonical label names |
 | `framejacker/evaluation.py`, `framejacker/assets.py` | Detector evaluation scoring; checksum-verified model/fixture download and verification |
 | `framejacker/sources/` | `ReplaySource` (PyAV) and `MirrorSource` (adapter for the V4L2 mirror acquisition loop) |

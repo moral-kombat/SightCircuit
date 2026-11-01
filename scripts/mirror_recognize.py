@@ -17,6 +17,7 @@ if not __package__:
 
 from framejacker.context import CaptureContext
 from framejacker.convert import to_bgr as convert_frame
+from framejacker.detection import MobileNetSSD, annotate, require_result
 from framejacker.errors import FrameFormatError
 from framejacker.frame import Frame
 from framejacker.hud import CaptureFormat, HudMask, HUD_CONFIG
@@ -24,11 +25,9 @@ from framejacker.latest import LatestSlot
 
 if __package__:
     from . import mirror_check as check
-    from .demo_detector import DemoDetector
     from .mirror_capture import MirrorError, discover, select_candidate
 else:
     import mirror_check as check
-    from demo_detector import DemoDetector
     from mirror_capture import MirrorError, discover, select_candidate
 
 
@@ -125,7 +124,7 @@ def recognize(candidate, seconds, stop, progress=lambda report: None, want_previ
             report.update(hud_mode=True, calibration_scope="synthetic_fixture_only",
                           hardware_mapping_verified=False, feedback_exclusion_verified=False,
                           stale_results_skipped=0)
-        detector = (detector_factory or DemoDetector)()
+        detector = (detector_factory or MobileNetSSD)()
         if stop.is_set():
             report["status"] = "cancelled"
             return report, None
@@ -176,29 +175,31 @@ def recognize(candidate, seconds, stop, progress=lambda report: None, want_previ
                 context.admit(native_frame(frame, source_id))
             prepared = to_bgr(frame, hud=hud, source_id=source_id,
                 capture_layout=getattr(backend_factory, "capture_layout", None), hud_config=hud_config)
-            detected = detector.detect(prepared, threshold)
+            result = detector.detect(prepared, threshold)
             if hud is not None:
                 if latest.snapshot()[0].get("status") == "error":
                     raise ValueError("hud_capture_failed_or_changed")
                 context.admit(native_frame(frame, source_id))
-                if detected["image"].shape != prepared.shape or detected["image"].dtype != prepared.dtype:
-                    raise ValueError("hud_detection_image_mismatch")
+            require_result(result)
+            if hud is not None:
                 if stop.is_set() or (time.monotonic_ns() - frame.observed_ns) / 1e6 > 1000:
                     report["stale_results_skipped"] += 1
                     continue
-                tile, rows = hud.render(detected["detections"], prepared.shape[:2], threshold)
-                detected = dict(detected, image=tile, labels=[row["label"] for row in rows], detections=rows)
-            image = detected["image"]
+                image, rows = hud.render(result.detections, prepared.shape[:2], threshold)
+                shown_labels, listed = [row.label for row in rows], [row.as_dict() for row in rows]
+            else:
+                image = annotate(prepared, result)
+                shown_labels, listed = result.labels, [item.as_dict() for item in result.detections]
             report["frames_processed"] += 1
-            labels.update(detected["labels"])
-            total_inference += detected["inference_ms"]
-            max_inference = max(max_inference, detected["inference_ms"])
+            labels.update(shown_labels)
+            total_inference += result.inference_ms
+            max_inference = max(max_inference, result.inference_ms)
             max_age = max(max_age, age)
             report["last_result"] = {"read_sequence": frame.read_sequence,
                                      "observation_time_ns": frame.observed_ns,
                                      "processing_started_age_ms": round(age, 3),
-                                     "inference_ms": round(detected["inference_ms"], 3),
-                                     "labels": detected["labels"], "detections": detected["detections"][:20],
+                                     "inference_ms": round(result.inference_ms, 3),
+                                     "labels": shown_labels, "detections": listed[:20],
                                      "width": image.shape[1], "height": image.shape[0],
                                      "box_coordinate_space": "approximate_image_view_direction" if hud else "resized_mirror_pixels"}
             if want_preview:

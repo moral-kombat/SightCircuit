@@ -11,6 +11,7 @@ import time
 import unittest
 from unittest.mock import patch
 
+from framejacker.frame import Detection, DetectionResult
 from scripts import mirror_capture as device
 from scripts import mirror_check as check
 from scripts import mirror_recognize as live
@@ -62,8 +63,7 @@ class MarkedDetector:
     def detect(self, image, threshold):
         value = int(image[0, 0, 0])
         time.sleep(self.delay)
-        return {"image": image.copy(), "labels": ["fixture"], "inference_ms": self.delay * 1000,
-                "detections": [{"label": "fixture", "confidence": 1.0, "box_xyxy": [value, 0, value + 1, 1]}]}
+        return DetectionResult((Detection("fixture", 1.0, (value, 0, value + 1, 1)),), self.delay * 1000)
 
 
 class SlowDetector(MarkedDetector):
@@ -72,9 +72,7 @@ class SlowDetector(MarkedDetector):
 
 class EmptyDetector(MarkedDetector):
     def detect(self, image, threshold):
-        result = super().detect(image, threshold)
-        result.update(labels=[], detections=[])
-        return result
+        return DetectionResult((), super().detect(image, threshold).inference_ms)
 
 
 class EmptyMirror(MarkedMirror):
@@ -116,7 +114,7 @@ class RecognitionGuardTests(unittest.TestCase):
     def test_discovery_does_not_load_model_or_open_device(self):
         output = io.StringIO()
         with patch.object(live, "discover", return_value=DISCOVERY), \
-                patch.object(live, "DemoDetector", side_effect=AssertionError("model must not load")), \
+                patch.object(live, "MobileNetSSD", side_effect=AssertionError("model must not load")), \
                 patch.object(check, "run_bounded", side_effect=AssertionError("worker must not start")), redirect_stdout(output):
             self.assertEqual(live.main([]), 0)
         report = json.loads(output.getvalue())

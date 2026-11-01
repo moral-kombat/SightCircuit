@@ -141,11 +141,12 @@ class LivePipelineTests(unittest.TestCase):
 
     def test_original_observation_and_run_deadline_bound_result_lifetime(self):
         class Sink(live.HeadlessSink):
-            def submit(sink, frame, detection):
-                self.assertGreater(detection["expires_ns"], frame.observed_ns)
-                self.assertLessEqual(detection["expires_ns"], frame.observed_ns + 1_000_000_000)
-                sink.expiry = detection["expires_ns"]
-                super().submit(frame, detection)
+            def submit(sink, processed):
+                frame = processed.frame
+                self.assertGreater(processed.expires_ns, frame.observed_ns)
+                self.assertLessEqual(processed.expires_ns, frame.observed_ns + 1_000_000_000)
+                sink.expiry = processed.expires_ns
+                super().submit(processed)
 
         sink = Sink()
         started = time.monotonic_ns()
@@ -156,28 +157,40 @@ class LivePipelineTests(unittest.TestCase):
         self.assertFalse(report["physical_recovery_confirmed"])
         self.assertGreaterEqual(report["total_processing_ms"], report["total_inference_ms"])
 
-    def test_legacy_detector_adapter_uses_shared_inference_and_owned_annotations(self):
+    def test_engine_annotates_an_owned_copy_and_submits_one_processed_record(self):
         import numpy as np
-        from framejacker.frame import Detection, DetectionResult
-        from scripts.demo_detector import DemoDetector
+        from framejacker.frame import Detection, DetectionResult, Processed
 
-        image = np.zeros((32, 48, 3), dtype=np.uint8)
-        typed = DetectionResult((Detection("fixture", .9, (1, 1, 20, 20)),), 2.5)
-        detector = DemoDetector.__new__(DemoDetector)
-        with patch("framejacker.detection.MobileNetSSD.detect", return_value=typed) as detect:
-            result = detector.detect(image, .5)
-        detect.assert_called_once_with(image, .5)
-        self.assertEqual(result["labels"], ["fixture"])
-        self.assertEqual(result["detections"], [typed.detections[0].as_dict()])
-        self.assertEqual(result["inference_ms"], 2.5)
-        self.assertFalse(np.shares_memory(result["image"], image))
-        self.assertEqual(int(image.max()), 0)
+        seen = {}
+
+        class Detector(live.FixtureDetector):
+            def detect(self, image, threshold):
+                seen["input"] = image
+                return DetectionResult((Detection("fixture", .9, (1, 1, 20, 20)),), 2.5)
+
+        class Sink(live.HeadlessSink):
+            def submit(sink, processed):
+                seen["processed"] = processed
+                super().submit(processed)
+
+        report = live.run_pipeline(live.SyntheticSource(rate=1), Detector(), Sink(), .2)
+        self.assertEqual(report["status"], "completed", report)
+        processed = seen["processed"]
+        self.assertIsInstance(processed, Processed)
+        self.assertEqual(processed.labels, ["fixture"])
+        self.assertEqual(processed.result.inference_ms, 2.5)
+        self.assertEqual(processed.output_space, "detector_input_pixels")
+        self.assertIsNone(processed.hud)
+        self.assertEqual(processed.image.shape, seen["input"].shape)
+        self.assertFalse(np.shares_memory(processed.image, seen["input"]))
+        self.assertGreater(int(processed.image.max()), int(seen["input"].max()))
+        self.assertEqual(report["last_result"]["box_coordinate_space"], "detector_input_pixels")
 
     def test_pipeline_matches_each_output_to_its_own_frame_and_cleans_up(self):
         class Sink(live.HeadlessSink):
-            def submit(self, frame, detection):
-                self.test.assertEqual(int(detection["image"][0, 0, 0]), frame.sequence % 255)
-                super().submit(frame, detection)
+            def submit(self, processed):
+                self.test.assertEqual(int(processed.image[0, 0, 0]), processed.frame.sequence % 255)
+                super().submit(processed)
         sink = Sink()
         sink.test = self
         source = live.SyntheticSource(rate=100)
@@ -214,16 +227,21 @@ class LivePipelineTests(unittest.TestCase):
         self.assertEqual(report["frames_submitted"], 0)
         self.assertTrue(report["cleanup_ok"])
 
-    def test_detector_shape_failure_still_closes_source_and_sink(self):
-        class Bad(live.FixtureDetector):
-            def detect(self, *args):
-                result = super().detect(*args)
-                result["image"] = result["image"][:1]
-                return result
-        report = live.run_pipeline(live.SyntheticSource(), Bad(), live.HeadlessSink(), 0.2)
-        self.assertEqual(report["status"], "error")
-        self.assertIn("does_not_match_source", report["reason"])
-        self.assertTrue(report["cleanup_ok"])
+    def test_malformed_detector_result_still_closes_source_and_sink(self):
+        from framejacker.frame import DetectionResult
+
+        for bad in ({"image": None, "labels": [], "detections": [], "inference_ms": 0.0},
+                    DetectionResult([], 0.0), DetectionResult((), float("nan")), DetectionResult((), -1.0),
+                    DetectionResult(({"label": "dict"},), 0.0)):
+            class Bad(live.FixtureDetector):
+                def detect(self, *args):
+                    return bad
+            with self.subTest(bad=bad):
+                report = live.run_pipeline(live.SyntheticSource(), Bad(), live.HeadlessSink(), 0.2)
+                self.assertEqual(report["status"], "error")
+                self.assertEqual(report["reason"], "invalid_detection_result")
+                self.assertEqual(report["frames_submitted"], 0)
+                self.assertTrue(report["cleanup_ok"])
 
     def test_source_failure_is_reported_and_closed(self):
         source = live.SyntheticSource()

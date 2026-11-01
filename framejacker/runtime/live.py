@@ -3,18 +3,22 @@
 The only accepted acquisition kind remains synthetic. Hardware adapters and
 production output require separate gates; moving this engine does not lift them.
 
+Detectors return ``DetectionResult``; the engine annotates an owned copy, or
+the ``hud`` adapter renders the tile, and sinks receive one ``Processed``.
 ``hud``, when given, is an adapter exposing ``start()`` (returns report fields
-and sets ``mask``), ``check_sink()``, ``prepare(frame)`` and ``render(...)``.
+and sets ``mask``), ``check_sink()``, ``prepare(frame)`` and
+``render(result, shape, threshold) -> (tile, HudOutput)``.
 Capture-context identity, including the HUD calibration, is enforced by one
 ``CaptureContext`` admitted on publish, before inference, after inference and
 before submission.
 """
-import math
 import threading
 import time
 
 from ..context import CaptureContext
 from ..convert import to_bgr
+from ..detection import annotate, require_result
+from ..frame import Processed
 from ..latest import LatestFrameSlot as LatestSlot
 
 
@@ -104,27 +108,25 @@ def run_pipeline(source, detector, sink, seconds, *, stop=None, max_fps=5, max_a
             if age > max_age_ms:
                 report["stale_inputs_dropped"] += 1
                 continue
+            input_age = age
             next_inference = time.monotonic() + 1 / max_fps
             processing_started = time.monotonic()
             admit(frame)
             prepared = hud.prepare(frame) if hud is not None else to_bgr(frame.as_frame())
-            detection = detector.detect(prepared, threshold)
+            result = detector.detect(prepared, threshold)
             report["frames_processed"] += 1
             if source_state["error"]:
                 raise ValueError(source_state["error"])
             admit(frame)
-            if not math.isfinite(detection["inference_ms"]) or detection["inference_ms"] < 0:
-                raise ValueError("invalid_inference_measurement")
-            if detection["image"].shape != prepared.shape or detection["image"].dtype != prepared.dtype:
-                raise ValueError("detection_image_does_not_match_source")
+            require_result(result)
             if hud is not None:
-                detection = hud.render(detection, prepared.shape[:2], threshold)
-            # Own annotations before another detector call can reuse its storage.
-            detection = dict(detection, image=detection["image"].copy(),
-                             expires_ns=min(frame.observed_ns + int(max_age_ms * 1e6), int(deadline * 1e9)))
+                image, hud_output = hud.render(result, prepared.shape[:2], threshold)
+            else:
+                # Owned annotations: the detector's input buffer is never presented.
+                image, hud_output = annotate(prepared, result), None
             processing_ms = (time.monotonic() - processing_started) * 1000
             report["total_processing_ms"] += processing_ms
-            report["total_inference_ms"] += detection["inference_ms"]
+            report["total_inference_ms"] += result.inference_ms
             # Rendering and ownership copies may invoke adapters or take time.
             # Validate once more at the final output boundary.
             if source_state["error"]:
@@ -135,21 +137,27 @@ def run_pipeline(source, detector, sink, seconds, *, stop=None, max_fps=5, max_a
             if age > max_age_ms or time.monotonic() >= deadline or stop.is_set():
                 report["stale_results_dropped"] += 1
                 continue
-            sink.submit(frame, detection)
+            processed = Processed(
+                frame, result, image, report["frames_processed"], input_age, processing_ms,
+                expires_ns=min(frame.observed_ns + int(max_age_ms * 1e6), int(deadline * 1e9)),
+                output_age_ms=age, detector_input_size=(prepared.shape[1], prepared.shape[0]),
+                native_to_inference_scale=(prepared.shape[1] / frame.image.shape[1],
+                                           prepared.shape[0] / frame.image.shape[0]),
+                hud=hud_output)
+            sink.submit(processed)
             displayed_ns = frame.observed_ns
-            labels.update(detection["labels"])
+            labels.update(processed.labels)
             report["frames_submitted"] += 1
             report["last_result"] = {"source_id": frame.source_id, "sequence": frame.sequence,
                 "observed_ns": frame.observed_ns, "media_time": frame.media_time,
-                "inference_ms": detection["inference_ms"], "observation_age_ms": round(age, 3),
-                "processing_ms": round(processing_ms, 3), "expires_ns": detection["expires_ns"],
+                "inference_ms": result.inference_ms, "observation_age_ms": round(age, 3),
+                "processing_ms": round(processing_ms, 3), "expires_ns": processed.expires_ns,
                 "native_format": frame.native_descriptor,
-                "detector_input_size": [prepared.shape[1], prepared.shape[0]],
-                "native_to_inference_scale": [prepared.shape[1] / frame.image.shape[1],
-                                               prepared.shape[0] / frame.image.shape[0]],
-                "box_coordinate_space": "approximate_image_view_direction" if hud else "detector_input_pixels"}
-            if hud is not None:
-                report["last_result"]["hud_rows"] = detection["detections"]
+                "detector_input_size": list(processed.detector_input_size),
+                "native_to_inference_scale": list(processed.native_to_inference_scale),
+                "box_coordinate_space": processed.output_space}
+            if hud_output is not None:
+                report["last_result"]["hud_rows"] = [row.as_dict() for row in hud_output.rows]
         if source_state["error"]:
             raise RuntimeError(source_state["error"])
         if stop.is_set():

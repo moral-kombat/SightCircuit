@@ -22,7 +22,7 @@ from typing import Callable, Protocol
 
 from .context import CaptureContext
 from .convert import to_bgr
-from .detection import annotate
+from .detection import annotate, require_result
 from .frame import Frame, Processed
 from .latest import LatestSlot
 
@@ -143,7 +143,7 @@ class Pipeline:
             return
         started = time.monotonic()
         bgr = self.convert(frame)
-        result = self.detector.detect(bgr, self.threshold)
+        result = require_result(self.detector.detect(bgr, self.threshold))
         image = self.annotator(bgr, result)
         if hasattr(image, "copy"):
             image = image.copy()

@@ -7,7 +7,8 @@ derived from a hardware mapping candidate is rejected until a separate gate.
 from dataclasses import dataclass
 import math
 
-from .contract import HUD_CONFIG, Calibration, CaptureFormat, Footprint, HudConfig, viewports
+from ..frame import Detection
+from .contract import HUD_CONFIG, Calibration, CaptureFormat, Footprint, HudConfig, HudRow, viewports
 from .geometry import contains, expand, overlaps, within_blind_budget
 from .render import draw_tile
 
@@ -98,6 +99,7 @@ class HudMask:
         return image
 
     def rows_for(self, detections, inference_shape, threshold):
+        """Select at most ``config.rows`` ``HudRow``s from ``Detection``s in inference pixels."""
         self.validate()
         if tuple(inference_shape) != self.inference_shape():
             raise ValueError("hud_inference_mapping_changed")
@@ -110,9 +112,9 @@ class HudMask:
         eyes = viewports(fmt, self.calibration.capture_layout)
         rows = []
         for detection in detections:
-            box = detection.get("box_xyxy", ())
-            score = detection.get("confidence", float("nan"))
-            label = detection.get("label", "")
+            if not isinstance(detection, Detection):
+                continue
+            box, score, label = detection.box_xyxy, detection.confidence, detection.label
             if (not isinstance(box, (list, tuple)) or len(box) != 4 or
                     any(not isinstance(v, (int, float)) or not math.isfinite(v) for v in box) or
                     not isinstance(score, (int, float)) or not math.isfinite(score) or
@@ -134,17 +136,17 @@ class HudMask:
             dy = -1 if cy < 0.4 else 1 if cy > 0.6 else 0
             name = "".join(c for c in label if c.isascii() and (c.isalnum() or c in " _-"))[:20].strip()
             if name:
-                rows.append({"label": name, "confidence": float(score), "direction": (dx, dy)})
-        rows.sort(key=lambda row: (-row["confidence"], row["label"], row["direction"]))
+                rows.append(HudRow(name, float(score), (dx, dy)))
+        rows.sort(key=lambda row: (-row.confidence, row.label, row.direction))
         selected, seen = [], set()
         for row in rows:
-            key = (row["label"], row["direction"])
+            key = (row.label, row.direction)
             if key not in seen:
                 seen.add(key)
                 selected.append(row)
             if len(selected) == self.config.rows:
                 break
-        return selected
+        return tuple(selected)
 
     def render(self, detections, inference_shape, threshold):
         rows = self.rows_for(detections, inference_shape, threshold)
