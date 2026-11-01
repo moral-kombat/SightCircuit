@@ -217,12 +217,63 @@ class PanelSettingsTests(unittest.TestCase):
 
 
 class SharedOverlayContractTests(unittest.TestCase):
-    def test_commands_use_the_shared_transport_and_frozen_settings(self):
+    def test_commands_use_the_shared_sink_and_frozen_settings(self):
+        from framejacker.overlay import OverlaySink
         from scripts import live_pipeline
 
-        self.assertIs(live_pipeline.OverlayClient, OverlayClient)
-        self.assertIs(live_pipeline.PanelSettings, PanelSettings)
+        self.assertIs(live_pipeline.OverlaySink, OverlaySink)
         self.assertTrue(hasattr(OverlayClient, "freeze_settings"))
+
+    def test_caller_owned_client_keeps_its_placement_visibility_and_close(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        from framejacker.hud import HUD_CONFIG
+        from framejacker.overlay import OverlaySink
+
+        client = Mock()
+        sink = OverlaySink(client)
+        sink.open()
+        sink.submit(SimpleNamespace(image="tile", expires_ns=None))
+        sink.submit(SimpleNamespace(image="tile", expires_ns=7))
+        sink.clear()
+        self.assertIs(sink.close(), True)
+        self.assertEqual([call[0] for call in client.method_calls], ["submit_bgr", "submit_bgr"])
+        self.assertEqual(client.submit_bgr.call_args_list[1].kwargs, {"expires_ns": 7})
+        with self.assertRaisesRegex(ValueError, "hud_sink_requires_owned_validation_client"):
+            OverlaySink(client, hud=HUD_CONFIG)
+
+    def test_owned_hud_sink_freezes_placement_and_accepts_only_its_tiles(self):
+        from types import SimpleNamespace
+        from framejacker.hud import HUD_CONFIG, HudOutput
+        from framejacker.overlay import OverlaySink
+
+        class Client:
+            def __init__(self, validation_only):
+                self.validation_only, self.error, self.settings, self.sent = validation_only, None, None, []
+            def start(self):
+                return self
+            def freeze_settings(self, settings):
+                self.settings = settings
+            def set_settings(self, settings):
+                self.settings = settings
+            def submit_bgr(self, image, *, expires_ns=None):
+                self.sent.append(image)
+
+        sink = OverlaySink(hud=HUD_CONFIG, client_factory=Client)
+        sink.open()
+        self.assertIs(sink.client.validation_only, True)
+        self.assertEqual(sink.client.settings, sink.placement(False))
+        tile = SimpleNamespace(shape=(HUD_CONFIG.height_px, HUD_CONFIG.width_px, 3))
+        for bad in (SimpleNamespace(hud=None, image=tile, expires_ns=1),
+                    SimpleNamespace(hud=HudOutput((), HUD_CONFIG), image=SimpleNamespace(shape=(1, 1, 3)),
+                                    expires_ns=1)):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "hud_payload_contract_mismatch"):
+                sink.submit(bad)
+        self.assertEqual(sink.client.sent, [])
+        sink.submit(SimpleNamespace(hud=HudOutput((), HUD_CONFIG), image=tile, expires_ns=1))
+        self.assertEqual((sink.client.sent, sink.client.settings.visible), ([tile], True))
+        sink.clear()
+        self.assertEqual(sink.client.settings, sink.placement(False))
 
     @unittest.skipUnless(shutil.which("g++"), "C++ compiler required for fake native dispatch")
     def test_fake_dispatch_decodes_pixels_deadlines_and_cleanup_failures(self):

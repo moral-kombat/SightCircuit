@@ -137,7 +137,7 @@ class DisplayExpiryTests(unittest.TestCase):
                     if not release.wait(5):
                         raise RuntimeError("fixture_release_timeout")
                 return super().detect(*args)
-        sink = live.OverlayValidationSink()
+        sink = OverlaySink()
         result = {}
         def run():
             result.update(live.run_pipeline(live.SyntheticSource(), Detector(), sink, 5,

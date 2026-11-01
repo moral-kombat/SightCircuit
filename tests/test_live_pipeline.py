@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from framejacker.frame import Frame, native_format
+from framejacker.overlay import OverlaySink
 from scripts import live_pipeline as live
 
 
@@ -321,7 +322,7 @@ class LivePipelineTests(unittest.TestCase):
                         "forced_termination": False, "worker_reaped": True, "worker_exit_code": 0,
                         "transport_threads_stopped": True, "native_report": {"cleanup_ok": True,
                         "exit_code": 0, "mode": "--validate-stdin", "runtime_initialized": False}}
-        sink = live.OverlayValidationSink(client_factory=Client)
+        sink = OverlaySink(client_factory=Client)
         report = live.run_pipeline(live.SyntheticSource(), live.FixtureDetector(), sink, 0.3)
         self.assertTrue(sink.client.validation_only)
         self.assertGreater(sink.client.count, 0)

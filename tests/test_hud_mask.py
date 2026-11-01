@@ -18,7 +18,7 @@ from framejacker import hud
 from framejacker.frame import Detection, DetectionResult, Frame
 from scripts import live_pipeline as live
 from scripts import mirror_recognize as mirror
-from framejacker.overlay import DEFAULT_BRIDGE, OverlayClient, PanelSettings, rgba_from_bgr
+from framejacker.overlay import DEFAULT_BRIDGE, OverlayClient, OverlaySink, PanelSettings, rgba_from_bgr
 
 
 def calibration(width=1280, height=720, *, layout="mono", fourcc="BGR3", padding=0):
@@ -305,8 +305,8 @@ class HudIntegrationTests(unittest.TestCase):
 
     def test_hud_requires_fixed_sink_and_cli_never_enables_live_source(self):
         detector = live.FixtureDetector()
-        with patch.object(detector, "detect") as detect, patch.object(live.OverlayValidationSink, "open") as opened:
-            report = live.run_pipeline(live.SyntheticSource(), detector, live.OverlayValidationSink(), .2,
+        with patch.object(detector, "detect") as detect, patch.object(OverlaySink, "open") as opened:
+            report = live.run_pipeline(live.SyntheticSource(), detector, OverlaySink(), .2,
                 hud_mode=True, calibration=live.synthetic_hud_calibration())
         opened.assert_not_called()
         detect.assert_not_called()
@@ -446,7 +446,7 @@ class HudIntegrationTests(unittest.TestCase):
 @unittest.skipUnless(os.name == "posix" and DEFAULT_BRIDGE.is_file(), "Linux native validation bridge required")
 class HudNativeTests(unittest.TestCase):
     def test_hud_native_transport_fixed_placement_expiry_and_clean_shutdown(self):
-        sink = live.HudValidationSink()
+        sink = OverlaySink(hud=hud.HUD_CONFIG)
         report = live.run_pipeline(live.SyntheticSource(), live.FixtureDetector(), sink, .3,
             hud_mode=True, calibration=live.synthetic_hud_calibration())
         self.assertEqual(report["status"], "completed", report)
@@ -458,7 +458,7 @@ class HudNativeTests(unittest.TestCase):
         self.assertGreater(sink.report["native_report"]["expiring_frames_received"], 0)
 
     def test_placement_change_during_inference_is_rejected_before_submission(self):
-        sink = live.HudValidationSink()
+        sink = OverlaySink(hud=hud.HUD_CONFIG)
         class Detector(live.FixtureDetector):
             def detect(self, *args):
                 sink.client.set_settings(replace(sink.client.settings, x=.4))
@@ -473,7 +473,7 @@ class HudNativeTests(unittest.TestCase):
         self.assertFalse(sink.client.settings.visible)
 
     def test_stalled_inference_expires_hud_without_python_clear(self):
-        sink = live.HudValidationSink()
+        sink = OverlaySink(hud=hud.HUD_CONFIG)
         blocked, release, stop = threading.Event(), threading.Event(), threading.Event()
         class Detector(live.FixtureDetector):
             calls = 0

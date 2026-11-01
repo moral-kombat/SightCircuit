@@ -11,6 +11,7 @@ import threading
 import time
 
 from .gates import LIVE_HUD_OUTPUT
+from .hud.contract import HUD_CONFIG
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BRIDGE = ROOT / "artifacts/overlay-bridge/framejacker-overlay-bridge"
@@ -281,13 +282,77 @@ class OverlayClient:
 
 
 class OverlaySink:
-    """Pipeline sink that mirrors each annotated image into the VR panel."""
+    """Pipeline sink presenting each result on the VR panel.
 
-    def __init__(self, client):
-        self.client = client
+    With ``client``, the caller owns that client: its start, placement,
+    visibility and close (the replay window's interactive panel); the sink only
+    submits images. Without one, the sink owns a validation-only client: it
+    starts it on ``open``, shows the panel on ``submit``, hides it on ``clear``
+    and returns ``True`` from ``close`` only for a proven clean validation
+    shutdown. ``hud`` (the fixed HUD configuration) also freezes the HUD
+    placement and accepts only HUD tiles drawn for it; real fixed-HUD output
+    stays behind the ``LIVE_HUD_OUTPUT`` gate.
+    """
+
+    def __init__(self, client=None, *, hud=None, client_factory=None):
+        if hud is not None and client is not None:
+            raise ValueError("hud_sink_requires_owned_validation_client")
+        self.client, self.hud = client, hud
+        self.owns_client = client is None
+        self.client_factory = client_factory or OverlayClient
+        self.report = None
+
+    def placement(self, visible):
+        if self.hud is None:
+            return PanelSettings(visible=visible)
+        c = HUD_CONFIG  # Even failure cleanup uses the frozen placement.
+        return PanelSettings(width=c.panel_width_m, distance=c.distance_m, x=c.x_m, y=c.y_m,
+                             opacity=c.opacity, visible=visible)
+
+    def check_contract(self, config):
+        """The fixed HUD contract: frozen configuration, validation client and placement."""
+        if config != HUD_CONFIG or self.hud != config:
+            raise ValueError("hud_sink_config_changed")
+        if self.client is not None and (self.client.validation_only is not True or
+                                        self.client.settings != self.placement(self.client.settings.visible)):
+            raise ValueError("hud_sink_mode_or_placement_changed")
+
+    def open(self):
+        if not self.owns_client:
+            return
+        if self.hud is not None:
+            self.check_contract(HUD_CONFIG)
+        self.client = self.client_factory(validation_only=True)
+        self.client.start()
+        if self.hud is not None:
+            self.client.freeze_settings(self.placement(False))
 
     def submit(self, processed):
+        if self.hud is not None:
+            self.check_contract(HUD_CONFIG)
+            if (processed.hud is None or processed.hud.config != self.hud or
+                    processed.image.shape != (self.hud.height_px, self.hud.width_px, 3)):
+                raise ValueError("hud_payload_contract_mismatch")
+        if self.owns_client:
+            if self.client.error:
+                raise RuntimeError(self.client.error)
+            self.client.set_settings(self.placement(True))
         if processed.expires_ns is None:
             self.client.submit_bgr(processed.image)
         else:
             self.client.submit_bgr(processed.image, expires_ns=processed.expires_ns)
+
+    def clear(self):
+        if self.owns_client and self.client is not None:
+            self.client.set_settings(self.placement(False))
+
+    def close(self):
+        if not self.owns_client or self.client is None:
+            return True
+        report = self.report = self.client.close()
+        native = report.get("native_report") or {}
+        return (report.get("validation_only") is True and not report.get("error") and
+                report.get("forced_termination") is False and report.get("worker_reaped") is True and
+                report.get("worker_exit_code") == 0 and report.get("transport_threads_stopped") is True and
+                native.get("cleanup_ok") is True and native.get("exit_code") == 0 and
+                native.get("mode") == "--validate-stdin" and native.get("runtime_initialized") is False)
