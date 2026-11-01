@@ -18,18 +18,19 @@ development; exact tested pins remain in the `requirements-*.txt` files.
 
 | Module | Responsibility |
 | --- | --- |
-| `framejacker/frame.py` | `Frame`/`OwnedFrame` (pixels, layout, source, sequence, observation time, media time); `DetectionResult`, which every detector returns; `Processed`, the one record every engine submits to sinks (annotated image or HUD tile with `HudOutput` rows, expiry, sizes and coordinate space) |
-| `framejacker/pipeline.py` | `FrameSource`/`Sink` interfaces and `Pipeline`, the one engine for replay, mirror recognition and the synthetic live HUD: latest-only or every-frame scheduling, rate cap, `CaptureContext` admission, HUD stage or annotation, result expiry and deadline, optional sink `open`/`clear`/`close` with cleanup results |
+| `framejacker/frame.py` | `Frame`, the only frame type (pixels, layout, source, sequence, observation time, media time, declared `native_format`), with `Frame.owned_bgr` (validated private BGR copy) and `owned()` (the engine's copy on publish); `DetectionResult`, which every detector returns; `Processed`, the one record every engine submits to sinks (annotated image or HUD tile with `HudOutput` rows, expiry, sizes and coordinate space) |
+| `framejacker/pipeline.py` | `FrameSource`/`Sink` interfaces and `Pipeline`, the one engine for replay, mirror recognition and the synthetic live HUD: latest-only or every-frame scheduling, rate cap, `CaptureContext` admission, HUD stage or annotation, result expiry and deadline, optional sink `open`/`clear`/`close` with cleanup results. `PipelineStats.report()` is the one statistics vocabulary: the replay, mirror and synthetic live reports embed it as `pipeline` (mirror and synthetic live once the engine is constructed, replay only on a clean finish; a report that ends earlier has no block and only the fields its command already wrote) and keep their earlier field names only as aliases (`report_fields`) until a schema version bump |
 | `framejacker/latest.py` | One-pending-item handoff; newer items replace older ones |
+| `framejacker/gates.py` | The closed approval gates (live image input, hardware mapping, live HUD output): each boundary's `require` and every report's gate claims; nothing here opens a gate |
 | `framejacker/context.py` | `CaptureContext`: pins declared source identity, frame source/native layout/session metadata and an optional HUD mask binding; `admit(frame)` fails closed and latches the first failure |
-| `framejacker/convert.py` | BGR24 and padded RGB3/BGR3 conversion to detector input of at most 960 pixels |
+| `framejacker/convert.py` | One native pixel rule (`buffer_bgr`: BGR24 arrays and padded RGB3/BGR3 buffers), `native_bgr` for frames and `to_bgr` for detector input of at most 960 pixels |
 | `framejacker/detection.py` | `Detector` interface, `MobileNetSSD` baseline, `YoloxDetector` candidate, `create_detector()`, separate `annotate()` and `require_result()` (rejects malformed detector output before any output) |
 | `framejacker/preprocess.py`, `framejacker/labels.py` | Letterbox input and inverse box mapping; COCO vocabulary and VOC-to-canonical label names |
 | `framejacker/evaluation.py`, `framejacker/assets.py` | Detector evaluation scoring; checksum-verified model/fixture download and verification |
-| `framejacker/sources/` | `ReplaySource` (PyAV); `mirror_device` (read-only V4L2 SteamVR mirror discovery and reads); `mirror` (bounded acquisition loop `capture` and `MirrorSource`); `recording` (MP4 header inspection, newest recording); `PolledSource` (adapter for `open`/`read`/`close` sources). Adapters forward the wrapped source's declared identity |
-| `framejacker/overlay.py` | Overlay bridge client and pipeline sink |
-| `framejacker/hud/` | Fixed edge HUD contract, shared eye/rectangle geometry, synthetic-only native mask, tile rendering, the `HudStage` engine stage and offline mapping qualification |
-| `framejacker/runtime/` | `process` (bounded spawned workers, parent-death signalling), `guard` (owned process-group supervision with the Linux parent-loss guardian), reserve/publish of explicit image outputs, and `live.run_pipeline` (gated synthetic run on `Pipeline`, as a report) |
+| `framejacker/sources/` | `ReplaySource` (PyAV); `mirror_device` (read-only V4L2 SteamVR mirror discovery and reads); `mirror` (bounded acquisition loop `capture` and `MirrorSource`); `recording` (one MP4 box-header decoder for finished-file inspection and the growing-file scan used by `recording_growth_check`; newest recording); `PolledSource` (adapter for `open`/`read`/`close` sources). Adapters forward the wrapped source's declared identity |
+| `framejacker/overlay.py` | Overlay bridge client and `OverlaySink`, the one panel sink: with a caller-owned client (replay's interactive panel) it only submits images; otherwise it owns a validation-only client through `open`/`clear`/`close`, optionally with the frozen HUD placement and payload contract |
+| `framejacker/hud/` | Fixed edge HUD contract, shared eye/rectangle geometry, synthetic-only native mask, tile rendering, the `HudStage` engine stage, offline mapping qualification, the calibration marker client and `observation` (empirical marker-copy location in native pixels, used by `hud_marker_observer.py`) |
+| `framejacker/runtime/` | `process` (bounded spawned workers, parent-death signalling), `guard` (owned process-group supervision with the Linux parent-loss guardian), reserve/publish of explicit image outputs, `live.run_pipeline` (gated synthetic run on `Pipeline`, as a report) and `synthetic` (the generated source, its fixture calibration, `FixtureDetector` and `HeadlessSink`) |
 
 File replay uses every-frame scheduling, so each decoded frame is processed in
 order. Mirror recognition uses latest-only scheduling with a one-second input
@@ -1284,8 +1285,8 @@ runtime compatibility. No install, transfer or device execution is implied.
 ## Offline foundation for the minimum live POC
 
 [`live_pipeline.py`](../scripts/live_pipeline.py) exercises generated input,
-the shared CPU detector and a result sink. `OwnedFrame.copy_from` and the
-latest slot own contiguous BGR copies; source identity/sequence cannot regress.
+the shared CPU detector and a result sink. `Frame.owned_bgr` and the engine's
+copy on publish own contiguous BGR copies; source identity/sequence cannot regress.
 Only one frame waits for inference, and annotations remain associated with
 their source. Inputs/results older than one second are dropped. Deadlines,
 cancellation and errors close source/sink; a process supervisor terminates and

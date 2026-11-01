@@ -9,6 +9,7 @@ import subprocess
 import threading
 import time
 
+from ..gates import claims
 from ..overlay import OverlayClient
 
 
@@ -16,8 +17,7 @@ def new_report(validation_only=True):
     return {"report_kind": "hud_calibration_marker", "status": "not_run", "exit_code": 3,
         "calibration_validation_only": validation_only, "cleanup_ok": True,
         "capture_started": False, "inference_started": False, "frames_read": 0,
-        "images_saved": False, "production_live_input_enabled": False, "production_hud_enabled": False,
-        "physical_display_recovery_verified": False, "mapping_qualified": False,
+        "images_saved": False, **claims(), "physical_display_recovery_verified": False,
         "scope": "Generated fixed marker only; best-effort software deadline, not physical display recovery proof"}
 
 
@@ -75,7 +75,7 @@ def validate_worker_report(report, returncode, *, validation_only=None):
             type(report.get("calibration_validation_only")) is not bool or
             (validation_only is not None and report["calibration_validation_only"] != validation_only) or
             any(report.get(key) is not False for key in ("capture_started", "inference_started", "images_saved",
-                "production_live_input_enabled", "production_hud_enabled", "physical_display_recovery_verified", "mapping_qualified")) or
+                *claims(), "physical_display_recovery_verified")) or
             type(report.get("frames_read")) is not int or report["frames_read"] != 0):
         raise ValueError("invalid_marker_worker_report")
     if report["exit_code"] == 0:

@@ -91,11 +91,12 @@ class CaptureContextTests(unittest.TestCase):
 
 
 @unittest.skipUnless(importlib.util.find_spec("numpy"), "NumPy required for owned-frame tests")
-class OwnedFrameAndHudBindingTests(unittest.TestCase):
+class ValidatedFrameAndHudBindingTests(unittest.TestCase):
+    """Validated owned frames (``Frame.owned_bgr``) and the HUD binding."""
+
     def owned(self, sequence=1, width=96, height=64, source="synthetic:generated"):
         import numpy as np
-        from framejacker.frame import OwnedFrame
-        return OwnedFrame.copy_from(np.zeros((height, width, 3), np.uint8), sequence, time.monotonic_ns(), source)
+        return Frame.owned_bgr(np.zeros((height, width, 3), np.uint8), sequence, time.monotonic_ns(), source)
 
     def calibration(self):
         from framejacker.hud import Calibration, CaptureFormat, Footprint

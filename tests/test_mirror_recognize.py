@@ -136,6 +136,25 @@ class RecognitionGuardTests(unittest.TestCase):
             self.assertEqual(live.main(["--capture"]), 1)
         self.assertEqual(json.loads(output.getvalue())["status"], "unavailable")
 
+    def test_progress_snapshot_aliases_come_from_the_block_it_embeds(self):
+        from types import SimpleNamespace
+        from framejacker.pipeline import PipelineStats
+
+        snapshots = []
+        sink = live.ReportSink(live.new_report(), snapshots.append, SimpleNamespace(report={}), False, False)
+        sink.pipeline = SimpleNamespace(stats=PipelineStats(frames_processed=1, labels_seen={"cup"}, started=1.0))
+        sink.next_progress = 0
+        frame = SimpleNamespace(sequence=2, observed_ns=1)
+        # The engine records this result's labels only after its sinks run.
+        sink.submit(SimpleNamespace(frame=frame, result=DetectionResult((), 1.0), labels=["person"], hud=None,
+                                    image=SimpleNamespace(shape=(1, 1, 3)), input_age_ms=0.0,
+                                    output_space="detector_input_pixels"))
+        snapshot = snapshots[0]
+        self.assertEqual(snapshot["pipeline"]["labels_seen"], ["cup", "person"])
+        for name, source in live.LEGACY_FIELDS.items():
+            with self.subTest(field=name):
+                self.assertEqual(snapshot[name], snapshot["pipeline"][source])
+
 
 
 @unittest.skipUnless(AVAILABLE, "Run scripts/setup_window.sh for mirror/inference checks")
@@ -165,6 +184,17 @@ class RecognitionIntegrationTests(unittest.TestCase):
         self.assertEqual(last["read_sequence"], last["detections"][0]["box_xyxy"][0])
         self.assertEqual(int(image[0, 0, 0]), last["read_sequence"])
         self.assertLess(report["frames_processed"], report["capture"]["frames_read"])
+        expected = {"frames_processed": "frames_processed", "stale_inputs_skipped": "stale_inputs_skipped",
+                    "stale_results_skipped": "stale_results_skipped", "pending_frames_replaced": "pending_replaced",
+                    "labels_seen": "labels_seen", "processing_elapsed_ms": "elapsed_ms",
+                    "observed_processing_rate_hz": "processed_fps", "mean_inference_ms": "mean_inference_ms",
+                    "maximum_inference_ms": "max_inference_ms",
+                    "maximum_processing_started_age_ms": "max_input_age_ms"}
+        self.assertEqual(live.LEGACY_FIELDS, expected)  # Literal, so a mis-mapped alias fails here.
+        block = report["pipeline"]
+        for name, source in expected.items():
+            with self.subTest(field=name):
+                self.assertEqual(report[name], block[source])
 
     def test_empty_labels_are_successful_inference_without_image_output(self):
         report, image = live.recognize(CANDIDATE, 0.3, threading.Event(), backend_factory=MarkedMirror,

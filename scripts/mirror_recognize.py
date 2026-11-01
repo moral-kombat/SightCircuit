@@ -17,8 +17,9 @@ if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from framejacker.detection import MobileNetSSD
+from framejacker.gates import LIVE_IMAGE_INPUT
 from framejacker.hud import HUD_CONFIG, HudStage
-from framejacker.pipeline import Pipeline
+from framejacker.pipeline import Pipeline, report_fields
 from framejacker.runtime import process
 from framejacker.runtime.process import StopRequested, stop_on_signal
 from framejacker.sources.mirror import MirrorSource, capture
@@ -26,6 +27,14 @@ from framejacker.sources.mirror_device import MirrorError, discover, select_cand
 
 
 MAX_INPUT_AGE_MS = 1000
+# Schema-1 field names kept for existing reports and evidence; "pipeline" holds the canonical block.
+LEGACY_FIELDS = {
+    "frames_processed": "frames_processed", "stale_inputs_skipped": "stale_inputs_skipped",
+    "stale_results_skipped": "stale_results_skipped", "pending_frames_replaced": "pending_replaced",
+    "labels_seen": "labels_seen", "processing_elapsed_ms": "elapsed_ms",
+    "observed_processing_rate_hz": "processed_fps", "mean_inference_ms": "mean_inference_ms",
+    "maximum_inference_ms": "max_inference_ms", "maximum_processing_started_age_ms": "max_input_age_ms",
+}
 
 
 def new_report():
@@ -62,10 +71,11 @@ class ReportSink:
         if self.want_preview:
             self.image = processed.image
         if time.monotonic() >= self.next_progress:
-            stats = self.pipeline.stats
-            self.report.update(frames_processed=stats.frames_processed, stale_inputs_skipped=stats.stale_inputs_skipped,
-                               labels_seen=sorted(stats.labels_seen | set(processed.labels)),
-                               capture=self.source.report)
+            block = self.pipeline.stats.report()
+            # Sinks run before the engine records this result's labels; the snapshot includes them,
+            # so the legacy alias still comes from the block it embeds.
+            block["labels_seen"] = sorted(set(block["labels_seen"]) | set(processed.labels))
+            self.report.update(report_fields(block, LEGACY_FIELDS), pipeline=block, capture=self.source.report)
             self.progress(self.report.copy())
             self.next_progress = time.monotonic() + 1
 
@@ -81,8 +91,8 @@ def recognize(candidate, seconds, stop, progress=lambda report: None, want_previ
     try:
         if hud_mode:
             # No CLI/live adapter enables this: fixture backends only.
-            if backend_factory is None or getattr(backend_factory, "kind", None) != "synthetic":
-                raise ValueError("hud_live_mirror_not_approved")
+            LIVE_IMAGE_INPUT.require(backend_factory is not None and getattr(backend_factory, "kind", None) == "synthetic",
+                                     "hud_live_mirror_not_approved")
             # Validate the calibration before the model loads or the source opens.
             stage = HudStage(backend_factory, calibration, hud_config)
             stage.start()
@@ -122,15 +132,8 @@ def recognize(candidate, seconds, stop, progress=lambda report: None, want_previ
             if captured["status"] == "error":
                 report.update(status="error", reason=captured.get("reason", "capture_failed"), error=captured.get("error", "Capture failed"))
         if pipeline is not None:
-            stats = pipeline.stats
-            elapsed = max(stats.elapsed_s, 0.001)
-            report.update(frames_processed=stats.frames_processed, stale_inputs_skipped=stats.stale_inputs_skipped,
-                          stale_results_skipped=stats.stale_results_skipped, pending_frames_replaced=stats.pending_replaced,
-                          labels_seen=sorted(stats.labels_seen), processing_elapsed_ms=round(stats.elapsed_s * 1000, 3),
-                          observed_processing_rate_hz=round(stats.frames_processed / elapsed, 3),
-                          mean_inference_ms=round(stats.mean_inference_ms, 3),
-                          maximum_inference_ms=round(stats.max_inference_ms, 3),
-                          maximum_processing_started_age_ms=round(stats.max_input_age_ms, 3))
+            block = pipeline.stats.report()
+            report.update(report_fields(block, LEGACY_FIELDS), pipeline=block)
         report["phase"] = "closed"
     if report["status"] == "recognized":
         age = (time.monotonic_ns() - report["last_result"]["observation_time_ns"]) / 1e6

@@ -16,9 +16,10 @@ import numpy as np
 
 from framejacker import hud
 from framejacker.frame import Detection, DetectionResult, Frame
+from framejacker.runtime import synthetic
 from scripts import live_pipeline as live
 from scripts import mirror_recognize as mirror
-from framejacker.overlay import DEFAULT_BRIDGE, OverlayClient, PanelSettings, rgba_from_bgr
+from framejacker.overlay import DEFAULT_BRIDGE, OverlayClient, OverlaySink, PanelSettings, rgba_from_bgr
 
 
 def calibration(width=1280, height=720, *, layout="mono", fourcc="BGR3", padding=0):
@@ -193,8 +194,8 @@ class HudMaskTests(unittest.TestCase):
 
 class HudIntegrationTests(unittest.TestCase):
     def test_pipeline_absent_or_unvalidated_calibration_never_opens_or_infers(self):
-        for cal in (None, replace(live.synthetic_hud_calibration(), validated=False)):
-            source, sink, detector = live.SyntheticSource(), live.HeadlessSink(), live.FixtureDetector()
+        for cal in (None, replace(synthetic.synthetic_hud_calibration(), validated=False)):
+            source, sink, detector = synthetic.SyntheticSource(), synthetic.HeadlessSink(), synthetic.FixtureDetector()
             with patch.object(source, "open") as opened, patch.object(sink, "open") as shown, \
                     patch.object(detector, "detect") as detect:
                 report = live.run_pipeline(source, detector, sink, .2, hud_mode=True, calibration=cal)
@@ -204,13 +205,13 @@ class HudIntegrationTests(unittest.TestCase):
             self.assertEqual(report["status"], "error")
 
     def test_pipeline_inference_sees_mask_and_sink_receives_only_hud(self):
-        cal = live.synthetic_hud_calibration()
-        class Detector(live.FixtureDetector):
+        cal = synthetic.synthetic_hud_calibration()
+        class Detector(synthetic.FixtureDetector):
             def detect(inner, image, threshold):
                 self.assertFalse(image[39:59, 65:92].any())
                 self.assertFalse(image.flags.writeable)
                 return DetectionResult((detected("chair", .9, [10, 10, 20, 20]),), 0.0)
-        class Sink(live.HeadlessSink):
+        class Sink(synthetic.HeadlessSink):
             def submit(inner, processed):
                 frame = processed.frame
                 self.assertEqual(processed.image.shape, (128, 320, 3))
@@ -220,9 +221,9 @@ class HudIntegrationTests(unittest.TestCase):
                 self.assertEqual(processed.output_space, "approximate_image_view_direction")
                 self.assertLessEqual(processed.expires_ns, frame.observed_ns + 1000000000)
                 self.assertGreater(processed.expires_ns, frame.observed_ns)
-                self.assertEqual(frame.source_id, cal.source_id)
+                self.assertEqual(frame.source, cal.source_id)
                 super().submit(processed)
-        report = live.run_pipeline(live.SyntheticSource(), Detector(), Sink(), .3, hud_mode=True, calibration=cal)
+        report = live.run_pipeline(synthetic.SyntheticSource(), Detector(), Sink(), .3, hud_mode=True, calibration=cal)
         self.assertEqual(report["status"], "completed", report)
         self.assertTrue(report["cleanup_ok"])
         self.assertFalse(report["hardware_mapping_verified"])
@@ -230,8 +231,8 @@ class HudIntegrationTests(unittest.TestCase):
         self.assertFalse(report["world_locked"])
 
     def test_worker_report_cannot_upgrade_synthetic_calibration_to_hardware_evidence(self):
-        report = live.run_pipeline(live.SyntheticSource(), live.FixtureDetector(), live.HeadlessSink(), .1,
-            hud_mode=True, calibration=live.synthetic_hud_calibration())
+        report = live.run_pipeline(synthetic.SyntheticSource(), synthetic.FixtureDetector(), synthetic.HeadlessSink(), .1,
+            hud_mode=True, calibration=synthetic.synthetic_hud_calibration())
         report["vr_runtime_initialized"] = False
         live.validate_worker_report(report, report["exit_code"])
         for key, value in (("hardware_mapping_verified", True), ("world_locked", True),
@@ -242,8 +243,8 @@ class HudIntegrationTests(unittest.TestCase):
     def test_changed_source_layout_or_format_prevents_first_inference(self):
         for mode in ("source", "layout", "format", "config"):
             with self.subTest(mode=mode):
-                source = live.SyntheticSource()
-                cal = live.synthetic_hud_calibration()
+                source = synthetic.SyntheticSource()
+                cal = synthetic.synthetic_hud_calibration()
                 if mode == "source":
                     source.source_id = "synthetic:another"
                 if mode == "layout":
@@ -251,64 +252,63 @@ class HudIntegrationTests(unittest.TestCase):
                 if mode == "format":
                     cal = replace(cal, capture_format=replace(cal.capture_format, fourcc="RGB3"))
                 config = replace(hud.HUD_CONFIG, x_m=.4) if mode == "config" else hud.HUD_CONFIG
-                detector = live.FixtureDetector()
+                detector = synthetic.FixtureDetector()
                 with patch.object(detector, "detect") as detect:
-                    report = live.run_pipeline(source, detector, live.HeadlessSink(), .2, hud_mode=True,
+                    report = live.run_pipeline(source, detector, synthetic.HeadlessSink(), .2, hud_mode=True,
                                                calibration=cal, hud_config=config)
                 detect.assert_not_called()
                 self.assertEqual(report["status"], "error", report)
 
     def test_layout_changed_during_inference_drops_result(self):
-        source = live.SyntheticSource()
-        class Detector(live.FixtureDetector):
+        source = synthetic.SyntheticSource()
+        class Detector(synthetic.FixtureDetector):
             def detect(self, *args):
                 source.capture_layout = "stereo_sbs"
                 return super().detect(*args)
-        report = live.run_pipeline(source, Detector(), live.HeadlessSink(), .2, hud_mode=True,
-                                   calibration=live.synthetic_hud_calibration())
+        report = live.run_pipeline(source, Detector(), synthetic.HeadlessSink(), .2, hud_mode=True,
+                                   calibration=synthetic.synthetic_hud_calibration())
         self.assertEqual(report["status"], "error")
         self.assertEqual(report["frames_submitted"], 0)
         self.assertTrue(report["cleanup_ok"])
 
     def test_native_format_changed_while_inference_runs_drops_result(self):
         entered, closed = threading.Event(), threading.Event()
-        class Source(live.SyntheticSource):
+        class Source(synthetic.SyntheticSource):
             def read(self, *args, **kwargs):
                 if entered.is_set():
-                    return live.OwnedFrame.copy_from(np.zeros((32, 96, 3), np.uint8), 2,
-                                                    time.monotonic_ns(), self.source_id)
+                    return Frame.owned_bgr(np.zeros((32, 96, 3), np.uint8), 2, time.monotonic_ns(), self.source_id)
                 return super().read(*args, **kwargs)
             def close(self):
                 closed.set()
                 return super().close()
-        class Detector(live.FixtureDetector):
+        class Detector(synthetic.FixtureDetector):
             def detect(self, *args):
                 entered.set()
                 if not closed.wait(3):
                     raise AssertionError("format-change fixture did not close")
                 return super().detect(*args)
-        report = live.run_pipeline(Source(), Detector(), live.HeadlessSink(), .5, hud_mode=True,
-                                   calibration=live.synthetic_hud_calibration())
+        report = live.run_pipeline(Source(), Detector(), synthetic.HeadlessSink(), .5, hud_mode=True,
+                                   calibration=synthetic.synthetic_hud_calibration())
         self.assertEqual(report["frames_submitted"], 0)
         self.assertEqual("native_capture_format_changed", report["reason"])
         self.assertTrue(report["cleanup_ok"])
 
     def test_slow_hud_result_is_not_submitted(self):
-        class Slow(live.FixtureDetector):
+        class Slow(synthetic.FixtureDetector):
             def detect(self, *args):
                 time.sleep(.08)
                 return super().detect(*args)
-        report = live.run_pipeline(live.SyntheticSource(), Slow(), live.HeadlessSink(), .25,
-            hud_mode=True, calibration=live.synthetic_hud_calibration(), max_age_ms=30)
+        report = live.run_pipeline(synthetic.SyntheticSource(), Slow(), synthetic.HeadlessSink(), .25,
+            hud_mode=True, calibration=synthetic.synthetic_hud_calibration(), max_age_ms=30)
         self.assertGreater(report["stale_results_dropped"], 0)
         self.assertEqual(report["frames_submitted"], 0)
         self.assertTrue(report["cleanup_ok"])
 
     def test_hud_requires_fixed_sink_and_cli_never_enables_live_source(self):
-        detector = live.FixtureDetector()
-        with patch.object(detector, "detect") as detect, patch.object(live.OverlayValidationSink, "open") as opened:
-            report = live.run_pipeline(live.SyntheticSource(), detector, live.OverlayValidationSink(), .2,
-                hud_mode=True, calibration=live.synthetic_hud_calibration())
+        detector = synthetic.FixtureDetector()
+        with patch.object(detector, "detect") as detect, patch.object(OverlaySink, "open") as opened:
+            report = live.run_pipeline(synthetic.SyntheticSource(), detector, OverlaySink(), .2,
+                hud_mode=True, calibration=synthetic.synthetic_hud_calibration())
         opened.assert_not_called()
         detect.assert_not_called()
         self.assertEqual(report["status"], "error")
@@ -374,7 +374,7 @@ class HudIntegrationTests(unittest.TestCase):
                 return self.data
             def close(self):
                 type(self).closed = True
-        class Detector(live.FixtureDetector):
+        class Detector(synthetic.FixtureDetector):
             def detect(inner, image, threshold):
                 self.assertEqual(image.shape, (540, 960, 3))
                 self.assertFalse(image[490:520, 890:940].any())
@@ -413,7 +413,7 @@ class HudIntegrationTests(unittest.TestCase):
                 return self.data
             def close(self):
                 pass
-        class Detector(live.FixtureDetector):
+        class Detector(synthetic.FixtureDetector):
             def detect(inner, image, threshold):
                 Source.kind = "live_camera"  # The approved declaration is pinned at start.
                 return super().detect(image, threshold)
@@ -447,9 +447,9 @@ class HudIntegrationTests(unittest.TestCase):
 @unittest.skipUnless(os.name == "posix" and DEFAULT_BRIDGE.is_file(), "Linux native validation bridge required")
 class HudNativeTests(unittest.TestCase):
     def test_hud_native_transport_fixed_placement_expiry_and_clean_shutdown(self):
-        sink = live.HudValidationSink()
-        report = live.run_pipeline(live.SyntheticSource(), live.FixtureDetector(), sink, .3,
-            hud_mode=True, calibration=live.synthetic_hud_calibration())
+        sink = OverlaySink(hud=hud.HUD_CONFIG)
+        report = live.run_pipeline(synthetic.SyntheticSource(), synthetic.FixtureDetector(), sink, .3,
+            hud_mode=True, calibration=synthetic.synthetic_hud_calibration())
         self.assertEqual(report["status"], "completed", report)
         self.assertTrue(report["cleanup_ok"], report)
         self.assertEqual(sink.client.settings, PanelSettings(width=.32, distance=1.25, x=.55, y=-.35,
@@ -459,13 +459,13 @@ class HudNativeTests(unittest.TestCase):
         self.assertGreater(sink.report["native_report"]["expiring_frames_received"], 0)
 
     def test_placement_change_during_inference_is_rejected_before_submission(self):
-        sink = live.HudValidationSink()
-        class Detector(live.FixtureDetector):
+        sink = OverlaySink(hud=hud.HUD_CONFIG)
+        class Detector(synthetic.FixtureDetector):
             def detect(self, *args):
                 sink.client.set_settings(replace(sink.client.settings, x=.4))
                 return super().detect(*args)
-        report = live.run_pipeline(live.SyntheticSource(), Detector(), sink, .3,
-            hud_mode=True, calibration=live.synthetic_hud_calibration())
+        report = live.run_pipeline(synthetic.SyntheticSource(), Detector(), sink, .3,
+            hud_mode=True, calibration=synthetic.synthetic_hud_calibration())
         self.assertEqual(report["status"], "error")
         self.assertIn("overlay_settings_frozen", report["reason"])
         self.assertEqual(report["frames_submitted"], 0)
@@ -474,9 +474,9 @@ class HudNativeTests(unittest.TestCase):
         self.assertFalse(sink.client.settings.visible)
 
     def test_stalled_inference_expires_hud_without_python_clear(self):
-        sink = live.HudValidationSink()
+        sink = OverlaySink(hud=hud.HUD_CONFIG)
         blocked, release, stop = threading.Event(), threading.Event(), threading.Event()
-        class Detector(live.FixtureDetector):
+        class Detector(synthetic.FixtureDetector):
             calls = 0
             def detect(self, *args):
                 self.calls += 1
@@ -485,9 +485,9 @@ class HudNativeTests(unittest.TestCase):
                     release.wait(5)
                 return super().detect(*args)
         report = {}
-        thread = threading.Thread(target=lambda: report.update(live.run_pipeline(live.SyntheticSource(),
+        thread = threading.Thread(target=lambda: report.update(live.run_pipeline(synthetic.SyntheticSource(),
             Detector(), sink, 5, stop=stop, max_fps=10, max_age_ms=500, hud_mode=True,
-            calibration=live.synthetic_hud_calibration())))
+            calibration=synthetic.synthetic_hud_calibration())))
         thread.start()
         try:
             self.assertTrue(blocked.wait(4))

@@ -10,8 +10,20 @@ with ``check_sink()``, run at every admission checkpoint).
 """
 import threading
 
-from ..pipeline import Pipeline
+from ..frame import native_format
+from ..gates import LIVE_IMAGE_INPUT
+from ..pipeline import Pipeline, report_fields
 from ..sources.polled import PolledSource
+
+
+# Schema-1 field names kept for existing reports and evidence; "pipeline" holds the canonical block.
+LEGACY_FIELDS = {
+    "frames_processed": "frames_processed", "frames_submitted": "frames_submitted",
+    "frames_received": "frames_received", "stale_inputs_dropped": "stale_inputs_skipped",
+    "stale_results_dropped": "stale_results_skipped", "pending_inputs_replaced": "pending_replaced",
+    "maximum_observation_age_ms": "max_output_age_ms", "total_processing_ms": "total_processing_ms",
+    "total_inference_ms": "total_inference_ms", "labels_seen": "labels_seen",
+}
 
 
 def new_report(max_fps, seconds):
@@ -28,12 +40,12 @@ def new_report(max_fps, seconds):
 
 def last_result(processed):
     frame = processed.frame
-    result = {"source_id": frame.source_id, "sequence": frame.sequence,
+    result = {"source_id": frame.source, "sequence": frame.sequence,
               "observed_ns": frame.observed_ns, "media_time": frame.media_time,
               "inference_ms": processed.result.inference_ms,
               "observation_age_ms": round(processed.output_age_ms, 3),
               "processing_ms": round(processed.processing_ms, 3), "expires_ns": processed.expires_ns,
-              "native_format": frame.native_descriptor,
+              "native_format": native_format(frame),
               "detector_input_size": list(processed.detector_input_size),
               "native_to_inference_scale": list(processed.native_to_inference_scale),
               "box_coordinate_space": processed.output_space}
@@ -44,8 +56,7 @@ def last_result(processed):
 
 def run_pipeline(source, detector, sink, seconds, *, stop=None, max_fps=5, max_age_ms=1000, threshold=0.5,
                  hud=None):
-    if getattr(source, "kind", None) != "synthetic":
-        raise ValueError("live_image_source_not_approved")
+    LIVE_IMAGE_INPUT.require(getattr(source, "kind", None) == "synthetic", "live_image_source_not_approved")
     if not (0.05 <= seconds <= 60 and 1 <= max_fps <= 10 and 0 < max_age_ms <= 1000 and 0 <= threshold <= 1):
         raise ValueError("pipeline_limits_invalid")
     stop = stop or threading.Event()
@@ -70,11 +81,9 @@ def run_pipeline(source, detector, sink, seconds, *, stop=None, max_fps=5, max_a
         report.update(status="error", exit_code=1, reason=str(error)[:1024])
     stats = pipeline.stats
     report.update(stats.hud_report)
-    report.update(frames_processed=stats.frames_processed, frames_submitted=stats.frames_submitted,
-                  stale_inputs_dropped=stats.stale_inputs_skipped, stale_results_dropped=stats.stale_results_skipped,
-                  maximum_observation_age_ms=stats.max_output_age_ms, total_processing_ms=stats.total_processing_ms,
-                  total_inference_ms=stats.total_inference_ms, frames_received=stats.frames_received,
-                  pending_inputs_replaced=stats.pending_replaced, labels_seen=sorted(stats.labels_seen),
+    block = stats.report()
+    # From the unrounded stats: deriving it from the block's rounded elapsed_ms would round twice.
+    report.update(report_fields(block, LEGACY_FIELDS), pipeline=block,
                   elapsed_seconds=round(stats.elapsed_s, 3) if stats.started else 0)
     if stats.last is not None:
         report["last_result"] = last_result(stats.last)

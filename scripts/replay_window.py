@@ -14,7 +14,7 @@ import time
 if not __package__:  # Run as a file: import this checkout's packages without installation.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from framejacker.detection import DEFAULT_DETECTOR, DETECTORS, create_detector, describe
-from framejacker.pipeline import LatestResultSink, Pipeline
+from framejacker.pipeline import LatestResultSink, Pipeline, report_fields
 from framejacker.sources.replay import ReplaySource
 from framejacker.sources.recording import RecordingError, latest_recording
 
@@ -76,19 +76,22 @@ class ReplayWorker(threading.Thread):
             self.done.set()
 
 
+# Schema field names kept for existing reports and evidence; "pipeline" holds the canonical block.
+LEGACY_FIELDS = {"frames_replaced": "pending_replaced", "processed_fps": "processed_fps",
+                 "mean_processing_ms": "mean_processing_ms", "max_input_age_ms": "max_input_age_ms"}
+
+
 def pacing_report(worker, args, latencies, schedule_lateness):
     """Throughput and timing fields: decode, skipping, processing and presentation."""
     source, stats = worker.source, worker.pipeline.stats
     elapsed = max(stats.elapsed_s, 1e-9)
+    block = stats.report()
     fields = {"realtime": args.realtime, "decode_threads": args.decode_threads,
               "frames_decoded": source.frames_decoded, "decode_fps": round(source.frames_decoded / elapsed, 3),
               "frames_dropped": source.frames_dropped, "frames_skipped": source.frames_skipped,
-              "catch_ups": source.catch_ups, "frames_replaced": stats.pending_replaced,
-              "media_seconds_played": round(source.media_seconds, 3),
+              "catch_ups": source.catch_ups, "media_seconds_played": round(source.media_seconds, 3),
               "realtime_ratio": round(source.media_seconds / elapsed, 3),
-              "processed_fps": round(worker.frames_processed / elapsed, 3),
-              "mean_processing_ms": round(stats.mean_processing_ms, 3),
-              "max_input_age_ms": round(stats.max_input_age_ms, 3)}
+              **report_fields(block, LEGACY_FIELDS), "pipeline": block}
     if latencies:
         fields.update(mean_presentation_latency_ms=round(sum(latencies) / len(latencies), 3),
                       max_presentation_latency_ms=round(max(latencies), 3))

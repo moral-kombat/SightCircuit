@@ -33,7 +33,7 @@ from typing import Callable, Protocol
 from .context import CaptureContext
 from .convert import to_bgr
 from .detection import annotate, require_result
-from .frame import Frame, OwnedFrame, Processed, frame_view
+from .frame import Frame, Processed
 from .latest import LatestSlot
 
 
@@ -100,6 +100,35 @@ class PipelineStats:
     @property
     def sink_cleanup_ok(self):
         return self.sink_clear_ok and self.sink_close_ok
+
+    def report(self):
+        """Run statistics in the engine's own vocabulary, embedded in reports as "pipeline".
+
+        Durations are milliseconds rounded to three decimals; ``processed_fps``
+        divides by at least 1 ms. Commands keep their earlier field names only
+        as aliases of these (``report_fields``). Which reports embed the block,
+        and when, is up to each command; see ``docs/development.md``.
+        """
+        def ms(value):
+            return round(value, 3)
+        return {"frames_received": self.frames_received, "frames_processed": self.frames_processed,
+                "frames_submitted": self.frames_submitted, "stale_inputs_skipped": self.stale_inputs_skipped,
+                "stale_results_skipped": self.stale_results_skipped, "pending_replaced": self.pending_replaced,
+                "total_inference_ms": ms(self.total_inference_ms), "mean_inference_ms": ms(self.mean_inference_ms),
+                "max_inference_ms": ms(self.max_inference_ms), "total_processing_ms": ms(self.total_processing_ms),
+                "mean_processing_ms": ms(self.mean_processing_ms), "max_input_age_ms": ms(self.max_input_age_ms),
+                "max_output_age_ms": ms(self.max_output_age_ms), "elapsed_ms": ms(self.elapsed_s * 1000),
+                "processed_fps": round(self.frames_processed / max(self.elapsed_s, 1e-3), 3),
+                "labels_seen": sorted(self.labels_seen), "cancelled": self.cancelled,
+                "sink_clear_ok": self.sink_clear_ok, "sink_close_ok": self.sink_close_ok}
+
+
+def report_fields(block, aliases):
+    """A command's legacy report fields, derived from a ``PipelineStats.report()`` block.
+
+    ``aliases`` maps each legacy name to a block key, or to a function of the block.
+    """
+    return {name: source(block) if callable(source) else block[source] for name, source in aliases.items()}
 
 
 class Pipeline:
@@ -212,7 +241,7 @@ class Pipeline:
     def _prepare(self, frame):
         if self.hud is not None:
             return self.hud.prepare(frame)
-        return self.convert(frame_view(frame))
+        return self.convert(frame)
 
     def _present(self, bgr, result):
         if self.hud is not None:
@@ -254,12 +283,11 @@ class Pipeline:
         if self._expired(expires_ns, stop):
             stats.stale_results_skipped += 1
             return
-        view = frame_view(frame)
         shape = getattr(bgr, "shape", None)
         processed = Processed(frame, result, image, stats.frames_processed, age_ms, processing_ms,
                               expires_ns, output_age,
                               (shape[1], shape[0]) if shape is not None else None,
-                              (shape[1] / view.width, shape[0] / view.height) if shape is not None else None,
+                              (shape[1] / frame.width, shape[0] / frame.height) if shape is not None else None,
                               hud=hud_output)
         for sink in self.sinks:
             if capture_failure:
@@ -300,6 +328,12 @@ class Pipeline:
             try:
                 def publish(frame):
                     nonlocal captured_sequence
+                    # The slot holds a private copy, so a source cannot change a queued
+                    # frame and every checkpoint sees the same pixels and layout. Anything
+                    # else is left as-is: a capture context, when present, rejects it with
+                    # its own reason, and otherwise the frame fails later as before.
+                    if isinstance(frame, Frame):
+                        frame = frame.owned()
                     # A context change observed by capture latches the context's
                     # failure, so an older in-flight inference cannot reach a sink.
                     self._admit(frame)
@@ -309,8 +343,7 @@ class Pipeline:
                         if captured_sequence is not None and frame.sequence <= captured_sequence:
                             raise ValueError("frame_sequence_regressed")
                         captured_sequence = frame.sequence
-                    # Owned frames are copied so a source cannot reuse their pixels.
-                    slot.put(frame.copy() if isinstance(frame, OwnedFrame) else frame)
+                    slot.put(frame)
                     self.stats.frames_received += 1
                 self.source.run(publish, stop)
             except BaseException as error:
@@ -331,6 +364,7 @@ class Pipeline:
                     continue
                 remaining = self.deadline - now if self.deadline is not None else 0.05
                 frame = slot.take(timeout=max(0, min(0.05, remaining)))
+                self.stats.pending_replaced = slot.replaced  # Current for progress snapshots.
                 if frame is None:
                     if slot.closed:
                         break

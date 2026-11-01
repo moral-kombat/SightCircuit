@@ -26,7 +26,7 @@ check or approves a source; approval gates stay with the callers.
 from copy import copy, deepcopy
 import threading
 
-from .frame import Frame, OwnedFrame, native_format
+from .frame import Frame, native_format
 from .hud.contract import CaptureFormat
 
 __all__ = ("CaptureContext", "FORMAT_CHANGED", "FORMAT_METADATA_KEYS", "SESSION_METADATA_KEYS",
@@ -58,8 +58,6 @@ def declared_identity(source):
 
 def frame_identity(frame):
     """Return ``(source_id, native_layout, session_metadata)`` as owned copies."""
-    if isinstance(frame, OwnedFrame):
-        return frame.source_id, frame.native_descriptor, {}
     if isinstance(frame, Frame):
         metadata = frame.metadata or {}
         layout = (frame.pixel_format, frame.width, frame.height, frame.stride,

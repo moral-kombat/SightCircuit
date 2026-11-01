@@ -1,4 +1,5 @@
-"""Shared frame pipeline, latest-item handoff and output helpers, without OpenCV."""
+"""Shared frame pipeline, latest-item handoff and output helpers; OpenCV only where a test says so."""
+import importlib.util
 import os
 from pathlib import Path
 import signal
@@ -326,6 +327,112 @@ class PipelineTests(unittest.TestCase):
             runner.run(threading.Event())
         self.assertEqual(sink.items, [])
 
+    def test_padded_array_frames_are_owned_before_any_checkpoint(self):
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("NumPy required for array frames")
+        storage = np.zeros((2, 16), np.uint8)
+        view = np.ndarray((2, 4, 3), np.uint8, buffer=storage, strides=(16, 3, 1))
+
+        class Source:
+            def run(self, emit, stop):
+                for number in (1, 2, 3):
+                    view[:] = number  # The source reuses one padded buffer.
+                    emit(Frame(view, "BGR24", 4, 2, 16, "fixture", number, time.monotonic_ns(),
+                               metadata={"native_format": {"stride_bytes": 16}}))
+                    time.sleep(.02)
+
+        class Detector:
+            def detect(self, image, threshold):
+                time.sleep(.03)
+                return DetectionResult((), 0.0)
+
+        seen = []
+        runner = Pipeline(Source(), Detector(), [Recorder()], max_fps=1000, max_input_age_ms=1000,
+                          convert=lambda item: seen.append(item) or item.pixels,
+                          annotator=lambda image, result: image)
+        stats = runner.run(threading.Event())
+        self.assertGreater(stats.frames_submitted, 0)
+        for item in seen:
+            self.assertEqual(item.stride, 12)
+            self.assertFalse(np.shares_memory(item.pixels, storage))
+            self.assertEqual(int(item.pixels[0, 0, 0]), item.sequence)
+
+    def test_raw_buffers_keep_their_declared_stride_and_are_frozen(self):
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("NumPy required for array frames")
+        from array import array
+        import ctypes
+        flat = np.arange(32, dtype=np.uint8)
+        writable = array("B", range(32))
+        for pixels in (np.frombuffer(bytes(range(32)), np.uint8), flat, writable, bytearray(range(32))):
+            with self.subTest(kind=type(pixels).__name__):
+                owned = Frame(pixels, "RGB3", 4, 2, 16, "fixture", 1, 1).owned()
+                self.assertEqual(owned.stride, 16)
+                self.assertEqual(bytes(owned.pixels), bytes(range(32)))
+                if not hasattr(owned.pixels, "strides"):
+                    self.assertIs(type(owned.pixels), bytes)
+                writable[0] = flat[0] = 99  # The source rewrites its buffer.
+                self.assertEqual(bytes(owned.pixels)[0], 0)
+                writable[0] = flat[0] = 0
+
+        # The copy is of the bytes themselves; item formats with padding are never re-parsed.
+        class Padded(ctypes.Structure):
+            _fields_ = [("a", ctypes.c_uint8), ("b", ctypes.c_uint32)]
+
+        padded = (Padded * 4)()
+        ctypes.memmove(padded, bytes(range(1, 33)), 32)
+        for pixels in (np.frombuffer(bytes(range(1, 33)), "V1").copy(), padded):
+            with self.subTest(kind=type(pixels).__name__):
+                owned = Frame(pixels, "RGB3", 4, 2, 16, "fixture", 1, 1).owned()
+                self.assertEqual(memoryview(owned.pixels).tobytes(), bytes(range(1, 33)))
+
+    @unittest.skipUnless(importlib.util.find_spec("numpy") and importlib.util.find_spec("cv2"),
+                         "NumPy and OpenCV required for the real converter")
+    def test_latest_only_engine_accepts_a_raw_array_buffer(self):
+        import numpy as np
+
+        class Source:
+            def run(self, emit, stop):
+                for number in (1, 2):
+                    emit(Frame(np.frombuffer(bytes(32), np.uint8), "RGB3", 4, 2, 16, "fixture", number,
+                               time.monotonic_ns()))
+
+        class Detector:
+            def detect(self, image, threshold):
+                return DetectionResult((), 0.0)
+
+        # The real converter reads the raw buffer with the frame's declared stride.
+        stats = Pipeline(Source(), Detector(), [Recorder()], max_fps=1000, max_input_age_ms=1000,
+                         annotator=lambda image, result: image).run(threading.Event())
+        self.assertGreater(stats.frames_submitted, 0)
+
+    def test_pending_replaced_is_current_while_the_run_is_going(self):
+        observed = []
+
+        class Sink:
+            def submit(self, processed):
+                observed.append(runner.stats.pending_replaced)
+
+        runner = Pipeline(ListSource(40, delay=0.002), EchoDetector(delay=0.02), [Sink()], max_fps=1000,
+                          convert=lambda item: item.pixels, annotator=lambda image, result: image)
+        stats = runner.run(threading.Event())
+        self.assertGreater(max(observed), 0)
+        self.assertLessEqual(max(observed), stats.pending_replaced)
+
+    def test_publishing_a_non_frame_latches_the_context_reason(self):
+        class Source:
+            def run(self, emit, stop):
+                emit({"pixels": b""})
+
+        runner = Pipeline(Source(), EchoDetector(), [Recorder()], max_input_age_ms=1000)
+        with self.assertRaisesRegex(ValueError, "capture_frame_type_unsupported"):
+            runner.run(threading.Event())
+        self.assertEqual(runner.capture_context.failure, "capture_frame_type_unsupported")
+
     def test_mirror_source_converts_reads_and_retains_report(self):
         def acquire(stop, on_frame, progress):
             progress({"status": "acquiring"})
@@ -383,6 +490,28 @@ class Lifecycle:
     def close(self):
         self.calls.append("close")
         return self.close_result
+
+
+class StatsReportTests(unittest.TestCase):
+    CANONICAL = {"frames_received", "frames_processed", "frames_submitted", "stale_inputs_skipped",
+                 "stale_results_skipped", "pending_replaced", "total_inference_ms", "mean_inference_ms",
+                 "max_inference_ms", "total_processing_ms", "mean_processing_ms", "max_input_age_ms",
+                 "max_output_age_ms", "elapsed_ms", "processed_fps", "labels_seen", "cancelled",
+                 "sink_clear_ok", "sink_close_ok"}
+
+    def test_one_canonical_block_with_rounded_milliseconds(self):
+        from framejacker.pipeline import PipelineStats, report_fields
+
+        stats = PipelineStats(frames_processed=2, total_inference_ms=1.23456, max_input_age_ms=9.87654,
+                              labels_seen={"dog", "cat"}, started=10.0, finished=12.5)
+        block = stats.report()
+        self.assertEqual(set(block), self.CANONICAL)
+        self.assertEqual((block["total_inference_ms"], block["mean_inference_ms"], block["max_input_age_ms"]),
+                         (1.235, 0.617, 9.877))
+        self.assertEqual((block["elapsed_ms"], block["processed_fps"], block["labels_seen"]), (2500.0, 0.8, ["cat", "dog"]))
+        self.assertEqual(PipelineStats().report()["processed_fps"], 0.0)
+        self.assertEqual(report_fields(block, {"seen": "labels_seen", "seconds": lambda b: b["elapsed_ms"] / 1000}),
+                         {"seen": ["cat", "dog"], "seconds": 2.5})
 
 
 class EngineLifecycleTests(unittest.TestCase):

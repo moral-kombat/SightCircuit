@@ -1,7 +1,12 @@
-"""Inspect MP4 recording headers without decoding or reading media/pose payloads.
+"""Read MP4 recording headers without decoding or reading media/pose payloads.
 
-Used by the replay window and the ``recording_check`` command; ``latest_recording``
-selects the newest Arcturus ``*_stereo.mp4`` file.
+One box-header decoder (``box_header``) serves two walkers with deliberately
+different policies: ``Reader``/``inspect_recording`` for finished files (a cut
+or crossing box is an error; a size-0 box runs to its container's end), used by
+the replay window and ``recording_check``; and ``scan_headers`` for a file that
+is still being written (a cut or open-ended tail is pending), used by
+``recording_growth_check``. ``latest_recording`` selects the newest Arcturus
+``*_stereo.mp4`` file.
 """
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +34,33 @@ class Box:
     end: int
 
 
+@dataclass(frozen=True)
+class BoxHeader:
+    """One decoded MP4 box header, before any container policy is applied."""
+    kind: bytes = b""
+    size: int = 0  # Decoded 32-bit or 64-bit size; 0 for the open-ended marker.
+    header_size: int = 8  # 16 when a 64-bit size follows.
+    open_ended: bool = False  # 32-bit size 0: the box runs to the end of its container.
+    truncated: str | None = None  # "header" or "extended_header" when the bound cuts the header.
+
+
+def box_header(read, offset, available):
+    """Decode the box header at ``offset`` with ``available`` bytes before its bound.
+
+    ``read(offset, count)`` is the caller's bounded reader. Policy stays with the
+    caller: a finished file treats truncation as an error and an open-ended box
+    as running to its container's end; a growing file reports both as pending.
+    """
+    if available < 8:
+        return BoxHeader(truncated="header")
+    size, kind = struct.unpack(">I4s", read(offset, 8))
+    if size == 1:
+        if available < 16:
+            return BoxHeader(kind, truncated="extended_header")
+        return BoxHeader(kind, struct.unpack(">Q", read(offset + 8, 8))[0], 16)
+    return BoxHeader(kind, size, 8, open_ended=size == 0)
+
+
 class Reader:
     def __init__(self, stream, size):
         self.stream, self.size = stream, size
@@ -51,20 +83,15 @@ class Reader:
             self.box_count += 1
             if self.box_count > MAX_BOXES:
                 raise RecordingError("MP4 box count limit exceeded")
-            if end - start < 8:
+            head = box_header(self.read, start, end - start)
+            if head.truncated == "header":
                 raise RecordingError("Truncated MP4 box header")
-            size, kind = struct.unpack(">I4s", self.read(start, 8))
-            header = 8
-            if size == 1:
-                if end - start < 16:
-                    raise RecordingError("Truncated extended MP4 box header")
-                size = struct.unpack(">Q", self.read(start + 8, 8))[0]
-                header = 16
-            elif size == 0:
-                size = end - start
-            if size < header or size > end - start:
+            if head.truncated:
+                raise RecordingError("Truncated extended MP4 box header")
+            size = end - start if head.open_ended else head.size
+            if size < head.header_size or size > end - start:
                 raise RecordingError("MP4 box size crosses its parent or file boundary")
-            yield Box(kind, start + header, start + size)
+            yield Box(head.kind, start + head.header_size, start + size)
             start += size
 
     def prefix(self, box, size):
@@ -194,3 +221,66 @@ def latest_recording(directory):
         return max(candidates, key=lambda path: path.stat().st_mtime_ns)
     except ValueError as error:
         raise RecordingError(f"No *_stereo.mp4 recordings found in {directory}") from error
+
+
+# Growing files: one top-level scan per observation, never media payloads.
+SCAN_MAX_BOXES = 8192
+MAX_FILE_BYTES = 8 * 1024 * 1024 * 1024
+
+
+class GrowthError(ValueError):
+    pass
+
+
+class Budget:
+    """Header bytes one observation run may read, across all of its rescans."""
+    def __init__(self, maximum=MAX_HEADER_BYTES):
+        self.maximum, self.read_bytes = maximum, 0
+
+    def read(self, stream, offset, count):
+        if self.read_bytes + count > self.maximum:
+            raise GrowthError("header_read_budget_exhausted")
+        stream.seek(offset)
+        data = stream.read(count)
+        self.read_bytes += len(data)
+        if len(data) != count:
+            raise GrowthError("file_truncated_during_header_read")
+        return data
+
+
+def scan_headers(stream, size, budget):
+    """File extents bound boxes; they do not certify payload completion/ownership."""
+    if not 0 <= size <= MAX_FILE_BYTES:
+        raise GrowthError("file_size_out_of_bounds")
+    offset, pending, movie_seen, fragment = 0, None, False, None
+    headers, pairs = [], []
+    while offset < size:
+        if len(headers) >= SCAN_MAX_BOXES:
+            raise GrowthError("box_count_limit")
+        head = box_header(lambda at, count: budget.read(stream, at, count), offset, size - offset)
+        if head.truncated:
+            pending = "partial_header" if head.truncated == "header" else "partial_extended_header"
+            break
+        length, kind = head.size, head.kind
+        if head.open_ended or length == 0:
+            pending = "open_ended_box"
+            break
+        if length < head.header_size:
+            raise GrowthError("invalid_box_length")
+        if length > size - offset:
+            pending = "incomplete_box_extent"
+            break
+        headers.append((offset, length, kind.hex()))
+        if kind == b"moov":
+            movie_seen = True
+        elif kind == b"moof":
+            fragment = offset if movie_seen else None
+        elif kind == b"mdat":
+            if fragment is not None:
+                pairs.append((fragment, offset + length))
+            fragment = None
+        elif kind not in (b"free", b"skip"):
+            fragment = None
+        offset += length  # Skip every payload, including moov/moof and mdat.
+    return {"headers": headers, "pairs": pairs, "movie_header_present": movie_seen,
+            "pending": pending, "bounded_prefix_bytes": offset}
