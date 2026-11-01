@@ -10,10 +10,10 @@ import sys
 import tempfile
 import time
 
-if __package__:
-    from .mirror_capture import grayscale_png
-else:
-    from mirror_capture import grayscale_png
+if not __package__:  # Run as a file: import this checkout's packages without installation.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from framejacker.sources.mirror_device import grayscale_png  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 READER = ROOT / "artifacts/shm-reader/framejacker-shm-reader"

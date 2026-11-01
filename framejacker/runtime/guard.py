@@ -7,10 +7,11 @@ Linux uses a separate guardian and a private parent lifeline; catchable signals
 are not the only trigger for worker cleanup. Windows callers must be single-
 process workers (no native overlay helper) and have no parent-death guarantee.
 
-Callers pass their own module-level ``validate(report, returncode, **options)``.
-The guardian imports that validator by module name from this directory, so it
-knows no command and still never imports worker code beyond the validator's
-module (no detector, decoder or VR library is loaded at import time).
+Callers pass their own module-level ``validate(report, returncode, **options)``
+from ``scripts/`` or ``framejacker/``. The guardian imports that validator by
+dotted module name from this checkout only, so it knows no command and never
+imports worker code beyond the validator's module (no detector, decoder or VR
+library is loaded at import time).
 """
 import contextlib
 import importlib
@@ -234,30 +235,45 @@ def _supervise_owned(command, base_report, timeout, validate, *, descendants=Fal
     return report
 
 
-HERE = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[2]
+VALIDATOR_PACKAGES = ("scripts", "framejacker")
+
+
+def _dotted(name):
+    parts = name.split(".") if isinstance(name, str) else []
+    return (len(parts) >= 2 and parts[0] in VALIDATOR_PACKAGES and
+            all(part.isidentifier() for part in parts))
 
 
 def validator_reference(validate, options=None):
-    """Name a module-level validator in this directory so the guardian can import it."""
+    """Name a module-level validator of this checkout so the guardian can import it."""
     module = sys.modules.get(getattr(validate, "__module__", None))
     path = Path(getattr(module, "__file__", None) or "").resolve()
     name = getattr(validate, "__name__", "")
-    if (path.parent != HERE or path.suffix != ".py" or not path.stem.isidentifier() or
-            not name.isidentifier() or getattr(module, name, None) is not validate):
-        raise ValueError("worker_validator_must_be_module_level_in_scripts")
-    return {"module": path.stem, "function": name, "options": dict(options or {})}
+    try:
+        dotted = ".".join(path.relative_to(ROOT).with_suffix("").parts)
+    except ValueError:
+        dotted = ""
+    if (path.suffix != ".py" or not _dotted(dotted) or not name.isidentifier() or
+            getattr(module, name, None) is not validate):
+        raise ValueError("worker_validator_must_be_module_level_in_checkout")
+    return {"module": dotted, "function": name, "options": dict(options or {})}
 
 
 def load_validator(reference):
-    """Import a referenced validator from this directory only; bind its options."""
+    """Import a referenced validator from this checkout only; bind its options."""
     module_name, function_name = reference.get("module", ""), reference.get("function", "")
     options = reference.get("options") or {}
-    if (not isinstance(module_name, str) or not module_name.isidentifier() or
-            not isinstance(function_name, str) or not function_name.isidentifier() or
+    if (not _dotted(module_name) or not isinstance(function_name, str) or not function_name.isidentifier() or
             not isinstance(options, dict)):
         raise ValueError("unsupported_worker_validator")
-    spec = importlib.util.find_spec(module_name)
-    if spec is None or spec.origin is None or Path(spec.origin).resolve().parent != HERE:
+    try:
+        spec = importlib.util.find_spec(module_name)
+    except ImportError:
+        spec = None
+    allowed = tuple(ROOT / package for package in VALIDATOR_PACKAGES)
+    if (spec is None or spec.origin is None or
+            not any(Path(spec.origin).resolve().is_relative_to(base) for base in allowed)):
         raise ValueError("unsupported_worker_validator")
     validate = getattr(importlib.import_module(module_name), function_name)
 
@@ -345,4 +361,6 @@ def _guard_main(options):
 if __name__ == "__main__":
     if len(sys.argv) != 3 or sys.argv[1] != "--guard":
         sys.exit(64)
+    # Run as a file: import validators as checkout packages, never as siblings of this file.
+    sys.path[0] = str(ROOT)
     sys.exit(_guard_main(json.loads(sys.argv[2])))

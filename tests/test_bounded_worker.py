@@ -10,7 +10,8 @@ import tempfile
 import time
 import unittest
 
-from scripts import bounded_worker, recording_growth_check as growth
+from framejacker.runtime import guard as bounded_worker
+from scripts import recording_growth_check as growth
 
 ROOT = Path(__file__).resolve().parents[1]
 HAS_OPENCV = importlib.util.find_spec("cv2") is not None
@@ -39,38 +40,43 @@ def child_pids(pid):
 
 
 class ValidatorReferenceTests(unittest.TestCase):
-    """The guardian imports only a caller-named validator from scripts/, never a command table."""
+    """The guardian imports only a caller-named validator of this checkout, never a command table."""
 
-    def test_reference_names_a_module_level_validator_in_scripts_only(self):
+    def test_reference_names_a_module_level_validator_in_the_checkout_only(self):
+        from framejacker.hud import marker
+
         self.assertEqual(bounded_worker.validator_reference(growth.validate_worker_report, {"limit": 1}),
-                         {"module": "recording_growth_check", "function": "validate_worker_report",
+                         {"module": "scripts.recording_growth_check", "function": "validate_worker_report",
                           "options": {"limit": 1}})
-        for validate in (lambda report, code: None, json.loads, bounded_worker.load_validator.__call__):
-            with self.subTest(validate=validate), self.assertRaisesRegex(ValueError, "module_level_in_scripts"):
+        self.assertEqual(bounded_worker.validator_reference(marker.validate_worker_report)["module"],
+                         "framejacker.hud.marker")
+        for validate in (lambda report, code: None, json.loads, bounded_worker.load_validator.__call__,
+                         child_pids):
+            with self.subTest(validate=validate), self.assertRaisesRegex(ValueError, "module_level_in_checkout"):
                 bounded_worker.validator_reference(validate)
 
-    def test_loader_imports_only_from_scripts_and_binds_options(self):
-        from unittest.mock import patch
-        from scripts import hud_marker_check as marker
+    def test_loader_imports_only_checkout_packages_and_binds_options(self):
+        from framejacker.hud import marker
 
-        with patch.object(sys, "path", [str(bounded_worker.HERE), *sys.path]):
-            for reference in ({"module": "json", "function": "loads"}, {"module": "os.path", "function": "join"},
-                              {"module": "../recording_growth_check", "function": "validate_worker_report"},
-                              {"module": "recording_growth_check", "function": "validate worker"},
-                              {"module": "recording_growth_check", "function": "validate_worker_report",
-                               "options": ["not", "a", "mapping"]}, {}):
-                with self.subTest(reference=reference), self.assertRaisesRegex(ValueError, "unsupported_worker_validator"):
-                    bounded_worker.load_validator(reference)
-            report = dict(marker.new_report(False), exit_code=1, status="error", seconds_requested=1)
-            for validation_only, accepted in ((False, True), (True, False)):
-                validate = bounded_worker.load_validator(bounded_worker.validator_reference(
-                    marker.validate_worker_report, {"validation_only": validation_only}))
-                with self.subTest(validation_only=validation_only):
-                    if accepted:
+        for reference in ({"module": "json", "function": "loads"}, {"module": "os.path", "function": "join"},
+                          {"module": "tests.test_bounded_worker", "function": "child_pids"},
+                          {"module": "scripts..recording_growth_check", "function": "validate_worker_report"},
+                          {"module": "scripts.missing_command", "function": "validate_worker_report"},
+                          {"module": "scripts.recording_growth_check", "function": "validate worker"},
+                          {"module": "scripts.recording_growth_check", "function": "validate_worker_report",
+                           "options": ["not", "a", "mapping"]}, {}):
+            with self.subTest(reference=reference), self.assertRaisesRegex(ValueError, "unsupported_worker_validator"):
+                bounded_worker.load_validator(reference)
+        report = dict(marker.new_report(False), exit_code=1, status="error", seconds_requested=1)
+        for validation_only, accepted in ((False, True), (True, False)):
+            validate = bounded_worker.load_validator(bounded_worker.validator_reference(
+                marker.validate_worker_report, {"validation_only": validation_only}))
+            with self.subTest(validation_only=validation_only):
+                if accepted:
+                    validate(report, 1)
+                else:
+                    with self.assertRaisesRegex(ValueError, "invalid_marker_worker_report"):
                         validate(report, 1)
-                    else:
-                        with self.assertRaisesRegex(ValueError, "invalid_marker_worker_report"):
-                            validate(report, 1)
 
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "Frame/Linux process groups and subreaping")
@@ -179,7 +185,7 @@ class BoundedWorkerTests(unittest.TestCase):
                    "base_report": growth.new_report(), "timeout": 2, "descendants": False, "parent_fd": reader,
                    "validator": bounded_worker.validator_reference(growth.validate_worker_report)}
         try:
-            result = subprocess.run([sys.executable, str(ROOT / "scripts/bounded_worker.py"),
+            result = subprocess.run([sys.executable, str(ROOT / "framejacker/runtime/guard.py"),
                 "--guard", json.dumps(options)], pass_fds=(reader,), capture_output=True, timeout=5)
         finally:
             os.close(reader)

@@ -217,11 +217,11 @@ class PanelSettingsTests(unittest.TestCase):
 
 
 class SharedOverlayContractTests(unittest.TestCase):
-    def test_script_exports_shared_transport_and_frozen_settings(self):
-        from scripts import overlay_client
+    def test_commands_use_the_shared_transport_and_frozen_settings(self):
+        from scripts import live_pipeline
 
-        self.assertIs(overlay_client.OverlayClient, OverlayClient)
-        self.assertIs(overlay_client.PanelSettings, PanelSettings)
+        self.assertIs(live_pipeline.OverlayClient, OverlayClient)
+        self.assertIs(live_pipeline.PanelSettings, PanelSettings)
         self.assertTrue(hasattr(OverlayClient, "freeze_settings"))
 
     @unittest.skipUnless(shutil.which("g++"), "C++ compiler required for fake native dispatch")

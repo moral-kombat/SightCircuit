@@ -9,7 +9,9 @@ validation evidence and compatibility limits.
 ## Python package and pipeline
 
 Reusable code lives in the `framejacker/` package; `scripts/` keeps the
-documented command-line tools. Scripts add the checkout root to `sys.path`
+documented command-line entry points. No active script imports another, and
+`framejacker/` never imports `scripts/`; `tests/test_scripts_boundary.py`
+enforces both (the paused capture-provider scripts are exempt while frozen). Scripts add the checkout root to `sys.path`
 when run as files, so headset commands need no installation step.
 `pip install -e '.[window]'` (or `uv pip install -e .`) also works for desktop
 development; exact tested pins remain in the `requirements-*.txt` files.
@@ -24,15 +26,16 @@ development; exact tested pins remain in the `requirements-*.txt` files.
 | `framejacker/detection.py` | `Detector` interface, `MobileNetSSD` baseline, `YoloxDetector` candidate, `create_detector()`, separate `annotate()` and `require_result()` (rejects malformed detector output before any output) |
 | `framejacker/preprocess.py`, `framejacker/labels.py` | Letterbox input and inverse box mapping; COCO vocabulary and VOC-to-canonical label names |
 | `framejacker/evaluation.py`, `framejacker/assets.py` | Detector evaluation scoring; checksum-verified model/fixture download and verification |
-| `framejacker/sources/` | `ReplaySource` (PyAV), `MirrorSource` (adapter for the V4L2 mirror acquisition loop) and `PolledSource` (adapter for `open`/`read`/`close` sources); adapters forward the wrapped source's declared identity |
+| `framejacker/sources/` | `ReplaySource` (PyAV); `mirror_device` (read-only V4L2 SteamVR mirror discovery and reads); `mirror` (bounded acquisition loop `capture` and `MirrorSource`); `recording` (MP4 header inspection, newest recording); `PolledSource` (adapter for `open`/`read`/`close` sources). Adapters forward the wrapped source's declared identity |
 | `framejacker/overlay.py` | Overlay bridge client and pipeline sink |
 | `framejacker/hud/` | Fixed edge HUD contract, shared eye/rectangle geometry, synthetic-only native mask, tile rendering, the `HudStage` engine stage and offline mapping qualification |
-| `framejacker/runtime/` | Bounded spawned workers, parent-death signalling, reserve/publish of explicit image outputs, and `live.run_pipeline` (gated synthetic run on `Pipeline`, as a report) |
+| `framejacker/runtime/` | `process` (bounded spawned workers, parent-death signalling), `guard` (owned process-group supervision with the Linux parent-loss guardian), reserve/publish of explicit image outputs, and `live.run_pipeline` (gated synthetic run on `Pipeline`, as a report) |
 
 File replay uses every-frame scheduling, so each decoded frame is processed in
 order. Mirror recognition uses latest-only scheduling with a one-second input
-age limit. The V4L2 mirror device module and diagnostic loop remain in
-`scripts/mirror_capture.py` and `scripts/mirror_check.py` for now.
+age limit. The V4L2 mirror device module and acquisition loop live in
+`framejacker/sources/mirror_device.py` and `framejacker/sources/mirror.py`;
+`scripts/mirror_check.py` is the diagnostic command.
 
 Lint with the configuration in `pyproject.toml`:
 
@@ -1283,7 +1286,7 @@ exclusion of our panel remain unknown.
 
 The [lifecycle audit](status.md#e67-offline-cancellation-and-cleanup-audit)
 replaces the pipeline's blocking multiprocessing report receive and the probe's
-plain `subprocess.run` with [a shared supervisor](../scripts/bounded_worker.py).
+plain `subprocess.run` with [a shared supervisor](../framejacker/runtime/guard.py).
 It caps report bytes before parsing, keeps its deadline independent of report
 I/O, handles catchable SIGINT/TERM/HUP without interrupting cleanup, and verifies
 exit status against the final report. On Linux, a separate guardian now owns
@@ -1296,11 +1299,12 @@ restored afterward. One supervisor must run on the main thread. Windows retains
 single-process supervision and explicitly reports parent-death containment
 unavailable; native-helper supervision requires Linux. Each command passes its
 own module-level `validate_worker_report` (and options such as
-`validation_only`); the guardian imports that validator by module name from
-`scripts/` only, so it holds no table of commands.
+`validation_only`); the guardian imports that validator by dotted module name
+from this checkout's `scripts/` or `framejacker/` only, so it holds no table of
+commands.
 
 Two supervision policies remain, each with one implementation:
-`scripts/bounded_worker.py` (command workers in an owned process group under
+`framejacker/runtime/guard.py` (command workers in an owned process group under
 the Linux guardian, used by the live pipeline, HUD marker/observer and recording
 growth check) and `framejacker/runtime/process.py` (spawned Python workers that
 stream progress, with parent-death signalling and terminate/kill escalation,

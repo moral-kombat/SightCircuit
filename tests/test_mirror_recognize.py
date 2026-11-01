@@ -16,7 +16,7 @@ from dataclasses import replace
 from framejacker.convert import to_bgr
 from framejacker.errors import FrameFormatError
 from framejacker.frame import Detection, DetectionResult
-from scripts import mirror_capture as device
+from framejacker.sources import mirror_device as device
 from scripts import mirror_recognize as live
 
 ROOT = Path(__file__).resolve().parents[1]

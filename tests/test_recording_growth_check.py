@@ -11,7 +11,8 @@ import threading
 import unittest
 from unittest.mock import MagicMock, patch
 
-from scripts import bounded_worker, recording_growth_check as growth
+from framejacker.runtime import guard as bounded_worker
+from scripts import recording_growth_check as growth
 
 
 def box(kind, payload=b"", size=None):

@@ -200,7 +200,7 @@ jobs:
             tests/test_hud_mask.py tests/test_hud_marker_check.py tests/test_hud_marker_observer.py \
             tests/test_display_expiry.py tests/test_bounded_worker.py tests/test_overlay_cleanup.py \
             tests/test_frame_session.py tests/test_generate_status.py tests/test_hud_qualification.py \
-            tests/test_capture_context.py
+            tests/test_capture_context.py tests/test_scripts_boundary.py
       - name: Verify generated evidence and capability summaries are current
         run: python scripts/generate_status.py --check
       - name: Compare detectors on the seed evaluation set (runner CPU, not Frame)

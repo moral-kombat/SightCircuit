@@ -46,7 +46,7 @@ masking before resize and a fixed 320 x 128 tile with up to three names and
 approximate view-direction arrows. Detections overlapping masked regions or
 crossing eye boundaries are rejected. No scene video or leader lines enter the
 HUD. `mirror_recognize.py` and `live_pipeline.py` integrate the owned masked
-input; `overlay_client.py` freezes geometry/opacity while permitting visibility
+input; `framejacker.overlay` freezes geometry/opacity while permitting visibility
 changes. Existing native expiring-frame transport is reused without a new
 bridge/protocol change. Only synthetic calibration is accepted; live mirror HUD
 input is rejected before opening, and real HUD output remains blocked.

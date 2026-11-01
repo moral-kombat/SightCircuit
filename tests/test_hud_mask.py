@@ -18,7 +18,7 @@ from framejacker import hud
 from framejacker.frame import Detection, DetectionResult, Frame
 from scripts import live_pipeline as live
 from scripts import mirror_recognize as mirror
-from scripts.overlay_client import DEFAULT_BRIDGE, OverlayClient, PanelSettings, rgba_from_bgr
+from framejacker.overlay import DEFAULT_BRIDGE, OverlayClient, PanelSettings, rgba_from_bgr
 
 
 def calibration(width=1280, height=720, *, layout="mono", fourcc="BGR3", padding=0):

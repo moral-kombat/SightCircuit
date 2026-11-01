@@ -21,14 +21,8 @@ from framejacker.hud import HUD_CONFIG, HudStage
 from framejacker.pipeline import Pipeline
 from framejacker.runtime import process
 from framejacker.runtime.process import StopRequested, stop_on_signal
-from framejacker.sources.mirror import MirrorSource
-
-if __package__:
-    from . import mirror_check as check
-    from .mirror_capture import MirrorError, discover, select_candidate
-else:
-    import mirror_check as check
-    from mirror_capture import MirrorError, discover, select_candidate
+from framejacker.sources.mirror import MirrorSource, capture
+from framejacker.sources.mirror_device import MirrorError, discover, select_candidate
 
 
 MAX_INPUT_AGE_MS = 1000
@@ -100,7 +94,7 @@ def recognize(candidate, seconds, stop, progress=lambda report: None, want_previ
             return report, None
 
         def acquire(capture_stop, on_frame, update):
-            return check.capture(candidate, seconds, capture_stop, update,
+            return capture(candidate, seconds, capture_stop, update,
                                  backend_factory=backend_factory, on_frame=on_frame)[0]
 
         source = MirrorSource(acquire, getattr(backend_factory, "source_id", None) or "mirror:observed",

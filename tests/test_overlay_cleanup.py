@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 
-from scripts.overlay_client import OverlayClient
+from framejacker.overlay import OverlayClient
 
 
 @unittest.skipUnless(os.name == "posix", "Executable local helper fixtures")

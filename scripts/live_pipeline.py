@@ -11,14 +11,11 @@ import time
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from framejacker.frame import DetectionResult, OwnedFrame  # noqa: F401 - OwnedFrame: compatibility export
+from framejacker.frame import DetectionResult, OwnedFrame
 from framejacker.hud import Calibration, CaptureFormat, Footprint, HudStage, HUD_CONFIG
+from framejacker.overlay import OverlayClient, PanelSettings
+from framejacker.runtime.guard import supervise
 from framejacker.runtime.live import run_pipeline as run_bounded_pipeline
-
-if __package__:
-    from .bounded_worker import supervise
-else:
-    from bounded_worker import supervise
 
 class SyntheticSource:
     kind = "synthetic"
@@ -77,10 +74,6 @@ class OverlayValidationSink:
         self.client = None
 
     def open(self):
-        if __package__:
-            from .overlay_client import OverlayClient, PanelSettings
-        else:
-            from overlay_client import OverlayClient, PanelSettings
         self.settings_type = PanelSettings
         self.client = (self.client_factory or OverlayClient)(validation_only=True)
         self.client.start()

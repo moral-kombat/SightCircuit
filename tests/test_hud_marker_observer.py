@@ -20,8 +20,8 @@ import numpy as np
 
 from scripts import hud_marker_observer as observer
 from framejacker.hud import CaptureFormat, HUD_CONFIG
-from scripts import mirror_check
-from scripts.overlay_client import DEFAULT_BRIDGE
+from framejacker.sources import mirror as mirror_check
+from framejacker.overlay import DEFAULT_BRIDGE
 
 ROOT = Path(__file__).resolve().parents[1]
 
