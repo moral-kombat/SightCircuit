@@ -23,7 +23,6 @@ LEGACY_FIELDS = {
     "stale_results_dropped": "stale_results_skipped", "pending_inputs_replaced": "pending_replaced",
     "maximum_observation_age_ms": "max_output_age_ms", "total_processing_ms": "total_processing_ms",
     "total_inference_ms": "total_inference_ms", "labels_seen": "labels_seen",
-    "elapsed_seconds": lambda block: round(block["elapsed_ms"] / 1000, 3),
 }
 
 
@@ -83,7 +82,9 @@ def run_pipeline(source, detector, sink, seconds, *, stop=None, max_fps=5, max_a
     stats = pipeline.stats
     report.update(stats.hud_report)
     block = stats.report()
-    report.update(report_fields(block, LEGACY_FIELDS), pipeline=block)
+    # From the unrounded stats: deriving it from the block's rounded elapsed_ms would round twice.
+    report.update(report_fields(block, LEGACY_FIELDS), pipeline=block,
+                  elapsed_seconds=round(stats.elapsed_s, 3) if stats.started else 0)
     if stats.last is not None:
         report["last_result"] = last_result(stats.last)
     report["source_cleanup_ok"] = (not pipeline.capture_thread_started or

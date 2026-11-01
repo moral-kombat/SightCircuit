@@ -254,7 +254,15 @@ class LivePipelineTests(unittest.TestCase):
         self.assertGreater(report["frames_received"], report["frames_submitted"])
         self.assertFalse(report["live_input_verified"])
         from framejacker.runtime.live import LEGACY_FIELDS
-        self.assert_legacy_fields_follow_the_block(report, LEGACY_FIELDS)
+        expected = {"frames_processed": "frames_processed", "frames_submitted": "frames_submitted",
+                    "frames_received": "frames_received", "stale_inputs_dropped": "stale_inputs_skipped",
+                    "stale_results_dropped": "stale_results_skipped", "pending_inputs_replaced": "pending_replaced",
+                    "maximum_observation_age_ms": "max_output_age_ms", "total_processing_ms": "total_processing_ms",
+                    "total_inference_ms": "total_inference_ms", "labels_seen": "labels_seen"}
+        self.assertEqual(LEGACY_FIELDS, expected)  # Literal, so a mis-mapped alias fails here.
+        self.assert_legacy_fields_follow_the_block(report, expected)
+        # Rounded once from the stats; the block's rounded milliseconds agree within that rounding.
+        self.assertAlmostEqual(report["elapsed_seconds"], report["pipeline"]["elapsed_ms"] / 1000, delta=0.001)
 
 
     def test_stale_input_and_future_observation_are_not_sent_to_sink(self):

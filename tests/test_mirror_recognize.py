@@ -165,8 +165,15 @@ class RecognitionIntegrationTests(unittest.TestCase):
         self.assertEqual(last["read_sequence"], last["detections"][0]["box_xyxy"][0])
         self.assertEqual(int(image[0, 0, 0]), last["read_sequence"])
         self.assertLess(report["frames_processed"], report["capture"]["frames_read"])
+        expected = {"frames_processed": "frames_processed", "stale_inputs_skipped": "stale_inputs_skipped",
+                    "stale_results_skipped": "stale_results_skipped", "pending_frames_replaced": "pending_replaced",
+                    "labels_seen": "labels_seen", "processing_elapsed_ms": "elapsed_ms",
+                    "observed_processing_rate_hz": "processed_fps", "mean_inference_ms": "mean_inference_ms",
+                    "maximum_inference_ms": "max_inference_ms",
+                    "maximum_processing_started_age_ms": "max_input_age_ms"}
+        self.assertEqual(live.LEGACY_FIELDS, expected)  # Literal, so a mis-mapped alias fails here.
         block = report["pipeline"]
-        for name, source in live.LEGACY_FIELDS.items():
+        for name, source in expected.items():
             with self.subTest(field=name):
                 self.assertEqual(report[name], block[source])
 

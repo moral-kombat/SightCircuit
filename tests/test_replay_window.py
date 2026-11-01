@@ -83,8 +83,13 @@ class ReplayWindowTests(unittest.TestCase):
                       "decode_fps", "mean_presentation_latency_ms", "max_schedule_lateness_ms"):
             self.assertIn(field, report)
         self.assertGreater(report["realtime_ratio"], 0)
-        self.assertEqual(report["frames_replaced"], report["pipeline"]["pending_replaced"])
-        self.assertEqual(report["processed_fps"], report["pipeline"]["processed_fps"])
+        from scripts.replay_window import LEGACY_FIELDS
+        expected = {"frames_replaced": "pending_replaced", "processed_fps": "processed_fps",
+                    "mean_processing_ms": "mean_processing_ms", "max_input_age_ms": "max_input_age_ms"}
+        self.assertEqual(LEGACY_FIELDS, expected)  # Literal, so a mis-mapped alias fails here.
+        for name, source in expected.items():
+            with self.subTest(field=name):
+                self.assertEqual(report[name], report["pipeline"][source])
         invalid = subprocess.run([sys.executable, str(SCRIPT), str(self.clip), "--decode-threads", "0"],
                                  capture_output=True, text=True, timeout=30)
         self.assertEqual(invalid.returncode, 2)
