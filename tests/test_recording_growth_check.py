@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from framejacker.runtime import guard as bounded_worker
+from framejacker.sources import recording as mp4
 from scripts import recording_growth_check as growth
 
 
@@ -85,7 +86,7 @@ class RecordingGrowthTests(unittest.TestCase):
                 if count < 0 or any(start < end and start + count > begin for begin, end in ranges):
                     raise AssertionError("Payload read attempted")
                 return super().read(count)
-        report = growth.scan_headers(HeaderOnly(data), len(data), growth.Budget())
+        report = mp4.scan_headers(HeaderOnly(data), len(data), mp4.Budget())
         self.assertEqual(len(report["pairs"]), 1)
 
     def test_partial_headers_extents_and_open_ended_media_remain_pending(self):
@@ -94,9 +95,22 @@ class RecordingGrowthTests(unittest.TestCase):
                 (box(b"mdat", b"partial", size=1000), "incomplete_box_extent"),
                 (box(b"mdat", b"payload", size=0), "open_ended_box")):
             with self.subTest(expected=expected):
-                report = growth.scan_headers(io.BytesIO(data), len(data), growth.Budget())
+                report = mp4.scan_headers(io.BytesIO(data), len(data), mp4.Budget())
                 self.assertEqual(report["pending"], expected)
                 self.assertEqual(report["pairs"], [])
+
+    def test_box_header_edges_keep_growing_file_policy(self):
+        for data, expected in ((struct.pack(">I4sQ", 1, b"mdat", 0), "open_ended_box"),
+                               (struct.pack(">I4sQ", 1, b"mdat", 64) + b"partial", "incomplete_box_extent")):
+            with self.subTest(expected=expected):
+                report = mp4.scan_headers(io.BytesIO(data), len(data), mp4.Budget())
+                self.assertEqual((report["pending"], report["headers"]), (expected, []))
+        for data in (struct.pack(">I4sQ", 1, b"free", 15) + bytes(8), struct.pack(">I4s", 4, b"free")):
+            with self.subTest(data=data), self.assertRaisesRegex(mp4.GrowthError, "^invalid_box_length$"):
+                mp4.scan_headers(io.BytesIO(data), len(data), mp4.Budget())
+        data = box(b"free", b"y" * 4)
+        self.assertEqual(mp4.scan_headers(io.BytesIO(data), len(data), mp4.Budget())["headers"],
+                         [(0, 12, b"free".hex())])
 
     def test_partial_fragment_can_finish_on_later_observation(self):
         data = fragment(2)
@@ -132,19 +146,19 @@ class RecordingGrowthTests(unittest.TestCase):
 
     def test_budget_malformed_boxes_and_size_limits(self):
         for data in (box(b"free", size=4),):
-            with self.assertRaises(growth.GrowthError):
-                growth.scan_headers(io.BytesIO(data), len(data), growth.Budget())
-        with self.assertRaisesRegex(growth.GrowthError, "file_size"):
-            growth.scan_headers(io.BytesIO(), growth.MAX_FILE_BYTES + 1, growth.Budget())
-        report = self.observe(budget=growth.Budget(8))
+            with self.assertRaises(mp4.GrowthError):
+                mp4.scan_headers(io.BytesIO(data), len(data), mp4.Budget())
+        with self.assertRaisesRegex(mp4.GrowthError, "file_size"):
+            mp4.scan_headers(io.BytesIO(), mp4.MAX_FILE_BYTES + 1, mp4.Budget())
+        report = self.observe(budget=mp4.Budget(8))
         self.assertIn("budget", report["reason"])
         self.assertLessEqual(report["header_bytes_read"], 8)
 
     def test_extended_box_headers_and_missing_initial_movie(self):
         data = struct.pack(">I4sQ", 1, b"moov", 16) + fragment(1)
-        self.assertEqual(len(growth.scan_headers(io.BytesIO(data), len(data), growth.Budget())["pairs"]), 1)
+        self.assertEqual(len(mp4.scan_headers(io.BytesIO(data), len(data), mp4.Budget())["pairs"]), 1)
         data = fragment(1)
-        self.assertEqual(growth.scan_headers(io.BytesIO(data), len(data), growth.Budget())["pairs"], [])
+        self.assertEqual(mp4.scan_headers(io.BytesIO(data), len(data), mp4.Budget())["pairs"], [])
 
     def test_nonregular_file_is_rejected_without_opening(self):
         with patch.object(growth.os, "open", side_effect=AssertionError("Must not open")):
@@ -211,10 +225,10 @@ class RecordingGrowthTests(unittest.TestCase):
     def test_wait_and_observation_limits_remain_separate(self):
         with patch.object(growth, "recording_names") as scanned:
             for wait in (0, -1, 120.001, 121, float("inf"), float("nan")):
-                with self.subTest(wait=wait), self.assertRaises(growth.GrowthError):
+                with self.subTest(wait=wait), self.assertRaises(mp4.GrowthError):
                     growth.watch_new(self.path.parent, wait_seconds=wait)
             for seconds in (0, 30.001, 31):
-                with self.subTest(seconds=seconds), self.assertRaises(growth.GrowthError):
+                with self.subTest(seconds=seconds), self.assertRaises(mp4.GrowthError):
                     growth.watch_new(self.path.parent, wait_seconds=120, seconds=seconds)
             scanned.assert_not_called()
         with patch.object(growth, "supervise") as supervised, contextlib.redirect_stderr(io.StringIO()):
@@ -405,7 +419,7 @@ class RecordingGrowthTests(unittest.TestCase):
             for packet in stream.encode():
                 output.mux(packet)
         data = encoded.read_bytes()
-        scanned = growth.scan_headers(io.BytesIO(data), len(data), growth.Budget())
+        scanned = mp4.scan_headers(io.BytesIO(data), len(data), mp4.Budget())
         self.assertGreaterEqual(len(scanned["pairs"]), 3)
         pairs = list(scanned["pairs"])
         self.path.write_bytes(data[:pairs[0][0]])

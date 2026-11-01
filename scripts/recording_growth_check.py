@@ -1,11 +1,14 @@
-"""Bounded MP4 growth observation: top-level headers only, never media payloads."""
+"""Bounded MP4 growth observation: top-level headers only, never media payloads.
+
+The header scan (``scan_headers``) lives in ``framejacker.sources.recording``; this
+command watches one growing file and reports what changed.
+"""
 import argparse
 import json
 import os
 from pathlib import Path
 import signal
 import stat
-import struct
 import sys
 import threading
 import time
@@ -14,74 +17,9 @@ if not __package__:  # Run as a file: import this checkout's packages without in
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from framejacker.runtime.guard import supervise  # noqa: E402
+from framejacker.sources.recording import Budget, GrowthError, scan_headers  # noqa: E402
 
-MAX_BOXES = 8192
-MAX_HEADER_BYTES = 2 * 1024 * 1024
-MAX_FILE_BYTES = 8 * 1024 * 1024 * 1024
 MAX_WAIT_SECONDS = 120
-
-
-class GrowthError(ValueError):
-    pass
-
-
-class Budget:
-    def __init__(self, maximum=MAX_HEADER_BYTES):
-        self.maximum, self.read_bytes = maximum, 0
-
-    def read(self, stream, offset, count):
-        if self.read_bytes + count > self.maximum:
-            raise GrowthError("header_read_budget_exhausted")
-        stream.seek(offset)
-        data = stream.read(count)
-        self.read_bytes += len(data)
-        if len(data) != count:
-            raise GrowthError("file_truncated_during_header_read")
-        return data
-
-
-def scan_headers(stream, size, budget):
-    """File extents bound boxes; they do not certify payload completion/ownership."""
-    if not 0 <= size <= MAX_FILE_BYTES:
-        raise GrowthError("file_size_out_of_bounds")
-    offset, pending, movie_seen, fragment = 0, None, False, None
-    headers, pairs = [], []
-    while offset < size:
-        if len(headers) >= MAX_BOXES:
-            raise GrowthError("box_count_limit")
-        if size - offset < 8:
-            pending = "partial_header"
-            break
-        length, kind = struct.unpack(">I4s", budget.read(stream, offset, 8))
-        header_size = 8
-        if length == 1:
-            if size - offset < 16:
-                pending = "partial_extended_header"
-                break
-            length = struct.unpack(">Q", budget.read(stream, offset + 8, 8))[0]
-            header_size = 16
-        if length == 0:
-            pending = "open_ended_box"
-            break
-        if length < header_size:
-            raise GrowthError("invalid_box_length")
-        if length > size - offset:
-            pending = "incomplete_box_extent"
-            break
-        headers.append((offset, length, kind.hex()))
-        if kind == b"moov":
-            movie_seen = True
-        elif kind == b"moof":
-            fragment = offset if movie_seen else None
-        elif kind == b"mdat":
-            if fragment is not None:
-                pairs.append((fragment, offset + length))
-            fragment = None
-        elif kind not in (b"free", b"skip"):
-            fragment = None
-        offset += length  # Skip every payload, including moov/moof and mdat.
-    return {"headers": headers, "pairs": pairs, "movie_header_present": movie_seen,
-            "pending": pending, "bounded_prefix_bytes": offset}
 
 
 def identity(info):

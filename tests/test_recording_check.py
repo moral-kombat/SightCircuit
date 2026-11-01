@@ -123,6 +123,32 @@ class RecordingCheckTests(unittest.TestCase):
                 with self.assertRaises(recording.RecordingError):
                     self.inspect(data)
 
+    def test_box_header_decoder_reports_shape_not_policy(self):
+        def decode(data, available=None):
+            return recording.box_header(lambda at, count: data[at:at + count], 0,
+                                        len(data) if available is None else available)
+
+        self.assertEqual(decode(b"1234567").truncated, "header")
+        self.assertEqual(decode(struct.pack(">I4s", 1, b"mdat")), recording.BoxHeader(b"mdat", truncated="extended_header"))
+        self.assertEqual(decode(struct.pack(">I4s", 0, b"mdat")), recording.BoxHeader(b"mdat", 0, 8, open_ended=True))
+        self.assertEqual(decode(struct.pack(">I4sQ", 1, b"mdat", 0)), recording.BoxHeader(b"mdat", 0, 16))
+        self.assertEqual(decode(struct.pack(">I4sQ", 1, b"mdat", 2 ** 40)), recording.BoxHeader(b"mdat", 2 ** 40, 16))
+        self.assertEqual(decode(struct.pack(">I4s", 9, b"free")), recording.BoxHeader(b"free", 9, 8))
+
+    def test_box_header_edges_keep_finished_file_policy(self):
+        def walk(data):
+            return list(recording.Reader(io.BytesIO(data), len(data)).boxes(0, len(data)))
+
+        for data, message in ((b"bad", "^Truncated MP4 box header$"),
+                              (struct.pack(">I4s", 1, b"free"), "^Truncated extended MP4 box header$"),
+                              (struct.pack(">I4sQ", 1, b"free", 0), "crosses its parent or file boundary"),
+                              (struct.pack(">I4sQ", 1, b"free", 15) + bytes(8), "crosses its parent or file boundary"),
+                              (struct.pack(">I4s", 4, b"free"), "crosses its parent or file boundary")):
+            with self.subTest(data=data), self.assertRaisesRegex(recording.RecordingError, message):
+                walk(data)
+        self.assertEqual(walk(box(b"mdat", b"x" * 5, to_end=True)), [recording.Box(b"mdat", 8, 13)])
+        self.assertEqual(walk(box(b"free", b"y" * 4, extended=True)), [recording.Box(b"free", 16, 20)])
+
     def test_metadata_work_is_bounded(self):
         with patch.object(recording, "MAX_BOXES", 2):
             with self.assertRaisesRegex(recording.RecordingError, "box count limit"):
