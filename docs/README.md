@@ -37,6 +37,8 @@ owns the current capture work plan.
 | Review the platform start/stop hooks | [Read shipped launcher definitions without executing them](on-device.md#read-the-platform-launcher-definitions) |
 | Connect from an independent development PC | [Verified SSH access](on-device.md#verify-independent-ssh-access) |
 | Understand the canceled SteamVR stop and recovery | [Service-only rehearsal result and current guard](on-device.md#service-only-recovery-rehearsal-result) |
+| Plan automated Frame testing with an on-device agent | [Claude Code on Frame plan (proposal)](agent-on-frame.md) |
+| Run guarded automated checks on Frame | [Fixed task runner and agent settings](on-device.md#run-automated-checks-with-an-on-device-agent) |
 | Run the prepared whole-session operator test | [One-command session test and result collection](on-device.md#prepared-platform-session-test) |
 | Run the next metadata-only activation/restoration test | [Prepared two-session trial](on-device.md#prepared-metadata-session-trial) |
 | Understand or replace the recognition model | [Recognition architecture and model candidates](architecture.md#recognition-implementation-and-model-replacement) |

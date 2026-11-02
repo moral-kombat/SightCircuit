@@ -168,10 +168,13 @@ class DisplayExpiryTests(unittest.TestCase):
 
         client = OverlayClient(validation_only=True).start()
         try:
-            deadline = time.monotonic_ns() + 200000000
+            # The sink delivers through the client's writer thread. The bridge drops
+            # a frame that arrives after its deadline as stale and then emits no
+            # frame_expired event, so the margin must cover delivery under CPU load.
+            deadline = time.monotonic_ns() + 1000000000
             processed = SimpleNamespace(image=np.zeros((1, 2, 3), dtype=np.uint8), expires_ns=deadline)
             OverlaySink(client).submit(processed)
-            self.assertTrue(client.frame_expired.wait(3))
+            self.assertTrue(client.frame_expired.wait(5))
             self.assertEqual(client.last_expiry["deadline_ns"], deadline)
             self.assertFalse(client.last_expiry["content_current"])
         finally:

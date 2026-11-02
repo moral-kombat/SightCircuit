@@ -741,6 +741,78 @@ If it cannot, note the URL, the error, and the network setup in
 [status](status.md) rather than assuming the page works. Record the answers in
 `observations.json` as user-reported results, not as device checks.
 
+### Run automated checks with an on-device agent
+
+**Cloud-tested only; no Frame result yet.** This is Phase 2 of the
+[agent plan](agent-on-frame.md), which needs its own approval. A Claude Code
+session on Frame may run only `scripts/frame_agent_run.py`, which executes a
+fixed task table by ID. Tier A tasks never touch VR output, cameras or
+services; Tier B (wearer present) and Tier C (person-only) IDs are refused.
+
+```bash
+cd "$HOME/framejacker"
+python3 scripts/frame_agent_run.py list
+python3 scripts/frame_agent_run.py run tier-a/inventory
+python3 scripts/frame_agent_run.py run-tier tier-a
+python3 scripts/frame_agent_run.py report latest
+```
+
+Each run creates `artifacts/agent-runs/<UTC time>-<label>/` with `result.json`
+(revision, clean flag, host, per-task argument vector, exit code, status and
+duration) and each task's `stdout.txt`/`stderr.txt`; `result.json` is rewritten
+before and after each task. Statuses are `passed`, `failed` (a nonzero exit,
+or an exit that left processes running in the task's group, which are then
+terminated), `failed_to_start` (the command could not be executed),
+`timed_out` (the task's whole process group is terminated, SIGKILL after a
+10-second grace), `skipped_precondition` (for example no `.venv-replay`),
+`running` (while it runs), `interrupted` and `not_started` (after a failed
+`tier-a/setup`, when the run budget of 90 minutes is spent, or after an
+interruption). Exit codes: 0 all passed, 1 otherwise, 2 refused, 3 another run
+holds the lock, 128 + signal number when SIGINT, SIGTERM or SIGHUP (for
+example a dropped SSH connection) interrupted the run; the running task's
+group is terminated before the lock is released. Run `run-tier` inside `tmux`
+when the connection may drop (`nohup` also works: a signal the runner was
+started with ignored stays ignored).
+
+On today's runtime `run-tier tier-a` does not report `all_passed`: by design
+`tier-a/service-preflight` exits 1 with
+`steamvr_stop_propagates_to_graphical_session` (the
+[current guard](#service-only-recovery-rehearsal-result)),
+`tier-a/service-report` exits nonzero because no successful rehearsal exists,
+and `tier-a/evaluate-local` is skipped when `evaluation/local/frame.json` is
+absent. Read each task's status and reason rather than the overall exit code.
+
+`update <full commit>` detaches a clean checkout at a commit already on
+`origin/main` whose agent guard is at least as strict as the current one; it
+refuses older revisions, which a person checks out, and refuses (exit 2) when a
+git command fails or times out; git never prompts for credentials there. It
+leaves the checkout on a detached `HEAD`, so before the manual procedures in
+this guide or `scripts/frame_session.sh` (whose setup stage runs
+`git pull --ff-only`) run `git switch main`, or start the session with
+`SKIP_UPDATE=1`.
+
+To let Claude Code use it, install the guarded settings once, in the Frame
+checkout only:
+
+```bash
+cd "$HOME/framejacker"
+mkdir -p .claude
+cp framejacker/agent/frame-settings.json .claude/settings.local.json
+```
+
+That file is git-ignored. It refuses every tool call that is not allowed
+instead of prompting, permits Bash only for the runner, denies reads of
+private stills, recordings, images and credentials, and installs
+`scripts/frame_agent_guard.py` as a PreToolUse hook that blocks shell syntax,
+other commands, reads outside the checkout or of images, and every write except
+a run's `summary.md`. Remove the file to return the checkout to normal
+interactive use.
+
+Results are agent-run device output: they are not user reports, and exit codes
+do not establish what the headset showed. Room images stay on Frame: the
+settings and hook refuse the agent's reads of them. Hand `result.json` and the
+agent's draft summary to the evidence coordinator.
+
 ### Bounded edge HUD calibration checkpoint
 
 This is the proposed device step for WP9 in the

@@ -1,0 +1,47 @@
+{
+  "permissions": {
+    "defaultMode": "dontAsk",
+    "allow": [
+      "Bash(python3 scripts/frame_agent_run.py:*)",
+      "Write(artifacts/agent-runs/*/summary.md)",
+      "Edit(artifacts/agent-runs/*/summary.md)"
+    ],
+    "deny": [
+      "Bash(sudo:*)",
+      "Bash(systemctl:*)",
+      "Bash(steamosctl:*)",
+      "Bash(steamos-readonly:*)",
+      "Bash(pacman:*)",
+      "Bash(git push:*)",
+      "Monitor",
+      "WebFetch",
+      "WebSearch",
+      "Read(evaluation/local/**)",
+      "Read(recordings/**)",
+      "Read(calibration/**)",
+      "Read(**/*.png)",
+      "Read(**/*.jpg)",
+      "Read(**/*.jpeg)",
+      "Read(**/*.mp4)",
+      "Read(~/Videos/**)",
+      "Read(~/.ssh/**)",
+      "Read(~/.claude/**)",
+      "Read(~/.config/**)",
+      "Read(~/.git-credentials)",
+      "Read(~/.netrc)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Monitor|Read|Grep|Glob|Write|Edit|MultiEdit|NotebookEdit|WebFetch|WebSearch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/frame_agent_guard.py\" || exit 2"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -14,6 +14,7 @@ anchors are preserved. [The index](README.md) is the starting point.
 | [Evidence records](evidence/README.md) | Per-entry procedure, result, provenance and unknowns; `index.json` owns identities | A coordinator records a new result |
 | `status-data.json` | Reviewed capability summaries consumed by `scripts/generate_status.py` | The evidence justifies a capability change |
 | [On-device guide](on-device.md) | Frame access, inventory, recording/replay procedures and session handoff | Device commands or operating procedures change |
+| [Agent on Frame](agent-on-frame.md) | Proposed plan, tiers and guards for running Claude Code on Frame for automated tests | The plan changes or a phase is completed |
 | [VR overlay](vr-overlay.md) | Panel launch, UI controls, shutdown and native transport reference | Panel behavior, options or protocol change |
 | [Development](development.md) | Cloud/desktop setup, dependency environments, builds, tests and CI | Setup, dependencies or checks change |
 | [Architecture](architecture.md) | Components, frame flow, concurrency, interfaces and long-term acceptance criteria | A design or interface changes |
