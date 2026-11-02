@@ -12,6 +12,318 @@ device-dependent acceptance left explicit. The dated
 [execution checkpoint](poc-scope.md#execution-checkpoint-2026-10-31) summarizes
 the state when this prompt was prepared. Refresh that state before execution.
 
+The [2026-11-01 offline handoff](#offline-handoff-2026-11-01) below is newer.
+Where the two differ, follow the newer handoff. The 2026-10-31 prompt stays for
+reference.
+
+## Offline handoff, 2026-11-01
+
+Delivery: packages A–H below are implemented and verified offline on branch
+`claude/tender-rubin-nsiva2` ([E76](evidence/e076.md)). Do not redo them. The
+device steps in the last table still need approval, one at a time.
+
+Prepared against `main` `9885f43` (after PR #15) from an architecture review
+scoped to work that needs no headset, because the owner is away from it. Line
+references are to `9885f43`. Nothing here authorizes a device operation, and
+every gate in `framejacker/gates.py` stays closed.
+
+### Baseline
+
+- CI on `main` `9885f43`: x86_64 and ARM64 runs passed.
+- Local cloud run (Linux x86_64, Python 3.12): 592 tests ran: 537 passed, 55
+  skipped.
+  Every skip is a capture-provider fixture this run did not build: 27
+  `--provider-fixes`, 11 `--import-fixes`, 9 `--resource-fixes` and 8
+  publication. CI builds them. This is not a Frame result.
+
+### Blocker found in the review
+
+`scripts/mirror_recognize.py` lost `--detector` and `--still` in `3bd3d4c`
+(the 2026-10-30 consolidation). Its parser is now lines 191-198, but
+`scripts/frame_session.sh:156` still passes both flags. The `stills` stage
+therefore exits with argparse code 2, and WP2 still capture cannot run.
+`tests/test_frame_session.py` replaces Python with a fake, so CI did not catch
+it. `docs/on-device.md:568-581`, `docs/morning-checklist.md:43` and
+`docs/design-review.md:190` still document the flags. Package A fixes this.
+
+### Findings
+
+| # | Area | Signal | Evidence | Impact | Package |
+| --- | --- | --- | --- | --- | --- |
+| 1 | Marker and worker lifecycle | Truthful report, wrong mechanism | `MarkerClient` never starts a writer (`hud/marker.py:24-25`), so every stop is forced (`overlay.py:232,269`). This is the V4 software stop in E75. Guardian-loss containment is untested (`runtime/guard.py:151,194-201`) | High: the next G3 attempt needs it | B |
+| 2 | Checkpoint pinning | Missing module | The next G3 attempt needs a complete artifact manifest (`docs/hud-qualification.md:242-249`). No tool exists, and the earlier one was never committed (`docs/development.md:1276-1279`) | High: device prerequisite | C |
+| 3 | Python/C++ HUD contract | Duplicated knowledge | `HudConfig`, marker pixels, packet layout and limits are written on both sides with no equivalence test, while V4's tag/bit mismatch is unexplained. The "bridge closed cleanly" check is written five times | High | D |
+| 4 | Qualification vs runtime | Two models of one concept | `ValidationLedger` and `require_production_qualification` have no production caller. The runtime `Calibration` has a free `validated` flag and no expiry. The mask/eye rule and the margin bounds are each enforced in different places with different results | High for G4/G5 | E |
+| 5 | Commands vs library | Logic in entry points; unused deep helper | The mirror recognizer repeats `runtime/live.run_pipeline`. Three commands copy the preview publication sequence that `runtime/output.py` implements, and nothing in production uses it. Tests call script internals 33 times | Medium | F |
+| 6 | Detector ownership | Knowledge spread over files | Adding a detector touches `detection.py`, `smoke-assets.json` and `evaluate_detectors.py:166-181`. The live and smoke paths hard-code `MobileNetSSD`. CI throws the seed report away | Medium | A, G |
+| 7 | Latency reporting | Too little for WP12 | Statistics are mean and max only. `processing_ms` mixes stages. `realtime_ratio` counts catch-up jumps as progress | Medium | H |
+
+### Packages
+
+Each package has an owner lane, the reason it is needed, steps, a test-backed
+done condition and the device work it unlocks. Each one becomes its own PR (or
+one PR per numbered part), with tests that fail before the change and pass
+after it.
+
+#### A. Restore still capture and pin still digests (blocker, small)
+
+Why: see the blocker above. In addition, `scripts/frame_session_manifest.py:26-27`
+records no SHA-256, so its stills fail `evaluate_detectors.py
+--require-input-digests` (`scripts/evaluate_detectors.py:42-43`).
+
+1. Restore `--detector` in `mirror_recognize.py`: choices from
+   `detection.DETECTORS`, default unchanged, built through `create_detector`
+   instead of the hard-coded `MobileNetSSD` (lines 19 and 101).
+2. Restore `--still PATH`. It saves the unannotated frame of the last processed
+   result, with exclusive creation, published only after capture stops, the
+   same way `--preview` works.
+3. Record the still's SHA-256, detector, source id and sequence in the manifest
+   entry.
+4. Add a contract test that checks every `scripts/*.py` command line in
+   `frame_session.sh` against that script's real argument parser, for example
+   through a `build_parser()` function or by intercepting
+   `ArgumentParser.parse_args`.
+5. Correct the three documents named above.
+
+Done when the contract test fails on `9885f43` and passes after the change. A
+test must also drive `mirror_recognize --capture --still` with patched
+`discover`/`MirrorSource` and a fake detector, producing a still and a report,
+and the resulting manifest entry must pass `--require-input-digests`.
+
+Device work this unlocks: the `stills` and `evaluate` stages for WP2, after
+approval.
+
+#### B. Marker stop, guardian loss and startup cancel (G2 software, small to medium)
+
+Why: finding 1. `docs/hud-qualification.md:240-241` asks for a changed
+marker-stop path with regression coverage before another G3 attempt. The
+guardian question is a review hypothesis: the guardian and the worker each
+start a new session, and cleanup signals only the child's own group. Prove or
+disprove it with a test before changing code.
+
+1. Give the marker client a cooperative stop: a requested stop sends the stop
+   packet or closes stdin, then waits. Escalation stays SIGTERM then SIGKILL,
+   and stays reported as forced. Report `stop_requested` and `escalated`
+   separately.
+2. Test a V4-shaped early rejection (a tag/bit mismatch on frame 3) against the
+   real validation-mode bridge. The existing cases at
+   `tests/test_hud_marker_observer.py:422-434` use mocks. Cleanup must be clean,
+   with no forced termination.
+3. Test SIGKILL of the guardian while the supervisor runs. Afterwards the
+   worker tree must be gone, or the report must say `cleanup_ok: false` and the
+   code must be fixed. One possible fix: the guardian reports the worker's group
+   and the supervisor signals it too.
+4. Test marker startup cancellation and the ready timeout
+   (`hud/marker.py:42-47`).
+5. Record the change in `docs/lifecycle-review.md`.
+
+Done when all four tests exist and pass, and each test that targets a defect
+fails on `9885f43`. Do not claim this explains the green input, the tag
+mismatch or physical recovery.
+
+#### C. Device checkpoint artifact manifest (G3 prerequisite, small to medium)
+
+Why: finding 2. Also, `qualification.py:148-156` checks evidence digests for
+format only.
+
+1. Add `framejacker/runtime/manifest.py` and a `scripts/checkpoint_manifest.py`
+   entry point with `--write` and `--verify`.
+2. The manifest records the git commit, a clean-tree check, the Python version,
+   the architecture, and SHA-256 of the built bridge, every
+   `framejacker/**/*.py`, the scripts the checkpoint invokes, the model files
+   and the installed package versions.
+3. `--verify` is read-only and exits non-zero on any difference.
+4. Both commands run on Frame after the native build. Built binaries are never
+   transferred.
+5. List the commands, checked against `--help`, in the checkpoint section of
+   `docs/hud-qualification.md`.
+
+Done when tests show `--verify` fails for a changed module, a rebuilt bridge, a
+dirty tree and a different architecture, and passes when nothing changed.
+
+#### D. One HUD and marker contract for Python and C++ (G3/G4, medium)
+
+Why: finding 3. The duplicated pieces are:
+
+- `HudConfig` (`hud/contract.py:16-26`), repeated in
+  `tools/overlay_bridge.cpp` around lines 297, 327 and 387.
+- Marker pixels, drawn in `hud/observation.py:29-42` and again in
+  `overlay_bridge.cpp:296-320`.
+- Packet layout in `overlay.py:24,216-217`, `overlay_bridge.cpp:231-237` and
+  `tools/overlay_frame.hpp:17-28`, with a literal 512 at line 24.
+- The 1-second expiry cap, in four places.
+- The 1-20-second marker bound, in seven places.
+- The cleanup check, at `overlay.py:248-250,355-359`, `hud/marker.py:85-93`,
+  `hud_marker_check.py:54-56` and `hud_marker_observer.py:145-148`.
+- Two u32 decoders, at `overlay_bridge.cpp:36-39` and `overlay_frame.hpp:8-11`.
+
+1. Generate one header (for example `tools/hud_contract.hpp`) from the Python
+   constants, with a CI check mode. A compiled probe that prints the native
+   values for a test is an acceptable alternative.
+2. Add a validation-only way to render the native marker into a buffer, and
+   compare it pixel for pixel with `observation.py`'s expectation, including
+   the tag bits for frame 3.
+3. Write one cleanup-confirmation function and use it in all five places.
+4. Use one constant per limit.
+
+Done when changing any `HudConfig` field, marker pixel, tag bit or limit on one
+side fails a test. If the pixel comparison finds a mismatch, record it in the PR
+as a candidate explanation for the V4 tag mismatch, not as its cause.
+
+#### E. Wire qualification into the runtime (G4/G5 offline, medium to large; after D)
+
+Why: finding 4. The specific gaps:
+
+- `calibration()` drops `expires_ns`.
+- The runtime drops a box that overlaps the mask or crosses eyes
+  (`mask.py:128-132`), but the ledger invalidates the whole run
+  (`qualification.py:272-276`).
+- The margin is bounded at 2-128 (`mask.py:52`), at 8-128
+  (`observation.py:53`), and by a derived minimum (`qualification.py:134`).
+- Nothing converts an observer report into a candidate. The observer's
+  footprint union already includes the margin (`observation.py:333-340`);
+  the candidate's `rect_native` does not.
+- The observer accepts sequence gaps (`observation.py:293-295`).
+- The ledger's default maximum age is 750 ms; the pipeline's is 1000 ms.
+
+Three parts:
+
+1. **E1.** `hud_validation_report.py --from-observer` builds a candidate from an
+   observer report. Unknown error terms must be explicit, never 0. The result
+   stays `candidate_valid_unqualified` with exit 2. The observer rejects
+   sequence gaps.
+2. **E2.** The runtime `Calibration` is built only from a candidate record or
+   the synthetic fixture, and carries its context tokens and `expires_ns`. The
+   mask checks expiry and the session and recenter tokens. One margin rule
+   applies everywhere.
+3. **E3.** Add pipeline counters for mask-overlap and eye-crossing rejections,
+   and for footprint pixels that are non-zero after masking. Feed
+   `ValidationLedger` from synthetic HUD runs. Use one maximum age.
+
+Done when a synthetic observer report becomes a valid unqualified candidate,
+and the synthetic HUD report carries the G5 software counts that
+`docs/templates/hud-device-validation-report.json` names. A fake detector that
+boxes the footprint must fail the run, and `tests/test_gates.py` must stay
+green.
+
+#### F. One live report runner and one mirror launcher (structural, medium; after A and B)
+
+Why: finding 5. The specific duplication:
+
+- `mirror_recognize.recognize` and `ReportSink` (lines 52-144) repeat the gate
+  check, `Pipeline` construction, status mapping, cleanup and `report_fields`
+  from `runtime/live.run_pipeline`.
+- `HudPipelineAdapter` lives in `scripts/live_pipeline.py:20-38`.
+- The preview publication sequence is copied in `mirror_check.py` (33-43,
+  84-97, 107-116), `mirror_recognize.py` (168-178, 214-228, 236-244) and
+  `shm_capture_check.py` (166-180).
+- SIGTERM installation, restoration and the cancelled-report mapping are
+  copied three times, and the worker stop-on-signal code four times.
+- `replay_decode_check.py:89-98` uses a raw `subprocess.run` instead of
+  `guard.supervise`.
+- `runtime/process.py:5` names a script that no longer exists.
+
+1. Write characterization tests of the current report fields first.
+2. Move to one report runner in `runtime/live.py` for synthetic and mirror
+   runs.
+3. Move the adapter into `hud/stage.py`.
+4. Add a bounded mirror launcher in `sources/mirror.py`, built on
+   `runtime/output.py`.
+5. Add a stop-on-signal helper to `runtime/guard.py`.
+6. Put `replay_decode_check` on `guard.supervise`.
+7. Point the tests at the library instead of the scripts.
+
+Done when the characterization tests pass unchanged, `runtime/output.py` has
+production callers, and `tests/test_scripts_boundary.py` and
+`tests/test_gates.py` pass.
+
+Device work this unlocks: a re-run of the E48 mirror regression.
+
+#### G. Detector ownership and evaluator diagnostics (medium; after A)
+
+Why: finding 6. In addition:
+
+- The evaluator exits 0 whenever it evaluates, and CI discards its report
+  (`.github/workflows/check-jobs.yml:206-207`).
+- E61's input was the `mirror_check` grayscale preview: every third pixel and
+  an integer luma (`sources/mirror.py:116`, `sources/mirror_device.py:136-156`).
+  The `gray-replicated` variant does not reproduce it.
+- SSD decoding has no test that runs without the model.
+
+1. Detector classes own `model_files()` and a description of their
+   preprocessing.
+2. Add a `mirror-preview` audit variant equal to `grayscale_sample` replicated
+   to three channels.
+3. Report the best below-threshold confidence for each expected label, with
+   scoring kept at 0.5.
+4. Add a per-label table.
+5. Pin the E73 seed counts and fail CI on a regression.
+6. Add a model-free SSD decode test.
+7. Make tests that need downloaded assets skip or fail consistently
+   (`tests/test_mirror_recognize.py:249`).
+
+Done when a deliberate label-map break fails CI and the variant test passes. Do
+not change the default detector or threshold, and do not present seed or
+synthetic results as Frame evidence.
+
+Optional: a licensed public indoor manifest with complete boxes, including
+rugs. It is valid general indoor evidence, but it cannot close WP2.
+
+#### H. Latency statistics for WP12 (small to medium; after E3, because both change `PipelineStats`)
+
+Why: finding 7. In addition:
+
+- Replay reports statistics only on a clean finish
+  (`scripts/replay_window.py:322-326`).
+- The WP12 template does not say which statistic it wants.
+- PR #15 notes that realtime replay now copies each processed frame twice.
+
+1. Report p50, p95 and max for input age, processing time and inference time,
+   plus per-stage timings.
+2. Report a processed-media fraction beside `realtime_ratio`.
+3. Report statistics on error too.
+4. Add an ARM64 CI job that runs the synthetic replay stand-in and uploads its
+   report, labelled as runner CPU, not Frame.
+5. Measure the double copy, and remove one copy only if the measurement shows
+   it matters.
+
+Done when a fake detector with known delays produces the expected percentiles
+in the replay, mirror and synthetic reports, and the template names the
+statistic it wants.
+
+### Lanes and order
+
+| Lane | Files it owns | Order |
+| --- | --- | --- |
+| 1. Runtime and lifecycle | `runtime/`, `overlay.py`, `hud/marker.py`, mirror commands | B, then C, then F |
+| 2. HUD contract and qualification | `hud/`, `tools/overlay_*`, `pipeline.py` statistics | D, then E, then H |
+| 3. Detection and evaluation | `detection.py`, `evaluation.py`, `evaluate_detectors.py`, `frame_session*` | A, then G |
+
+Start with A. Several packages share files: `mirror_recognize.py` (A, then F),
+`pipeline.py` (E3, then H) and `docs/hud-qualification.md` (B, C and E each add
+their own section).
+
+### Rules for every package
+
+- Use Python 3.12 and run the checks in `CLAUDE.md`. If you change capture
+  code, build the capture fixtures. A skipped test is not a pass.
+- Do not run any device operation, and do not make any change that opens a
+  gate.
+- Only the coordinator allocates evidence IDs. E76 records this delivery, so
+  the next free one is E77. Put cloud results in the PR description.
+- Update the owning documents in the same change.
+
+### Device work these packages unlock (for the project manager)
+
+| After | Device step (each needs its own approval) |
+| --- | --- |
+| A | WP2 `stills` and `evaluate` stages |
+| B, C and D, plus the G2 log analysis | Revised G3 marker-observer attempt, following the `docs/hud-qualification.md` checkpoint |
+| F | Re-run of the E48 mirror regression |
+| H | Realtime replay measurement on Frame |
+
+E and G need no device.
+
 ## Copy-ready prompt
 
 ```text

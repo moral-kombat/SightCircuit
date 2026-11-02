@@ -3,17 +3,63 @@
 No device, file, calibration loader or runtime approval is provided here.
 Only ``validated`` synthetic-fixture calibrations are accepted; a calibration
 derived from a hardware mapping candidate is rejected until a separate gate.
+The mask fails closed once its calibration expires and checks the calibration's
+session tokens and view fields against the capture context (``check_session``).
+It counts the footprint pixels still non-zero after masking (``prepare_counted``)
+and reports the boxes it drops for touching the mask or crossing an eye (``select``).
 """
 from dataclasses import dataclass
 import math
+import time
 
 from ..frame import Detection
 from ..gates import HARDWARE_MAPPING
-from .contract import HUD_CONFIG, Calibration, CaptureFormat, Footprint, HudConfig, HudRow, viewports
-from .geometry import contains, expand, overlaps, within_blind_budget
+from .contract import (HUD_CONFIG, SESSION_TOKENS, VIEW_FIELDS, Calibration, CaptureFormat, Footprint, HudChecks,
+                       HudConfig, HudRow, margin_valid, viewports)
+from .geometry import contains, exclusion, expand, within_blind_budget
 from .render import draw_tile
 
-__all__ = ("HudMask",)
+__all__ = ("HudMask", "mask_regions")
+
+
+def _comparable(value):
+    """A crop given as a JSON list or a tuple of ints compares as a tuple; any other value as itself."""
+    if type(value) in (list, tuple) and all(type(item) is int for item in value):
+        return tuple(value)
+    return value
+
+
+def mask_regions(calibration):
+    """Native regions the mask removes for ``calibration``: the geometry rule alone, never an approval.
+
+    Applies the eye partition, the margin rule and the per-eye blind budget.
+    ``HudMask`` applies it after its approval checks, and offline code can
+    compare a candidate's geometry with the runtime mask without making it usable.
+    """
+    cal = calibration
+    if not isinstance(cal, Calibration):
+        raise ValueError("hud_calibration_required")
+    if not isinstance(cal.capture_format, CaptureFormat):
+        raise ValueError("hud_capture_format_invalid")
+    cal.capture_format.validate()
+    eyes = viewports(cal.capture_format, cal.capture_layout)
+    if type(cal.footprints) is not tuple or len(cal.footprints) != len(eyes):
+        raise ValueError("hud_missing_eye_footprint")
+    seen, regions = set(), []
+    for footprint in cal.footprints:
+        if (not isinstance(footprint, Footprint) or type(footprint.eye) is not int or
+                footprint.eye not in range(len(eyes)) or footprint.eye in seen or
+                type(footprint.rect) is not tuple or len(footprint.rect) != 4 or
+                any(type(value) is not int for value in footprint.rect) or not margin_valid(footprint.margin_px)):
+            raise ValueError("hud_mapping_invalid")
+        seen.add(footprint.eye)
+        expanded = expand(footprint.rect, footprint.margin_px)
+        eye = eyes[footprint.eye]
+        if (not contains(eye, footprint.rect) or not contains(eye, expanded) or
+                not within_blind_budget((expanded,), eye)):
+            raise ValueError("hud_footprint_or_margin_out_of_bounds")
+        regions.append(expanded)
+    return tuple(regions)
 
 
 @dataclass(frozen=True)
@@ -26,6 +72,7 @@ class HudMask:
         self.validate()
 
     def validate(self):
+        """Approval, record, geometry and lifetime; an expired calibration is unusable."""
         cal = self.calibration
         if not isinstance(cal, Calibration):
             raise ValueError("hud_calibration_required")
@@ -37,26 +84,10 @@ class HudMask:
             "hud_hardware_mapping_not_approved")
         if self.config != HUD_CONFIG or cal.config != self.config:
             raise ValueError("hud_config_changed")
-        if not isinstance(cal.capture_format, CaptureFormat):
-            raise ValueError("hud_capture_format_invalid")
-        cal.capture_format.validate()
-        eyes = viewports(cal.capture_format, cal.capture_layout)
-        if type(cal.footprints) is not tuple or len(cal.footprints) != len(eyes):
-            raise ValueError("hud_missing_eye_footprint")
-        seen = set()
-        for footprint in cal.footprints:
-            if (not isinstance(footprint, Footprint) or type(footprint.eye) is not int or
-                    footprint.eye not in range(len(eyes)) or footprint.eye in seen or
-                    type(footprint.rect) is not tuple or len(footprint.rect) != 4 or
-                    any(type(value) is not int for value in footprint.rect) or
-                    type(footprint.margin_px) is not int or not 2 <= footprint.margin_px <= 128):
-                raise ValueError("hud_mapping_invalid")
-            seen.add(footprint.eye)
-            expanded = self.expand(footprint)
-            eye = eyes[footprint.eye]
-            if (not contains(eye, footprint.rect) or not contains(eye, expanded) or
-                    not within_blind_budget((expanded,), eye)):
-                raise ValueError("hud_footprint_or_margin_out_of_bounds")
+        cal.validate()
+        mask_regions(cal)
+        if not cal.observed_ns <= time.monotonic_ns() < cal.expires_ns:
+            raise ValueError("hud_calibration_expired_or_clock_changed")
 
     @staticmethod
     def expand(footprint):
@@ -77,12 +108,46 @@ class HudMask:
         if config != self.config:
             raise ValueError("hud_config_changed")
 
+    def check_session(self, declared, reported=None):
+        """The calibration's session tokens (``SESSION_TOKENS``) and view fields (``VIEW_FIELDS``).
+
+        ``declared`` maps source field names to the source's declared values
+        (None when undeclared); ``reported`` is one frame's session metadata.
+        Each value present must equal the calibration's, with its type; a crop
+        may be a list or a tuple of ints. With a frame, each session token must
+        also be present in one of them. An undeclared view field is the
+        calibration's full, upright frame and HUD, which is what the mask applies.
+        """
+        self.validate()
+        for name in SESSION_TOKENS + VIEW_FIELDS:
+            token = getattr(self.calibration, name)
+            values = [declared[name]] if declared.get(name) is not None else []
+            if reported is not None and name in reported:
+                values.append(reported[name])
+            if any(type(value) is not type(token) or value != token for value in map(_comparable, values)):
+                raise ValueError("hud_" + name.removeprefix("hud_") + "_changed")
+            if name in SESSION_TOKENS and reported is not None and not values:
+                raise ValueError(f"hud_{name}_undeclared")
+
     def inference_shape(self):
         fmt = self.calibration.capture_format
         ratio = min(1, self.config.inference_max_side / max(fmt.width, fmt.height))
         return (max(1, round(fmt.height * ratio)), max(1, round(fmt.width * ratio)))
 
-    def prepare(self, bgr, *, source_id, capture_format, capture_layout, config=HUD_CONFIG):
+    def prepare(self, bgr, **context):
+        """Read-only masked detector input; any footprint pixel left non-zero raises ``hud_mask_zeroing_failed``."""
+        image, unmasked = self.prepare_counted(bgr, **context)
+        if unmasked:
+            raise ValueError("hud_mask_zeroing_failed")
+        return image
+
+    def prepare_counted(self, bgr, *, source_id, capture_format, capture_layout, config=HUD_CONFIG):
+        """Masked detector input and its count of footprint pixels still non-zero before the resize.
+
+        The count should be 0. It is taken from the geometry rule
+        (``mask_regions``), not from the regions the zeroing used, and the
+        caller decides what a non-zero count stops.
+        """
         import cv2
         import numpy as np
         self.check_context(source_id, capture_format, capture_layout, config)
@@ -93,14 +158,29 @@ class HudMask:
         # No resize/filter is permitted before this union is removed.
         for x0, y0, x1, y1 in self.regions:
             image[y0:y1, x0:x1] = 0
+        unmasked = self.unmasked_pixels(image)
         height, width = self.inference_shape()
         if image.shape[:2] != (height, width):
             image = cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)
         image.flags.writeable = False
-        return image
+        return image, unmasked
+
+    def unmasked_pixels(self, native):
+        """Footprint pixels with any non-zero channel in a masked native image (one region per eye)."""
+        import numpy as np
+        return sum(int(np.count_nonzero(native[y0:y1, x0:x1].any(axis=2)))
+                   for x0, y0, x1, y1 in mask_regions(self.calibration))
 
     def rows_for(self, detections, inference_shape, threshold):
         """Select at most ``config.rows`` ``HudRow``s from ``Detection``s in inference pixels."""
+        return self.select(detections, inference_shape, threshold)[0]
+
+    def select(self, detections, inference_shape, threshold):
+        """``(rows, HudChecks)``: the HUD rows and every valid box in native pixels, with the ones dropped.
+
+        A box that touches a masked region or does not lie inside exactly one
+        eye (``geometry.exclusion``) is dropped for presentation and counted.
+        """
         self.validate()
         if tuple(inference_shape) != self.inference_shape():
             raise ValueError("hud_inference_mapping_changed")
@@ -111,7 +191,7 @@ class HudMask:
         height, width = inference_shape
         fmt = self.calibration.capture_format
         eyes = viewports(fmt, self.calibration.capture_layout)
-        rows = []
+        rows, boxes, dropped = [], [], {"mask_overlap": 0, "eye_crossing": 0}
         for detection in detections:
             if not isinstance(detection, Detection):
                 continue
@@ -125,12 +205,12 @@ class HudMask:
             # Outward rounding accounts conservatively for area-filter support.
             native = (math.floor(box[0] * fmt.width / width), math.floor(box[1] * fmt.height / height),
                       math.ceil(box[2] * fmt.width / width), math.ceil(box[3] * fmt.height / height))
-            if any(overlaps(native, region) for region in self.regions):
+            boxes.append(native)
+            reason = exclusion(native, self.regions, eyes)
+            if reason is not None:  # Never a direction from the HUD's own pixels or from two eyes.
+                dropped[reason] += 1
                 continue
-            matching = [index for index, eye in enumerate(eyes) if contains(eye, native)]
-            if len(matching) != 1:  # Do not turn a cross-eye box into a direction.
-                continue
-            eye = eyes[matching[0]]
+            eye = next(eye for eye in eyes if contains(eye, native))
             cx = ((native[0] + native[2]) / 2 - eye[0]) / (eye[2] - eye[0])
             cy = ((native[1] + native[3]) / 2 - eye[1]) / (eye[3] - eye[1])
             dx = -1 if cx < 0.4 else 1 if cx > 0.6 else 0
@@ -147,7 +227,7 @@ class HudMask:
                 selected.append(row)
             if len(selected) == self.config.rows:
                 break
-        return tuple(selected)
+        return tuple(selected), HudChecks(tuple(boxes), dropped["mask_overlap"], dropped["eye_crossing"])
 
     def render(self, detections, inference_shape, threshold):
         rows = self.rows_for(detections, inference_shape, threshold)

@@ -9,9 +9,37 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 if not __package__:  # Run as a file: import this checkout's packages without installation.
     sys.path.insert(0, str(ROOT))
+# framejacker is imported only inside functions, after main() has invalidated the previous report.
 ASSETS = ROOT / ".cache" / "framejacker" / "assets"
 RESULTS = ROOT / "artifacts" / "smoke"
 FRAME_COUNT = 12
+THRESHOLD = 0.5
+# What the sample image shows, in canonical names; each detector must find every label it can name.
+FIXTURE = {"id": "dog.jpg", "present": ["bicycle", "dog", ["car", "truck"]]}
+
+
+def require_fixture_labels(detector, result):
+    """Fail unless ``result`` holds every fixture label ``detector``'s vocabulary has."""
+    from framejacker import evaluation
+
+    score = evaluation.score_image(FIXTURE, result.detections, detector.classes)
+    if score["present_misses"] or not score["present_hits"]:
+        missing = ", ".join(score["present_misses"]) or "any fixture label"
+        raise RuntimeError(f"{detector.name} expected {missing}; got {result.labels}")
+
+
+def check_detectors(image):
+    """Create every registered detector, with no per-name code, and check it on the fixture."""
+    from framejacker.detection import DETECTORS, create_detector, describe
+
+    detectors, report = {}, {}
+    for name in DETECTORS:
+        detector = create_detector(name)
+        result = detector.detect(image, THRESHOLD)
+        require_fixture_labels(detector, result)
+        detectors[name] = detector
+        report[name] = {**describe(detector), "labels": result.labels}
+    return detectors, report
 
 
 def main() -> None:
@@ -27,7 +55,7 @@ def main() -> None:
     import onnxruntime as ort
     from PySide6 import QtCore, QtGui, QtWidgets
 
-    from framejacker.detection import MobileNetSSD, annotate, create_detector, describe
+    from framejacker.detection import DEFAULT_DETECTOR, annotate, describe
 
     ort.disable_telemetry_events()
 
@@ -60,8 +88,9 @@ def main() -> None:
     finally:
         writer.release()
 
-    # The application's shared, checksum-verified detector rather than a copy of it.
-    detector = MobileNetSSD()
+    # The application's shared, checksum-verified detectors rather than copies of them.
+    detectors, checked = check_detectors(image)
+    detector = detectors[DEFAULT_DETECTOR]
     capture = cv2.VideoCapture(str(video_path), cv2.CAP_FFMPEG)
     if not capture.isOpened():
         raise RuntimeError("FFmpeg video capture failed")
@@ -95,11 +124,10 @@ def main() -> None:
                 timer.stop()
                 app.quit()
                 return
-            result = detector.detect(frame, 0.5)
+            result = detector.detect(frame, THRESHOLD)
             found = {detection.label: round(detection.confidence, 4) for detection in result.detections}
             frame = annotate(frame, result)
-            if not {"bicycle", "car", "dog"}.issubset(found):
-                raise RuntimeError(f"Expected bicycle, car, dog detections; got {found}")
+            require_fixture_labels(detector, result)
             rgb = np.ascontiguousarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
             qt_image = QtGui.QImage(
                 rgb.data, width, height, rgb.strides[0], QtGui.QImage.Format.Format_RGB888
@@ -123,11 +151,6 @@ def main() -> None:
         raise failures[0]
     if exit_code:
         raise RuntimeError(f"Qt exited with status {exit_code}")
-    # The 80-class candidate through ONNX Runtime must find the same fixture objects.
-    candidate = create_detector("yolox-nano", runtime="onnxruntime")
-    candidate_labels = candidate.detect(image, 0.5).labels
-    if not {"bicycle", "dog"}.issubset(candidate_labels) or not {"car", "truck"} & set(candidate_labels):
-        raise RuntimeError(f"YOLOX-Nano expected bicycle, dog and car/truck; got {candidate_labels}")
     screenshot = cv2.imread(str(screenshot_path))
     if screenshot is None or screenshot.std() < 10:
         raise RuntimeError("Rendered screenshot is blank or invalid")
@@ -139,8 +162,8 @@ def main() -> None:
         "qt": QtCore.qVersion(),
         "onnxruntime": ort.__version__,
         "onnx_numerical_inference": "passed",
-        "detector": "MobileNet-SSD (OpenCV DNN CPU)",
-        "candidate_detector": {**describe(candidate), "labels": candidate_labels},
+        "detector": describe(detector),
+        "detectors": checked,
         "capture_backend": backend,
         "qt_platform": app.platformName(),
         **state,

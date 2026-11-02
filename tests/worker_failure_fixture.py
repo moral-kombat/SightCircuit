@@ -38,7 +38,7 @@ def main():
         try:
             report = bounded_worker.supervise([sys.executable, __file__, "worker", mode, directory],
                 growth.new_report(), 2 if mode == "partial" else 10,
-                growth.validate_worker_report, descendants=mode in ("orphan_helper", "parent_death"))
+                growth.validate_worker_report, descendants=mode in ("orphan_helper", "parent_death", "guardian_death"))
             if unrelated:
                 report["unrelated_child_untouched"] = unrelated.poll() is None
         finally:
@@ -64,10 +64,10 @@ def main():
         sys.stdout.buffer.write(b"x" * (bounded_worker.MAX_REPORT_BYTES + 4096))
         sys.stdout.flush()
         time.sleep(60)
-    if mode in ("orphan_helper", "parent_death"):
+    if mode in ("orphan_helper", "parent_death", "guardian_death"):
         subprocess.Popen([sys.executable, __file__, "helper", mode, directory])
         wait_for(root / "helper")
-    if mode == "parent_death":
+    if mode in ("parent_death", "guardian_death"):
         time.sleep(60)
     report = dict(growth.new_report(), status="insufficient_fragment_growth", exit_code=2)
     if mode == "cooperative":

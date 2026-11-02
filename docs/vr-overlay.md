@@ -143,6 +143,11 @@ explicit preview/report flags still control optional file outputs.
 
 The binary protocol uses little-endian `FJO1`, a uint32 opcode, a uint32 payload
 length, and a bounded payload. It is private to these two project components.
+The opcodes, layouts and frame-side limit below are defined once in
+`framejacker/hud/contract.py`, and the settings ranges in
+`framejacker/overlay.py` (`PANEL_LIMITS`); the bridge reads both from the
+generated [`tools/hud_contract.hpp`](development.md#generated-hud-contract-header).
+The ten- and three-second input timeouts are the bridge's own.
 
 | Opcode | Payload |
 | --- | --- |

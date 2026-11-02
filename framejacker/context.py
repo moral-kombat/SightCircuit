@@ -16,7 +16,10 @@ It pins three things:
    (plus ``FORMAT_METADATA_KEYS``) and session metadata (``SESSION_METADATA_KEYS``).
    Per-frame telemetry outside these keys does not invalidate the context.
 3. **HUD binding** (optional): the bound ``HudMask`` checks each frame against
-   its calibration's source, native format, layout and configuration.
+   its calibration's source, native format, layout, configuration and
+   lifetime, and checks the source's declared session tokens and view fields
+   (crop, orientation and HUD digest) and the frame's session metadata against
+   the calibration's (``HudMask.check_session``).
 
 Any mismatch raises ``ValueError``. The first failure is latched: every later
 admission fails with the same reason, so an in-flight result cannot outlive a
@@ -81,6 +84,7 @@ class CaptureContext:
             # The calibration must describe this source before any frame is read.
             mask.check_context(self.declared("source_id"), mask.calibration.capture_format,
                                self.declared("capture_layout"), mask.config)
+            mask.check_session(dict(zip(SOURCE_FIELDS, self._declared)))
 
     def declared(self, name):
         return copy(self._declared[SOURCE_FIELDS.index(name)])
@@ -122,3 +126,4 @@ class CaptureContext:
         if self.mask is not None:
             self.mask.check_context(identity[0], CaptureFormat.from_mapping(native_format(frame)),
                                     self.declared("capture_layout"), self.mask.config)
+            self.mask.check_session(dict(zip(SOURCE_FIELDS, self._declared)), identity[2])

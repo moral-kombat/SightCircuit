@@ -280,7 +280,12 @@ the compositor. The JSON summary reports `realtime_ratio` (media seconds per wal
 second; about 1.0 means real time), `media_seconds_played`, `decode_fps`,
 `frames_decoded`, `frames_skipped`, `catch_ups`, `frames_replaced` (decoded but
 superseded before inference), `frames_dropped`, `processed_fps`,
-`mean_processing_ms`, presentation latency and `max_schedule_lateness_ms`. The
+`mean_processing_ms`, presentation latency and `max_schedule_lateness_ms`, plus
+`processed_media_fraction` (frames inferred on per frame the played span
+covered; skipped frames lower it while `realtime_ratio` counts them as
+progress) and the `pipeline` block's p50/p95/max latency statistics, which a
+run that fails after starting also reports (`statistics_final` is false when
+its worker had not stopped). The
 keyframe-skipping version is cloud-tested only; see
 [E62](status.md#e62-keyframe-catch-up-realtime-replay-cloud-checks). The earlier
 frame-dropping version was decode-bound on Frame, processing about 0.97 fps
@@ -566,26 +571,42 @@ cd "$HOME/framejacker" && git pull --ff-only && bash scripts/setup_window.sh
 ```
 
 Then capture unannotated stills for a private evaluation set. `--still` saves
-the last processed input, at the detector's input size, after the source closes;
-it is separate from the annotated `--preview`. Aim at the scene to label,
+the frame of the last processed result without annotation, at its native mirror
+size rather than the 960-pixel detector input. Like `--preview`, it needs a new
+path and is published only after capture/inference stops and cleanup is
+confirmed. `evaluate_detectors.py` applies the application's own conversion to
+at most 960 pixels, so its input equals what the live detector saw. The JSON
+report records `still_sha256`, `still_detector`, `still_source` and
+`still_sequence` (the same frame as `last_result`); keep it, because the
+manifest helper pins the still's digest from it. Aim at the scene to label,
 including the rug from [E15](status.md#e15-saved-room-recognition-and-rug-false-positive),
-and keep it in view through the final seconds:
+and keep it in view through the final seconds. Change `--present`/`--absent` to
+the scene:
 
 ```bash
 (
   set -e
   cd "$HOME/framejacker"
   mkdir -p evaluation/local
+  framejacker_still="evaluation/local/room-$(date +%Y%m%d-%H%M%S)"
   .venv-replay/bin/python scripts/mirror_recognize.py --capture --device /dev/video99 \
-    --seconds 5 --detector yolox-nano \
-    --still "evaluation/local/room-$(date +%Y%m%d-%H%M%S).png"
+    --seconds 5 --detector yolox-nano --still "$framejacker_still.png" > "$framejacker_still.json"
+  .venv-replay/bin/python scripts/frame_session_manifest.py --manifest evaluation/local/frame.json \
+    --id "${framejacker_still##*/}" --image "$framejacker_still.png" \
+    --still-report "$framejacker_still.json" --present chair --absent couch
 )
 ```
 
-The earlier grayscale `artifacts/mirror-check/scene-check.png` is also usable.
+The `stills` stage of `scripts/frame_session.sh` runs the same two commands for
+each scene. The manifest helper refuses a report that is not a successful
+`--still` run for that image, or whose SHA-256 the image no longer matches. The
+entry then carries `sha256` and `capture` (detector, source and sequence); keep
+both when adding boxes by hand. The earlier grayscale
+`artifacts/mirror-check/scene-check.png` is also usable, but it has no capture
+report, so its entry has no pinned digest.
 `evaluation/local/` is ignored by Git, so private room images stay on the
-device. Describe each still in `evaluation/local/frame.json`; boxes are optional
-source-pixel coordinates (an image viewer's cursor position is enough):
+device. Each entry in `evaluation/local/frame.json` describes one still; boxes
+are optional source-pixel coordinates (an image viewer's cursor position is enough):
 
 ```json
 {
@@ -608,6 +629,8 @@ JSON totals:
   --report "evaluation/local/report-$(date +%Y%m%d-%H%M%S).json"
 ```
 
+Pinned digests are verified before inference. Add `--require-input-digests` to
+refuse any entry without one, such as the hand-added grayscale still.
 `present`/`absent` list canonical COCO names (`couch`, `tv`, `dining table`);
 VOC output such as `sofa` is mapped automatically. A rug detected as `couch`
 inside the rug's box is counted under `confusions`. Labels a model cannot
@@ -752,7 +775,8 @@ Run the offline checks on the reviewed revision, in the cloud or on Frame:
 ```bash
 cd "$HOME/framejacker"
 QT_QPA_PLATFORM=offscreen .venv-replay/bin/python -m unittest \
-  tests.test_hud_marker_check tests.test_hud_marker_observer tests.test_hud_mask
+  tests.test_hud_marker_check tests.test_hud_marker_observer tests.test_hud_mask \
+  tests.test_checkpoint_manifest
 ```
 
 On Frame, confirm all of the following:
@@ -768,16 +792,35 @@ On Frame, confirm all of the following:
   Optionally start the [observation page](#record-headset-observations-for-a-run)
   for their answers.
 
-Then run the marker's validation mode on Frame. It uses the generated marker
-and native timer only, and never initializes VR:
+Right after the bridge build, pin the checkout, interpreter, packages and
+bridge with the [checkpoint artifact manifest](hud-qualification.md#next-device-checkpoint).
+Write it on Frame; built binaries are never transferred:
 
 ```bash
 cd "$HOME/framejacker"
-.venv-replay/bin/python scripts/hud_marker_check.py --validate --seconds 3
+mkdir -p artifacts/hud-calibration
+.venv-replay/bin/python scripts/checkpoint_manifest.py \
+  --write artifacts/hud-calibration/checkpoint-manifest.json
 ```
 
-Expect `"status": "completed"`, `"exit_code": 0` and `"cleanup_ok": true`. Stop
-here if it reports anything else.
+Expect `"status": "written"`, `"dirty": false` and empty `problems`. It refuses
+a dirty tree and never overwrites an earlier manifest; move that aside first.
+
+Then verify the manifest (read-only) and run the marker's validation mode on
+Frame. The validation uses the generated marker and native timer only, and
+never initializes VR. `&&` stops before the bridge runs if anything differs
+from the manifest:
+
+```bash
+cd "$HOME/framejacker"
+.venv-replay/bin/python scripts/checkpoint_manifest.py \
+  --verify artifacts/hud-calibration/checkpoint-manifest.json &&
+  .venv-replay/bin/python scripts/hud_marker_check.py --validate --seconds 3
+```
+
+Expect `"status": "verified"` from the manifest check, then
+`"status": "completed"`, `"exit_code": 0` and `"cleanup_ok": true` from the
+validation. Stop here if either reports anything else.
 
 #### Approved run
 
@@ -796,6 +839,10 @@ attached to the active `:0` display.
   mkdir -p artifacts/hud-calibration
   run="$(mktemp -d "$PWD/artifacts/hud-calibration/run-XXXXXX")"
   git rev-parse HEAD > "$run/revision.txt"
+  cp artifacts/hud-calibration/checkpoint-manifest.json "$run/"
+  .venv-replay/bin/python scripts/checkpoint_manifest.py \
+    --verify artifacts/hud-calibration/checkpoint-manifest.json \
+    > "$run/manifest-verify.json" || { echo "Manifest differs; see $run"; exit 1; }
   set +e
   .venv-replay/bin/python scripts/hud_marker_observer.py --observe-calibration \
     --allow-mirror-observation --allow-calibration-output \
@@ -805,13 +852,20 @@ attached to the active `:0` display.
 )
 ```
 
+The read-only `--verify` step stops the run before the mirror opens if
+anything differs from the manifest: a changed module or script, a rebuilt
+bridge, a dirty tree, or another interpreter, architecture or package. Keep
+the directory, with its `manifest-verify.json`, and do not run the observer.
+
 During the run, the wearer keeps passthrough visible and looks at the scene
 for the first two seconds. A completely unchanging view can end the run with
 `baseline_distinct_clear_frames_not_established`. Once the marker tile appears,
 they turn their head slowly through a small range and keep the tile in view.
 Large movements, or a change in how many copies are visible, end the run
-rejected instead of widening the footprint. Ctrl-C (or SIGTERM over SSH) stops
-both tools.
+rejected instead of widening the footprint. After a rejection the marker tile
+stays until its own timer ends, at most `--seconds`, because the marker bridge
+does not read a stop request. Ctrl-C (or SIGTERM over SSH) stops both tools at
+once; that stop is reported as forced, with `cleanup_ok: false`.
 
 #### Reading the result
 
@@ -1632,7 +1686,9 @@ refers to a local eight-entry deployment manifest (the ARM64 bridge plus seven
 Python modules) with verified sizes and hashes, and to a placeholder deployment
 command. **Neither the manifest nor that command is in this repository.** This
 section therefore gives no deployment command. No install, transfer or device
-execution is authorized here.
+execution is authorized here. The [checkpoint artifact manifest](hud-qualification.md#next-device-checkpoint)
+is different: it pins a checkout and bridge built on Frame itself, and nothing
+is transferred.
 
 That historical file list is also insufficient for the current adapters:
 shared code now lives only in `framejacker/` (for example the mirror reader in

@@ -158,7 +158,7 @@ stage_stills() {
     results[still-$id]=$code
     if [ "$code" = 0 ] && [ -f "$file" ]; then
       run "manifest-$id" "$py" scripts/frame_session_manifest.py --manifest evaluation/local/frame.json --id "$id-$stamp" \
-        --image "$file" --present "$present" --absent "$absent" || return $?
+        --image "$file" --still-report "$out/still-$id.json" --present "$present" --absent "$absent" || return $?
       note "- still \`$id\`: $file added to frame.json"
     else
       note "- still \`$id\`: capture failed (exit $code)"

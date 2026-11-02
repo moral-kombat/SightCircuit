@@ -82,9 +82,9 @@ was a dated snapshot; this table has a reproducible repository source.
 | Area | State | Evidence and limits |
 | --- | --- | --- |
 | Annotated Qt replay window | Device-confirmed | Latest run presents/processes 576 frames and reports four labels; label accuracy remains unevaluated; [E47](status.md#e47-recorded-recognition-and-vr-panel-poc-on-frame) |
-| Bounded mirror recognition | Frame POC execution and sampled preview localization confirmed | Latest run: 100 captured / 51 processed reads, 4.993 processed fps, 40.065 ms mean inference, clean shutdown; user confirms matching preview labels/boxes and normal passthrough/tracking during/after; broader accuracy and continuous display remain separate; [E48](status.md#e48-live-mirror-recognition-poc-and-matching-preview) |
-| Candidate detector and evaluation harness | Preprocessing audit verified offline; E61 reproduction and Frame selection blocked | Corrected demonstrated SSD channel normalization and per-axis scoring; pinned audit variants and factual annotation coverage; original still/digest absent; no default change; [E73](status.md#e73-reproducible-preprocessing-audit-and-ssd-channel-correction), [E61](status.md#e61-file-only-detector-comparison-on-the-evening-grayscale-still) |
-| Fixed edge HUD, marker and offline live pipeline | Shared runtime verified offline; historical V4 observation rejected; production closed | Native masking, original-frame expiry and qualification schema verified offline; recovered V4 report/source explain the software stop, while green physical outcome and G2 remain open; [E72](status.md#e72-shared-hud-runtime-and-independent-lifecycle-fixes), [E74](status.md#e74-evidence-generation-and-offline-mapping-qualification-support), [E75](status.md#e75-recovered-v4-evidence-and-software-termination-analysis) |
+| Bounded mirror recognition | Frame POC execution and sampled preview localization confirmed | Latest run: 100 captured / 51 processed reads, 4.993 processed fps, 40.065 ms mean inference, clean shutdown; user confirms matching preview labels/boxes and normal passthrough/tracking during/after; broader accuracy and continuous display remain separate; `--detector`/`--still` with pinned still digests restored offline for WP2 stills, [E76](status.md#e76-offline-work-packages-ah-cloud-checks); [E48](status.md#e48-live-mirror-recognition-poc-and-matching-preview) |
+| Candidate detector and evaluation harness | Preprocessing audit verified offline; E61 reproduction and Frame selection blocked | Corrected demonstrated SSD channel normalization and per-axis scoring; pinned audit variants and factual annotation coverage; original still/digest absent; detector-owned preprocessing, mirror-preview variant, per-label diagnostics and a CI seed pin added offline ([E76](status.md#e76-offline-work-packages-ah-cloud-checks)); no default change; [E73](status.md#e73-reproducible-preprocessing-audit-and-ssd-channel-correction), [E61](status.md#e61-file-only-detector-comparison-on-the-evening-grayscale-still) |
+| Fixed edge HUD, marker and offline live pipeline | Shared runtime verified offline; historical V4 observation rejected; production closed | Native masking, original-frame expiry and qualification schema verified offline; recovered V4 report/source explain the software stop; cooperative marker stop, guardian-loss containment, one generated HUD contract, observer-to-candidate conversion, factory-only calibrations and exclusion counters verified offline ([E76](status.md#e76-offline-work-packages-ah-cloud-checks)); green physical outcome and G2 remain open; [E72](status.md#e72-shared-hud-runtime-and-independent-lifecycle-fixes), [E74](status.md#e74-evidence-generation-and-offline-mapping-qualification-support), [E75](status.md#e75-recovered-v4-evidence-and-software-termination-analysis) |
 | Stereo depth and world-space labels | Deferred | Calibration, depth and pose/timebase alignment remain unresolved |
 | Gaussian splat reconstruction and viewing | Deferred optional work | Recorded-data workflow researched; training and headset splat rendering not validated by this project |
 
@@ -182,8 +182,9 @@ image = annotate(bgr_image, result)              # owned annotated copy
 
 `Pipeline` performs conversion, detection and annotation for both callers and
 hands each `Processed` result (frame, detections, annotated image, input age and
-total processing time) to sinks. There is no model selector or second detector
-yet; a replacement implements the same protocol. Replay presents one latest completed
+total processing time) to sinks. `create_detector()` selects a registered
+detector (`--detector`); a replacement implements the same protocol and
+registers its class. Replay presents one latest completed
 result, while mirror capture keeps one pending owned input for inference and
 drops observations older than one second. The measured 42.044 ms mean forward
 time and roughly 5 processed fps belong to the bounded mirror/MobileNet trial,
@@ -228,7 +229,11 @@ splats concern scene reconstruction and do not replace the detector.
    Frame ([procedure](on-device.md#compare-detectors-on-frame-stills)).
 2. Add a detector adapter that preserves the method/result boundary above.
    Pin weights and label-map hashes, input dtype/shape, RGB/BGR order,
-   normalization, model/runtime versions and licenses. Add the runtime only to
+   normalization, model/runtime versions and licenses. The class owns its
+   `model_files()` and structured `preprocessing()` description; registering
+   it in `DETECTORS` and pinning its files in `scripts/smoke-assets.json` is
+   all the evaluator, smoke check and asset tests need. Record its seed counts
+   in `evaluation/seed-expected.json` so CI fails on later regressions. Add the runtime only to
    environments that use it. ONNX Runtime is pinned in the window environment
    for YOLOX; MobileNet-SSD continues to use OpenCV DNN.
 3. Perform the new model's own preprocessing/output decoding, score filtering

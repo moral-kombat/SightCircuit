@@ -211,7 +211,7 @@ class ShmNativeTests(ShmTestCase):
             race.write_bytes(b"preserve concurrent file")
             return real_link(name, destination, **kwargs)
 
-        with patch.object(check.os, "link", side_effect=racing_link), redirect_stdout(io.StringIO()):
+        with patch.object(os, "link", side_effect=racing_link), redirect_stdout(io.StringIO()):
             code = check.main(["--read", "--source", str(source), "--frames", "1", "--preview", str(race)])
         self.assertEqual(code, 1)
         self.assertEqual(race.read_bytes(), b"preserve concurrent file")

@@ -1,4 +1,8 @@
-"""Compare detectors on labelled stills, with the application's own conversion path."""
+"""Compare detectors on labelled stills, with the application's own conversion path.
+
+With ``--expect`` the run also fails (exit 1) when any detector does worse than
+a committed count pin, such as ``evaluation/seed-expected.json``.
+"""
 import argparse
 import hashlib
 import importlib
@@ -12,18 +16,24 @@ import time
 
 if not __package__:  # Run as a file: import this checkout's packages without installation.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from framejacker import assets, evaluation
+from framejacker import assets, detection, evaluation
 from framejacker.convert import MAX_PROCESSING_SIDE, to_bgr
-from framejacker.detection import DETECTORS, MODEL_FILES, YoloxDetector, create_detector, describe
+from framejacker.detection import DETECTORS, create_detector, describe
+from framejacker.errors import FramejackerError
 from framejacker.frame import Frame
+from framejacker.sources.mirror_device import grayscale_sample, validate_format
 
 ROOT = Path(__file__).resolve().parents[1]
 DOWNLOADS = ROOT / ".cache/framejacker/evaluation"
 DEFAULT_MANIFEST = ROOT / "evaluation/seed.json"
+MIRROR_PREVIEW_SIDE = 640  # The bound sources/mirror.capture gives the preview mirror_check publishes.
 AUDIT_VARIANTS = {
     "swap-rb": "Swap B/R after decode; all geometry and model preprocessing unchanged",
     "gray-replicated": "Convert decoded BGR to grayscale and replicate it; all geometry unchanged",
     "native-size": "Omit only the application's 960-side resize; model preprocessing unchanged",
+    "mirror-preview": ("Replace decoded BGR with mirror_check's preview, sources.mirror_device.grayscale_sample "
+                       "at a 640-pixel bound (nearest-neighbour stride, integer luma), replicated to three "
+                       "channels: E61's detector input; model preprocessing unchanged"),
 }
 
 
@@ -63,6 +73,17 @@ def load_images(manifests, fetch, require_digests=False):
     return images
 
 
+def mirror_preview(image):
+    """``grayscale_sample`` of a decoded BGR still, the way the mirror check samples a frame, in three channels."""
+    import numpy as np
+
+    pixels = np.ascontiguousarray(image)
+    height, width = pixels.shape[:2]
+    fmt = validate_format(width, height, "BGR3", width * 3, pixels.nbytes)
+    sample_width, sample_height, gray = grayscale_sample(pixels.tobytes(), fmt, MIRROR_PREVIEW_SIDE)
+    return np.repeat(np.frombuffer(gray, dtype=np.uint8).reshape(sample_height, sample_width, 1), 3, axis=2)
+
+
 def prepare_image(image, variant="baseline"):
     """One controlled change from the application's BGR conversion path."""
     import cv2
@@ -71,6 +92,8 @@ def prepare_image(image, variant="baseline"):
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     elif variant == "gray-replicated":
         image = cv2.cvtColor(cv2.cvtColor(image, cv2.COLOR_BGR2GRAY), cv2.COLOR_GRAY2BGR)
+    elif variant == "mirror-preview":
+        image = mirror_preview(image)
     elif variant not in ("baseline", "native-size"):
         raise ValueError(f"Unknown audit variant {variant!r}")
     height, width = image.shape[:2]
@@ -97,13 +120,13 @@ def preprocessing_audit(detector, image, bgr, decode):
     tensor, transform = detector.prepare_input(bgr)
     height, width = image.shape[:2]
     processing_h, processing_w = bgr.shape[:2]
+    description = detection.preprocessing(detector.name)  # The detector's own resize kind and box inverse.
     if transform is None:
-        mapping = {"kind": "stretch", "scale_x": 300 / processing_w,
-                   "scale_y": 300 / processing_h, "pad_x": 0, "pad_y": 0,
-                   "inverse": "normalized SSD corners multiplied by processing width/height"}
+        input_w, input_h = description["input_size"]
+        geometry = {"scale_x": input_w / processing_w, "scale_y": input_h / processing_h, "pad_x": 0, "pad_y": 0}
     else:
-        mapping = {"kind": "letterbox_top_left", **asdict(transform),
-                   "inverse": "subtract padding, divide by realized per-axis scale, clamp to input"}
+        geometry = asdict(transform)
+    mapping = {"kind": description["resize"], **geometry, "inverse": description["box_mapping"]}
     return {"decode": decode, "decoded_bgr": tensor_fingerprint(image),
             "decoded_channels_equal": bool(np.array_equal(image[:, :, 0], image[:, :, 1])
                                            and np.array_equal(image[:, :, 1], image[:, :, 2])),
@@ -117,6 +140,8 @@ def preprocessing_audit(detector, image, bgr, decode):
 
 
 def evaluate(detector, images, threshold, iou_threshold, audit=False, variant="baseline"):
+    """Score each image at ``threshold``; a second, untimed call at the floor only feeds diagnostics."""
+    floor = min(evaluation.BELOW_THRESHOLD_FLOOR, threshold)
     scores, inference, processing = [], [], []
     for manifest, entry, image, image_path, image_sha256 in images:
         height, width = image.shape[:2]
@@ -133,6 +158,8 @@ def evaluate(detector, images, threshold, iou_threshold, audit=False, variant="b
                      decoded_width=width, decoded_height=height, processing_width=bgr.shape[1],
                      processing_height=bgr.shape[0], inference_ms=round(result.inference_ms, 3),
                      detections=[item.as_dict() for item in result.detections[:50]])
+        below = detector.detect(bgr, floor).detections if floor < threshold else ()
+        score["best_below_threshold"] = evaluation.best_below_threshold(entry, below, detector.classes, threshold)
         if audit:
             score["preprocessing_audit"] = preprocessing_audit(detector, image, bgr, entry.get("_input_decode"))
         scores.append(score)
@@ -156,29 +183,12 @@ def source_revision():
         return {"revision": None, "error": str(error)}
     source_files = ("framejacker/convert.py", "framejacker/detection.py", "framejacker/evaluation.py",
                     "framejacker/frame.py", "framejacker/labels.py", "framejacker/preprocess.py",
-                    "scripts/evaluate_detectors.py", "scripts/smoke-assets.json")
+                    "framejacker/sources/mirror_device.py", "scripts/evaluate_detectors.py",
+                    "scripts/smoke-assets.json")
     return {"revision": revision, "working_tree_dirty": bool(status),
             "working_tree_paths": [line[3:] for line in status.splitlines()],
             "tracked_diff_sha256": hashlib.sha256(diff).hexdigest(),
             "source_files_sha256": {path: assets.checksum(ROOT / path) for path in source_files}}
-
-
-def model_files(detector):
-    if detector.name == "mobilenet-ssd":
-        return MODEL_FILES
-    return (YoloxDetector.MODELS[detector.name][0],)
-
-
-def model_preprocessing(detector):
-    if detector.name == "mobilenet-ssd":
-        return {"color_order": "BGR", "resize": "stretch", "input_size": [300, 300],
-                "blob_scale": 0.007843, "mean": [127.5, 127.5, 127.5],
-                "box_mapping": "normalized corners times processing dimensions"}
-    if detector.name == "yolox-nano":
-        return {"color_order": "BGR", "resize": "letterbox_top_left",
-                "input_size": [detector.size, detector.size], "padding_value": 114,
-                "box_mapping": "inverse realized x/y resize ratios"}
-    raise ValueError(f"Unknown detector {detector.name!r}")
 
 
 def image_runtime_versions():
@@ -189,17 +199,11 @@ def image_runtime_versions():
 
 
 def model_provenance(detector):
-    import cv2
-
-    if detector.runtime == "onnxruntime":
-        import onnxruntime
-
-        runtime_version = onnxruntime.__version__
-    elif detector.runtime == "opencv-dnn":
-        runtime_version = cv2.__version__
-    else:
+    """Hashes of the files the detector loads and runs, from what its class declares."""
+    if detector.runtime not in detection.RUNTIME_MODULES:
         raise ValueError(f"Unknown detector runtime {detector.runtime!r}")
-    module = importlib.import_module("onnxruntime" if detector.runtime == "onnxruntime" else "cv2")
+    module = importlib.import_module(detection.RUNTIME_MODULES[detector.runtime])
+    runtime_version = module.__version__
     package = Path(module.__file__).parent
     artifacts = sorted({Path(module.__file__), *package.glob("*.so"), *package.glob("capi/*.so"),
                         *package.glob("*.pyd"), *package.glob("capi/*.pyd")})
@@ -207,9 +211,19 @@ def model_provenance(detector):
             "runtime_artifacts": [{"name": str(path.relative_to(package)), "sha256": assets.checksum(path)}
                                   for path in artifacts],
             "runtime_hash_scope": "Python package entry and native extension files; system dependencies not hashed",
-            "preprocessing": model_preprocessing(detector),
+            "preprocessing": detection.preprocessing(detector.name),
             "model_files": [{"name": name, "sha256": assets.checksum(assets.ASSETS / name)}
-                            for name in model_files(detector)]}
+                            for name in detection.model_files(detector.name)]}
+
+
+def print_expectation(path, result):
+    """The pin verdict for people reading CI logs; the JSON report holds the same result."""
+    verdict = "passed (counts no worse than pinned)" if result["status"] == "passed" else "REGRESSED"
+    print(f"pin {path}: {verdict}", file=sys.stderr)
+    for label, key in (("regression", "failures"), ("better than pinned; update the pin", "improvements"),
+                       ("not pinned", "unpinned")):
+        for item in result[key]:
+            print(f"  {label}: {item}", file=sys.stderr)
 
 
 def main(argv=None):
@@ -227,13 +241,15 @@ def main(argv=None):
                         help="Require a supplied SHA-256 for every image before evaluation")
     parser.add_argument("--audit-variant", choices=AUDIT_VARIANTS, action="append",
                         help="Add one-factor audit comparison; repeatable, with separate warm-up and results")
+    parser.add_argument("--expect", type=Path,
+                        help="Committed count pin, such as evaluation/seed-expected.json; exit 1 on any regression")
     args = parser.parse_args(argv)
     for name, value in (("--threshold", args.threshold), ("--iou", args.iou)):
         if not math.isfinite(value) or not 0 < value <= 1:
             parser.error(f"{name} must be in (0, 1]")
     if args.report and args.report.exists():
         parser.error("--report must name a new file")
-    report = {"report_kind": "detector_evaluation", "schema_version": 3, "status": "error",
+    report = {"report_kind": "detector_evaluation", "schema_version": 4, "status": "error",
               "threshold": args.threshold, "iou_threshold": args.iou,
               "confusion_iou_threshold": evaluation.CONFUSION_IOU, "detectors": {},
               "code": source_revision(),
@@ -243,6 +259,9 @@ def main(argv=None):
                              "maximum_processing_side": MAX_PROCESSING_SIDE},
               "warmup": {"runs_per_detector": 1, "input_index": 0, "included_in_timing": False},
               "confidence_is_calibrated_probability": False,
+              "below_threshold": {"floor": min(evaluation.BELOW_THRESHOLD_FLOOR, args.threshold), "scored": False,
+                                  "method": "one untimed detect() per image at the floor after the measured call",
+                                  "limits": "a model's own output filter can hide lower scores"},
               "audit_preprocessing": bool(args.audit_preprocessing or args.audit_variant),
               "require_input_digests": args.require_input_digests,
               "annotation_limits": "Only supplied labels/boxes are scored; zero unannotated checks is not accuracy",
@@ -251,6 +270,13 @@ def main(argv=None):
         manifests = args.manifest or [DEFAULT_MANIFEST]
         report["manifests"] = [str(path) for path in manifests]
         report["manifest_sha256"] = {str(path): assets.checksum(path) for path in manifests}
+        pin = None
+        if args.expect:
+            pin = evaluation.load_pin(args.expect)
+            evaluation.require_pin_applies(pin, [assets.checksum(path) for path in manifests], args.threshold,
+                                           args.iou)
+            report["expectation"] = {"pin": str(args.expect), "pin_sha256": assets.checksum(args.expect),
+                                     "status": "not_checked"}
         images = load_images(manifests, args.fetch, args.require_input_digests)
         report["environment"].update(image_runtime_versions())
         report["images"] = len(images)
@@ -263,7 +289,8 @@ def main(argv=None):
             audit = bool(args.audit_preprocessing or args.audit_variant)
             summary, scores = evaluate(detector, images, args.threshold, args.iou, audit=audit)
             summary["startup_ms"] = round(startup, 3)
-            report["detectors"][name] = {**model_provenance(detector), "totals": summary, "images": scores}
+            report["detectors"][name] = {**model_provenance(detector), "totals": summary,
+                                         "labels": evaluation.label_table(scores), "images": scores}
             if args.audit_variant:
                 comparisons = report["detectors"][name]["audit_variants"] = {}
                 for variant in dict.fromkeys(args.audit_variant):
@@ -272,13 +299,22 @@ def main(argv=None):
                                                              audit=True, variant=variant)
                     comparisons[variant] = {"change": AUDIT_VARIANTS[variant], "baseline": "baseline",
                                             "warmup_runs": 1, "warmup_included_in_timing": False,
-                                            "totals": variant_totals, "images": variant_scores}
+                                            "totals": variant_totals,
+                                            "labels": evaluation.label_table(variant_scores),
+                                            "images": variant_scores}
             print(f"{name:14s} present {summary['present_hits']}/{summary['present_hits'] + summary['present_misses']}"
                   f"  absent-violations {summary['absent_violations']}  confusions {summary['confusions']}"
                   f"  box-recall {summary['box_recall']}  mean {summary['mean_inference_ms']:.1f} ms",
                   file=sys.stderr)
+        tables = {name: result["labels"] for name, result in report["detectors"].items()}
+        for line in evaluation.format_label_table(tables, args.threshold):
+            print(line, file=sys.stderr)
+        if pin is not None:
+            counts = {name: evaluation.pin_counts(result["totals"]) for name, result in report["detectors"].items()}
+            report["expectation"].update(evaluation.check_pin(pin, counts))
+            print_expectation(args.expect, report["expectation"])
         report["status"] = "evaluated"
-    except (ImportError, OSError, ValueError, RuntimeError) as error:
+    except (ImportError, OSError, ValueError, RuntimeError, FramejackerError) as error:
         report["error"] = str(error)
     print(json.dumps(report, indent=2))
     if args.report:
@@ -288,7 +324,8 @@ def main(argv=None):
         except OSError as error:
             print(f"Could not save report: {error}", file=sys.stderr)
             return 1
-    return 0 if report["status"] == "evaluated" else 1
+    expectation = report.get("expectation", {"status": "passed"})["status"]
+    return 0 if report["status"] == "evaluated" and expectation == "passed" else 1
 
 
 if __name__ == "__main__":

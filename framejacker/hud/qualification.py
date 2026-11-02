@@ -3,20 +3,40 @@
 These records describe proposed operating conditions and evidence references.
 Their validity never grants hardware or production-output authority. In
 particular, supplied JSON and artifact digests cannot prove eye composition,
-coverage of hidden copies, physical visibility, or wearer recovery.
+coverage of hidden copies, physical visibility, or wearer recovery. A record
+names each term it cannot establish in ``unknowns``; such a field is null,
+never 0.
 """
 from dataclasses import dataclass
 import json
 import math
 
 from ..gates import HARDWARE_MAPPING, LIVE_HUD_OUTPUT, claims
-from .contract import HUD_CONFIG, Calibration, CaptureFormat, Footprint, HudConfig, config_digest
-from .geometry import LAYOUTS, contains, expand, eye_viewports, overlaps, within_blind_budget
+from .contract import (CANDIDATE_PROVENANCE, HUD_CONFIG, MAX_DISPLAY_AGE_NS, MAX_MAPPING_LIFETIME_NS,
+                       SESSION_TOKENS, Calibration, CaptureFormat, Footprint, HudConfig, config_digest, margin_valid,
+                       token_valid)
+from .geometry import LAYOUTS, exclusion, expand, eye_viewports, within_blind_budget
 
 
 MAX_RECORD_BYTES = 128 * 1024
-MAX_MAPPING_LIFETIME_NS = 300 * 1_000_000_000
 EVIDENCE_ROLES = ("observer", "composition", "copy_coverage", "motion_margin", "physical_expiry")
+MAPPING_FIELDS = ("schema_version", "status", "mapping_qualified", "mapping_id", "context", "observed_ns",
+                  "expires_ns", "operating_limits", "copies", "evidence")
+OPERATING_LIMIT_FIELDS = ("yaw_degrees", "pitch_degrees", "roll_degrees", "angular_speed_degrees_s", "display_mode")
+# Per-copy margin terms, in pixels: sampled drift, corner localization and filter support.
+COPY_ERROR_TERMS = ("maximum_drift_px", "localization_error_px", "filter_support_px")
+# Terms a record may declare unknown, each with a reason. A field-bearing term
+# (a copy term, or every operating limit) is then null in the record, never 0.
+UNKNOWN_TERMS = ("eye_composition", "unseen_or_occluded_copies", "capture_freshness", "motion_displacement_bound",
+                 *COPY_ERROR_TERMS, "operating_limits")
+# ValidationLedger failure kinds by reason; a failed context check is "context" whatever its reason.
+FAILURE_KINDS = {"hud_frame_sequence_invalid": "identity", "hud_result_identity_mismatch": "identity",
+                 "hud_nonmonotonic_result": "identity", "hud_validation_mask_overlap": "exclusion",
+                 "hud_validation_cross_eye_detection": "exclusion", "hud_native_detection_box_invalid": "exclusion",
+                 "hud_completion_clock_regressed": "timing", "hud_frame_observed_time_invalid": "timing",
+                 "hud_result_deadline_invalid": "timing", "hud_validation_result_budget_exceeded": "budget",
+                 "hud_validation_detection_budget_exceeded": "budget"}
+EXCLUSION_REASONS = {"mask_overlap": "hud_validation_mask_overlap", "eye_crossing": "hud_validation_cross_eye_detection"}
 
 
 def _object(value, keys, name):
@@ -30,8 +50,7 @@ def _integer(value, low, high, name):
 
 
 def _token(value, name, limit=160):
-    if (type(value) is not str or not 1 <= len(value) <= limit or
-            any(ord(char) < 32 or ord(char) == 127 for char in value)):
+    if not token_valid(value, limit):
         raise ValueError(f"hud_{name}_invalid")
 
 
@@ -50,6 +69,32 @@ def _rect(value, bounds, name):
 def _number(value, low, high, name):
     if type(value) not in (int, float) or not math.isfinite(value) or not low <= value <= high:
         raise ValueError(f"hud_{name}_invalid")
+
+
+def _reject_constant(name):
+    raise ValueError("hud_input_json_nonfinite_number")
+
+
+def parse_record(data):
+    """Decode one size-bounded JSON record; deep nesting and NaN/Infinity are rejected."""
+    try:
+        return json.loads(data, parse_constant=_reject_constant)
+    except RecursionError as error:
+        raise ValueError("hud_input_json_nesting_exceeded") from error
+
+
+def _unknowns(value):
+    """Explicit unknown terms: each a schema term with a reason, so an absent value is never read as 0."""
+    if (type(value) is not dict or not 1 <= len(value) <= len(UNKNOWN_TERMS) or
+            any(term not in UNKNOWN_TERMS for term in value)):
+        raise ValueError("hud_unknowns_invalid")
+    for reason in value.values():
+        _token(reason, "unknown_reason", 240)
+
+
+def _unknown_null(value):
+    if value is not None:
+        raise ValueError("hud_unknown_term_has_value")
 
 
 def validate_context(context):
@@ -92,8 +137,12 @@ class MappingCandidate:
 
     @classmethod
     def from_mapping(cls, record):
-        _object(record, ("schema_version", "status", "mapping_qualified", "mapping_id", "context", "observed_ns",
-                         "expires_ns", "operating_limits", "copies", "evidence"), "mapping")
+        # ``unknowns`` is optional; when present it names every null term.
+        declared = type(record) is dict and "unknowns" in record
+        _object(record, MAPPING_FIELDS + (("unknowns",) if declared else ()), "mapping")
+        unknowns = record["unknowns"] if declared else {}
+        if declared:
+            _unknowns(unknowns)
         if (type(record["schema_version"]) is not int or record["schema_version"] != 1 or
                 record["status"] != "observed_unqualified" or record["mapping_qualified"] is not False):
             raise ValueError("hud_mapping_cannot_claim_qualification")
@@ -103,13 +152,16 @@ class MappingCandidate:
         _integer(record["expires_ns"], record["observed_ns"]+1,
                  min(2**63-1, record["observed_ns"]+MAX_MAPPING_LIFETIME_NS), "mapping_expiry")
         limits = record["operating_limits"]
-        _object(limits, ("yaw_degrees", "pitch_degrees", "roll_degrees", "angular_speed_degrees_s", "display_mode"),
-                "operating_limits")
-        for key in ("yaw_degrees", "pitch_degrees", "roll_degrees"):
-            _number(limits[key], 0, 180, key)
-        _number(limits["angular_speed_degrees_s"], 0, 360, "angular_speed")
-        if limits["display_mode"] not in ("passthrough_only", "dashboard_only"):
-            raise ValueError("hud_display_mode_invalid")
+        _object(limits, OPERATING_LIMIT_FIELDS, "operating_limits")
+        if "operating_limits" in unknowns:
+            for key in OPERATING_LIMIT_FIELDS:
+                _unknown_null(limits[key])
+        else:
+            for key in ("yaw_degrees", "pitch_degrees", "roll_degrees"):
+                _number(limits[key], 0, 180, key)
+            _number(limits["angular_speed_degrees_s"], 0, 360, "angular_speed")
+            if limits["display_mode"] not in ("passthrough_only", "dashboard_only"):
+                raise ValueError("hud_display_mode_invalid")
         copies = record["copies"]
         if type(copies) is not list or not 1 <= len(copies) <= 4:
             raise ValueError("hud_copy_budget_invalid")
@@ -127,11 +179,17 @@ class MappingCandidate:
             eyes.add(copy["declared_eye"])
             eye = viewports[copy["declared_eye"]]
             _rect(copy["rect_native"], eye, "copy_rect")
-            for key in ("maximum_drift_px", "localization_error_px", "filter_support_px"):
-                _number(copy[key], 0, 128, key)
-            required_margin = math.ceil(sum(copy[key] for key in
-                                           ("maximum_drift_px", "localization_error_px", "filter_support_px"))) + 2
-            _integer(copy["margin_px"], max(8, required_margin), 128, "conservative_margin")
+            for key in COPY_ERROR_TERMS:
+                if key in unknowns:
+                    _unknown_null(copy[key])
+                else:
+                    _number(copy[key], 0, 128, key)
+            # Known terms bound the margin from below (the contract's one margin
+            # rule). An unknown term cannot raise that bound and is given no
+            # value, 0 or otherwise: it stays listed in ``unknowns`` and
+            # ``report()``, so the margin is underived.
+            if not margin_valid(copy["margin_px"], [copy[key] for key in COPY_ERROR_TERMS if key not in unknowns]):
+                raise ValueError("hud_conservative_margin_invalid")
             expanded = list(expand(copy["rect_native"], copy["margin_px"]))
             _rect(expanded, eye, "expanded_copy")
             regions_by_eye[copy["declared_eye"]].append(expanded)
@@ -182,12 +240,14 @@ class MappingCandidate:
                 "mapping_id": record["mapping_id"], **claims(),
                 "evidence_contents_verified": False, "physical_expiry_verified": False,
                 "missing_evidence_roles": [role for role in EVIDENCE_ROLES if role not in roles],
+                "unknown_error_terms": record.get("unknowns", {}),
                 "scope": "Schema and declared context only; artifact references do not qualify hardware"}
 
     def calibration(self, config=HUD_CONFIG):
-        """Express this candidate's geometry as a runtime ``Calibration``.
+        """Issue this candidate as a runtime ``Calibration``, one of its two factories.
 
-        The result is always unvalidated with ``observed_unqualified``
+        The result carries the record's context tokens, ``observed_ns`` and
+        ``expires_ns``. It is always unvalidated with ``observed_unqualified``
         provenance, so ``HudMask`` rejects it: this never enables masking,
         inference or output from a hardware mapping. Conditions the runtime
         mask cannot represent fail closed here instead of being dropped.
@@ -208,8 +268,12 @@ class MappingCandidate:
             raise ValueError("hud_runtime_multiple_copies_per_eye_unsupported")
         footprints = tuple(Footprint(copy["declared_eye"], tuple(copy["rect_native"]), copy["margin_px"])
                            for copy in copies)
-        return Calibration(context["source_id"], fmt, context["capture_layout"], footprints, config,
-                           validated=False, provenance="observed_unqualified")
+        return Calibration._issue(
+            source_id=context["source_id"], capture_format=fmt, capture_layout=context["capture_layout"],
+            footprints=footprints, config=config, provenance=CANDIDATE_PROVENANCE,
+            **{name: context[name] for name in SESSION_TOKENS}, crop_xyxy=tuple(context["crop_xyxy"]),
+            orientation_degrees=context["orientation_degrees"], hud_config_sha256=context["hud_config_sha256"],
+            observed_ns=record["observed_ns"], expires_ns=record["expires_ns"])
 
     def require_production_qualification(self):
         # No qualified mapping exists in this checkout; the candidate is never one.
@@ -221,13 +285,18 @@ class ValidationLedger:
 
     Native boxes refer to the original acquisition coordinate system. This
     auditor does not read images, run a detector, submit output or grant gates.
-    Any context/timing/feedback error latches invalidation for the entire run.
+    Any context/timing/feedback error latches invalidation for the entire run,
+    and ``failure_kind`` names its class (``FAILURE_KINDS``). A box that touches
+    the mask or crosses an eye invalidates the run under the runtime mask's own
+    rule (``geometry.exclusion``): the runtime drops that box from presentation,
+    and a validation run with it fails. The default maximum age is the
+    contract's ``MAX_DISPLAY_AGE_NS``, the pipeline's cap.
     """
-    def __init__(self, candidate, current_context, now_ns, *, max_age_ns=750_000_000, maximum_results=1000):
+    def __init__(self, candidate, current_context, now_ns, *, max_age_ns=MAX_DISPLAY_AGE_NS, maximum_results=1000):
         if not isinstance(candidate, MappingCandidate):
             raise ValueError("hud_mapping_candidate_required")
         candidate.check_context(current_context, now_ns)
-        _integer(max_age_ns, 1, 1_000_000_000, "maximum_age")
+        _integer(max_age_ns, 1, MAX_DISPLAY_AGE_NS, "maximum_age")
         _integer(maximum_results, 1, 1000, "result_budget")
         self.candidate = candidate
         self.max_age_ns = max_age_ns
@@ -236,22 +305,25 @@ class ValidationLedger:
         self.maximum_input_age_ns = 0
         self.last_observed_ns = -1
         self.last_completed_ns = now_ns
-        self.invalidated_reason = None
+        self.invalidated_reason = self.failure_kind = None
 
     def record_result(self, *, current_context, source_id, frame_sequence, result_sequence,
                       observed_ns, completed_ns, expires_ns, boxes_native):
         if self.invalidated_reason:
             raise ValueError("hud_validation_run_invalidated")
+        kind = "context"
         try:
+            self.candidate.check_context(current_context, completed_ns)
+            kind = None
             self._record(current_context, source_id, frame_sequence, result_sequence,
                          observed_ns, completed_ns, expires_ns, boxes_native)
         except ValueError as error:
             self.rejected += 1
             self.invalidated_reason = str(error)
+            self.failure_kind = kind or FAILURE_KINDS.get(self.invalidated_reason, "other")
             raise
 
     def _record(self, context, source, sequence, result_sequence, observed, completed, expiry, boxes):
-        self.candidate.check_context(context, completed)
         if completed < self.last_completed_ns:
             raise ValueError("hud_completion_clock_regressed")
         record = self.candidate.as_dict()
@@ -267,13 +339,12 @@ class ValidationLedger:
         if type(boxes) is not list or len(boxes) > 128:
             raise ValueError("hud_validation_detection_budget_exceeded")
         viewports = _viewports(context)
+        regions = [expand(copy["rect_native"], copy["margin_px"]) for copy in record["copies"]]
         for box in boxes:
             _rect(box, context["crop_xyxy"], "native_detection_box")
-            if sum(contains(eye, box) for eye in viewports) != 1:
-                raise ValueError("hud_validation_cross_eye_detection")
-            for copy in record["copies"]:
-                if overlaps(box, expand(copy["rect_native"], copy["margin_px"])):
-                    raise ValueError("hud_validation_mask_overlap")
+            reason = exclusion(box, regions, viewports)
+            if reason is not None:
+                raise ValueError(EXCLUSION_REASONS[reason])
         self.results += 1
         self.last_sequence, self.last_observed_ns = sequence, observed
         self.last_completed_ns = completed
@@ -283,6 +354,7 @@ class ValidationLedger:
         return {"report_kind": "hud_offline_validation_ledger", "status": "invalidated" if self.invalidated_reason
                 else "telemetry_checked_unqualified", **claims(HARDWARE_MAPPING, LIVE_HUD_OUTPUT),
                 "results_checked": self.results, "results_rejected": self.rejected,
-                "invalidated_reason": self.invalidated_reason, "maximum_input_age_ns": self.maximum_input_age_ns,
+                "invalidated_reason": self.invalidated_reason, "failure_kind": self.failure_kind,
+                "max_age_ns": self.max_age_ns, "maximum_input_age_ns": self.maximum_input_age_ns,
                 "physical_expiry_verified": False, "wearer_recovery_verified": False,
                 "scope": "Declared telemetry only; no image, device or physical visibility observation"}

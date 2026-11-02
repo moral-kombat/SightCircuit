@@ -1,4 +1,5 @@
 """Run the session helper with generated commands, never a device or runtime."""
+import json
 import os
 from pathlib import Path
 import shutil
@@ -12,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @unittest.skipUnless(shutil.which("bash") and shutil.which("timeout"), "requires bash and timeout")
 class SessionFailureTests(unittest.TestCase):
-    def run_session(self, stages, fail_match="", fail_code=1):
+    def run_session(self, stages, fail_match="", fail_code=1, scenes=""):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             scripts = root / "scripts"
@@ -26,6 +27,7 @@ class SessionFailureTests(unittest.TestCase):
                 "from pathlib import Path\n"
                 "with Path(os.environ['SESSION_CALLS']).open('a') as f:\n"
                 " f.write(json.dumps(sys.argv[1:])+'\\n')\n"
+                "if '--still' in sys.argv: Path(sys.argv[sys.argv.index('--still')+1]).write_bytes(b'png')\n"
                 "match=os.environ.get('SESSION_FAIL_MATCH','')\n"
                 "if match and match in ' '.join(sys.argv[1:]):\n"
                 " if os.environ['SESSION_FAIL_CODE']=='hang': time.sleep(30)\n"
@@ -40,7 +42,7 @@ class SessionFailureTests(unittest.TestCase):
             sleep.chmod(0o700)
             env = dict(os.environ, YES="1", SKIP_UPDATE="1", SESSION_CALLS=str(calls), STEP_TIMEOUT="1",
                        PATH=str(binary_dir)+os.pathsep+os.environ["PATH"],
-                       SESSION_FAIL_MATCH=fail_match, SESSION_FAIL_CODE=str(fail_code))
+                       SESSION_FAIL_MATCH=fail_match, SESSION_FAIL_CODE=str(fail_code), SCENES=scenes)
             env.pop("COUNTDOWN", None)
             result = subprocess.run(["bash", str(scripts / "frame_session.sh"), *stages],
                                     env=env, capture_output=True, text=True, timeout=10)
@@ -90,6 +92,16 @@ class SessionFailureTests(unittest.TestCase):
         self.assertIn("replay-unpaced.json", calls)
         self.assertIn("mirror_recognize.py", calls)
         self.assertNotIn("Physical headset recovery is unconfirmed", result.stdout)
+
+    def test_still_capture_report_is_given_to_the_manifest(self):
+        result, calls = self.run_session(["stills"], scenes="rug|chair|couch")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        capture, entry = (json.loads(line) for line in calls.splitlines())
+        self.assertEqual(capture[capture.index("--detector") + 1], "yolox-nano")
+        self.assertEqual(entry[entry.index("--image") + 1], capture[capture.index("--still") + 1])
+        report = entry[entry.index("--still-report") + 1]
+        self.assertTrue(report.endswith("/still-rug.json") and "/artifacts/frame-session/" in report, report)
+        self.assertIn("added to frame.json", result.stdout)
 
 
 if __name__ == "__main__":

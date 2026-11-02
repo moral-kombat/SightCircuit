@@ -1,4 +1,5 @@
 """Real subprocess cancellation, pipe failure and owned-helper reaping."""
+import errno
 import importlib.util
 import json
 import os
@@ -9,6 +10,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 from framejacker.runtime import guard as bounded_worker
 from scripts import recording_growth_check as growth
@@ -77,6 +79,54 @@ class ValidatorReferenceTests(unittest.TestCase):
                 else:
                     with self.assertRaisesRegex(ValueError, "invalid_marker_worker_report"):
                         validate(report, 1)
+
+
+@unittest.skipUnless(os.name == "posix", "Anonymous pipes with non-blocking reads")
+class ReportedGroupTests(unittest.TestCase):
+    """The guardian names its worker group, then confirms it gone; only an unconfirmed group is contained."""
+
+    def reported(self, data):
+        reader, writer = os.pipe()
+        try:
+            if data:
+                os.write(writer, data)
+            return bounded_worker._reported_group(reader)
+        finally:
+            os.close(reader)
+            os.close(writer)
+
+    def test_only_a_single_unconfirmed_group_number_is_returned(self):
+        self.assertEqual(self.reported(b"4321\n"), 4321)
+        for data in (b"", b"4321\nreaped\n", b"1\n", b"0\n", b"-5\n", b"group\n", b"12 34\n"):
+            with self.subTest(data=data):
+                self.assertIsNone(self.reported(data))
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux lifeline guardian")
+    def test_lifeline_is_closed_if_the_group_pipe_cannot_be_created(self):
+        real_pipe, created = os.pipe, []
+
+        def pipe():
+            if created:
+                raise OSError(errno.EMFILE, "fixture_pipe_exhausted")
+            pair = real_pipe()
+            created.extend((fd, os.fstat(fd)) for fd in pair)
+            return pair
+
+        with patch.object(bounded_worker.os, "pipe", side_effect=pipe), \
+                self.assertRaisesRegex(OSError, "fixture_pipe_exhausted"):
+            bounded_worker.supervise([sys.executable, "-c", "pass"], growth.new_report(), 1,
+                                     growth.validate_worker_report)
+        self.assertEqual(len(created), 2)
+        for fd, identity in created:
+            with self.subTest(fd=fd):
+                try:
+                    now = os.fstat(fd)
+                except OSError:
+                    continue  # Closed, as required.
+                leaked = (now.st_dev, now.st_ino) == (identity.st_dev, identity.st_ino)
+                if leaked:
+                    os.close(fd)  # Failure-only recovery: never leak into later tests.
+                self.assertFalse(leaked, "lifeline pipe left open")
 
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "Frame/Linux process groups and subreaping")
@@ -177,6 +227,42 @@ class BoundedWorkerTests(unittest.TestCase):
 
     def test_stopped_guardian_needs_scheduling_before_it_can_clean_up(self):
         self.parent_death(pause_guardian=True)
+
+    def test_sigkill_of_guardian_lets_supervisor_contain_the_reported_worker_tree(self):
+        # The guardian and its worker each start a new session, so the
+        # supervisor's own group signals cannot reach the worker. Without the
+        # group the guardian reports, losing the guardian strands the worker
+        # and its SIGTERM-ignoring helper (package B review hypothesis).
+        process = self.launch("guardian_death")
+        worker = int(self.wait_file("ready", process))
+        helper = int(self.wait_file("helper", process))
+        try:
+            status = Path(f"/proc/{worker}/status").read_text()
+            guardian = int(next(line.split()[1] for line in status.splitlines() if line.startswith("PPid:")))
+            self.assertNotEqual(guardian, process.pid)
+            os.kill(guardian, signal.SIGKILL)
+            # Wait for the supervisor itself: a stranded worker would keep the
+            # inherited stderr pipe open, so communicate() could not finish.
+            process.wait(timeout=12)
+            report = json.loads(process.stdout.read())
+            for pid in (worker, helper):
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(pid, 0)
+            with self.assertRaises(ProcessLookupError):
+                os.killpg(worker, 0)
+            # Guardian loss is never a clean run, even after containment.
+            self.assertEqual(report["status"], "guardian_failed", report)
+            self.assertFalse(report["cleanup_ok"])
+            self.assertTrue(report["guardian_forced_termination"])
+            self.assertEqual(report["orphaned_worker_group"], worker)
+            self.assertTrue(report["orphaned_worker_tree_signalled"])
+            self.assertTrue(report["worker_tree_reaped"])
+        finally:
+            # Failure-only recovery of this fixture's exact owned group.
+            try:
+                os.killpg(worker, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
     def test_closed_lifeline_before_guardian_start_never_launches_worker(self):
         reader, writer = os.pipe()

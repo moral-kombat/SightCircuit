@@ -6,7 +6,9 @@ copies, requires a changed clear baseline before the marker is shown
 (``BaselineGate``) and bounds stable copy positions across reads
 (``EmpiricalObservation``). Results are unqualified: no eye identity,
 composition or unseen copy is inferred, so ``mapping_qualified`` stays False.
-Used by ``scripts/hud_marker_observer.py``.
+Used by ``scripts/hud_marker_observer.py``. ``validate_observer_report`` is
+that command's worker report contract, applied by its supervisor and before a
+report becomes a mapping candidate (``framejacker.hud.candidate``).
 """
 from dataclasses import dataclass
 import hashlib
@@ -15,7 +17,8 @@ import math
 
 from ..convert import buffer_bgr
 from ..gates import HARDWARE_MAPPING, claims
-from .contract import HUD_CONFIG, CaptureFormat
+from .contract import HUD_CONFIG, MARKER, MARKER_MAX_SECONDS, MARKER_MIN_SECONDS, CaptureFormat, margin_valid
+from .marker import new_report as marker_report, validate_worker_report as validate_marker_report
 
 MAX_PIXELS = 8 * 1024 * 1024
 MAX_CONTOURS = 2048
@@ -24,21 +27,30 @@ MAX_COPIES = 4
 MAX_DIAGNOSTIC_CANDIDATES = 4
 MAX_DIAGNOSTIC_FRAGMENTS = 16
 MAX_CORNER_REFINEMENT_PX = 2
+TAG_ORIGINS = tuple(MARKER.tag_origin(tag) for tag in range(len(MARKER.corner_ids)))
+
+
+def bit_sample(bit, inset=1, offset=0):
+    """Rows and columns of code bit ``bit``, relative to its tag's origin plus
+    ``offset`` pixels, shrunk by ``inset`` per side so resampled edges are not scored."""
+    x, y = MARKER.bit_origin(bit)
+    low, high = inset - offset, MARKER.bit_size_px - inset - offset
+    return slice(y + low, y + high), slice(x + low, x + high)
 
 
 def marker_template():
-    """Test/reference pixels matching the finalized native marker, not a frame read."""
+    """Reference pixels of the native marker, drawn from the shared ``MARKER``; not a frame read."""
     import numpy as np
-    image = np.full((128, 320), 32, dtype=np.uint8)
-    image[:4] = image[-4:] = 255
-    image[:, :4] = image[:, -4:] = 255
-    for tag in range(4):
-        x, y = (288 if tag % 2 else 8), (96 if tag // 2 else 8)
-        image[y:y+24, x:x+24] = 0
-        image[y+2:y+22, x+2:x+22] = 255
-        for bit in range(4):
-            bx, by = x+4+(bit % 2)*8, y+4+(bit // 2)*8
-            image[by:by+6, bx:bx+6] = 255 if ((tag+1) >> bit) & 1 else 0
+    m, size, outline = MARKER, MARKER.tag_size_px, MARKER.tag_outline_px
+    image = np.full((HUD_CONFIG.height_px, HUD_CONFIG.width_px), m.background_value, dtype=np.uint8)
+    image[:m.border_px] = image[-m.border_px:] = m.border_value
+    image[:, :m.border_px] = image[:, -m.border_px:] = m.border_value
+    for tag, (x, y) in enumerate(TAG_ORIGINS):
+        image[y:y+size, x:x+size] = m.tag_outline_value
+        image[y+outline:y+size-outline, x+outline:x+size-outline] = m.tag_fill_value
+        for bit in range(m.bits):
+            rows, columns = bit_sample(bit, inset=0)
+            image[y:y+size, x:x+size][rows, columns] = m.bit_set_value if m.bit_set(tag, bit) else m.bit_clear_value
     return image
 
 
@@ -50,7 +62,7 @@ class ObserverConfig:
     config_id: str = HUD_CONFIG.layout_id
 
     def validate(self):
-        if (type(self.margin_px) is not int or not 8 <= self.margin_px <= 128 or
+        if (not margin_valid(self.margin_px) or
                 type(self.maximum_drift_px) is not int or not 0 <= self.maximum_drift_px <= self.margin_px // 2 or
                 (self.expected_copies is not None and
                  (type(self.expected_copies) is not int or not 1 <= self.expected_copies <= MAX_COPIES)) or
@@ -115,18 +127,19 @@ def locate_copies(bgr, *, diagnostics=None):
             if len(quads) > MAX_QUADS:
                 reject("observer_quad_budget")
     template = marker_template().astype(np.float32)
-    target = np.float32([[0, 0], [319, 0], [319, 127], [0, 127]])
-    tags = [template[y+2:y+22, x+2:x+22] for x, y in ((8, 8), (288, 8), (8, 96), (288, 96))]
+    width, height = HUD_CONFIG.width_px, HUD_CONFIG.height_px
+    size, outline_px = MARKER.tag_size_px, MARKER.tag_outline_px
+    inner = size - 2 * outline_px  # The bright square inside a tag's outline.
+    target = np.float32([[0, 0], [width-1, 0], [width-1, height-1], [0, height-1]])
+    tags = [template[y+outline_px:y+size-outline_px, x+outline_px:x+size-outline_px] for x, y in TAG_ORIGINS]
 
     def pattern_metrics(warped, whole_error):
         outline = float(min(warped[:3].mean(), warped[-3:].mean(), warped[:, :3].mean(), warped[:, -3:].mean()))
-        tag_error = float(max(np.mean(np.abs(warped[y:y+24, x:x+24] - template[y:y+24, x:x+24]))
-                              for x, y in ((8, 8), (288, 8), (8, 96), (288, 96))))
-        bit_error = float(max(np.mean(np.abs(warped[y+5+(bit//2)*8:y+9+(bit//2)*8,
-                                                  x+5+(bit%2)*8:x+9+(bit%2)*8] -
-                                             template[y+5+(bit//2)*8:y+9+(bit//2)*8,
-                                                      x+5+(bit%2)*8:x+9+(bit%2)*8]))
-                              for x, y in ((8, 8), (288, 8), (8, 96), (288, 96)) for bit in range(4)))
+        tag_error = float(max(np.mean(np.abs(warped[y:y+size, x:x+size] - template[y:y+size, x:x+size]))
+                              for x, y in TAG_ORIGINS))
+        bit_error = float(max(np.mean(np.abs(warped[y:y+size, x:x+size][bit_sample(bit)] -
+                                             template[y:y+size, x:x+size][bit_sample(bit)]))
+                              for x, y in TAG_ORIGINS for bit in range(MARKER.bits)))
         failures = (["whole_pattern_error"] if whole_error > 13 else [])
         failures += ["outline_brightness"] if outline < 210 else []
         failures += ["tag_pattern_error"] if tag_error > 45 else []
@@ -141,7 +154,7 @@ def locate_copies(bgr, *, diagnostics=None):
             for shift in range(4):
                 ordered = np.roll(order, shift, axis=0).copy()
                 warped = cv2.warpPerspective(gray, cv2.getPerspectiveTransform(ordered, target),
-                                             (320, 128)).astype(np.float32)
+                                             (width, height)).astype(np.float32)
                 whole_error = float(np.mean(np.abs(warped - template)))
                 if best is None or whole_error < best[0]:
                     best = (whole_error, ordered, warped, geometry)
@@ -155,14 +168,14 @@ def locate_copies(bgr, *, diagnostics=None):
         # A white inner tag is a separate contour. Its complete code must match.
         if min(edges) >= 6 and max(edges) / min(edges) < 2.5:
             tag_image = cv2.warpPerspective(gray, cv2.getPerspectiveTransform(quad,
-                np.float32([[0, 0], [19, 0], [19, 19], [0, 19]])), (20, 20)).astype(np.float32)
+                np.float32([[0, 0], [inner-1, 0], [inner-1, inner-1], [0, inner-1]])), (inner, inner)).astype(np.float32)
             # Orphan detection is deliberately more conservative than complete
             # copy acceptance: aliased tag borders must not conceal a partial
             # second copy. Still require each bit, not just an average score.
             if any(np.mean(np.abs(rotated - tag)) < 50 and all(
-                       np.mean(np.abs(rotated[3+(bit//2)*8:7+(bit//2)*8, 3+(bit%2)*8:7+(bit%2)*8] -
-                                      tag[3+(bit//2)*8:7+(bit//2)*8, 3+(bit%2)*8:7+(bit%2)*8])) < 80
-                       for bit in range(4))
+                       np.mean(np.abs(rotated[bit_sample(bit, offset=outline_px)] -
+                                      tag[bit_sample(bit, offset=outline_px)])) < 80
+                       for bit in range(MARKER.bits))
                    for rotation in range(4) for rotated in (np.rot90(tag_image, rotation),) for tag in tags):
                 fragments.append(quad)
         if min(edges) < 32 or max(edges) < 80:
@@ -293,6 +306,9 @@ class EmpiricalObservation:
         if (type(sequence) is not int or type(observed_ns) is not int or observed_ns < 0 or
                 (self.samples and (sequence <= self.samples[-1][0] or observed_ns <= self.samples[-1][1]))):
             raise ValueError("observer_sequence_or_time_changed")
+        # Reads are numbered consecutively; a skipped number is a dropped frame.
+        if self.samples and sequence != self.samples[-1][0] + 1:
+            raise ValueError("observer_sequence_gap")
         try:
             copies = locate_copies(image, diagnostics=self.last_match_diagnostics)
         finally:
@@ -343,3 +359,55 @@ class EmpiricalObservation:
                 "last_match_diagnostics": self.last_match_diagnostics,
                 "eye_identity_assigned": False, "composition_verified": False,
                 "unseen_or_occluded_copies_established": False, **claims(HARDWARE_MAPPING)}
+
+
+def validate_marker_evidence(bridge, seconds, validation_only):
+    """Reuse the finalized marker deadline contract, then pin every HUD setting.
+
+    The bridge report and the native objects the contract reads must be JSON
+    objects, so a malformed report is a ``ValueError``, never another exception.
+    """
+    native = bridge.get("native_report") if type(bridge) is dict else None
+    if type(native) is not dict or any(type(native.get(key, {})) is not dict
+                                       for key in ("marker", "visibility_after_submit")):
+        raise ValueError("invalid_marker_worker_report")
+    report = marker_report(validation_only)
+    report.update(status="completed", exit_code=0, cleanup_ok=True, seconds_requested=seconds, bridge=bridge)
+    validate_marker_report(report, 0, validation_only=validation_only)
+    marker = bridge["native_report"].get("marker") or {}
+    expected = {"width": HUD_CONFIG.width_px, "height": HUD_CONFIG.height_px,
+                "opaque_pixels": HUD_CONFIG.width_px * HUD_CONFIG.height_px,
+                "corner_ids": list(MARKER.corner_ids), "border_pixels": MARKER.border_px,
+                "tag_size_pixels": MARKER.tag_size_px, "tag_inset_pixels": MARKER.tag_inset_px,
+                "config_id": HUD_CONFIG.layout_id, "corner_order": MARKER.corner_order,
+                "visible_in_dashboard": True}
+    if (any(marker.get(key) != value for key, value in expected.items()) or
+            any(type(marker.get(key)) not in (int, float) or
+                not math.isclose(marker[key], getattr(HUD_CONFIG, key), rel_tol=0, abs_tol=1e-6)
+                for key in ("panel_width_m", "distance_m", "x_m", "y_m", "opacity"))):
+        raise ValueError("native_marker_config_mismatch")
+
+
+def validate_observer_report(report, returncode):
+    """The ``hud_marker_observer`` worker report contract; never evidence of qualification."""
+    if (not isinstance(report, dict) or report.get("report_kind") != "hud_marker_observation" or
+            type(report.get("exit_code")) is not int or report["exit_code"] not in (1, 2, 130) or report["exit_code"] != returncode or
+            type(report.get("cleanup_ok")) is not bool or
+            type(report.get("calibration_validation_only")) is not bool or
+            type(report.get("seconds_requested")) is not int or not MARKER_MIN_SECONDS <= report["seconds_requested"] <= MARKER_MAX_SECONDS or
+            report.get("maximum_processing_fps") != 5 or
+            any(report.get(key) is not False for key in (*claims(), "images_saved", "inference_started",
+                "physical_display_recovery_verified",
+                "eye_identity_assigned", "composition_verified", "unseen_or_occluded_copies_established",
+                "camera_freshness_verified")) or
+            (report["exit_code"] == 2 and (report.get("status") != "observed_unqualified" or not report["cleanup_ok"] or
+                                           not 3 <= report.get("sample_count", 0) <= 100))):
+        raise ValueError("invalid_observer_worker_report")
+    if report["exit_code"] == 2:
+        baseline = report.get("baseline")
+        if (type(baseline) is not dict or baseline.get("established") is not True or
+                baseline.get("camera_freshness_verified") is not False or
+                baseline.get("clear_frames", 0) < 2 or baseline.get("content_changes", 0) < 1):
+            raise ValueError("invalid_observer_baseline_evidence")
+        validate_marker_evidence(report.get("bridge"), report["seconds_requested"],
+                                 report["calibration_validation_only"])

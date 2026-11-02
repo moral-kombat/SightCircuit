@@ -18,31 +18,68 @@ development; exact tested pins remain in the `requirements-*.txt` files.
 
 | Module | Responsibility |
 | --- | --- |
-| `framejacker/frame.py` | `Frame`, the only frame type (pixels, layout, source, sequence, observation time, media time, declared `native_format`), with `Frame.owned_bgr` (validated private BGR copy) and `owned()` (the engine's copy on publish); `DetectionResult`, which every detector returns; `Processed`, the one record every engine submits to sinks (annotated image or HUD tile with `HudOutput` rows, expiry, sizes and coordinate space) |
-| `framejacker/pipeline.py` | `FrameSource`/`Sink` interfaces and `Pipeline`, the one engine for replay, mirror recognition and the synthetic live HUD: latest-only or every-frame scheduling, rate cap, `CaptureContext` admission, HUD stage or annotation, result expiry and deadline, optional sink `open`/`clear`/`close` with cleanup results. `PipelineStats.report()` is the one statistics vocabulary: the replay, mirror and synthetic live reports embed it as `pipeline` (mirror and synthetic live once the engine is constructed, replay only on a clean finish; a report that ends earlier has no block and only the fields its command already wrote) and keep their earlier field names only as aliases (`report_fields`) until a schema version bump |
+| `framejacker/frame.py` | `Frame`, the only frame type (pixels, layout, source, sequence, observation time, media time, declared `native_format`), with `Frame.owned_bgr` (validated private BGR copy) and `owned()` (the engine's copy on publish); `DetectionResult`, which every detector returns; `Processed`, the one record every engine submits to sinks (annotated image or HUD tile with `HudOutput` rows and exclusion checks, expiry, completion time, sizes and coordinate space) |
+| `framejacker/pipeline.py` | `FrameSource`/`Sink` interfaces and `Pipeline`, the one engine for replay, mirror recognition and the synthetic live HUD: latest-only or every-frame scheduling, rate cap, `CaptureContext` admission, HUD stage or annotation, HUD exclusion counts, result expiry and deadline, optional sink `open`/`clear`/`close` with cleanup results. `PipelineStats.report()` is the one statistics vocabulary, including the [latency statistics](#latency-statistics): the replay, mirror and synthetic live reports embed it as `pipeline` (mirror and synthetic live once the engine is constructed, replay once its engine has started, on error too, with `statistics_final` false if its worker had not stopped; a report that ends earlier has no block and only the fields its command already wrote) and keep their earlier field names only as aliases (`report_fields`) until a schema version bump |
 | `framejacker/latest.py` | One-pending-item handoff; newer items replace older ones |
 | `framejacker/gates.py` | The closed approval gates (live image input, hardware mapping, live HUD output): each boundary's `require` and every report's gate claims; nothing here opens a gate |
-| `framejacker/context.py` | `CaptureContext`: pins declared source identity, frame source/native layout/session metadata and an optional HUD mask binding; `admit(frame)` fails closed and latches the first failure |
+| `framejacker/context.py` | `CaptureContext`: pins declared source identity, frame source/native layout/session metadata and an optional HUD mask binding (calibration source, format, layout, session tokens and lifetime); `admit(frame)` fails closed and latches the first failure |
 | `framejacker/convert.py` | One native pixel rule (`buffer_bgr`: BGR24 arrays and padded RGB3/BGR3 buffers), `native_bgr` for frames and `to_bgr` for detector input of at most 960 pixels |
-| `framejacker/detection.py` | `Detector` interface, `MobileNetSSD` baseline, `YoloxDetector` candidate, `create_detector()`, separate `annotate()` and `require_result()` (rejects malformed detector output before any output) |
+| `framejacker/detection.py` | `Detector` interface, `MobileNetSSD` baseline (model-free `decode_ssd()`), `YoloxDetector` candidate, the `DETECTORS` registry whose classes own their `model_files()` and `preprocessing()` description, `create_detector()`, separate `annotate()` and `require_result()` (rejects malformed detector output before any output) |
 | `framejacker/preprocess.py`, `framejacker/labels.py` | Letterbox input and inverse box mapping; COCO vocabulary and VOC-to-canonical label names |
 | `framejacker/evaluation.py`, `framejacker/assets.py` | Detector evaluation scoring; checksum-verified model/fixture download and verification |
-| `framejacker/sources/` | `ReplaySource` (PyAV); `mirror_device` (read-only V4L2 SteamVR mirror discovery and reads); `mirror` (bounded acquisition loop `capture` and `MirrorSource`); `recording` (one MP4 box-header decoder for finished-file inspection and the growing-file scan used by `recording_growth_check`; newest recording); `PolledSource` (adapter for `open`/`read`/`close` sources). Adapters forward the wrapped source's declared identity |
+| `framejacker/sources/` | `ReplaySource` (PyAV); `standin` (the synthetic realtime-replay [stand-in clip](#continuous-integration)); `mirror_device` (read-only V4L2 SteamVR mirror discovery and reads); `mirror` (bounded acquisition loop `capture`, `MirrorSource`, and `launch`, the one launcher of both mirror commands: candidate selection, output reservation, the bounded worker and all-or-nothing publication); `recording` (one MP4 box-header decoder for finished-file inspection and the growing-file scan used by `recording_growth_check`; newest recording); `PolledSource` (adapter for `open`/`read`/`close` sources). Adapters forward the wrapped source's declared identity |
 | `framejacker/overlay.py` | Overlay bridge client and `OverlaySink`, the one panel sink: with a caller-owned client (replay's interactive panel) it only submits images; otherwise it owns a validation-only client through `open`/`clear`/`close`, optionally with the frozen HUD placement and payload contract |
-| `framejacker/hud/` | Fixed edge HUD contract, shared eye/rectangle geometry, synthetic-only native mask, tile rendering, the `HudStage` engine stage, offline mapping qualification, the calibration marker client and `observation` (empirical marker-copy location in native pixels, used by `hud_marker_observer.py`) |
-| `framejacker/runtime/` | `process` (bounded spawned workers, parent-death signalling), `guard` (owned process-group supervision with the Linux parent-loss guardian), reserve/publish of explicit image outputs, `live.run_pipeline` (gated synthetic run on `Pipeline`, as a report) and `synthetic` (the generated source, its fixture calibration, `FixtureDetector` and `HeadlessSink`) |
+| `framejacker/hud/` | Fixed edge HUD contract, shared eye/rectangle geometry, the one margin rule, synthetic-only native mask (calibrations from two factories only, with expiry, session tokens and view fields), tile rendering, the `HudStage` engine stage (and `HudPipelineAdapter`, the stage bound to its sink's fixed output contract, used by `live_pipeline.py`), offline mapping qualification, the calibration marker client, `observation` (empirical marker-copy location in native pixels and the observer report contract, used by `hud_marker_observer.py`), `candidate` (an observer report to an unqualified mapping candidate, used by `hud_validation_report.py --from-observer`) and `validation` (the synthetic HUD run's ledger feed and G5 software counts) |
+| `framejacker/runtime/` | `process` (bounded spawned workers, parent-death signalling), `guard` (owned process-group supervision with the Linux parent-loss guardian, and the one stop-on-signal convention: `sigterm_cancels` and `cancelled` for launchers, `stop_on_signals` for workers), `output` (reserve, write, publish all or none, withdraw and discard explicit image outputs; `publish_new` for finished bytes), `live` (`run_report`, the one report runner on `Pipeline`, used by `run_pipeline`, the gated synthetic run, whose HUD run also feeds the validation ledger, and by `run_recognition`, the mirror recognizer), `synthetic` (the generated source and its declared `SyntheticSession`, the fixture calibration factory and its candidate record, `FixtureDetector` and `HeadlessSink`) and `manifest` (the [checkpoint artifact manifest](#checkpoint-artifact-manifest): software identity written and verified on Frame) |
 
 File replay uses every-frame scheduling, so each decoded frame is processed in
 order. Mirror recognition uses latest-only scheduling with a one-second input
 age limit. The V4L2 mirror device module and acquisition loop live in
 `framejacker/sources/mirror_device.py` and `framejacker/sources/mirror.py`;
-`scripts/mirror_check.py` is the diagnostic command.
+`scripts/mirror_check.py` is the diagnostic command. Both mirror commands start
+their workers through `sources.mirror.launch`. `tests/test_report_characterization.py`
+pins the report keys, value types and status and exit-code mapping of the
+synthetic run, the mirror recognizer and both mirror commands. It was written
+before these moved into the library and must keep passing unchanged.
 
 Lint with the configuration in `pyproject.toml`:
 
 ```bash
 uvx ruff@0.14.2 check .
 ```
+
+### Latency statistics
+
+The engine times every frame that reaches presentation, including a result
+later dropped as stale, at the points where it already measured. The
+`pipeline` block keeps its earlier mean, total and maximum fields and adds one
+distribution per timing (all in milliseconds):
+
+| Block field | Measures |
+| --- | --- |
+| `input_age_ms` | Observation (`Frame.observed_ns`) to the start of processing |
+| `processing_ms` | Start of processing to a presented result: `stage_ms.prepare` + `detect` + `present` |
+| `inference_ms` | The detector's own forward time (`DetectionResult.inference_ms`) |
+| `output_age_ms` | Observation to the output boundary, before the sinks |
+| `stage_ms.prepare` | Conversion to detector input; with a HUD stage, native masking and conversion |
+| `stage_ms.detect` | The whole detector call, including its own pre- and post-processing |
+| `stage_ms.present` | Result checks plus annotation (and its owned copy) or HUD rendering |
+| `stage_ms.submit` | Every sink's admission check and `submit`, for results submitted to all sinks |
+
+Each holds `count` (frames timed), `samples` (values behind the percentiles),
+`p50`, `p95` and `max`, rounded to three decimals; the statistics are null
+until a frame is timed. `percentile_method` is `nearest_rank`: the
+p-percentile of n sorted values is the value at 1-based rank ceil(p × n / 100),
+so it is always a measured value (n = 1 gives that value, n = 2 gives the lower
+value for p50 and the upper for p95, and ties return the tied value). Memory is
+bounded: each timing keeps at most 4,096 values (`TIMING_SAMPLE_CAPACITY`),
+which makes percentiles exact up to 4,096 frames; beyond that a seeded
+reservoir keeps a uniform sample of the whole run, so `samples` stays 4,096
+while `count` and `max` cover every frame. Stage durations are read from
+`Pipeline.timer` (`time.monotonic`); `tests/latency_fixture.py` installs a
+stepping clock driven by a fake detector with known delays, so tests check exact
+percentiles in the replay, mirror and synthetic reports. Ages are measured
+against the source's monotonic observation clock.
 
 ## Detector evaluation
 
@@ -55,13 +92,27 @@ darknet photos with image-level labels; `--fetch` downloads them into ignored
 mapping and gross confusions, not evidence about Frame's indoor input.
 
 ```bash
-.venv-replay/bin/python scripts/evaluate_detectors.py --fetch
+.venv-replay/bin/python scripts/evaluate_detectors.py --fetch --expect evaluation/seed-expected.json
 .venv-replay/bin/python scripts/evaluate_detectors.py --manifest evaluation/local/frame.json \
   --detector yolox-nano --threshold 0.5 --report /tmp/evaluation.json
 ```
 
+Each class in `framejacker.detection.DETECTORS` owns what callers need to know
+about it: its constructor takes the registry name, `model_files(name)` lists
+its checksum-pinned assets and `preprocessing(name)` describes its model input
+(input size, stretch or letterbox resize, interpolation, channel order, layout,
+dtype, mean, scale, padding value and box mapping). The evaluator's provenance,
+the smoke check and the asset tests read these, so adding a detector changes
+`framejacker/detection.py` and its `scripts/smoke-assets.json` entries only.
+The default detector and the 0.5 threshold are unchanged.
+
 Manifest entries (`schema_version: 1`) need a unique `id` and either `path`
-(relative to the manifest) or `file` plus `url`/`sha256` for download. `present`
+(relative to the manifest) or `file` plus `url`/`sha256` for download. A `path`
+entry may also carry `sha256`; any supplied digest is verified before inference,
+and `--require-input-digests` needs one for every entry. Entries written by
+`scripts/frame_session_manifest.py --still-report` carry `sha256` and
+`capture` (`detector`, `source`, `sequence` from the capture report), which the
+evaluator does not read. `present`
 lists canonical COCO labels that must be detected; a nested list accepts any
 alternative, such as `["car", "truck"]`. `absent` lists labels that must not be
 reported. Optional `objects` give `label`, source-pixel `box_xyxy` and
@@ -69,14 +120,27 @@ reported. Optional `objects` give `label`, source-pixel `box_xyxy` and
 confusable detection overlapping the object at IoU 0.3 is a confusion. Set
 `boxes_complete: true` only when every supported object is boxed, enabling
 false-positive and precision counts. Labels a detector cannot output are
-reported as unsupported. The JSON report has per-detector totals, per-image
-detections and timing; a one-line summary per detector goes to stderr. Report
-schema version 3 records manifest and resolved image SHA-256 values,
+reported as unsupported. An entry may not repeat a `present` or `absent` label,
+including under another name for the same canonical label (`sofa` and `couch`),
+so the per-label table, the totals and a pin count the same checks. The JSON
+report has per-detector totals, per-image detections and timing; a one-line
+summary per detector and a per-label table go to stderr. Report
+schema version 4 records manifest and resolved image SHA-256 values,
 decoded and processed dimensions, detector model hashes, runtime versions and
 preprocessing parameters, Python/OpenCV/NumPy versions, the Git revision and
 tracked-diff hash, conversion path, participating source-file SHA-256 values
 and native inference runtime artifact hashes. It also states annotation coverage explicitly: a
 presence-only manifest does not measure absent-label or localization accuracy.
+Schema 4 adds, per detector, a `labels` table of present (hit, miss,
+unsupported) and absent (clean, violation, unsupported) outcomes, and per image
+`label_outcomes` and `best_below_threshold`: the highest score under the
+threshold for each supported expected label. That diagnostic comes from one
+extra untimed `detect()` per image at a 0.05 floor and is never scored, so
+counts are still taken at the requested threshold. A model's own output filter
+can hide lower scores: the pinned MobileNet-SSD network keeps nothing below
+0.25, so its `null` means below 0.25. In the table, `best miss` is the highest
+such score among images where a present label was missed, and `best clean`
+among images where an absent label stayed clean.
 Each detector/variant performs one untimed warm-up before measured evaluation.
 A dirty-worktree flag means the commit alone does not identify the executed
 source; retain the exact checkout diff as well as the report. The diff hash is
@@ -91,20 +155,68 @@ are separate from the unchanged baseline, one controlled change at a time:
 ```bash
 .venv-replay/bin/python scripts/evaluate_detectors.py --manifest evaluation/local/frame.json \
   --threshold 0.5 --require-input-digests --audit-preprocessing --audit-variant swap-rb \
-  --audit-variant gray-replicated --audit-variant native-size --report /tmp/frame-audit.json
+  --audit-variant gray-replicated --audit-variant native-size --audit-variant mirror-preview \
+  --report /tmp/frame-audit.json
 ```
 
+`mirror-preview` replaces the decoded still with what E61's detector actually
+saw: the `mirror_check` preview, which is
+`framejacker.sources.mirror_device.grayscale_sample` at a 640-pixel bound
+(every third pixel of a 1920-pixel frame, integer luma) replicated to three
+channels. The variant calls that function itself rather than a copy of it.
+`gray-replicated` keeps full resolution and OpenCV's luma, so it does not
+reproduce that input.
+
 `--require-input-digests` requires a supplied SHA-256 for every input and
-verifies it before inference. Reports distinguish `manifest_verified` from
+verifies it before inference. Entries added by
+`scripts/frame_session_manifest.py --still-report` carry the SHA-256 their
+capture report recorded; see
+[bounded mirror recognition](#bounded-mirror-recognition). Reports distinguish `manifest_verified` from
 `computed_only` identity; computing a digest does not establish the original
 E61 image identity. `--audit-preprocessing` adds fingerprints, channel
-statistics and coordinate transforms; `--audit-variant` is repeatable. The report path must be new. SSD
+statistics and coordinate transforms, whose resize kind and box inverse come
+from the detector's own `preprocessing(name)`; `--audit-variant` is repeatable. The report path must be new. SSD
 keeps stretched 300 × 300 input and explicitly centers all three BGR channels;
 YOLOX keeps its letterbox transform. Rounded resize mapping uses each realized
 axis ratio. Synthetic regressions establish those implementation behaviors,
 not the cause of the private E61 TV miss. Reproducing E61 still needs the
 approved original still, verifiable digest and factual annotations. No detector
 default follows from seed or synthetic results alone.
+
+### Pinned seed counts
+
+[`evaluation/seed-expected.json`](../evaluation/seed-expected.json) pins the
+seed counts recorded in
+[E73](status.md#e73-reproducible-preprocessing-audit-and-ssd-channel-correction):
+MobileNet-SSD hits 7 of 9 supported presence checks with 2 absent-label
+violations, and YOLOX-Nano 12 of 12 with none. `--expect` refuses, before any
+inference, a run whose manifest SHA-256, threshold or IoU differs from the
+pin's. After evaluation it exits 1 when a pinned detector was not evaluated,
+hits fewer present labels, violates more absent labels, has more confusions,
+or scores a different number of presence, absence or image checks (a
+vocabulary or label-map change). Results better than the pin pass and are
+listed for a reviewed pin update; detectors absent from the pin are listed as
+unpinned. The verdict goes to stderr and to the report's `expectation` block.
+The pin holds counts, never scores, so small floating-point differences between
+x86_64 and ARM64 cannot move it: in the pinned run the closest regression
+margin was a clean absent label at 0.437 against the 0.5 threshold.
+
+CI's replay-window job runs the seed comparison with `--expect` and then
+`tests/test_seed_pin.py` without skips, which checks that the committed pin
+passes and that swapping two VOC labels in the SSD label map fails it. Seed
+results remain a wiring and label-mapping regression check on the runner's
+CPU, not Frame evidence, and they do not select a detector.
+
+### Tests that need downloaded assets
+
+Tests that need checksum-pinned downloads (models, `dog.jpg`, seed images) use
+`tests/asset_gate.py`. When an asset is absent locally the test skips and names
+the missing files and the command that fetches them. The gate checks presence
+only: the detectors and the evaluator verify model and seed-image checksums
+themselves, so an altered file fails the test instead of skipping it. CI
+fetches the assets and runs those modules through
+`scripts/run_tests_no_skips.py`, so an absent asset fails CI instead of
+skipping there.
 
 ## Install and run
 
@@ -137,14 +249,17 @@ the expected checksum just to make the check pass.
 ## What validation demonstrates
 
 The smoke check generates an MJPEG video from 12 copies of the upstream sample
-image, reads all 12 frames with OpenCV's FFmpeg backend, runs MobileNet-SSD on CPU,
-and requires bicycle, car and dog detections on each frame. Qt renders the
+image, reads all 12 frames with OpenCV's FFmpeg backend, runs the default
+detector (MobileNet-SSD) on CPU, and requires bicycle, car and dog detections on
+each frame. Every registered detector also runs once on the sample image and
+must find each of bicycle, dog and car or truck that its vocabulary has. Qt renders the
 annotations and writes a nonblank screenshot. A separate bundled ONNX
 multiplication graph executes with checked numerical output.
 
 It invalidates the previous `artifacts/smoke/readiness.json` before importing
-runtime dependencies and writes a new report only after success. The detector
-fixture is a development check, not a selected production model.
+`framejacker` or any runtime dependency and writes a new report only after
+success. The detector fixture is a development check, not a selected production
+model.
 
 | Path | Contents | Committed? |
 | --- | --- | --- |
@@ -210,6 +325,16 @@ This check does not need the full desktop requirements or `uv`.
 .venv-replay/bin/python -m unittest discover -s tests -v
 ```
 
+The decoder runs in a child process under `framejacker/runtime/guard.py`
+`supervise`: an owned process group, a 45-second deadline, reaping and, on
+Linux, the parent-loss guardian. The parent accepts the child's report only
+through `validate_worker_report`. The report keeps its fields and adds
+`exit_code`, `cleanup_ok` and the supervisor's worker and guardian fields. A
+failed supervision (for example `timed_out` or `invalid_worker_report`) exits 1
+and still gives `error`, worded as before supervision: `File decode exceeded
+the 45-second limit`, or `Decoder process exited with code N` for a decoder
+that crashed or exited with a status other than 0 or 1.
+
 PyAV selects the requested video stream and converts a few decoded frames to
 RGB without NumPy, OpenCV or Qt. Tests generate real fragmented HEVC with two
 different video-track dimensions, exercise both selections, and check failures
@@ -259,6 +384,41 @@ Linux ARM64 Qt wheels require glibc 2.39+
 and graphical-system dependencies; the native X11 path checks `ldd` output for
 missing plugin libraries before creating a QApplication.
 
+The summary embeds the engine's `pipeline` block, with the
+[latency statistics](#latency-statistics), whenever the engine started: on a
+clean finish and also when the run fails afterwards, for example on a decoder or
+detector error, so a failed run keeps the statistics of the frames it
+processed. `statistics_final` is true when the worker had stopped, and false
+when it was still running after the five-second shutdown wait (the run then
+fails with "did not shut down"): those statistics are a snapshot that may
+still have grown. A run that fails before the engine starts (an invalid path,
+no display, missing Qt libraries) has no block. With `--realtime`,
+`realtime_ratio` is media seconds advanced per wall second and counts catch-up
+jumps as progress. `processed_media_fraction` is the frames processed divided
+by `media_frames_spanned`, the source frames the played span covered: each was
+emitted, dropped after decoding, or skipped undecoded during a catch-up. It is
+1.0 when every frame is processed (every-frame replay), null before any frame,
+and small when realtime replay keeps pace by skipping.
+
+Realtime replay's latest-only engine copies every frame the source publishes
+(`Frame.owned()`, once per `frames_received`, on the decode thread), including
+frames replaced before inference, and `to_bgr` copies the read-only copy of
+each processed frame again when no resize is needed; every-frame replay copies
+neither. Measured on the cloud runner CPU (Linux x86_64, 4 cores, NumPy 2.2.6;
+not Frame), the medians are 0.12 ms (`owned()`) and 0.11 ms (`to_bgr`) at
+960 × 540 (what the decoder makes of a 1920 × 1080 recording) and 0.027 and
+0.022 ms at 640 × 360. A 1920 × 1080 frame published unscaled takes 0.52 ms to
+own, and `to_bgr` resizes it instead of copying. On the decode thread, 60
+published frames per second at 960 × 540 cost about 7 ms of copying per
+second, under 1% of one core. The [stand-in clip](#continuous-integration)
+decodes to 960 × 960 frames (0.22 ms for each copy), and its realtime replays
+on the same runner received 1.8 and 3.5 frames per processed frame (2 and 4
+decoder threads), so the copies cost about 0.6 and 1.0 ms per processed frame,
+2.5% and 4% of a median MobileNet-SSD detector call of about 25 ms on the same
+CPU. Only `to_bgr`'s copy, once per processed frame (under 1% of that call at
+either size), could be removed without giving up the slot's private copy, so
+both stay, with the ownership guarantees the owned-copy tests pin.
+
 Run `.venv-replay/bin/python -m unittest discover -s tests -v` after window
 setup for the complete parser, decoder and offscreen display checks. The window
 tests generate two-track replay video and require bicycle/car/dog detections,
@@ -289,6 +449,30 @@ The standalone shared-memory job builds both native helpers and checks
 cross-process publications, stale/malformed input, source mutations, native
 fault containment, deadlines and preview publication with synthetic images.
 
+On ARM64 only (`pacing: true` in `arm64.yml`), the replay-pacing job writes the
+synthetic realtime-replay stand-in and replays it as E62 did: `--realtime`, 40
+processed frames at a 5 fps cap with MobileNet-SSD, once with 2 and once with 4
+decoder threads. It checks that each report finished and carries the
+[latency statistics](#latency-statistics) and `processed_media_fraction`, then
+uploads the two reports, the stand-in's description and the runner's CPU
+description as the artifact `replay-pacing-ubuntu-24.04-arm-runner-cpu-not-frame`.
+These are runner-CPU numbers on synthetic input, for comparing commits: they are
+not Frame measurements and not status evidence. E62's generator was never
+committed, so `scripts/replay_standin.py` (`framejacker/sources/standin.py`)
+encodes a clip to its documented parameters: 2464 × 2464 HEVC, 60 fps, 10 s,
+one-second GOP, 320 Mbit/s target. The content is new seeded noise, so bitrate
+and decode speed differ from E62's clip. On the 4-core x86_64 cloud runner it
+encodes in about 100 s at about 330 Mbit/s. To reproduce the job locally:
+
+```bash
+mkdir -p artifacts/replay-pacing
+.venv-replay/bin/python scripts/replay_standin.py artifacts/replay-pacing/standin.mp4 \
+  > artifacts/replay-pacing/standin.json
+QT_QPA_PLATFORM=offscreen .venv-replay/bin/python scripts/replay_window.py \
+  artifacts/replay-pacing/standin.mp4 --realtime --decode-threads 2 --max-frames 40 --max-fps 5 \
+  --report artifacts/replay-pacing/realtime-2-threads.json
+```
+
 ## Existing SteamVR mirror diagnostic
 
 `python3 scripts/mirror_check.py` performs sysfs-only discovery. Opt-in capture
@@ -311,10 +495,23 @@ Raw buffers are bounded at 64 MiB and dimensions at 16 Mi pixels; samples skip
 padding and chroma. The supervisor enforces the driver deadline and handles
 Ctrl+C/SIGTERM; Linux parent-death signaling stops the worker if its launcher dies.
 
+The launcher is the shared `framejacker/sources/mirror.py` `launch`, which mirror
+recognition also uses. An unsuitable `--preview` path stops it before the worker
+starts. The worker writes the reserved grayscale PNG after capture has closed,
+and the launcher links it into place only after a `captured` run with confirmed
+cleanup. A clean run that produced no preview fails with `requested_output_missing`.
+A destination created during the run is kept, and the run fails with
+`preview_publish_failed`.
+
 ```bash
 python3 -m unittest discover -s tests -p test_mirror_check.py -v
+python3 -m unittest tests.test_mirror_launcher tests.test_report_characterization -v
 ```
 
+With bare Python the second command covers the launcher and the
+`mirror_check.py` characterization; its mirror-recognition and synthetic-run
+characterization tests skip without NumPy/OpenCV and run under `.venv-replay`
+in [bounded mirror recognition](#bounded-mirror-recognition).
 Tests use controlled sysfs/device backends and real subprocesses. The ABI test
 compiles a tiny Linux-header program when `g++` and UAPI headers are installed;
 otherwise that check is explicitly skipped. With PyAV available, preview testing
@@ -327,22 +524,58 @@ validation evidence.
 
 `scripts/mirror_recognize.py` reuses the guarded capture loop and supervised
 process deadline, and runs recognition through the latest-only
-[shared pipeline](#python-package-and-pipeline). Default execution performs metadata-only discovery. Opt-in
+[shared pipeline](#python-package-and-pipeline). Its worker runs
+`framejacker/runtime/live.py` `run_recognition` on `run_report`, the report
+runner the synthetic run also uses, and `sources.mirror.launch` starts it and
+publishes its outputs. Default execution performs metadata-only discovery. Opt-in
 capture/inference needs the existing OpenCV/NumPy environment and checked model
 fixtures, with no Qt, PyAV or OpenVR initialization. The recognizer accepts only
 RGB3/BGR3, respects row padding and converts to owned BGR images of at most 960
 pixels on the longer side. A capture thread retains one latest pending read;
 slow inference replaces old input rather than accumulating a queue.
 
+`--detector` picks a `DETECTORS` entry through `create_detector`; the default
+stays `mobilenet-ssd`. The report records `detector_requested` and `detector`
+(name, runtime and class count). Two optional outputs come from the last
+processed result: `--preview`, the annotated image scaled to at most 640
+pixels, and `--still`, the unannotated frame at its native mirror size, for
+[evaluation sets](#detector-evaluation). Each refuses an existing path, is
+written to an owned temporary file after the source closes, and is hard-linked
+into place only after a recognized run with confirmed cleanup
+(`framejacker/runtime/output.py`). The two need paths that resolve to different
+files, and publication is all or nothing: if a later hard link fails, outputs
+this run already linked are withdrawn and the report gives
+`<kind>_publish_failed`; Ctrl+C or SIGTERM during publication also withdraws
+them, and the run is `cancelled`. The still is the native frame, not the
+960-pixel detector input that the flag saved before `3bd3d4c` removed it:
+`evaluate_detectors.py` applies the same conversion, so its baseline input
+equals what the live detector saw, and its `native-size` audit variant keeps a
+meaning. The report records `still_sha256` (of the PNG bytes written, checked
+again before publication; a still reported without it is not published),
+`still_detector`, `still_source`, `still_sequence`
+(equal to `last_result.read_sequence`) and `still_width`/`still_height`.
+`scripts/frame_session_manifest.py --still-report <report>` checks that the
+image still matches and copies the digest, detector, source and sequence into
+the manifest entry, which then passes `--require-input-digests`.
+
 ```bash
 .venv-replay/bin/python -m unittest discover -s tests -p test_mirror_recognize.py -v
+.venv-replay/bin/python -m unittest discover -s tests -p "test_frame_session*.py" -v
+.venv-replay/bin/python -m unittest tests.test_report_characterization tests.test_mirror_launcher -v
 ```
 
 Tests cover guards, channel order/padding, overload and exact source/result
 association, old/empty input, model/read/close failures, cancellation and real
-spawned-model/preview publication with the checked fixture. Image encoding is
+spawned-model/preview/still publication with the checked fixture. Image encoding is
 checked to occur after source closure. Destinations created concurrently remain
-untouched. Dependency-specific tests skip without OpenCV/NumPy; the replay-window
+untouched. A fixture mirror larger than 960 pixels and a fixture model drive
+`--capture --still` end to end: the still equals the native frame of
+`last_result`, the evaluator's conversion of it reproduces the live detector
+input, and its manifest entry passes `--require-input-digests`.
+`tests/test_frame_session_commands.py` parses every `scripts/*.py` command line
+in `scripts/frame_session.sh` with that script's own parser and exact option
+names, without running it; the session helper's own tests replace Python with a
+fake, so they cannot see a removed flag. Dependency-specific tests skip without OpenCV/NumPy; the replay-window
 CI job installs these and exercises the complete suite. Existing supervision
 tests cover hard deadlines, abnormal worker exit and process reaping.
 
@@ -1079,7 +1312,7 @@ The Python supervisor contains native mapping faults (including a truncation
 race) and enforces a deadline plus bounded terminate/kill cleanup. Linux
 parent-death signaling prevents a stranded native reader; core dumps are
 disabled in that reader. Optional PNG output is encoded only after input
-closure and published atomically to a new path. No pixels are saved by default.
+closure and published atomically to a new path (`runtime/output.py` `publish_new`). No pixels are saved by default.
 See [the device procedure](on-device.md#check-existing-luma-shared-memory) for
 existing-provider usage and [evidence](status.md#e9-shared-memory-reader-cloud-checks)
 for actual validation limits.
@@ -1252,12 +1485,20 @@ For a future justified rerun in the local Linux replay/window environment:
 
 ```bash
 python -m unittest tests.test_hud_mask tests.test_live_pipeline tests.test_display_expiry tests.test_mirror_recognize -v
-python -m scripts.live_pipeline --synthetic-check --synthetic-hud --validate-overlay --seconds 3
+python -m scripts.live_pipeline --synthetic-check --synthetic-hud --detector fixture --validate-overlay --seconds 3
 ```
 
 These use generated input and native validation only, with the existing built
-bridge and detector assets. `--synthetic-hud` requires `--synthetic-check`; it
-does not load hardware calibration or enable live input/real output. The earlier
+bridge and detector assets. `--synthetic-hud` and `--detector` require
+`--synthetic-check`; they do not load hardware calibration or enable live
+input/real output. `--detector` takes a registered model name (`DETECTORS`
+through `create_detector`; the default is `mobilenet-ssd`, and `real` remains
+an alias for it) or `fixture`. Since the
+[synthetic HUD validation counts](#synthetic-hud-validation-counts), the second
+command is also a validation run. `--detector fixture` reports no detections,
+so it checks the mask, ledger and transport and ends `completed` (exit 0).
+With the default detector it ends `validation_failed` (exit 1), because
+MobileNetSSD boxes the zeroed footprint region of the generated frames. The earlier
 session reported 57 tests; that absent log is not a new execution result.
 
 The later [marker-only harness](status.md#e70-offline-marker-only-harness) adds
@@ -1276,11 +1517,110 @@ independently inspected standalone log. No device execution is authorized.
 Earlier deployment preparation reported a local eight-entry manifest (ARM64
 bridge plus seven Python modules), with size/hash checks during that review.
 The manifest is not committed and does not pin the current implementation; a
-new reviewed artifact manifest is required for a future checkpoint.
+new reviewed artifact manifest is required for a future checkpoint. The
+[checkpoint artifact manifest](#checkpoint-artifact-manifest) below now writes
+and verifies one on Frame.
 See the [preflight and placeholder command](on-device.md#deployment-preflight-and-command-shape-not-authorized).
 Target UAPI/ctypes/ioctl size evidence is still required before capture; passing
 the cloud ABI test does not establish the headset ABI. Cross-compilation and Windows fixture outcomes do not establish Frame
 runtime compatibility. No install, transfer or device execution is implied.
+
+### Checkpoint artifact manifest
+
+`scripts/checkpoint_manifest.py` is the command and
+`framejacker/runtime/manifest.py` the library. `--write PATH` pins the git
+commit, a clean-tree check, the Python, architecture and OS identity, and
+SHA-256 values of the built bridge, every `framejacker/**/*.py`, the
+checkpoint scripts, the bridge sources and the assets in
+`scripts/smoke-assets.json`. It also pins the installed package versions, all
+as deterministic JSON with checkout-relative paths. It creates a new file
+(never overwriting) and refuses a dirty tree unless `--allow-dirty` records
+`dirty: true`. `--verify PATH` is read-only: it writes nothing, builds nothing
+and exits 1 on any difference or a dirty tree, printing the differences as
+JSON. Both run on Frame after the native build; built binaries are never
+transferred. The [device checkpoint](hud-qualification.md#next-device-checkpoint)
+gives the commands, when to run them and what a failure means.
+
+`CHECKPOINT_SCRIPTS` and `CHECKPOINT_PACKAGES` in the library are the single
+lists. `tests/test_checkpoint_manifest.py` fails if a script named in a code
+block of either checkpoint procedure is missing from the list, if a documented
+`checkpoint_manifest.py` command does not parse with the real parser, if a
+procedure runs the marker bridge before its first `--verify`, or if the
+third-party packages in the checkpoint's import closure differ from the
+pinned ones.
+Its write/verify cases each build a temporary git checkout. They cover a
+changed module, a rebuilt bridge, a modified tracked file, an untracked file,
+another architecture, Python or package version, an existing output path
+(including one created after the existence check), and a verify that leaves
+every file time unchanged. A manifest with a non-finite or overflowing number,
+or nested deeper than any manifest, is reported as unreadable, so the
+verification report stays strict JSON. These are cloud checks of the tool, not
+Frame evidence.
+
+## Observer report to mapping candidate
+
+[`hud_validation_report.py`](../scripts/hud_validation_report.py) has two
+offline modes. `--check-candidate` checks a mapping candidate record against a
+declared current context and time. `--from-observer` builds a candidate from a
+saved `hud_marker_observer.py` report and a declared context, using
+`framejacker/hud/candidate.py`. The result is at best
+`candidate_valid_unqualified` with exit 2; any rejection is a structured report
+with exit 1 and writes nothing. Unknown terms are null with a reason, never 0,
+and the observer's margin, already inside its union, is counted once. The
+[qualification design](hud-qualification.md#observer-report-to-candidate-2026-11-01)
+owns the rules. From the checkout:
+
+```bash
+python3 scripts/hud_validation_report.py --from-observer /tmp/observer-report.json \
+  --declared-context /tmp/declared-context.json --lifetime-seconds 60 \
+  --candidate-output /tmp/candidate.json
+.venv-replay/bin/python -m unittest tests.test_hud_candidate tests.test_hud_qualification \
+  tests.test_hud_marker_observer
+```
+
+The tests convert reports from the real observer on generated frames. They are
+cloud results, not Frame evidence, and they open no device or gate.
+
+## Synthetic HUD validation counts
+
+A synthetic HUD run, `framejacker/runtime/live.run_pipeline` with a HUD stage,
+is also a validation run. `framejacker/hud/validation.py` puts a
+`ValidationSink` ahead of the result sink. It records each result in a
+`ValidationLedger` built from `synthetic.fixture_candidate(calibration)` with
+the run's own maximum age. The engine counts the stage's exclusion checks in
+the `pipeline` block's `hud_checks`, which is null without a HUD stage:
+frames checked, footprint pixels left non-zero after masking, and boxes
+dropped for touching the mask or crossing an eye. The report adds
+`validation_ledger` and `g5_software`, whose counts use the names in
+`docs/templates/hud-device-validation-report.json`.
+
+The runtime alone only drops such a box from presentation. In a validation
+run, a footprint pixel left after masking, a dropped box or any ledger
+rejection ends the run `validation_failed` with exit 1, and a rejected result
+never reaches the result sink. A run that already failed on its own, for
+example on a capture-context change, keeps its status and reason, and
+`g5_software` names the validation failure. `MAX_DISPLAY_AGE_MS` in
+`framejacker/hud/contract.py` is the one maximum age and default for the
+pipeline, the ledger and both commands, and `Pipeline` refuses a HUD stage
+with a longer one. The
+[qualification design](hud-qualification.md#synthetic-validation-counts-and-one-maximum-age-2026-11-01)
+owns the rules. From the checkout:
+
+```bash
+.venv-replay/bin/python -m unittest tests.test_hud_validation tests.test_pipeline tests.test_live_pipeline
+python -m scripts.live_pipeline --synthetic-check --synthetic-hud --detector fixture --seconds 3
+python -m scripts.live_pipeline --synthetic-check --synthetic-hud --seconds 3
+```
+
+Both commands use generated input, with no overlay. The first uses the fixture
+detector, which reports no detections and loads no model, and ends `completed`
+with exit 0 and `g5_software.status` `checked_unqualified`. The second uses the
+default MobileNetSSD and ends `validation_failed` with exit 1 and clean
+cleanup: on these frames the detector reports the zeroed footprint region
+itself as `tvmonitor`, and a validation run fails on any box touching the mask.
+The same holds with `--validate-overlay`. Which of the two a G5 diagnostic
+should treat as feedback is an open design question. These are cloud results,
+not Frame evidence; they observe no device or physical expiry and open no gate.
 
 ## Offline foundation for the minimum live POC
 
@@ -1347,12 +1687,20 @@ commands.
 
 Two supervision policies remain, each with one implementation:
 `framejacker/runtime/guard.py` (command workers in an owned process group under
-the Linux guardian, used by the live pipeline, HUD marker/observer and recording
-growth check) and `framejacker/runtime/process.py` (spawned Python workers that
-stream progress, with parent-death signalling and terminate/kill escalation,
-used by `mirror_check.py` and `mirror_recognize.py`). The paused capture track's
-`capture_supervisor.py` and its diagnostics keep their own copies while that
-track is frozen.
+the Linux guardian, used by the live pipeline, HUD marker/observer, recording
+growth check and replay decode check) and `framejacker/runtime/process.py`
+(spawned Python workers that stream progress, with parent-death signalling and
+terminate/kill escalation, used by `sources.mirror.launch` for `mirror_check.py`
+and `mirror_recognize.py`). The paused capture track's `capture_supervisor.py`
+and its diagnostics keep their own copies while that track is frozen.
+
+Signals follow one convention, in `guard.py`. A launcher runs inside
+`sigterm_cancels()`, where SIGTERM raises `StopRequested` as Ctrl+C raises
+`KeyboardInterrupt`, and `cancelled(report, error)` records either as
+`cancelled` with exit 128 + signal. A guarded worker calls `stop_on_signals()`,
+so SIGINT and SIGTERM set its stop event and its own cleanup runs. The live
+pipeline, HUD marker check and observer and recording growth workers use it.
+`shm_capture_check.py` keeps its own copy of the launcher side.
 
 On cancellation/timeout/parent loss the guardian permits five seconds for cooperative
 worker cleanup, then one second for group termination and one for kill/reaping,
@@ -1379,9 +1727,15 @@ alone no longer serves as evidence of process reaping.
 The [E68 tests](status.md#e68-independent-expiry-and-supervisor-loss-containment)
 add actual SIGKILL of the outer supervisor, a closed lifeline before startup,
 and a deliberately stopped/resumed guardian. They verify owned-worker/helper
-reaping while preserving the lack of a final supervisor cleanup report. If the
-guardian is also killed, cannot run, or a helper detaches from its group, this
-scheme cannot guarantee cleanup. No test forces real uninterruptible kernel I/O.
+reaping while preserving the lack of a final supervisor cleanup report. The
+guardian also writes its worker's process group to a private pipe. If the
+guardian alone is killed, the outer supervisor (its subreaper) sends that group
+SIGTERM, then SIGKILL, and reaps it. The report stays `guardian_failed` with
+`cleanup_ok: false`. A guardian-SIGKILL test covers this path
+([lifecycle review](lifecycle-review.md#marker-stop-and-guardian-loss-2026-11-01)).
+If both supervisor and guardian are killed, the guardian cannot run, or a helper
+detaches from its group, this scheme cannot guarantee cleanup. No test forces
+real uninterruptible kernel I/O.
 
 Synthetic display frames now carry absolute monotonic expiry to the independent
 native validation process. Stalled inference, settings heartbeats and partial
@@ -1397,12 +1751,57 @@ See the [source/output contract review](live-capture.md#synthetic-input-and-feed
 and overlay builders share `scripts/build_openvr_tool.sh`; neither builder runs
 a runtime test. The camera binary's explicit opt-in guard remains in place.
 
-The overlay job checks strict C++ syntax, packet bounds, malformed input, idle
-payload timeouts, signals and named missing-runtime diagnostics. The replay
+The overlay job checks that the generated contract header is current, strict
+C++ syntax, packet bounds, malformed input, idle payload timeouts, signals and
+named missing-runtime diagnostics. The replay
 window job also builds the bridge so its validation-only mode can check actual
 RGBA forwarding and Qt control creation. This mode reports no OpenVR
 initialization and zero submitted frames. For the real hardware procedure,
 read [VR replay panel](vr-overlay.md).
+
+### Generated HUD contract header
+
+[`tools/hud_contract.hpp`](../tools/hud_contract.hpp) is committed and
+generated from the Python contract by
+[`framejacker/hud/native.py`](../framejacker/hud/native.py). It holds
+`HudConfig` and its digest, the calibration `MARKER` (sizes, positions, gray
+levels and corner ids), the pipe packet layouts and opcodes, the marker
+duration (1–20 s), display age (1 s) and frame side (512) limits, and
+`PANEL_LIMITS` with the `PanelSettings` defaults. `tools/overlay_bridge.cpp`
+and `tools/overlay_frame.hpp` include it and keep no copies of those values;
+they share one little-endian `read_u32`. Python call sites import the same
+constants from `framejacker/hud/contract.py` (`PANEL_LIMITS` and
+`PanelSettings` stay in `framejacker/overlay.py`). Change a value only on the
+Python side, then:
+
+```bash
+python3 scripts/hud_contract_header.py --write
+bash scripts/build_overlay_bridge.sh
+python3 scripts/hud_contract_header.py --check   # the overlay CI job runs this
+```
+
+`tests/test_hud_contract.py` fails when the committed header differs from the
+generated text, when a Python contract value would not reach the header, when
+the built bridge reports a different contract digest (rebuild it), and when the
+rebuilt bridge or a Python call site does not apply a limit at its boundary.
+Each Python marker-duration site must reject with its own reason, and
+`tests/fixtures/overlay_dispatch_fixture.cpp` accepts a deadline exactly at the
+generated display-age cap and rejects one a nanosecond later.
+
+`framejacker-overlay-bridge --render-calibration-marker NEW_RGBA_FILE` draws
+the native marker into a new file (exclusive creation) and reports the contract
+and HUD configuration digests. It makes no OpenVR call. The tests require its
+RGBA bytes to equal `framejacker.hud.observation.marker_template()` pixel for
+pixel, with every pixel opaque. They also replay V4's shape offline: two clear
+baseline reads, then the native marker on read 3, which must decode all four
+corner tags with zero tag and bit error. The compared marker function is
+unchanged from the V4 native source (SHA-256 `5ffc47f5…`, the
+`tools/overlay_bridge.cpp` committed in `bfc7aa7`). A passing run therefore
+rules out a disagreement between the native generator and the observer
+template, so this comparison offers no candidate explanation for V4's frame-3
+tag/bit rejection, which remains unexplained. It does not exercise compositor
+scaling, color or gamma transforms, mirror capture or timing. These are
+generated, validation-only checks, not Frame evidence.
 
 ## Generated evidence summaries
 

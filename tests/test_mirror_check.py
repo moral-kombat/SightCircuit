@@ -18,6 +18,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+from framejacker.runtime import process
 from framejacker.sources import mirror as acquisition
 from framejacker.sources import mirror_device as device
 from scripts import mirror_check as check
@@ -68,7 +69,7 @@ class ErrorMirror(FakeMirror):
         raise device.MirrorError("format_changed", "fixture format changed")
 
 
-def changing_worker(candidate, seconds, preview_temp, sender, stop, parent):
+def changing_worker(candidate, seconds, outputs, sender, stop, parent):
     acquisition.NativeMirror = FakeMirror
     real_encoder = check.grayscale_png
 
@@ -78,10 +79,10 @@ def changing_worker(candidate, seconds, preview_temp, sender, stop, parent):
         return real_encoder(*args)
 
     check.grayscale_png = encode_after_close
-    check._worker(candidate, seconds, preview_temp, sender, stop, parent)
+    check._worker(candidate, seconds, outputs, sender, stop, parent)
 
 
-def stuck_worker(candidate, seconds, preview_temp, sender, stop, parent):
+def stuck_worker(candidate, seconds, outputs, sender, stop, parent):
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     if candidate.get("ready_file"):
         Path(candidate["ready_file"]).write_text("ready")
@@ -89,8 +90,24 @@ def stuck_worker(candidate, seconds, preview_temp, sender, stop, parent):
     time.sleep(30)
 
 
-def crashed_worker(candidate, seconds, preview_temp, sender, stop, parent):
+def crashed_worker(candidate, seconds, outputs, sender, stop, parent):
     os._exit(7)
+
+
+def run_bounded(candidate, seconds, outputs=None, **options):
+    """The mirror check's worker supervision as ``sources.mirror.launch`` runs it."""
+    return process.run_bounded(candidate, seconds, outputs, success_status="captured",
+                               report_factory=lambda: dict(acquisition.new_capture_report(), candidate=candidate),
+                               **options)
+
+
+def bounded_quickly(worker=changing_worker, seconds=0.22):
+    """The launcher's supervision with ``worker`` and a short capture, for command-line tests."""
+    real = process.run_bounded
+
+    def run(job, _seconds, outputs=None, **options):
+        return real(job, seconds, outputs, **dict(options, worker=worker))
+    return patch.object(process, "run_bounded", side_effect=run)
 
 
 class MirrorDiscoveryTests(unittest.TestCase):
@@ -134,7 +151,7 @@ class MirrorDiscoveryTests(unittest.TestCase):
     def test_cli_discovery_and_unavailable_capture_have_no_device_calls(self):
         for args, expected in (([], 0), (["--capture"], 1), (["--capture", "--device", "/dev/video0"], 1)):
             with self.subTest(args=args), patch.object(check, "discover", return_value={"status": "unavailable", "candidates": []}), \
-                    patch.object(check, "run_bounded", side_effect=AssertionError("Unverified capture started")):
+                    patch.object(process, "run_bounded", side_effect=AssertionError("Unverified capture started")):
                 output = io.StringIO()
                 with redirect_stdout(output):
                     self.assertEqual(check.main(args), expected)
@@ -307,12 +324,12 @@ class MirrorFrameTests(unittest.TestCase):
 
 class MirrorWorkerTests(unittest.TestCase):
     def test_sigterm_cancels_launcher_and_reaps_its_worker(self):
-        code = '''import json, signal, sys
+        code = '''import json, sys
 sys.path[:0] = sys.argv[1:3]
-from scripts import mirror_check as check
-from test_mirror_check import CANDIDATE, stuck_worker
-signal.signal(signal.SIGTERM, check.stop_on_signal)
-report = check.run_bounded(dict(CANDIDATE, ready_file=sys.argv[3]), 10, worker=stuck_worker)
+from framejacker.runtime import guard
+from test_mirror_check import CANDIDATE, run_bounded, stuck_worker
+with guard.sigterm_cancels():
+    report = run_bounded(dict(CANDIDATE, ready_file=sys.argv[3]), 10, worker=stuck_worker)
 print(json.dumps(report), flush=True)
 sys.exit(report['exit_code'])
 '''
@@ -339,7 +356,7 @@ sys.exit(report['exit_code'])
                 process.communicate(timeout=3)
 
     def test_real_worker_pipeline_closes_and_exits_without_hardware(self):
-        report = check.run_bounded(CANDIDATE, 0.22, worker=changing_worker)
+        report = run_bounded(CANDIDATE, 0.22, worker=changing_worker)
         self.assertEqual(report["status"], "captured", report)
         self.assertGreaterEqual(report["frames_read"], 2)
         self.assertTrue(report["cleanup_ok"])
@@ -349,7 +366,7 @@ sys.exit(report['exit_code'])
             os.kill(report["worker_pid"], 0)
 
     def test_deadline_escalates_when_worker_ignores_termination(self):
-        report = check.run_bounded(CANDIDATE, 10, worker=stuck_worker, timeout=0.7)
+        report = run_bounded(CANDIDATE, 10, worker=stuck_worker, timeout=0.7)
         self.assertTrue(report.get("fixture_started"), report)
         self.assertEqual(report["status"], "timed_out", report)
         self.assertEqual(report["worker_exit_code"], -signal.SIGKILL)
@@ -358,21 +375,16 @@ sys.exit(report['exit_code'])
         self.assertLess(report["worker_elapsed_ms"], 4000)
 
     def test_abnormal_worker_exit_is_reported(self):
-        report = check.run_bounded(CANDIDATE, 1, worker=crashed_worker)
+        report = run_bounded(CANDIDATE, 1, worker=crashed_worker)
         self.assertEqual(report["status"], "error", report)
         self.assertEqual(report["worker_exit_code"], 7)
         self.assertEqual(report["reason"], "worker_exited_without_result")
 
     def test_optional_png_is_published_after_close_and_existing_output_is_preserved(self):
-        original_run = check.run_bounded
-
-        def run(candidate, seconds, preview_temp):
-            return original_run(candidate, 0.22, preview_temp, worker=changing_worker)
-
         with tempfile.TemporaryDirectory() as folder:
             target = Path(folder) / "mirror.png"
             with patch.object(check, "discover", return_value={"status": "candidates_found", "candidates": [CANDIDATE]}), \
-                    patch.object(check, "run_bounded", side_effect=run):
+                    bounded_quickly():
                 output = io.StringIO()
                 with redirect_stdout(output):
                     self.assertEqual(check.main(["--capture", "--preview", str(target)]), 0)
@@ -398,13 +410,13 @@ sys.exit(report['exit_code'])
         with tempfile.TemporaryDirectory() as folder:
             target = Path(folder) / "mirror.png"
 
-            def raced(candidate, seconds, preview_temp):
-                Path(preview_temp["path"]).write_bytes(b"fixture")
+            def raced(candidate, seconds, outputs, **_options):
+                Path(outputs["preview"]["path"]).write_bytes(b"fixture")
                 target.write_bytes(b"keep me")
                 return dict(check.new_report(), status="captured", preview_ready=True, exit_code=0)
 
             with patch.object(check, "discover", return_value={"candidates": [CANDIDATE]}), \
-                    patch.object(check, "run_bounded", side_effect=raced), redirect_stdout(io.StringIO()):
+                    patch.object(process, "run_bounded", side_effect=raced), redirect_stdout(io.StringIO()):
                 self.assertEqual(check.main(["--capture", "--preview", str(target)]), 1)
             self.assertEqual(target.read_bytes(), b"keep me")
             self.assertFalse(list(Path(folder).glob("*.part")))

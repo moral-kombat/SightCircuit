@@ -31,6 +31,19 @@ def overlaps(a, b):
     return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
 
 
+def exclusion(box, regions, eyes):
+    """Why a native box may not become HUD content: ``"mask_overlap"``, ``"eye_crossing"`` or None.
+
+    The runtime mask drops such a box and the validation ledger invalidates
+    its run on it; both classify with this one rule, mask overlap first.
+    """
+    if any(overlaps(box, region) for region in regions):
+        return "mask_overlap"
+    if sum(contains(eye, box) for eye in eyes) != 1:
+        return "eye_crossing"
+    return None
+
+
 def expand(rect, margin):
     x0, y0, x1, y1 = rect
     return (x0 - margin, y0 - margin, x1 + margin, y1 + margin)

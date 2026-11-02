@@ -6,8 +6,10 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from framejacker.sources.recording import inspect_recording
+from scripts import replay_decode_check as command
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -85,6 +87,66 @@ class ReplayDecodeTests(unittest.TestCase):
         result, report = self.run_check(Path(self.temporary.name))
         self.assertEqual(result.returncode, 1)
         self.assertIn("regular file", report["error"])
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "The parent-loss guardian is Linux-only")
+    def test_decoder_child_runs_under_the_shared_supervisor(self):
+        result, report = self.run_check(self.clip)
+        self.assertEqual((result.returncode, report["status"], report["exit_code"], report["cleanup_ok"]),
+                         (0, "decoded", 0, True), report)
+        self.assertEqual((report["worker_reaped"], report["worker_tree_reaped"], report["worker_forced_termination"]),
+                         (True, True, False))
+        self.assertEqual(report["parent_death_containment"], "linux_lifeline_guardian")
+
+
+class DecodeSupervisionTests(unittest.TestCase):
+    """The parent's acceptance of its decoder child's report, without PyAV."""
+
+    def report(self, **changes):
+        decoded = dict(command.new_report(Path("/clip.mp4"), 0, 3), status="decoded", frames_decoded=1, exit_code=0,
+                       cleanup_ok=True)
+        return dict(decoded, **changes)
+
+    def test_only_a_consistent_decode_report_is_accepted(self):
+        command.validate_worker_report(self.report(), 0)
+        command.validate_worker_report(self.report(status="error", frames_decoded=0, exit_code=1), 1)
+        command.validate_worker_report(self.report(status="dependency_missing", frames_decoded=0, exit_code=1), 1)
+        for report, returncode in ((self.report(), 1), (self.report(exit_code=1), 1), (self.report(status="error"), 0),
+                                   (self.report(frames_decoded=0), 0), (self.report(images_saved=True), 0),
+                                   (self.report(cleanup_ok=None), 0), (self.report(exit_code=2), 2),
+                                   (self.report(report_kind="other"), 0), ([], 0)):
+            with self.subTest(report=report, returncode=returncode), self.assertRaises(ValueError):
+                command.validate_worker_report(report, returncode)
+        self.assertEqual(command.worker_report(self.report(exit_code=None, cleanup_ok=None))["exit_code"], 0)
+        self.assertEqual(command.worker_report(self.report(status="error"))["exit_code"], 1)
+
+    def test_a_failed_supervision_still_reports_an_error(self):
+        for supervised, error in (({"status": "timed_out", "exit_code": 1}, "File decode exceeded the 45-second limit"),
+                                  ({"status": "invalid_worker_report", "exit_code": 1, "reason": "bad"}, "bad"),
+                                  ({"status": "error", "exit_code": 1, "error": "absent"}, "absent")):
+            with self.subTest(status=supervised["status"]), \
+                    patch.object(command, "supervise", return_value=dict(supervised)) as supervise:
+                report = command.run_worker(Path("/clip.mp4"), 1, 2)
+            self.assertEqual(report["error"], error)
+            command_line, base, seconds, validate = supervise.call_args.args
+            self.assertEqual(command_line[-6:], ["/clip.mp4", "--video-stream", "1", "--frames", "2", "--worker"])
+            self.assertEqual((base["frames_requested"], seconds, validate), (2, 45, command.validate_worker_report))
+
+    def test_a_crashed_or_timed_out_decoder_keeps_its_error_message(self):
+        """The supervisor's report-parse reason never replaces the decoder's own exit status in ``error``."""
+        unparsed = "Expecting value: line 1 column 1 (char 0)"
+        for supervised, error in (
+                ({"status": "invalid_worker_report", "exit_code": 1, "reason": unparsed, "worker_exit_code": -11},
+                 "Decoder process exited with code -11"),
+                ({"status": "invalid_worker_report", "exit_code": 1, "reason": "invalid_decode_worker_report",
+                  "worker_exit_code": 2}, "Decoder process exited with code 2"),
+                ({"status": "timed_out", "exit_code": 1, "reason": unparsed, "worker_exit_code": -15},
+                 "File decode exceeded the 45-second limit"),
+                ({"status": "cancelled", "exit_code": 143, "reason": unparsed, "worker_exit_code": -15}, unparsed),
+                ({"status": "invalid_worker_report", "exit_code": 1, "reason": "bad", "worker_exit_code": 1}, "bad")):
+            with self.subTest(supervised=supervised), patch.object(command, "supervise", return_value=dict(supervised)):
+                report = command.run_worker(Path("/clip.mp4"), 0, 3)
+            self.assertEqual((report["error"], report["status"], report["reason"]),
+                             (error, supervised["status"], supervised["reason"]))
 
 
 if __name__ == "__main__":

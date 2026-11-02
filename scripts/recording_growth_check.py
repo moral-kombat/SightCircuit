@@ -7,7 +7,6 @@ import argparse
 import json
 import os
 from pathlib import Path
-import signal
 import stat
 import sys
 import threading
@@ -16,7 +15,7 @@ import time
 if not __package__:  # Run as a file: import this checkout's packages without installation.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from framejacker.runtime.guard import supervise  # noqa: E402
+from framejacker.runtime.guard import stop_on_signals, supervise  # noqa: E402
 from framejacker.sources.recording import Budget, GrowthError, scan_headers  # noqa: E402
 
 MAX_WAIT_SECONDS = 120
@@ -181,9 +180,7 @@ def main(argv=None):
     report = new_report()
     if args.observe or args.watch_directory:
         if args.worker:
-            stop = threading.Event()
-            signal.signal(signal.SIGINT, lambda *_: stop.set())
-            signal.signal(signal.SIGTERM, lambda *_: stop.set())
+            stop = stop_on_signals()
             report = (watch_new(args.watch_directory, args.wait_for_new, args.seconds, stop, announce=True)
                       if args.watch_directory else observe(args.observe, args.seconds, stop))
         else:

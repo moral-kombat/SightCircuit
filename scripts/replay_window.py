@@ -19,6 +19,7 @@ from framejacker.sources.replay import ReplaySource
 from framejacker.sources.recording import RecordingError, latest_recording
 
 ROOT = Path(__file__).resolve().parents[1]
+WORKER_JOIN_SECONDS = 5  # Shutdown wait; a worker still running afterwards fails the run.
 
 
 class ReplayWorker(threading.Thread):
@@ -82,22 +83,38 @@ LEGACY_FIELDS = {"frames_replaced": "pending_replaced", "processed_fps": "proces
 
 
 def pacing_report(worker, args, latencies, schedule_lateness):
-    """Throughput and timing fields: decode, skipping, processing and presentation."""
+    """Throughput and timing fields: decode, skipping, processing and presentation.
+
+    ``realtime_ratio`` is media seconds per wall second, counting catch-up jumps
+    as progress; ``processed_media_fraction`` is frames processed per frame the
+    played span covered (``ReplaySource.processed_fraction``), null before any.
+    ``statistics_final`` is false when the worker was still running, so the
+    counts are a snapshot that the engine may since have extended.
+    """
     source, stats = worker.source, worker.pipeline.stats
     elapsed = max(stats.elapsed_s, 1e-9)
     block = stats.report()
+    processed = source.processed_fraction(stats.frames_processed)
     fields = {"realtime": args.realtime, "decode_threads": args.decode_threads,
               "frames_decoded": source.frames_decoded, "decode_fps": round(source.frames_decoded / elapsed, 3),
               "frames_dropped": source.frames_dropped, "frames_skipped": source.frames_skipped,
               "catch_ups": source.catch_ups, "media_seconds_played": round(source.media_seconds, 3),
               "realtime_ratio": round(source.media_seconds / elapsed, 3),
-              **report_fields(block, LEGACY_FIELDS), "pipeline": block}
+              "media_frames_spanned": source.frames_spanned,
+              "processed_media_fraction": round(processed, 3) if processed is not None else None,
+              **report_fields(block, LEGACY_FIELDS), "pipeline": block,
+              "statistics_final": not worker.is_alive()}
     if latencies:
         fields.update(mean_presentation_latency_ms=round(sum(latencies) / len(latencies), 3),
                       max_presentation_latency_ms=round(max(latencies), 3))
     if schedule_lateness:
         fields["max_schedule_lateness_ms"] = round(max(schedule_lateness), 3)
     return fields
+
+
+def engine_started(worker):
+    """True once the worker's engine started, so the report carries its statistics (final or not)."""
+    return worker is not None and worker.pipeline.stats.started is not None
 
 
 def check_display_libraries(QtCore):
@@ -150,6 +167,7 @@ def main(argv=None):
               "scope": "File replay; live camera, HDR appearance, stereo alignment and VR overlay unvalidated"}
     worker = None
     overlay = None
+    latencies, schedule_lateness = [], []
     try:
         path = (Path(args.path).expanduser() if args.path else latest_recording(
             Path.home() / "Videos/ArcturusVisionCamera")).resolve()
@@ -265,7 +283,6 @@ def main(argv=None):
         timer = QtCore.QTimer()
         labels_seen = set()
         failures = []
-        latencies, schedule_lateness = [], []
 
         def poll():
             try:
@@ -313,10 +330,10 @@ def main(argv=None):
             signal.signal(signal.SIGINT, previous_sigint)
             timer.stop()
             worker.stop()
-            worker.join(timeout=5)
+            worker.join(timeout=WORKER_JOIN_SECONDS)
             window.close()
         if worker.is_alive():
-            raise RuntimeError("Replay worker did not shut down within five seconds")
+            raise RuntimeError(f"Replay worker did not shut down within {WORKER_JOIN_SECONDS:g} seconds")
         if failures or worker.error or exit_code:
             raise RuntimeError("; ".join(failures) or worker.error or f"Qt exited with code {exit_code}")
         report.update(status="finished" if args.max_frames and worker.frames_processed >= args.max_frames else "closed",
@@ -326,6 +343,12 @@ def main(argv=None):
                       container_stream_index=worker.stream_index, qt_platform=app.platformName())
     except Exception as error:
         report["error"] = str(error)
+        if engine_started(worker):  # A failed run keeps the statistics of the frames it processed.
+            try:
+                report.update(frames_processed=worker.frames_processed,
+                              **pacing_report(worker, args, latencies, schedule_lateness))
+            except Exception as failure:  # The error report itself is never lost to its statistics.
+                report["statistics_error"] = str(failure)
     finally:
         if overlay:
             report["overlay"] = overlay.close()

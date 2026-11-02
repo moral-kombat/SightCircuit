@@ -45,6 +45,11 @@ class ReplaySource:
     schedule position, so playback keeps real-time progress even when the
     decoder cannot keep up with the recording (``catch_ups``/``frames_skipped``).
     Pair it with a latest-only pipeline so slow inference never stalls decoding.
+
+    ``media_seconds`` counts catch-up jumps as progress. ``frames_spanned``
+    counts the source frames the played span covered instead: each one was
+    emitted, dropped after decoding or skipped undecoded, so
+    ``processed_fraction`` shows how much of that media was inferred on.
     """
 
     def __init__(self, path, ordinal, realtime=False, catch_up_after=0.5, clock=None, decode_threads=2):
@@ -58,7 +63,23 @@ class ReplaySource:
         self.playing.set()
         self.looping.set()
         self.stream_index = None
-        self.sequence = 0
+        self.sequence = 0  # Frames emitted.
+
+    @property
+    def frames_spanned(self):
+        """Source frames in the played media span: emitted, dropped after decoding or skipped undecoded."""
+        return self.sequence + self.frames_dropped + self.frames_skipped
+
+    def processed_fraction(self, frames_processed):
+        """``frames_processed`` (frames inferred on) divided by ``frames_spanned``; None before any frame.
+
+        1.0 when every frame is processed. Unlike ``media_seconds``, a catch-up
+        jump adds the frames it passes over to the span, not progress.
+        """
+        if type(frames_processed) is not int or not 0 <= frames_processed <= self.sequence:
+            raise ValueError("processed_frame_count_invalid")
+        spanned = self.frames_spanned
+        return frames_processed / spanned if spanned else None
 
     def run(self, emit, stop):
         import av
@@ -94,7 +115,8 @@ class ReplaySource:
                             self.frames_skipped += 1
                             continue
                         skip_until = None
-                    for decoded in stream.decode(packet):
+                    decoded_frames = list(stream.decode(packet))
+                    for position, decoded in enumerate(decoded_frames):
                         self.frames_decoded += 1
                         media_time = (float(decoded.pts * decoded.time_base)
                                       if decoded.pts is not None and decoded.time_base is not None else None)
@@ -116,7 +138,10 @@ class ReplaySource:
                             if lateness > self.catch_up_after:
                                 skip_until = discard_before = media_time + lateness
                                 self.catch_ups += 1
-                                self.frames_dropped += 1
+                                # This frame and any the same call decoded after it are dropped.
+                                later = len(decoded_frames) - position - 1
+                                self.frames_decoded += later
+                                self.frames_dropped += 1 + later
                                 break
                             if lateness < -0.002 and stop.wait(-lateness):
                                 return

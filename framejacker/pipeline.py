@@ -17,15 +17,30 @@ Live runs set ``max_input_age_ms``. They then bind a ``CaptureContext`` (with
 the HUD calibration when ``hud`` is given) and admit every frame when capture
 publishes it, before inference, after inference and before each sink. A result
 expires at its original observation time plus that age, and never after the
-optional ``seconds`` deadline. Once a presented result expires, sinks that
-implement ``clear()`` are cleared even if the next inference is still running.
+optional ``seconds`` deadline or the HUD calibration's ``expires_ns``. With a
+HUD stage that age may not exceed the contract's ``MAX_DISPLAY_AGE_MS``. Once a
+presented result expires, sinks that implement ``clear()`` are cleared even if
+the next inference is still running.
 
 Sinks implement ``submit(processed)``; ``open()``, ``clear()`` and
 ``close() -> True`` are optional and are always called on cleanup, including
 after failures. The engine approves no source: callers keep their gates.
+
+With a HUD stage the engine counts its exclusion checks (``HUD_CHECK_FIELDS``):
+frames whose masked footprint was checked, footprint pixels left non-zero
+(a frame with any stops the run before the detector sees it), and boxes the
+stage dropped for touching the mask or crossing an eye.
+
+Every frame that reaches presentation is timed (``TIMINGS`` and ``STAGES``):
+input age, processing and inference time, output age, and the prepare, detect,
+present and submit stages. ``PipelineStats.report()`` gives each as a count,
+nearest-rank p50 and p95 over a bounded sample, and the exact maximum. Stage
+durations are read from ``Pipeline.timer`` (seconds, ``time.monotonic``); ages
+are measured against frames' ``observed_ns`` on ``time.monotonic_ns``.
 """
 from dataclasses import dataclass, field
 import math
+import random
 import threading
 import time
 from typing import Callable, Protocol
@@ -34,7 +49,76 @@ from .context import CaptureContext
 from .convert import to_bgr
 from .detection import annotate, require_result
 from .frame import Frame, Processed
+from .hud.contract import MAX_DISPLAY_AGE_MS
 from .latest import LatestSlot
+
+# PipelineStats.hud_checks: HUD exclusion counts over the run.
+HUD_CHECK_FIELDS = ("frames_checked", "unmasked_footprint_px", "mask_zeroing_failures",
+                    "mask_overlap_rejections", "eye_crossing_rejections")
+# Per-frame timings, each a report block of its own: "input_age_ms" from observation to processing start,
+# "processing_ms" from then to a presented result, the detector's own "inference_ms", and "output_age_ms"
+# from observation to the output boundary.
+TIMINGS = ("input_age_ms", "processing_ms", "inference_ms", "output_age_ms")
+# Engine stages ("stage_ms"): prepare (conversion, or HUD masking and conversion), detect (the whole
+# detector call), present (result checks and annotation or HUD rendering) and submit (every sink).
+# prepare + detect + present = processing_ms.
+STAGES = ("prepare", "detect", "present", "submit")
+PERCENTILE_METHOD = "nearest_rank"
+TIMING_SAMPLE_CAPACITY = 4096  # Values kept per timing for percentiles; count and max use every frame.
+
+
+def nearest_rank(ordered, percent):
+    """The nearest-rank ``percent`` percentile of the ascending list ``ordered``, or None when it is empty.
+
+    The value at 1-based rank ceil(percent * n / 100): the smallest kept value
+    with at least ``percent``% of values at or below it. It is always one of the
+    values, never an interpolation, so n = 1 gives that value for every
+    percentile and p100 is the maximum. ``percent`` is an integer from 1 to 100.
+    """
+    if type(percent) is not int or not 1 <= percent <= 100:
+        raise ValueError("percentile_out_of_range")
+    if not ordered:
+        return None
+    return ordered[-(-percent * len(ordered) // 100) - 1]
+
+
+class TimingSample:
+    """One timing's frame count, exact maximum and a bounded sample for its percentiles.
+
+    The first ``capacity`` values are all kept, so percentiles are exact up to
+    there. Beyond it, reservoir sampling keeps a uniform sample of the whole run:
+    value number k replaces a random kept value with probability capacity / k.
+    The generator is seeded, so one sequence of values always gives one report.
+    """
+
+    def __init__(self, capacity=TIMING_SAMPLE_CAPACITY):
+        if type(capacity) is not int or capacity < 1:
+            raise ValueError("timing_sample_capacity_invalid")
+        self.capacity, self.values, self.count, self.maximum = capacity, [], 0, None
+        self._random = random.Random(0)
+
+    def add(self, value):
+        self.count += 1
+        self.maximum = value if self.maximum is None else max(self.maximum, value)
+        if len(self.values) < self.capacity:
+            self.values.append(value)
+            return
+        slot = self._random.randrange(self.count)
+        if slot < self.capacity:
+            self.values[slot] = value
+
+    def report(self):
+        """``count`` frames timed, ``samples`` behind p50/p95 and the maximum, in rounded milliseconds."""
+        ordered = sorted(self.values)
+
+        def ms(value):
+            return None if value is None else round(value, 3)
+        return {"count": self.count, "samples": len(ordered), "p50": ms(nearest_rank(ordered, 50)),
+                "p95": ms(nearest_rank(ordered, 95)), "max": ms(self.maximum)}
+
+
+def timing_samples(names):
+    return {name: TimingSample() for name in names}
 
 
 class FrameSource(Protocol):
@@ -82,6 +166,9 @@ class PipelineStats:
     started: float | None = None
     finished: float | None = None
     cancelled: bool = False
+    hud_checks: dict | None = None  # HUD_CHECK_FIELDS counts with a HUD stage; None (unknown) without one.
+    timings: dict = field(default_factory=lambda: timing_samples(TIMINGS))
+    stages: dict = field(default_factory=lambda: timing_samples(STAGES))
 
     @property
     def elapsed_s(self):
@@ -101,6 +188,11 @@ class PipelineStats:
     def sink_cleanup_ok(self):
         return self.sink_clear_ok and self.sink_close_ok
 
+    def record(self, **values_ms):
+        """Add one frame's milliseconds to the named ``TIMINGS`` or ``STAGES`` samples."""
+        for name, value in values_ms.items():
+            (self.timings[name] if name in self.timings else self.stages[name]).add(value)
+
     def report(self):
         """Run statistics in the engine's own vocabulary, embedded in reports as "pipeline".
 
@@ -108,6 +200,9 @@ class PipelineStats:
         divides by at least 1 ms. Commands keep their earlier field names only
         as aliases of these (``report_fields``). Which reports embed the block,
         and when, is up to each command; see ``docs/development.md``.
+        ``hud_checks`` is null without a HUD stage. Each ``TIMINGS`` name and
+        each ``stage_ms`` stage holds ``count``, ``samples``, nearest-rank
+        ``p50`` and ``p95`` and ``max``; the statistics are null before a frame is timed.
         """
         def ms(value):
             return round(value, 3)
@@ -120,7 +215,11 @@ class PipelineStats:
                 "max_output_age_ms": ms(self.max_output_age_ms), "elapsed_ms": ms(self.elapsed_s * 1000),
                 "processed_fps": round(self.frames_processed / max(self.elapsed_s, 1e-3), 3),
                 "labels_seen": sorted(self.labels_seen), "cancelled": self.cancelled,
-                "sink_clear_ok": self.sink_clear_ok, "sink_close_ok": self.sink_close_ok}
+                "sink_clear_ok": self.sink_clear_ok, "sink_close_ok": self.sink_close_ok,
+                "hud_checks": dict(self.hud_checks) if self.hud_checks is not None else None,
+                **{name: sample.report() for name, sample in self.timings.items()},
+                "stage_ms": {name: sample.report() for name, sample in self.stages.items()},
+                "percentile_method": PERCENTILE_METHOD}
 
 
 def report_fields(block, aliases):
@@ -132,6 +231,8 @@ def report_fields(block, aliases):
 
 
 class Pipeline:
+    timer = staticmethod(time.monotonic)  # Seconds for stage durations; tests install a stepping clock.
+
     def __init__(self, source, detector, sinks=(), *, threshold=0.5, max_fps=5, latest_only=True,
                  max_input_age_ms=None, max_frames=0, seconds=None, join_timeout=1.0, convert=to_bgr,
                  annotator=annotate, context_validator=None, hud=None):
@@ -142,6 +243,8 @@ class Pipeline:
             raise ValueError("invalid_pipeline_limits")
         if hud is not None and (max_input_age_ms is None or not latest_only):
             raise ValueError("hud_requires_latest_only_bounded_age")
+        if hud is not None and max_input_age_ms > MAX_DISPLAY_AGE_MS:  # One display cap for every HUD result.
+            raise ValueError("hud_max_age_exceeds_contract")
         self.source, self.detector, self.sinks = source, detector, tuple(sinks)
         self.convert, self.annotator, self.hud = convert, annotator, hud
         self.threshold, self.period = threshold, 1 / max_fps
@@ -149,7 +252,7 @@ class Pipeline:
         self.max_frames = max_frames  # Read per frame; zero means unlimited.
         self.seconds, self.deadline = seconds, None
         self.join_timeout = join_timeout
-        self.stats = PipelineStats()
+        self.stats = PipelineStats(hud_checks=dict.fromkeys(HUD_CHECK_FIELDS, 0) if hud is not None else None)
         self.capture_thread_started = False
         self.capture_thread_alive = False
         self.context_validator = context_validator
@@ -214,8 +317,8 @@ class Pipeline:
         if self.context_validator is not None:
             self.context_validator(frame)
 
-    def _input_age(self, frame):
-        age_ms = (time.monotonic_ns() - frame.observed_ns) / 1e6
+    def _input_age(self, frame, now_ns=None):
+        age_ms = ((time.monotonic_ns() if now_ns is None else now_ns) - frame.observed_ns) / 1e6
         if age_ms < 0:
             raise ValueError("frame_observation_is_in_the_future")
         return age_ms
@@ -224,6 +327,9 @@ class Pipeline:
         if self.max_input_age_ms is None:
             return None
         expires = frame.observed_ns + int(self.max_input_age_ms * 1e6)
+        calibration_expiry = getattr(self.hud, "expires_ns", None)
+        if calibration_expiry is not None:
+            expires = min(expires, calibration_expiry)  # A HUD result never outlives its calibration.
         return min(expires, int(self.deadline * 1e9)) if self.deadline is not None else expires
 
     def _expired(self, expires_ns, stop):
@@ -239,9 +345,16 @@ class Pipeline:
                     clear()
 
     def _prepare(self, frame):
-        if self.hud is not None:
-            return self.hud.prepare(frame)
-        return self.convert(frame)
+        if self.hud is None:
+            return self.convert(frame)
+        image, unmasked = self.hud.prepare(frame)
+        checks = self.stats.hud_checks
+        checks["frames_checked"] += 1
+        checks["unmasked_footprint_px"] += unmasked
+        if unmasked:  # The detector never sees a footprint pixel the mask left behind.
+            checks["mask_zeroing_failures"] += 1
+            raise ValueError("hud_mask_zeroing_failed")
+        return image
 
     def _present(self, bgr, result):
         if self.hud is not None:
@@ -259,26 +372,37 @@ class Pipeline:
         if self.max_input_age_ms is not None and age_ms >= self.max_input_age_ms:
             stats.stale_inputs_skipped += 1
             return
-        started = time.monotonic()
+        started = self.timer()
         bgr = self._prepare(frame)
+        prepared = self.timer()
         result = self.detector.detect(bgr, self.threshold)
+        detected = self.timer()
         stats.frames_processed += 1
         if capture_failure:
             raise capture_failure[0]
         self._admit(frame)
         require_result(result)
         image, hud_output = self._present(bgr, result)
-        processing_ms = (time.monotonic() - started) * 1000
+        if hud_output is not None:
+            stats.hud_checks["mask_overlap_rejections"] += hud_output.checks.mask_overlap_rejections
+            stats.hud_checks["eye_crossing_rejections"] += hud_output.checks.eye_crossing_rejections
+        presented = self.timer()
+        processing_ms = (presented - started) * 1000
         stats.total_inference_ms += result.inference_ms
         stats.max_inference_ms = max(stats.max_inference_ms, result.inference_ms)
         stats.max_input_age_ms = max(stats.max_input_age_ms, age_ms)
         stats.total_processing_ms += processing_ms
+        stats.record(input_age_ms=age_ms, processing_ms=processing_ms, inference_ms=result.inference_ms,
+                     prepare=(prepared - started) * 1000, detect=(detected - prepared) * 1000,
+                     present=(presented - detected) * 1000)
         # Rendering and ownership copies take time: validate again at the output boundary.
         if capture_failure:
             raise capture_failure[0]
         self._admit(frame)
-        output_age = self._input_age(frame)
+        completed_ns = time.monotonic_ns()
+        output_age = self._input_age(frame, completed_ns)
         stats.max_output_age_ms = max(stats.max_output_age_ms, output_age)
+        stats.record(output_age_ms=output_age)
         expires_ns = self._expiry_ns(frame)
         if self._expired(expires_ns, stop):
             stats.stale_results_skipped += 1
@@ -288,7 +412,8 @@ class Pipeline:
                               expires_ns, output_age,
                               (shape[1], shape[0]) if shape is not None else None,
                               (shape[1] / frame.width, shape[0] / frame.height) if shape is not None else None,
-                              hud=hud_output)
+                              hud=hud_output, completed_ns=completed_ns)
+        submitting = self.timer()
         for sink in self.sinks:
             if capture_failure:
                 raise capture_failure[0]
@@ -297,6 +422,7 @@ class Pipeline:
                 stats.stale_results_skipped += 1
                 return
             sink.submit(processed)
+        stats.record(submit=(self.timer() - submitting) * 1000)
         stats.frames_submitted += 1
         stats.labels_seen.update(processed.labels)
         stats.last = processed

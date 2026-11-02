@@ -43,9 +43,10 @@ has been run; CI builds all of them.
 QT_QPA_PLATFORM=offscreen .venv-replay/bin/python -m unittest discover -s tests
 uvx ruff@0.14.2 check .
 .venv/bin/python scripts/smoke_check.py
-.venv-replay/bin/python scripts/evaluate_detectors.py --fetch   # seed detector comparison
+.venv-replay/bin/python scripts/evaluate_detectors.py --fetch --expect evaluation/seed-expected.json   # seed pin, as CI
 git diff --check
 ```
 
 CI runs the same jobs on x86_64 (`checks.yml`) and ARM64 (`arm64.yml`) through
-`check-jobs.yml`.
+`check-jobs.yml`; ARM64 also replays the synthetic stand-in and uploads
+runner-CPU latency reports (not Frame results).

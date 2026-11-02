@@ -1,10 +1,12 @@
 """Bounded spawned Python workers: parent-death signalling, cancellation and reaping.
 
-Used by the SteamVR mirror commands (``mirror_check``, ``mirror_recognize``),
-whose workers stream progress reports. Command workers that need an owned
-process group and the Linux parent-loss guardian use ``scripts/bounded_worker.py``.
-``StopRequested``/``stop_on_signal`` are the shared cancellation pair: a launcher
-must install ``stop_on_signal`` so ``run_bounded`` recognises the cancellation.
+Used by the SteamVR mirror launcher (``sources.mirror.launch``, for
+``mirror_check`` and ``mirror_recognize``), whose workers stream progress
+reports. Command workers that need an owned process group and the Linux
+parent-loss guardian use ``framejacker/runtime/guard.py`` (``supervise``).
+The cancellation pair ``StopRequested``/``stop_on_signal`` is ``guard``'s,
+re-exported here: a launcher runs ``run_bounded`` inside
+``guard.sigterm_cancels()`` so that a SIGTERM is recognised as a cancellation.
 """
 import ctypes
 import json
@@ -13,17 +15,9 @@ import os
 import signal
 import time
 
+from .guard import StopRequested, signal_number, stop_on_signal  # noqa: F401 - the shared cancellation pair
+
 PR_SET_PDEATHSIG = 1
-
-
-class StopRequested(BaseException):
-    def __init__(self, number):
-        self.number = number
-
-
-def stop_on_signal(number, _frame):
-    """Signal handler that turns SIGTERM into a catchable cancellation."""
-    raise StopRequested(number)
 
 
 def set_parent_death_signal(number):
@@ -90,7 +84,7 @@ def run_bounded(job, seconds, preview_temp=None, *, worker, report_factory, time
             report.update(status="timed_out" if expired else "error",
                           reason="worker_deadline" if expired else "worker_exited_without_result")
     except (KeyboardInterrupt, StopRequested) as error:
-        interrupted = error.number if isinstance(error, StopRequested) else signal.SIGINT
+        interrupted = signal_number(error)
         report.update(status="cancelled", reason="signal", signal=interrupted)
     except Exception as error:
         report.update(status="error", reason="worker_failed", error=str(error))

@@ -1,4 +1,4 @@
-"""SteamVR mirror acquisition: the bounded read loop and its pipeline source.
+"""SteamVR mirror acquisition: the bounded read loop, its pipeline source and the one launcher.
 
 ``capture`` reads a verified virtual mirror (``mirror_device.NativeMirror`` or
 an injected fixture backend) at a bounded rate until its deadline, reporting
@@ -6,6 +6,13 @@ progress and passing each complete read to ``on_frame``. ``MirrorSource`` turns
 those reads into owned ``Frame``s carrying their ``native_format`` and retains
 the acquisition report; a report with status ``error`` raises, so the pipeline
 stops presenting results from a failed capture.
+
+``launch`` is the one launcher of the mirror commands (``mirror_check.py`` and
+``mirror_recognize.py``): it selects the verified candidate, reserves each
+requested image output (``runtime.output``), runs the command's worker under
+the bounded spawned-process supervisor (``runtime.process``), publishes the
+outputs all or nothing and always discards their temporary files. SIGTERM and
+Ctrl+C cancel it (``runtime.guard``).
 """
 import hashlib
 import math
@@ -15,7 +22,8 @@ import time
 from ..context import SOURCE_FIELDS
 from ..errors import FramejackerError
 from ..frame import Frame
-from .mirror_device import NativeMirror, grayscale_sample
+from ..runtime import guard, output, process
+from .mirror_device import NativeMirror, grayscale_sample, select_candidate
 
 
 def new_capture_report():
@@ -153,3 +161,47 @@ class MirrorSource:
         self._update(report)
         if report.get("status") == "error":
             raise FramejackerError(report.get("reason", "capture_failed"), report.get("error", "Capture failed"))
+
+
+def launch(report, discovery, device, seconds, *, worker, report_factory, success_status, job=None,
+           outputs=None, digests=(), timeout=None, fields=None):
+    """Run ``worker`` bounded on the verified candidate and publish its outputs; return the final report.
+
+    ``report`` is the command's discovery report; it is returned, with the
+    failure, when no worker report replaces it. ``outputs`` maps an output kind
+    ("preview", "still") to ``(path, prefix)``. Each is reserved before the
+    worker starts, so an unsuitable path stops the launch, and reaches the
+    worker as ``{kind: reservation}``; all are published only after a run with
+    exit code 0, and every temporary file is discarded. A kind in ``digests``
+    is published only if it still matches the worker's ``<kind>_sha256``
+    (``output.publish_all``). ``job(candidate)`` is
+    the worker's job (default: the candidate); ``fields`` are added to the
+    worker's report. SIGTERM and Ctrl+C cancel (exit 128 + signal); a selection,
+    output or launch failure exits 1, ``unavailable`` without a candidate.
+    """
+    reservations = {}
+    with guard.sigterm_cancels():
+        try:
+            candidate = select_candidate(discovery, device)
+            for kind, (path, prefix) in (outputs or {}).items():
+                reservations[kind] = output.reserve(path, prefix, kind=kind)
+            report = process.run_bounded(job(candidate) if job is not None else candidate, seconds,
+                                         reservations or None, worker=worker, timeout=timeout,
+                                         report_factory=lambda: dict(report_factory(), candidate=candidate),
+                                         success_status=success_status)
+            report.update(discovery=discovery, candidate=candidate, **(fields or {}))
+            if report["exit_code"] == 0:
+                output.publish_all(reservations, report, digests=digests)
+        except (FramejackerError, OSError, ValueError) as error:
+            reason = getattr(error, "reason", "output_or_launch_failed")
+            report.update(status="unavailable" if reason == "mirror_unavailable" else "error",
+                          reason=reason, error=str(error), exit_code=1)
+        except guard.CANCELLATION as error:
+            guard.cancelled(report, error)
+        finally:
+            for kind, reservation in reservations.items():
+                try:
+                    output.discard(reservation)
+                except OSError as error:
+                    report.update(status="error", reason=f"{kind}_cleanup_failed", error=str(error), exit_code=1)
+    return report

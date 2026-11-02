@@ -497,7 +497,9 @@ class StatsReportTests(unittest.TestCase):
                  "stale_results_skipped", "pending_replaced", "total_inference_ms", "mean_inference_ms",
                  "max_inference_ms", "total_processing_ms", "mean_processing_ms", "max_input_age_ms",
                  "max_output_age_ms", "elapsed_ms", "processed_fps", "labels_seen", "cancelled",
-                 "sink_clear_ok", "sink_close_ok"}
+                 "sink_clear_ok", "sink_close_ok", "hud_checks",
+                 # Latency distributions, added beside the fields above (never renaming them).
+                 "input_age_ms", "processing_ms", "inference_ms", "output_age_ms", "stage_ms", "percentile_method"}
 
     def test_one_canonical_block_with_rounded_milliseconds(self):
         from framejacker.pipeline import PipelineStats, report_fields
@@ -510,8 +512,139 @@ class StatsReportTests(unittest.TestCase):
                          (1.235, 0.617, 9.877))
         self.assertEqual((block["elapsed_ms"], block["processed_fps"], block["labels_seen"]), (2500.0, 0.8, ["cat", "dog"]))
         self.assertEqual(PipelineStats().report()["processed_fps"], 0.0)
+        self.assertIsNone(block["hud_checks"])  # Unknown without a HUD stage, never zero.
         self.assertEqual(report_fields(block, {"seen": "labels_seen", "seconds": lambda b: b["elapsed_ms"] / 1000}),
                          {"seen": ["cat", "dog"], "seconds": 2.5})
+
+    def test_a_run_without_timed_frames_reports_unknown_percentiles(self):
+        from framejacker.pipeline import STAGES, PipelineStats
+
+        block = PipelineStats().report()
+        empty = {"count": 0, "samples": 0, "p50": None, "p95": None, "max": None}
+        for name in ("input_age_ms", "processing_ms", "inference_ms", "output_age_ms"):
+            self.assertEqual(block[name], empty, name)
+        self.assertEqual(block["stage_ms"], {stage: empty for stage in STAGES})
+        self.assertEqual(STAGES, ("prepare", "detect", "present", "submit"))
+        self.assertEqual(block["percentile_method"], "nearest_rank")
+
+
+class PercentileTests(unittest.TestCase):
+    def test_nearest_rank_on_known_inputs(self):
+        from framejacker.pipeline import nearest_rank
+
+        self.assertIsNone(nearest_rank([], 50))
+        for percent in (1, 50, 95, 100):  # n = 1: every percentile is the one value.
+            self.assertEqual(nearest_rank([7.5], percent), 7.5)
+        # n = 2: rank ceil(p * 2 / 100), so p50 is the lower value and anything above it the upper.
+        self.assertEqual([nearest_rank([1.0, 9.0], p) for p in (1, 50, 51, 95, 100)], [1.0, 1.0, 9.0, 9.0, 9.0])
+        # Ties: ranks 2, 3 and 4 of four values; a tied value is returned, never interpolated.
+        self.assertEqual([nearest_rank([2.0, 2.0, 2.0, 5.0], p) for p in (50, 75, 95)], [2.0, 2.0, 5.0])
+        self.assertEqual([nearest_rank([4.0, 4.0], p) for p in (50, 95)], [4.0, 4.0])
+        twenty = [float(value) for value in range(1, 21)]
+        self.assertEqual([nearest_rank(twenty, p) for p in (5, 50, 95, 100)], [1.0, 10.0, 19.0, 20.0])
+        hundred = list(range(1, 101))
+        self.assertEqual([nearest_rank(hundred, p) for p in (1, 50, 95, 99, 100)], [1, 50, 95, 99, 100])
+        for percent in (0, 101, 50.0, True, None):
+            with self.subTest(percent=percent), self.assertRaisesRegex(ValueError, "percentile_out_of_range"):
+                nearest_rank([1.0], percent)
+
+    def test_timing_sample_is_exact_below_capacity_and_bounded_above_it(self):
+        from framejacker.pipeline import TIMING_SAMPLE_CAPACITY, TimingSample
+        from tests.latency_fixture import DELAYS_MS, EXPECTED
+
+        exact = TimingSample()
+        for value in DELAYS_MS:
+            exact.add(value)
+        self.assertEqual(exact.report(), {"count": 20, "samples": 20, **EXPECTED})
+        self.assertEqual(TIMING_SAMPLE_CAPACITY, 4096)
+        bounded, again = TimingSample(capacity=100), TimingSample(capacity=100)
+        for value in range(100_000):
+            bounded.add(float(value))
+            again.add(float(value))
+        report = bounded.report()
+        self.assertEqual((report["count"], report["samples"], report["max"]), (100_000, 100, 99_999.0))
+        self.assertEqual(len(bounded.values), 100)
+        self.assertEqual(report, again.report())  # Seeded: one input sequence always gives one report.
+        # A reservoir over the whole run, not its first 100 frames.
+        self.assertGreater(report["p50"], 25_000)
+        self.assertLess(report["p50"], 75_000)
+        self.assertGreater(report["p95"], report["p50"])
+        for capacity in (0, -1, 1.5, True):
+            with self.subTest(capacity=capacity), self.assertRaisesRegex(ValueError, "timing_sample_capacity_invalid"):
+                TimingSample(capacity=capacity)
+
+    def test_known_delays_give_exact_percentiles_for_every_stage(self):
+        from unittest.mock import patch
+        from framejacker.pipeline import Pipeline
+        from tests.latency_fixture import EXPECTED, KnownDelays
+
+        known = KnownDelays()
+
+        def convert(item):
+            known.now += .001  # 1 ms to prepare.
+            return item.pixels
+
+        def annotator(image, result):
+            known.now += .002  # 2 ms to present.
+            return image
+
+        class Sink:
+            def submit(self, processed):
+                known.now += .003  # 3 ms to submit.
+
+        with patch.object(Pipeline, "timer", staticmethod(known.clock)):
+            runner = Pipeline(ListSource(20), known, [Sink()], max_fps=1000, latest_only=False,
+                              convert=convert, annotator=annotator)
+            block = runner.run(threading.Event()).report()
+        exact = {"count": 20, "samples": 20}
+        self.assertEqual(block["inference_ms"], {**exact, **EXPECTED})
+        self.assertEqual(block["stage_ms"]["detect"], {**exact, **EXPECTED})
+        constant = {name: {**exact, "p50": value, "p95": value, "max": value}
+                    for name, value in (("prepare", 1.0), ("present", 2.0), ("submit", 3.0))}
+        for name, expected in constant.items():
+            self.assertEqual(block["stage_ms"][name], expected, name)
+        # processing = prepare + detect + present; submit comes after the processing time.
+        self.assertEqual(block["processing_ms"], {**exact, "p50": 53.0, "p95": 98.0, "max": 103.0})
+        self.assertEqual(block["max_inference_ms"], block["inference_ms"]["max"])
+        self.assertEqual((block["total_processing_ms"], block["mean_processing_ms"]), (1110.0, 55.5))
+
+    def test_inference_is_the_detectors_own_time_not_the_detect_stage(self):
+        from unittest.mock import patch
+        from framejacker.pipeline import Pipeline
+        from tests.latency_fixture import EXPECTED, KnownDelays
+
+        known = KnownDelays(overhead_ms=4.0)  # Each call takes 4 ms more than the detector reports.
+        with patch.object(Pipeline, "timer", staticmethod(known.clock)):
+            runner = Pipeline(ListSource(20), known, max_fps=1000, latest_only=False,
+                              convert=lambda item: item.pixels, annotator=lambda image, result: image)
+            block = runner.run(threading.Event()).report()
+        exact = {"count": 20, "samples": 20}
+        self.assertEqual(block["inference_ms"], {**exact, **EXPECTED})
+        self.assertEqual(block["stage_ms"]["detect"], {**exact, "p50": 54.0, "p95": 99.0, "max": 104.0})
+        self.assertEqual(block["processing_ms"], block["stage_ms"]["detect"])
+        self.assertEqual((block["max_inference_ms"], block["mean_inference_ms"]), (100.0, 52.5))
+
+    def test_input_age_percentiles_follow_known_observation_ages(self):
+        # 100, 800, 1500, 200, ... ms: each multiple of 100 ms from 100 to 2000 once.
+        ages_ms = [100 * ((7 * index) % 20 + 1) for index in range(20)]
+
+        class Aged:
+            def run(self, emit, stop):
+                for number, age in enumerate(ages_ms, 1):
+                    emit(frame(number, time.monotonic_ns() - age * 1_000_000))
+
+        runner, _ = pipeline(Aged(), EchoDetector(), latest_only=False)
+        block = runner.run(threading.Event()).report()
+        ages = block["input_age_ms"]
+        self.assertEqual((ages["count"], ages["samples"]), (20, 20))
+        # Nearest rank returns one measured age: the 10th, 19th and 20th known age plus the
+        # microseconds between emitting and processing, never an interpolation between two.
+        for statistic, known in (("p50", 1000), ("p95", 1900), ("max", 2000)):
+            self.assertGreaterEqual(ages[statistic], known, statistic)
+            self.assertLess(ages[statistic], known + 50, statistic)
+        self.assertEqual(ages["max"], block["max_input_age_ms"])
+        self.assertEqual(block["output_age_ms"]["max"], block["max_output_age_ms"])
+        self.assertGreaterEqual(block["output_age_ms"]["p50"], ages["p50"])
 
 
 class EngineLifecycleTests(unittest.TestCase):

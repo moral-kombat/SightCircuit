@@ -9,8 +9,7 @@ import threading
 import time
 import unittest
 
-from framejacker.runtime import synthetic
-from scripts import live_pipeline as live
+from framejacker.runtime import live, synthetic
 from framejacker.overlay import DEFAULT_BRIDGE, OverlayClient, PanelSettings, packet
 from framejacker.overlay import OverlaySink
 

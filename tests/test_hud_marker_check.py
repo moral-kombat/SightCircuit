@@ -2,19 +2,22 @@
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import queue
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import Mock, patch
 
 from scripts import hud_marker_check as marker
 from framejacker.hud import HUD_CONFIG
 from framejacker.hud import marker as marker_client
-from framejacker.overlay import DEFAULT_BRIDGE, OverlayClient
+from framejacker.overlay import DEFAULT_BRIDGE, OverlayClient, bridge_closed_cleanly
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -28,7 +31,7 @@ class MarkerGateTests(unittest.TestCase):
         client = Mock(mode="--validate-calibration-marker")
         client.process.poll.return_value = 0
         client.close.return_value = bridge
-        with patch.object(marker, "MarkerClient", return_value=client), patch.object(marker.signal, "signal"), \
+        with patch.object(marker, "MarkerClient", return_value=client), patch.object(signal, "signal"), \
                 contextlib.redirect_stderr(io.StringIO()):
             report = marker.worker({"seconds": 1, "validation_only": True})
         self.assertEqual(report["status"], "native_failed")
@@ -111,6 +114,122 @@ class MarkerGateTests(unittest.TestCase):
         self.assertIsNone(client.process)
 
 
+def reap(client):
+    """Failure-only recovery: never leave a marker helper running after a test."""
+    if client.process is not None and client.process.poll() is None:
+        client.process.kill()
+        client.process.wait(timeout=3)
+
+
+@unittest.skipUnless(os.name == "posix", "Executable local helper fixtures")
+class MarkerStartupAndStopTests(unittest.TestCase):
+    """Local helper processes stand in for the bridge; none reads stdin, like marker mode."""
+
+    def fake_bridge(self, *, ready):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        binary = Path(temporary.name) / "fake-marker-bridge"
+        announce = {"event": "ready", "validation_only": True, "runtime_initialized": False}
+        binary.write_text(f"#!{sys.executable}\nimport json, time\n" +
+                          (f"print({json.dumps(announce)!r}, flush=True)\n" if ready else "") +
+                          "time.sleep(30)\n")
+        binary.chmod(0o700)
+        client = marker.MarkerClient(binary, validation_only=True)
+        self.addCleanup(reap, client)
+        return client
+
+    def assert_escalated(self, report):
+        self.assertTrue(report["stop_requested"], report)
+        self.assertTrue(report["escalated"])
+        self.assertTrue(report["forced_termination"])
+        self.assertTrue(report["worker_reaped"])
+        self.assertEqual(report["worker_exit_code"], -signal.SIGTERM)
+        self.assertFalse(report["cleanup_confirmed"])
+        self.assertFalse(bridge_closed_cleanly(report))
+        self.assertFalse(report["physical_display_recovery_verified"])
+
+    def test_cancellation_before_startup_never_launches_the_bridge(self):
+        stop = threading.Event()
+        stop.set()
+        client = marker.MarkerClient(validation_only=True)
+        with patch.object(Path, "is_file", return_value=True), patch.object(marker_client.os, "access", return_value=True), \
+                patch.object(marker_client.subprocess, "Popen") as popen, \
+                patch.object(marker_client.threading, "Thread"), self.assertRaises(InterruptedError) as raised:
+            client.start_marker(1, stop)
+        popen.assert_not_called()
+        self.assertEqual(str(raised.exception), "cancelled_before_marker_startup")
+        self.assertIsNone(client.process)
+        report = client.close()
+        self.assertFalse(report["stop_requested"])
+        self.assertFalse(report["escalated"])
+        self.assertFalse(report["cleanup_confirmed"])
+
+    def test_cancellation_during_startup_is_prompt_and_escalates_without_waiting(self):
+        client = self.fake_bridge(ready=False)
+        stop = threading.Event()
+        timer = threading.Timer(.2, stop.set)
+        timer.start()
+        self.addCleanup(timer.cancel)
+        started = time.monotonic()
+        with self.assertRaisesRegex(InterruptedError, "cancelled_during_marker_startup"):
+            client.start_marker(1, stop)
+        self.assertLess(time.monotonic() - started, 2)  # Not the ready timeout.
+        closing = time.monotonic()
+        report = client.close()
+        self.assertLess(time.monotonic() - closing, 1.5)  # Cancellation skips the cooperative wait.
+        self.assert_escalated(report)
+
+    def test_ready_timeout_escalates_at_once_and_reports_forced(self):
+        # A bridge that missed its ready line may still be initializing; a
+        # grace wait would let it show the marker after the run had failed.
+        client = self.fake_bridge(ready=False)
+        started = time.monotonic()
+        with patch.object(marker_client, "READY_TIMEOUT_SECONDS", .3), \
+                patch.object(marker_client, "STOP_GRACE_SECONDS", 5):
+            with self.assertRaisesRegex(RuntimeError, "marker_ready_timeout"):
+                client.start_marker(1, threading.Event())
+            self.assertLess(time.monotonic() - started, 2)
+            closing = time.monotonic()
+            report = client.close()
+        self.assertLess(time.monotonic() - closing, 1.5)  # No STOP_GRACE_SECONDS wait.
+        self.assert_escalated(report)
+
+    def test_startup_error_after_the_final_report_gets_the_grace_to_exit(self):
+        # Native startup failed and already sent its final report, so it is
+        # exiting: the bounded grace avoids a spurious forced termination.
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        binary = Path(temporary.name) / "fake-marker-bridge"
+        final = {"event": "error", "error": "fixture_startup_failed", "status": "error",
+                 "exit_code": 1, "cleanup_ok": True}
+        binary.write_text(f"#!{sys.executable}\nimport json, os, time\n"
+                          f"print({json.dumps(final)!r}, flush=True)\n"
+                          "os.close(1)\ntime.sleep(.3)\nos._exit(1)\n")
+        binary.chmod(0o700)
+        client = marker.MarkerClient(binary, validation_only=True)
+        self.addCleanup(reap, client)
+        with patch.object(marker_client, "STOP_GRACE_SECONDS", 5):
+            with self.assertRaisesRegex(RuntimeError, "fixture_startup_failed"):
+                client.start_marker(1, threading.Event())
+            report = client.close()
+        self.assertFalse(report["forced_termination"], report)
+        self.assertFalse(report["escalated"])
+        self.assertEqual(report["worker_exit_code"], 1)
+        self.assertFalse(report["cleanup_confirmed"])
+        self.assertFalse(bridge_closed_cleanly(report))
+
+    def test_bridge_overrunning_its_own_deadline_is_escalated_and_reported_forced(self):
+        client = self.fake_bridge(ready=True)
+        with patch.object(marker_client, "STOP_GRACE_SECONDS", .2):
+            client.start_marker(1, threading.Event())
+            closing = time.monotonic()
+            report = client.close()
+        elapsed = time.monotonic() - closing
+        self.assertGreater(elapsed, .9)  # Waited for the one-second marker deadline first.
+        self.assertLess(elapsed, 3)
+        self.assert_escalated(report)
+
+
 @unittest.skipUnless(sys.platform.startswith("linux") and DEFAULT_BRIDGE.is_file(), "Linux native bridge required")
 class MarkerNativeTests(unittest.TestCase):
     def launch(self, *arguments):
@@ -181,6 +300,57 @@ class MarkerNativeTests(unittest.TestCase):
         self.assertTrue(report["cleanup_ok"])
         self.assertFalse(report["physical_display_recovery_verified"])
         self.assertLess(report["cutoff_requested_ns"], report["display_deadline_ns"])
+
+    def test_requested_stop_waits_for_native_timer_and_is_not_forced(self):
+        # V4's early stop (E75): marker mode never reads stdin, so the stop
+        # request is stdin EOF plus a bounded wait for the native timer.
+        client = marker.MarkerClient(validation_only=True)
+        self.addCleanup(reap, client)
+        started = time.monotonic()
+        client.start_marker(2, threading.Event())
+        self.assertIsNone(client.process.poll())
+        report = client.close()
+        elapsed = time.monotonic() - started
+        self.assertFalse(report["forced_termination"], report)
+        self.assertTrue(report["cleanup_confirmed"], report)
+        self.assertTrue(bridge_closed_cleanly(report))
+        self.assertTrue(report["stop_requested"])
+        self.assertFalse(report["escalated"])
+        native = report["native_report"]
+        self.assertEqual(native["status"], "validated_marker")
+        self.assertGreaterEqual(native["cutoff_requested_ns"], native["display_deadline_ns"])
+        self.assertFalse(report["physical_display_recovery_verified"])
+        self.assertLess(elapsed, 2 + marker_client.STOP_GRACE_SECONDS + 2)
+
+    def test_cancellation_during_requested_stop_escalates_promptly(self):
+        client = marker.MarkerClient(validation_only=True)
+        self.addCleanup(reap, client)
+        stop = threading.Event()
+        client.start_marker(20, stop)
+        timer = threading.Timer(.3, stop.set)
+        timer.start()
+        self.addCleanup(timer.cancel)
+        started = time.monotonic()
+        report = client.close()
+        self.assertLess(time.monotonic() - started, 4)
+        self.assertTrue(report["stop_requested"], report)
+        self.assertTrue(report["escalated"])
+        self.assertTrue(report["forced_termination"])
+        self.assertFalse(report["cleanup_confirmed"])
+        # The native SIGTERM handler still stops in order; that is not a clean run.
+        self.assertEqual(report["native_report"]["status"], "stopped")
+        self.assertLess(report["native_report"]["cutoff_requested_ns"], report["native_report"]["display_deadline_ns"])
+
+    def test_marker_that_reached_its_timer_needs_no_stop_request(self):
+        client = marker.MarkerClient(validation_only=True)
+        self.addCleanup(reap, client)
+        client.start_marker(1, threading.Event())
+        client.process.wait(timeout=5)
+        report = client.close()
+        self.assertFalse(report["stop_requested"], report)
+        self.assertFalse(report["escalated"])
+        self.assertFalse(report["forced_termination"])
+        self.assertTrue(report["cleanup_confirmed"])
 
     def test_native_rejects_unapproved_or_invalid_modes_before_vr(self):
         for args in (("--calibration-marker", "--seconds", "1"),

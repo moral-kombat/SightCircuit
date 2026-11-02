@@ -27,7 +27,10 @@ The matched source and report establish this sequence:
 2. The observer's frame-3 callback rejects `orphan_marker_tag_or_incomplete_copy`.
    Candidate diagnostics include `tag_pattern_error` and `code_bit_error`;
    no complete copy or accepted sample is recorded. Those checks explain the
-   rejection, not why the captured tag pixels failed to match.
+   rejection, not why the captured tag pixels failed to match. An offline
+   comparison now requires the native marker generator to equal the observer
+   template pixel for pixel ([contract header](development.md#generated-hud-contract-header)),
+   so a disagreement between them is not the explanation.
 3. The capture callback error takes the observer through its rejection handler
    into `finally`, which calls `MarkerClient.close()`. Marker mode deliberately
    has no writer thread. In the matched `OverlayClient.close()`, that condition
@@ -101,6 +104,59 @@ strategy changed; no profiling on Frame was available. Attribution is retained
 in [THIRD_PARTY](../THIRD_PARTY.md#research-references). Deferred pose/world-locked
 integrations and the frozen camera provider are outside this implementation.
 
+## Marker stop and guardian loss, 2026-11-01
+
+Package B of the [offline handoff](execution-prompt.md#offline-handoff-2026-11-01)
+changes the software stop path. Every result below comes from cloud tests with
+generated input and the validation bridge; none is Frame evidence.
+
+- **Marker stop.** In marker mode, `tools/overlay_bridge.cpp` never reads
+  stdin. It stops only at its display deadline, on SIGINT/SIGTERM or on an
+  OpenVR quit event. `MarkerClient.close()` therefore closes stdin as the stop
+  request, then waits for the native deadline plus two seconds. A rejection
+  such as V4's frame-3 tag/bit mismatch now ends on the native timer, with no
+  forced termination and clean software cleanup. The generated marker stays
+  until that timer, at most the requested seconds. Cancellation (the client's
+  stop event, set by Ctrl-C or SIGTERM), a ready timeout or an overrun still
+  escalates to SIGTERM, then SIGKILL. That stop is reported
+  `forced_termination: true` with overall cleanup false, even though the
+  native SIGTERM handler stops in order. Bridge reports add `stop_requested` and
+  `escalated` (equal to `forced_termination`); no field was renamed. Ending the
+  marker earlier without a signal would need the bridge to honour stdin EOF in
+  marker mode. That native change is not part of this package.
+- **Startup.** If cancellation is already set, `start_marker` no longer
+  launches the bridge. The eight-second ready timeout is now
+  `READY_TIMEOUT_SECONDS`. Cancellation during startup and the ready timeout
+  both escalate at once, with no grace wait, and are reported as forced. A
+  bridge without an accepted ready line may still be initializing and could
+  show the marker after the run had failed. Only a bridge that has already
+  sent its final report gets the two-second grace to exit.
+- **One cleanup check.** `overlay.bridge_closed_cleanly` is the single "bridge
+  closed cleanly" check. The overlay client and sink, the marker report
+  validator and both marker commands all use it. Its fields must be explicit,
+  so a missing `forced_termination` or an empty error string is no longer
+  clean in any caller.
+- **Guardian loss.** The review hypothesis held. After SIGKILL of the guardian,
+  the worker and its helper kept running, because the guardian and the worker
+  each start their own session and the supervisor signalled only the guardian's
+  group. The report already said `cleanup_ok: false`. Now the guardian writes
+  its worker's process group to a private pipe. If the guardian dies by a
+  signal, the supervisor (its subreaper) sends that group SIGTERM, then SIGKILL,
+  and reaps it. The report stays `guardian_failed` with `cleanup_ok: false`, and
+  adds `orphaned_worker_group`, `orphaned_worker_tree_signalled` and
+  `orphaned_worker_tree_reaped`. Cleanup is still not guaranteed if both the
+  supervisor and the guardian are lost, or if a helper leaves its group.
+
+Regression tests: `test_frame_three_tag_mismatch_closes_the_real_bridge_without_forced_termination`
+(the V4 shape through the real validation bridge, worker and guardian),
+`test_requested_stop_waits_for_native_timer_and_is_not_forced`,
+`test_cancellation_before_startup_never_launches_the_bridge` and
+`test_sigkill_of_guardian_lets_supervisor_contain_the_reported_worker_tree`.
+Each failed on the unchanged base. Further tests cover cancellation during a
+stop, startup cancellation, the ready timeout, deadline overrun and every
+outcome of the cleanup check. None of this explains the green input, the
+tag/bit mismatch or physical recovery.
+
 ## Evidence needed to advance G2
 
 The original observation report, ten matching source files and software
@@ -112,8 +168,9 @@ with the exact SteamOS, SteamVR and Arcturus versions. Record any missing logs
 or unknown versions explicitly. The original image is unavailable, so these
 metadata cannot diagnose the tag/bit mismatch or green-input mechanism.
 
-Review the writerless-marker stop path and require a focused failure-path
-regression before a changed output proposal. Do not repeat the unchanged run
+The [changed marker stop](#marker-stop-and-guardian-loss-2026-11-01) now has
+focused failure-path regressions; review it before a changed output proposal.
+Do not repeat the unchanged run
 to manufacture missing evidence or treat native API success as recovery.
 Physical cleanup still needs a later, separately approved bounded run with a
 wearer, independent abort and explicit passthrough/tracking observations.

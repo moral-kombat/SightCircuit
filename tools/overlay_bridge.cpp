@@ -1,6 +1,7 @@
 // Public OpenVR overlay bridge. Never requests a tracked-camera interface.
 #include <openvr.h>
 #include "json/json.h"
+#include "hud_contract.hpp"
 #include "overlay_frame.hpp"
 #include <array>
 #include <cerrno>
@@ -9,8 +10,10 @@
 #include <csignal>
 #include <cstdint>
 #include <cstring>
+#include <fcntl.h>
 #include <functional>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <poll.h>
 #include <stdexcept>
@@ -22,8 +25,13 @@
 #include <vector>
 
 namespace {
+namespace contract = framejacker_contract;
+using framejacker_overlay::read_u32;
 using Clock = std::chrono::steady_clock;
-constexpr std::uint32_t kMaxSide = 512, kMaxPayload = 16 + kMaxSide*kMaxSide*4;
+constexpr std::uint32_t kMaxPayload =
+    contract::kExpiringFramePrefixBytes + contract::kMaxSide*contract::kMaxSide*contract::kRgbaBytes;
+static_assert(sizeof contract::kPacketMagic - 1 ==
+              contract::kPacketHeaderOpcodeOffset - contract::kPacketHeaderMagicOffset);
 constexpr bool kCalibrationVisibleInDashboard = true;
 volatile std::sig_atomic_t stopping = 0;
 void stop_signal(int) { stopping = 1; }
@@ -33,10 +41,6 @@ void emit(Json::Value value) {
     value["schema_version"] = 1;
     std::cout << Json::FastWriter().write(value) << std::flush;
 }
-std::uint32_t u32(const std::uint8_t* p) {
-    return std::uint32_t(p[0]) | (std::uint32_t(p[1])<<8) |
-           (std::uint32_t(p[2])<<16) | (std::uint32_t(p[3])<<24);
-}
 std::uint64_t monotonic_ns() {
     timespec value{};
     if (clock_gettime(CLOCK_MONOTONIC, &value)) throw std::runtime_error("monotonic_clock_failed");
@@ -44,27 +48,38 @@ std::uint64_t monotonic_ns() {
 }
 float f32(const std::uint8_t* p) {
     static_assert(sizeof(float) == 4 && std::numeric_limits<float>::is_iec559);
-    const auto bits = u32(p);
+    const auto bits = read_u32(p);
     float result;
     std::memcpy(&result, &bits, 4);
     return result;
 }
 struct Settings {
-    float width = .8f, distance = 1.5f, x = 0, y = -.2f, alpha = .95f;
-    bool visible = true;
+    float width = contract::kPanelDefaultWidth, distance = contract::kPanelDefaultDistance,
+          x = contract::kPanelDefaultX, y = contract::kPanelDefaultY, alpha = contract::kPanelDefaultOpacity;
+    bool visible = contract::kPanelDefaultVisible;
 };
 void bounded(float value, float low, float high) {
     if (!std::isfinite(value) || value < low || value > high)
         throw std::runtime_error("panel_setting_out_of_range");
 }
 Settings settings(const std::vector<std::uint8_t>& b) {
-    if (b.size() != 24) throw std::runtime_error("invalid_settings_size");
-    Settings s{f32(b.data()), f32(b.data()+4), f32(b.data()+8),
-               f32(b.data()+12), f32(b.data()+16), u32(b.data()+20) != 0};
-    bounded(s.width,.25f,1.5f); bounded(s.distance,.5f,3.f);
-    bounded(s.x,-1.f,1.f); bounded(s.y,-1.f,1.f); bounded(s.alpha,.2f,1.f);
-    if (u32(b.data()+20) > 1) throw std::runtime_error("invalid_visibility");
+    if (b.size() != contract::kSettingsBytes) throw std::runtime_error("invalid_settings_size");
+    const auto visible = read_u32(b.data()+contract::kSettingsVisibleOffset);
+    Settings s{f32(b.data()+contract::kSettingsWidthOffset), f32(b.data()+contract::kSettingsDistanceOffset),
+               f32(b.data()+contract::kSettingsXOffset), f32(b.data()+contract::kSettingsYOffset),
+               f32(b.data()+contract::kSettingsOpacityOffset), visible != 0};
+    bounded(s.width, contract::kPanelWidthMin, contract::kPanelWidthMax);
+    bounded(s.distance, contract::kPanelDistanceMin, contract::kPanelDistanceMax);
+    bounded(s.x, contract::kPanelXMin, contract::kPanelXMax);
+    bounded(s.y, contract::kPanelYMin, contract::kPanelYMax);
+    bounded(s.alpha, contract::kPanelOpacityMin, contract::kPanelOpacityMax);
+    if (visible > 1) throw std::runtime_error("invalid_visibility");
     return s;
+}
+Settings marker_settings() {
+    // The fixed HUD placement; the marker never takes settings from stdin.
+    return Settings{contract::kHudPanelWidthM, contract::kHudDistanceM, contract::kHudXM, contract::kHudYM,
+                    contract::kHudOpacity, true};
 }
 class Overlay {
 public:
@@ -205,7 +220,7 @@ bool read_exact(std::uint8_t* data, std::size_t size, bool eof_allowed, Overlay&
     return true;
 }
 void stream(Overlay& overlay, bool validate, Json::Value& report) {
-    std::array<std::uint8_t,12> header{};
+    std::array<std::uint8_t,contract::kPacketHeaderBytes> header{};
     std::uint64_t expiry = 0;
     bool current = false, visible = true;
     const auto expire = [&] {
@@ -228,18 +243,25 @@ void stream(Overlay& overlay, bool validate, Json::Value& report) {
         report["presentation_visible"] = current && visible;
     };
     while (read_exact(header.data(),header.size(),true,overlay,expire)) {
-        if (std::memcmp(header.data(),"FJO1",4)) throw std::runtime_error("invalid_packet_magic");
-        const auto kind = u32(header.data()+4), size = u32(header.data()+8);
-        if (size > kMaxPayload || kind < 1 || kind > 4) throw std::runtime_error("invalid_packet_header");
-        if ((kind == 2 && size != 24) || (kind == 3 && size) || (kind == 1 && size < 8))
+        if (std::memcmp(header.data()+contract::kPacketHeaderMagicOffset, contract::kPacketMagic,
+                        sizeof contract::kPacketMagic - 1))
+            throw std::runtime_error("invalid_packet_magic");
+        const auto kind = read_u32(header.data()+contract::kPacketHeaderOpcodeOffset);
+        const auto size = read_u32(header.data()+contract::kPacketHeaderPayloadBytesOffset);
+        if (size > kMaxPayload || (kind != contract::kOpcodeFrame && kind != contract::kOpcodeSettings &&
+                                   kind != contract::kOpcodeStop && kind != contract::kOpcodeExpiringFrame))
+            throw std::runtime_error("invalid_packet_header");
+        if ((kind == contract::kOpcodeSettings && size != contract::kSettingsBytes) ||
+                (kind == contract::kOpcodeStop && size) ||
+                (kind == contract::kOpcodeFrame && size < contract::kFramePrefixBytes))
             throw std::runtime_error("invalid_packet_size");
-        if (kind == 4 && (!validate || size < 16))
+        if (kind == contract::kOpcodeExpiringFrame && (!validate || size < contract::kExpiringFramePrefixBytes))
             throw std::runtime_error("expiring_frames_validation_only");
         std::vector<std::uint8_t> payload(size);
         if (size) read_exact(payload.data(),size,false,overlay,expire);
         expire();
-        if (kind == 3) break;
-        if (kind == 2) {
+        if (kind == contract::kOpcodeStop) break;
+        if (kind == contract::kOpcodeSettings) {
             const auto s = settings(payload);
             visible = s.visible;
             if (!validate) overlay.configure(s);
@@ -248,7 +270,7 @@ void stream(Overlay& overlay, bool validate, Json::Value& report) {
             const auto frame = framejacker_overlay::decode_frame(kind, payload);
             const auto w = frame.width, h = frame.height;
             const auto requested_expiry = frame.expiry;
-            if (kind == 4) {
+            if (kind == contract::kOpcodeExpiringFrame) {
                 const auto now = monotonic_ns();
                 const bool current_deadline = framejacker_overlay::deadline_current(frame, now);
                 report["expiring_frames_received"] = report["expiring_frames_received"].asUInt()+1;
@@ -294,54 +316,107 @@ std::vector<std::uint8_t> pattern() {
 }
 
 std::vector<std::uint8_t> calibration_marker(Json::Value& description, const Settings& applied) {
-    constexpr unsigned w=320,h=128;
-    std::vector<std::uint8_t> pixels(w*h*4,255);
+    // Every size, position, gray level and corner id comes from the generated
+    // contract, which framejacker.hud.observation.marker_template also uses.
+    constexpr unsigned w=contract::kHudWidthPx, h=contract::kHudHeightPx;
+    constexpr unsigned border=contract::kMarkerBorderPx, size=contract::kMarkerTagSizePx;
+    constexpr unsigned inset=contract::kMarkerTagInsetPx, outline=contract::kMarkerTagOutlinePx;
+    constexpr unsigned bit_size=contract::kMarkerBitSizePx, columns=contract::kMarkerBitColumns;
+    static_assert(contract::kMarkerBorderValue<=255 && contract::kMarkerBackgroundValue<=255 &&
+                  contract::kMarkerTagOutlineValue<=255 && contract::kMarkerTagFillValue<=255 &&
+                  contract::kMarkerBitSetValue<=255 && contract::kMarkerBitClearValue<=255);
+    std::vector<std::uint8_t> pixels(w*h*contract::kRgbaBytes,255);
     const auto paint = [&](unsigned x, unsigned y, std::uint8_t value) {
-        const auto p=(y*w+x)*4;
+        const auto p=(y*w+x)*contract::kRgbaBytes;
         pixels[p]=pixels[p+1]=pixels[p+2]=value;
     };
     for (unsigned y=0;y<h;++y) for (unsigned x=0;x<w;++x)
-        paint(x,y,(x<4 || y<4 || x>=w-4 || y>=h-4) ? 255 : 32);
+        paint(x,y,(x<border || y<border || x>=w-border || y>=h-border) ?
+              contract::kMarkerBorderValue : contract::kMarkerBackgroundValue);
     // Four distinct binary corner tags; the outer border marks the full texture.
     // This is a generated marker, not an automatic eye/layout detector.
-    for (unsigned tag=0;tag<4;++tag) {
-        const unsigned x0=tag%2 ? w-32 : 8, y0=tag/2 ? h-32 : 8;
-        for (unsigned y=0;y<24;++y) for (unsigned x=0;x<24;++x)
-            paint(x0+x,y0+y,(x<2 || y<2 || x>=22 || y>=22) ? 0 : 255);
+    for (unsigned tag=0;tag<std::size(contract::kMarkerCornerIds);++tag) {
+        const unsigned x0=tag%2 ? w-inset-size : inset, y0=tag/2 ? h-inset-size : inset;
+        for (unsigned y=0;y<size;++y) for (unsigned x=0;x<size;++x)
+            paint(x0+x,y0+y,(x<outline || y<outline || x>=size-outline || y>=size-outline) ?
+                  contract::kMarkerTagOutlineValue : contract::kMarkerTagFillValue);
         unsigned decoded=0;
-        for (unsigned bit=0;bit<4;++bit) {
-            const unsigned x=x0+4+(bit%2)*8,y=y0+4+(bit/2)*8;
-            const bool white=((tag+1)>>bit)&1U;
-            for (unsigned dy=0;dy<6;++dy) for (unsigned dx=0;dx<6;++dx)
-                paint(x+dx,y+dy,white ? 255 : 0);
-            if (pixels[(y*w+x)*4]==255) decoded|=1U<<bit;
+        for (unsigned bit=0;bit<contract::kMarkerBits;++bit) {
+            const unsigned x=x0+contract::kMarkerBitOffsetPx+(bit%columns)*contract::kMarkerBitPitchPx;
+            const unsigned y=y0+contract::kMarkerBitOffsetPx+(bit/columns)*contract::kMarkerBitPitchPx;
+            const bool set=(contract::kMarkerCornerIds[tag]>>bit)&1U;
+            for (unsigned dy=0;dy<bit_size;++dy) for (unsigned dx=0;dx<bit_size;++dx)
+                paint(x+dx,y+dy,set ? contract::kMarkerBitSetValue : contract::kMarkerBitClearValue);
+            if (pixels[(y*w+x)*contract::kRgbaBytes]==contract::kMarkerBitSetValue) decoded|=1U<<bit;
         }
         description["corner_ids"].append(decoded);
     }
     unsigned opaque=0;
-    for (std::size_t i=3;i<pixels.size();i+=4) opaque+=pixels[i]==255;
+    for (std::size_t i=3;i<pixels.size();i+=contract::kRgbaBytes) opaque+=pixels[i]==255;
     description["width"]=w; description["height"]=h;
-    description["opaque_pixels"]=opaque; description["border_pixels"]=4;
-    description["tag_size_pixels"]=24; description["tag_inset_pixels"]=8;
-    description["corner_order"]="top_left,top_right,bottom_left,bottom_right";
-    description["config_id"]="fixed-edge-hud-v1";
+    description["opaque_pixels"]=opaque; description["border_pixels"]=border;
+    description["tag_size_pixels"]=size; description["tag_inset_pixels"]=inset;
+    description["corner_order"]=contract::kMarkerCornerOrder;
+    description["config_id"]=contract::kHudLayoutId;
     description["visible_in_dashboard"]=kCalibrationVisibleInDashboard;
     description["panel_width_m"]=applied.width; description["distance_m"]=applied.distance;
     description["x_m"]=applied.x; description["y_m"]=applied.y; description["opacity"]=applied.alpha;
     return pixels;
+}
+void write_new_file(const char* path, const std::vector<std::uint8_t>& bytes) {
+    // Exclusive creation: never replaces or follows an existing path.
+    const int fd=::open(path,O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC|O_NOFOLLOW,0600);
+    if (fd<0) throw std::runtime_error("render_output_open_failed");
+    std::size_t done=0;
+    while (done<bytes.size()) {
+        const auto count=::write(fd,bytes.data()+done,bytes.size()-done);
+        if (count<0 && errno==EINTR) continue;
+        if (count<=0) { ::close(fd); ::unlink(path); throw std::runtime_error("render_output_write_failed"); }
+        done+=static_cast<std::size_t>(count);
+    }
+    if (::close(fd)) { ::unlink(path); throw std::runtime_error("render_output_close_failed"); }
+}
+int render_marker(int argc, char* argv[]) {
+    // Validation only: draw the marker into a new RGBA file; no OpenVR call.
+    Json::Value report;
+    report["event"]="closed"; report["mode"]="--render-calibration-marker";
+    report["validation_only"]=true; report["runtime_initialized"]=false;
+    report["contract_digest"]=contract::kContractDigest; report["config_digest"]=contract::kHudConfigDigest;
+    report["physical_display_recovery_verified"]=false;
+    if (argc!=3 || !*argv[2]) {
+        report["event"]="error"; report["status"]="error";
+        report["error"]="render_requires_one_new_output_path"; report["exit_code"]=64;
+        emit(report); return 64;
+    }
+    int exit_code=0;
+    try {
+        const auto pixels=calibration_marker(report["marker"],marker_settings());
+        write_new_file(argv[2],pixels);
+        report["status"]="rendered"; report["rgba_bytes"]=Json::UInt64(pixels.size());
+    } catch (const std::exception& error) {
+        report["event"]="error"; report["status"]="error"; report["error"]=error.what(); exit_code=1;
+    }
+    report["exit_code"]=exit_code;
+    emit(report);
+    return exit_code;
 }
 } // namespace
 
 int main(int argc, char* argv[]) {
     const std::string mode=argc>1 ? argv[1] : "";
     if (mode=="--help" && argc==2) {
+        const auto marker_seconds=std::to_string(contract::kMarkerMinSeconds)+".."+
+                                  std::to_string(contract::kMarkerMaxSeconds);
         std::cout << "Usage: framejacker-overlay-bridge --test-panel [--seconds 1..30]\n"
                      "       framejacker-overlay-bridge --stdin\n"
                      "       framejacker-overlay-bridge --validate-stdin (no OpenVR calls)\n"
-                     "       framejacker-overlay-bridge --validate-calibration-marker --seconds 1..20\n"
-                     "       framejacker-overlay-bridge --calibration-marker --seconds 1..20 --allow-calibration-output\n";
+                     "       framejacker-overlay-bridge --validate-calibration-marker --seconds " << marker_seconds << "\n"
+                     "       framejacker-overlay-bridge --calibration-marker --seconds " << marker_seconds <<
+                     " --allow-calibration-output\n"
+                     "       framejacker-overlay-bridge --render-calibration-marker NEW_RGBA_FILE (no OpenVR calls)\n";
         return 0;
     }
+    if (mode=="--render-calibration-marker") return render_marker(argc,argv);
     Json::Value report;
     report["event"]="closed"; report["runtime_initialized"]=false;
     report["frames_received"]=0U; report["frames_submitted"]=0U; report["settings_received"]=0U;
@@ -359,7 +434,8 @@ int main(int argc, char* argv[]) {
                 throw std::runtime_error("calibration_requires_separate_explicit_opt_in");
             std::size_t used=0;
             seconds=std::stoi(argv[3],&used);
-            if (used!=std::strlen(argv[3]) || seconds<1 || seconds>20) throw std::runtime_error("seconds_out_of_range");
+            if (used!=std::strlen(argv[3]) || seconds<contract::kMarkerMinSeconds || seconds>contract::kMarkerMaxSeconds)
+                throw std::runtime_error("seconds_out_of_range");
         } else if (mode=="--test-panel" && argc==4 && std::string(argv[2])=="--seconds") {
             std::size_t used=0;
             seconds=std::stoi(argv[3],&used);
@@ -384,7 +460,7 @@ int main(int argc, char* argv[]) {
     const auto marker_start=marker ? monotonic_ns() : 0;
     const auto marker_deadline=marker_start+std::uint64_t(seconds)*1000000000ULL;
     if (marker) {
-        overlay.config=Settings{.32f,1.25f,.55f,-.35f,1.f,true};
+        overlay.config=marker_settings();
         overlay.calibration_show_deadline_ns=marker_deadline;
         report["calibration_only"]=true; report["seconds_requested"]=seconds;
         report["native_started_ns"]=Json::UInt64(marker_start);
@@ -418,7 +494,10 @@ int main(int argc, char* argv[]) {
             if (stopping) throw Stopped{};
             if (monotonic_ns()>=marker_deadline) throw std::runtime_error("calibration_deadline_before_marker");
             report["marker_request_ns"]=Json::UInt64(monotonic_ns());
-            if (!validate) { overlay.frame(320,128,pixels.data()); report["frames_submitted"]=1U; }
+            if (!validate) {
+                overlay.frame(contract::kHudWidthPx,contract::kHudHeightPx,pixels.data());
+                report["frames_submitted"]=1U;
+            }
             report["marker_submit_returned_ns"]=Json::UInt64(monotonic_ns());
             if (monotonic_ns()>=marker_deadline) throw std::runtime_error("calibration_submit_overran_deadline");
             if (!validate) overlay.calibration_visibility(report["visibility_after_submit"]);

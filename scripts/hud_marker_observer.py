@@ -2,29 +2,28 @@
 
 Native-resolution capture is retained. Only candidate quads are rectified to
 check the fixed marker. No eye identity or unseen/occluded copy is inferred.
-The copy-location algorithm lives in ``framejacker.hud.observation``; this
-command runs the bounded trial, its marker and its report.
+The copy-location algorithm and the worker report contract live in
+``framejacker.hud.observation``; this command runs the bounded trial, its
+marker and its report.
 """
 import argparse
 import json
-import math
 from pathlib import Path
-import signal
 import sys
-import threading
 import time
 
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from framejacker.gates import claims  # noqa: E402
-from framejacker.hud import HUD_CONFIG  # noqa: E402
+from framejacker.hud.contract import MARKER_MAX_SECONDS, MARKER_MIN_SECONDS  # noqa: E402
 
 from framejacker.hud.observation import (  # noqa: E402
-    BaselineGate, EmpiricalObservation, ObserverConfig, native_bgr)
-from framejacker.hud.marker import (  # noqa: E402
-    MarkerClient, new_report as marker_report, validate_worker_report as validate_marker_report)
-from framejacker.runtime.guard import supervise  # noqa: E402
+    BaselineGate, EmpiricalObservation, ObserverConfig, native_bgr, validate_marker_evidence,
+    validate_observer_report as validate_worker_report)
+from framejacker.hud.marker import MarkerClient  # noqa: E402
+from framejacker.overlay import bridge_closed_cleanly  # noqa: E402
+from framejacker.runtime.guard import stop_on_signals, supervise  # noqa: E402
 from framejacker.sources.mirror import capture  # noqa: E402
 from framejacker.sources.mirror_device import discover, select_candidate  # noqa: E402
 
@@ -40,28 +39,10 @@ def new_report(validation_only=False):
             "scope": "Empirical visible-copy bounds only; unknown composition cannot qualify production masking"}
 
 
-def validate_marker_evidence(bridge, seconds, validation_only):
-    """Reuse the finalized marker deadline contract, then pin every HUD setting."""
-    report = marker_report(validation_only)
-    report.update(status="completed", exit_code=0, cleanup_ok=True, seconds_requested=seconds, bridge=bridge)
-    validate_marker_report(report, 0, validation_only=validation_only)
-    marker = bridge["native_report"].get("marker") or {}
-    expected = {"width": HUD_CONFIG.width_px, "height": HUD_CONFIG.height_px,
-                "opaque_pixels": HUD_CONFIG.width_px * HUD_CONFIG.height_px,
-                "corner_ids": [1, 2, 3, 4], "border_pixels": 4, "tag_size_pixels": 24, "tag_inset_pixels": 8,
-                "config_id": HUD_CONFIG.layout_id, "corner_order": "top_left,top_right,bottom_left,bottom_right",
-                "visible_in_dashboard": True}
-    if (any(marker.get(key) != value for key, value in expected.items()) or
-            any(type(marker.get(key)) not in (int, float) or
-                not math.isclose(marker[key], getattr(HUD_CONFIG, key), rel_tol=0, abs_tol=1e-6)
-                for key in ("panel_width_m", "distance_m", "x_m", "y_m", "opacity"))):
-        raise ValueError("native_marker_config_mismatch")
-
-
 def observe(candidate, seconds, stop, *, backend_factory, marker_client, config=ObserverConfig(),
             allow_mirror_observation=False, allow_calibration_output=False):
     """One combined bounded trial; backend and marker are injected for offline tests."""
-    if type(seconds) is not int or not 1 <= seconds <= 20:
+    if type(seconds) is not int or not MARKER_MIN_SECONDS <= seconds <= MARKER_MAX_SECONDS:
         raise ValueError("observer_duration_out_of_bounds")
     config.validate()
     if backend_factory is None and allow_mirror_observation is not True:
@@ -141,11 +122,8 @@ def observe(candidate, seconds, stop, *, backend_factory, marker_client, config=
         try:
             bridge = marker_client.close()
             report["bridge"] = bridge
-            native = bridge.get("native_report") or {}
-            marker_clean = (marker_client.process is None and not marker_started) or (
-                bridge.get("worker_reaped") is True and bridge.get("worker_exit_code") == 0 and
-                bridge.get("transport_threads_stopped") is True and not bridge.get("forced_termination") and
-                bridge.get("error") is None and native.get("cleanup_ok") is True and native.get("exit_code") == 0)
+            marker_clean = ((marker_client.process is None and not marker_started) or
+                            bridge_closed_cleanly(bridge))
             report["cleanup_ok"] = (report.get("capture", {}).get("cleanup_ok") is True and
                                     marker_clean)
             if report["exit_code"] == 2 and marker_clean:
@@ -171,16 +149,14 @@ def main(argv=None):
     parser.add_argument("--allow-calibration-output", action="store_true")
     parser.add_argument("--device")
     parser.add_argument("--bridge", type=Path, help="Exact reviewed native bridge; defaults to the existing bridge path")
-    parser.add_argument("--seconds", type=int, choices=range(1, 21), default=20)
+    parser.add_argument("--seconds", type=int, choices=range(MARKER_MIN_SECONDS, MARKER_MAX_SECONDS + 1), default=20)
     parser.add_argument("--worker", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.worker:
         options = json.loads(args.worker)
         if options.get("approved_scope") != "marker_observation_only":
             raise ValueError("observer_explicit_scope_required")
-        stop = threading.Event()
-        for number in (signal.SIGINT, signal.SIGTERM):
-            signal.signal(number, lambda *_: stop.set())
+        stop = stop_on_signals()
         client = MarkerClient(options["bridge"], validation_only=False) if options.get("bridge") else MarkerClient(validation_only=False)
         report = observe(options["candidate"], options["seconds"], stop, backend_factory=None,
                          marker_client=client, allow_mirror_observation=True,
@@ -200,29 +176,6 @@ def main(argv=None):
                 new_report(), args.seconds + 12, validate_worker_report, descendants=True)
     print(json.dumps(report, indent=2))
     return report["exit_code"]
-
-
-def validate_worker_report(report, returncode):
-    if (not isinstance(report, dict) or report.get("report_kind") != "hud_marker_observation" or
-            type(report.get("exit_code")) is not int or report["exit_code"] not in (1, 2, 130) or report["exit_code"] != returncode or
-            type(report.get("cleanup_ok")) is not bool or
-            type(report.get("calibration_validation_only")) is not bool or
-            type(report.get("seconds_requested")) is not int or not 1 <= report["seconds_requested"] <= 20 or
-            report.get("maximum_processing_fps") != 5 or
-            any(report.get(key) is not False for key in (*claims(), "images_saved", "inference_started",
-                "physical_display_recovery_verified",
-                "eye_identity_assigned", "composition_verified", "unseen_or_occluded_copies_established",
-                "camera_freshness_verified")) or
-            (report["exit_code"] == 2 and (report.get("status") != "observed_unqualified" or not report["cleanup_ok"] or
-                                           not 3 <= report.get("sample_count", 0) <= 100))):
-        raise ValueError("invalid_observer_worker_report")
-    if report["exit_code"] == 2:
-        baseline = report.get("baseline") or {}
-        if (baseline.get("established") is not True or baseline.get("camera_freshness_verified") is not False or
-                baseline.get("clear_frames", 0) < 2 or baseline.get("content_changes", 0) < 1):
-            raise ValueError("invalid_observer_baseline_evidence")
-        validate_marker_evidence(report.get("bridge") or {}, report["seconds_requested"],
-                                 report["calibration_validation_only"])
 
 
 if __name__ == "__main__":

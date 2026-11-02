@@ -10,7 +10,12 @@ import threading
 import time
 
 from ..gates import claims
-from ..overlay import OverlayClient
+from ..overlay import OverlayClient, bridge_closed_cleanly
+from .contract import MARKER_MAX_SECONDS, MARKER_MIN_SECONDS
+
+READY_TIMEOUT_SECONDS = 8
+# After the native display deadline, time allowed for native cleanup and exit.
+STOP_GRACE_SECONDS = 2
 
 
 def new_report(validation_only=True):
@@ -22,14 +27,26 @@ def new_report(validation_only=True):
 
 
 class MarkerClient(OverlayClient):
-    """Reuse the bounded native JSON reader/cleanup; never create a frame writer."""
+    """Reuse the bounded native JSON reader/cleanup; never create a frame writer.
+
+    Native marker mode never reads stdin, so a requested stop (``close``)
+    closes stdin and waits for the bridge's own display deadline plus
+    ``STOP_GRACE_SECONDS``. Cancellation (the ``stop`` event), a ready
+    timeout or an overrun escalates to SIGTERM then SIGKILL, reported as forced.
+    """
+    cancel = None
+    marker_deadline = None
+
     def start_marker(self, seconds, stop, *, allow_calibration_output=False):
-        if type(seconds) is not int or not 1 <= seconds <= 20:
+        if type(seconds) is not int or not MARKER_MIN_SECONDS <= seconds <= MARKER_MAX_SECONDS:
             raise ValueError("marker_duration_out_of_bounds")
         if not self.validation_only and allow_calibration_output is not True:
             raise ValueError("separate_calibration_output_opt_in_required")
         if not self.binary.is_file() or not os.access(self.binary, os.X_OK):
             raise RuntimeError("native_marker_bridge_not_built")
+        self.cancel = stop
+        if stop.is_set():
+            raise InterruptedError("cancelled_before_marker_startup")
         self.mode = "--validate-calibration-marker" if self.validation_only else "--calibration-marker"
         arguments = [str(self.binary), self.mode, "--seconds", str(seconds)]
         if not self.validation_only:
@@ -38,16 +55,44 @@ class MarkerClient(OverlayClient):
                                         env=self.env, bufsize=0)
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
-        deadline = time.monotonic() + 8
+        deadline = time.monotonic() + READY_TIMEOUT_SECONDS
         while not self.ready.is_set() and not stop.is_set() and time.monotonic() < deadline:
             self.ready.wait(.02)
         if stop.is_set():
             raise InterruptedError("cancelled_during_marker_startup")
         if not self.acknowledged or self.error:
             raise RuntimeError(self.error or "marker_ready_timeout")
+        # The native timer started before its ready line, so this bounds its
+        # deadline from above: a stop never escalates before the timer ends.
+        self.marker_deadline = time.monotonic() + seconds
         # Native marker mode ignores stdin and creates its own opaque pixels.
         # In particular, no inherited OverlayClient._write thread is started.
         return self
+
+    def _request_stop(self):
+        """Close stdin as the stop request; marker mode ignores it and keeps its timer."""
+        self.process.stdin.close()
+        return True
+
+    def _wait_cooperative(self):
+        """Wait for the native deadline plus a grace; cancellation stops the wait.
+
+        Without an accepted ready line the bridge may still be initializing and
+        could show the marker after the run failed, so escalate at once unless
+        its final report shows it is already exiting.
+        """
+        if self.marker_deadline is None and self.final_report is None:
+            return False
+        start = self.marker_deadline if self.marker_deadline is not None else time.monotonic()
+        limit = start + STOP_GRACE_SECONDS
+        while self.cancel is None or not self.cancel.is_set():
+            try:
+                self.process.wait(timeout=.02)
+                return True
+            except subprocess.TimeoutExpired:
+                if time.monotonic() >= limit:
+                    break
+        return False
 
 
 def validate_visibility_evidence(native, validation_only):
@@ -71,7 +116,7 @@ def validate_worker_report(report, returncode, *, validation_only=None):
     if (not isinstance(report, dict) or report.get("report_kind") != "hud_calibration_marker" or
             type(report.get("exit_code")) is not int or report["exit_code"] not in (0, 1, 130) or
             report["exit_code"] != returncode or type(report.get("cleanup_ok")) is not bool or
-            type(report.get("seconds_requested")) is not int or not 1 <= report["seconds_requested"] <= 20 or
+            type(report.get("seconds_requested")) is not int or not MARKER_MIN_SECONDS <= report["seconds_requested"] <= MARKER_MAX_SECONDS or
             type(report.get("calibration_validation_only")) is not bool or
             (validation_only is not None and report["calibration_validation_only"] != validation_only) or
             any(report.get(key) is not False for key in ("capture_started", "inference_started", "images_saved",
@@ -88,10 +133,7 @@ def validate_worker_report(report, returncode, *, validation_only=None):
                     "native_started_ns", "marker_request_ns", "marker_submit_returned_ns",
                     "display_deadline_ns", "cutoff_requested_ns", "cleanup_returned_ns")) or
                 bridge.get("validation_only") != report["calibration_validation_only"] or
-                bridge.get("forced_termination") is not False or bridge.get("error") or
-                bridge.get("worker_reaped") is not True or bridge.get("worker_exit_code") != 0 or
-                bridge.get("transport_threads_stopped") is not True or native.get("cleanup_ok") is not True or
-                native.get("exit_code") != 0 or
+                not bridge_closed_cleanly(bridge) or
                 native.get("mode") != mode or native.get("runtime_initialized") != (not report["calibration_validation_only"]) or
                 native.get("status") != ("validated_marker" if report["calibration_validation_only"] else "marker_complete") or
                 native.get("calibration_only") is not True or native.get("physical_display_recovery_verified") is not False or

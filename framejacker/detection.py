@@ -3,6 +3,13 @@
 ``mobilenet-ssd`` is the device-validated baseline (Pascal VOC, 20 classes).
 ``yolox-nano`` is an 80-class COCO candidate under evaluation. Detectors keep
 their native label names; ``framejacker.labels.canonical`` compares them.
+
+Each ``DETECTORS`` class owns everything callers need to know about it: its
+constructor takes the registry name, and the class methods ``model_files(name)``
+and ``preprocessing(name)`` give its checksum-pinned assets and a structured
+model-input description. The evaluator, smoke check and asset tests read those,
+so adding a detector changes this module and its ``scripts/smoke-assets.json``
+entries only.
 """
 import math
 import time
@@ -19,6 +26,8 @@ CLASSES = (
     "background aeroplane bicycle bird boat bottle bus car cat chair cow "
     "diningtable dog horse motorbike person pottedplant sheep sofa train tvmonitor"
 ).split()
+# The Python module whose version and native files identify each inference runtime.
+RUNTIME_MODULES = {"opencv-dnn": "cv2", "onnxruntime": "onnxruntime"}
 
 
 class Detector(Protocol):
@@ -54,16 +63,47 @@ def validate_input(bgr, threshold):
         raise ValueError("Detector needs a nonempty uint8 BGR image")
 
 
+def decode_ssd(prediction, width, height, threshold):
+    """SSD ``DetectionOutput`` rows to detections in ``width`` × ``height`` input pixels.
+
+    Rows are ``[image, class, score, x1, y1, x2, y2]`` with normalized corners.
+    Non-finite rows, scores below ``threshold``, background or unmapped classes
+    and boxes empty after clamping are dropped. Labels come from ``CLASSES``.
+    """
+    import numpy as np
+
+    if prediction.ndim != 4 or prediction.shape[-1] != 7:
+        raise RuntimeError("Unexpected detector output shape")
+    detections = []
+    for row in prediction.reshape(-1, 7):
+        if not np.isfinite(row).all() or row[2] < threshold:
+            continue
+        class_id = int(row[1])
+        if not 0 < class_id < len(CLASSES):
+            continue
+        bounds = (np.clip(row[3:7], 0, 1) * np.array([width, height, width, height])).astype(int)
+        x1, y1, x2, y2 = map(int, bounds)
+        x1, x2 = min(x1, width - 1), min(x2, width - 1)
+        y1, y2 = min(y1, height - 1), min(y2, height - 1)
+        if x2 <= x1 or y2 <= y1:
+            continue
+        detections.append(Detection(CLASSES[class_id], round(float(row[2]), 5), (x1, y1, x2, y2)))
+    return tuple(detections)
+
+
 class MobileNetSSD:
     """Pascal VOC MobileNet-SSD through OpenCV DNN on CPU (20 foreground classes).
 
     Input is stretched to 300 × 300 without letterboxing, matching how SSD models
     are trained; letterboxing this model would change its validated behavior.
+    The pinned network's ``DetectionOutput`` drops scores below 0.25 itself.
     """
     name, runtime = "mobilenet-ssd", "opencv-dnn"
     classes = tuple(CLASSES[1:])
+    INPUT_SIZE, SCALE, MEAN = 300, 0.007843, (127.5, 127.5, 127.5)
 
-    def __init__(self):
+    def __init__(self, name="mobilenet-ssd"):
+        self._require_name(name)
         import cv2
         import numpy as np
 
@@ -74,8 +114,27 @@ class MobileNetSSD:
         self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
         self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
 
+    @classmethod
+    def _require_name(cls, name):
+        if name != cls.name:
+            raise ValueError(f"Unknown MobileNet-SSD model: {name}")
+
+    @classmethod
+    def model_files(cls, name="mobilenet-ssd"):
+        """Checksum-pinned asset names this model loads."""
+        cls._require_name(name)
+        return MODEL_FILES
+
+    @classmethod
+    def preprocessing(cls, name="mobilenet-ssd"):
+        """Model input as ``prepare_input`` builds it: ``(pixel - mean) * scale``."""
+        cls._require_name(name)
+        return {"input_size": [cls.INPUT_SIZE, cls.INPUT_SIZE], "resize": "stretch", "interpolation": "INTER_LINEAR",
+                "color_order": "BGR", "layout": "NCHW", "dtype": "float32", "mean": list(cls.MEAN),
+                "scale": cls.SCALE, "padding_value": None,
+                "box_mapping": "normalized corners times processing dimensions"}
+
     def detect(self, bgr, threshold):
-        np = self.np
         validate_input(bgr, threshold)
         height, width = bgr.shape[:2]
         blob, _ = self.prepare_input(bgr)
@@ -83,29 +142,14 @@ class MobileNetSSD:
         started = time.monotonic()
         prediction = self.net.forward()
         elapsed = (time.monotonic() - started) * 1000
-        if prediction.ndim != 4 or prediction.shape[-1] != 7:
-            raise RuntimeError("Unexpected detector output shape")
-        detections = []
-        for row in prediction.reshape(-1, 7):
-            if not np.isfinite(row).all() or row[2] < threshold:
-                continue
-            class_id = int(row[1])
-            if not 0 < class_id < len(CLASSES):
-                continue
-            bounds = (np.clip(row[3:7], 0, 1) * np.array([width, height, width, height])).astype(int)
-            x1, y1, x2, y2 = map(int, bounds)
-            x1, x2 = min(x1, width - 1), min(x2, width - 1)
-            y1, y2 = min(y1, height - 1), min(y2, height - 1)
-            if x2 <= x1 or y2 <= y1:
-                continue
-            detections.append(Detection(CLASSES[class_id], round(float(row[2]), 5), (x1, y1, x2, y2)))
-        return DetectionResult(tuple(detections), elapsed)
+        return DetectionResult(decode_ssd(prediction, width, height, threshold), elapsed)
 
     def prepare_input(self, bgr):
         """The production model input, also used by the file-only audit."""
         # Python numeric Scalars initialize only the first OpenCV channel. Use
         # all three means explicitly so G/R receive the same model normalization.
-        return self.cv2.dnn.blobFromImage(bgr, 0.007843, (300, 300), (127.5, 127.5, 127.5)), None
+        size = (self.INPUT_SIZE, self.INPUT_SIZE)
+        return self.cv2.dnn.blobFromImage(bgr, self.SCALE, size, self.MEAN), None
 
 
 class YoloxDetector:
@@ -118,14 +162,13 @@ class YoloxDetector:
     """
     MODELS = {"yolox-nano": ("yolox_nano.onnx", 416)}
     STRIDES = (8, 16, 32)
+    PADDING_VALUE = 114
 
     def __init__(self, name="yolox-nano", runtime="auto", nms_threshold=0.45, threads=2):
+        filename, self.size = self._model(name)
         import cv2
         import numpy as np
 
-        if name not in self.MODELS:
-            raise ValueError(f"Unknown YOLOX model: {name}")
-        filename, self.size = self.MODELS[name]
         (path,) = assets.verify([filename])
         self.cv2, self.np = cv2, np
         self.name, self.classes, self.nms_threshold = name, COCO_CLASSES, nms_threshold
@@ -158,6 +201,25 @@ class YoloxDetector:
             grids.append(np.stack((xs, ys), 2).reshape(-1, 2))
             strides.append(np.full((cells * cells, 1), stride))
         self.grid, self.stride = np.concatenate(grids), np.concatenate(strides)
+
+    @classmethod
+    def _model(cls, name):
+        if name not in cls.MODELS:
+            raise ValueError(f"Unknown YOLOX model: {name}")
+        return cls.MODELS[name]
+
+    @classmethod
+    def model_files(cls, name="yolox-nano"):
+        """Checksum-pinned asset names this model loads."""
+        return (cls._model(name)[0],)
+
+    @classmethod
+    def preprocessing(cls, name="yolox-nano"):
+        """Model input as ``prepare_input`` builds it: unnormalized, top-left letterboxed BGR."""
+        size = cls._model(name)[1]
+        return {"input_size": [size, size], "resize": "letterbox_top_left", "interpolation": "INTER_LINEAR",
+                "color_order": "BGR", "layout": "NCHW", "dtype": "float32", "mean": [0, 0, 0], "scale": 1,
+                "padding_value": cls.PADDING_VALUE, "box_mapping": "inverse realized x/y resize ratios"}
 
     def _forward(self, blob):
         if self.runtime == "onnxruntime":
@@ -199,7 +261,7 @@ class YoloxDetector:
 
     def prepare_input(self, bgr):
         """The production BGR, top-left letterboxed float32 NCHW input."""
-        image, transform = letterbox(bgr, self.size)
+        image, transform = letterbox(bgr, self.size, pad_value=self.PADDING_VALUE)
         return self.np.ascontiguousarray(image.transpose(2, 0, 1)[None], dtype=self.np.float32), transform
 
 
@@ -207,11 +269,25 @@ DETECTORS = {"mobilenet-ssd": MobileNetSSD, "yolox-nano": YoloxDetector}
 DEFAULT_DETECTOR = "mobilenet-ssd"
 
 
-def create_detector(name=DEFAULT_DETECTOR, **options):
+def registered(name):
+    """The ``DETECTORS`` class for ``name``; unknown names fail closed."""
     if name not in DETECTORS:
         raise ValueError(f"Unknown detector {name!r}; choose from {', '.join(DETECTORS)}")
-    factory = DETECTORS[name]
-    return factory(name, **options) if factory is YoloxDetector else factory(**options)
+    return DETECTORS[name]
+
+
+def create_detector(name=DEFAULT_DETECTOR, **options):
+    return registered(name)(name, **options)
+
+
+def model_files(name):
+    """Checksum-pinned asset names (each in ``scripts/smoke-assets.json``) detector ``name`` loads."""
+    return tuple(registered(name).model_files(name))
+
+
+def preprocessing(name):
+    """Structured model-input description of detector ``name``: size, resize, order, normalization."""
+    return registered(name).preprocessing(name)
 
 
 def describe(detector):

@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "description": "Count pin for scripts/evaluate_detectors.py --expect on seed.json, recorded in E73 (x86_64 cloud CPU). A detector fails when it hits fewer present labels, violates more absent labels, confuses more objects or changes how many checks it can score. It is a wiring and label-mapping regression check on the runner CPU, not Frame evidence and not a basis for choosing a detector. Counts, not scores, are pinned, so CPU floating-point differences cannot move it. Update it only with the manifest, in a reviewed change that explains the new counts.",
+  "manifest": "seed.json",
+  "manifest_sha256": "4a68a95275d2ea4d1b2cae92c8e10b8932afb83a582af9dc41e080be9c717257",
+  "threshold": 0.5,
+  "iou_threshold": 0.5,
+  "detectors": {
+    "mobilenet-ssd": {
+      "images": 6,
+      "present_checks": 9,
+      "present_hits": 7,
+      "absence_checks": 22,
+      "absent_violations": 2,
+      "confusions": 0
+    },
+    "yolox-nano": {
+      "images": 6,
+      "present_checks": 12,
+      "present_hits": 12,
+      "absence_checks": 24,
+      "absent_violations": 0,
+      "confusions": 0
+    }
+  }
+}

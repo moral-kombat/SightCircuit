@@ -3,59 +3,29 @@ import argparse
 import json
 import os
 from pathlib import Path
-import signal
 import sys
-import threading
 import time
 
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from framejacker.hud import HudStage, HUD_CONFIG
+from framejacker.detection import DEFAULT_DETECTOR, DETECTORS, create_detector
+from framejacker.hud import HUD_CONFIG, HudPipelineAdapter
 from framejacker.overlay import OverlaySink
-from framejacker.runtime.guard import supervise
-from framejacker.runtime.live import run_pipeline as run_bounded_pipeline
+from framejacker.runtime.guard import stop_on_signals, supervise
+from framejacker.runtime.live import run_pipeline
 from framejacker.runtime.synthetic import FixtureDetector, HeadlessSink, SyntheticSource, synthetic_hud_calibration
 
-class HudPipelineAdapter(HudStage):
-    """The shared HUD stage plus this command's fixed validation-sink contract."""
-
-    def __init__(self, source, sink, calibration, config):
-        super().__init__(source, calibration, config)
-        self.sink = sink
-
-    def start(self):
-        report = super().start()
-        if isinstance(self.sink, OverlaySink):
-            if self.sink.hud is None:
-                raise ValueError("hud_requires_fixed_validation_sink")
-            self.sink.check_contract(self.config)
-        return report
-
-    def check_sink(self):
-        """Output contract; capture identity is the engine's CaptureContext."""
-        if isinstance(self.sink, OverlaySink) and self.sink.hud is not None:
-            self.sink.check_contract(self.config)
-
-
-def run_pipeline(source, detector, sink, seconds, *, stop=None, max_fps=5, max_age_ms=1000, threshold=0.5,
-                 hud_mode=False, calibration=None, hud_config=HUD_CONFIG):
-    hud = HudPipelineAdapter(source, sink, calibration, hud_config) if hud_mode else None
-    return run_bounded_pipeline(source, detector, sink, seconds, stop=stop, max_fps=max_fps,
-                               max_age_ms=max_age_ms, threshold=threshold, hud=hud)
+# "real" names the default model, as before the registry choices existed.
+DETECTOR_CHOICES = (*DETECTORS, "real", "fixture")
 
 
 def _worker(options):
-    stopped = threading.Event()
-    for number in (signal.SIGINT, signal.SIGTERM):
-        signal.signal(number, lambda *_: stopped.set())
+    stopped = stop_on_signals()
     try:
         source = SyntheticSource()
-        if options.get("detector", "real") == "real":
-            from framejacker.detection import MobileNetSSD
-            detector = MobileNetSSD()
-        else:
-            detector = FixtureDetector()
+        name = options.get("detector", DEFAULT_DETECTOR)
+        detector = FixtureDetector() if name == "fixture" else create_detector(name)
         def hung(*_args, **_kwargs):
             if options.get("test_ready_file"):
                 Path(options["test_ready_file"]).write_text(str(os.getpid()))
@@ -67,9 +37,9 @@ def _worker(options):
         hud_mode = bool(options.get("synthetic_hud"))
         sink = (OverlaySink(hud=HUD_CONFIG if hud_mode else None)
                 if options.get("validate_overlay") else HeadlessSink())
-        report = run_pipeline(source, detector, sink, options["seconds"], stop=stopped, hud_mode=hud_mode,
-                              calibration=synthetic_hud_calibration() if hud_mode else None)
-        report["detector"] = options.get("detector", "real")
+        hud = HudPipelineAdapter(source, sink, synthetic_hud_calibration(), HUD_CONFIG) if hud_mode else None
+        report = run_pipeline(source, detector, sink, options["seconds"], stop=stopped, hud=hud)
+        report["detector"] = name
         report["overlay_validation_only"] = bool(options.get("validate_overlay"))
         report["sink_kind"] = "native_overlay_validation" if options.get("validate_overlay") else "headless"
         if options.get("validate_overlay"):
@@ -114,6 +84,10 @@ def main(argv=None):
     parser.add_argument("--seconds", type=int, choices=range(1, 61), default=3)
     parser.add_argument("--validate-overlay", action="store_true", help="Native transport validation only; no OpenVR session")
     parser.add_argument("--synthetic-hud", action="store_true", help="Generated-input HUD/mask fixture only; not hardware calibration")
+    parser.add_argument("--detector", choices=DETECTOR_CHOICES,
+                        help=f"A registered model (default {DEFAULT_DETECTOR}; real is an alias for it) or fixture: "
+                             "no detections and no model, which checks the mask, validation and transport without "
+                             "a detector's view of the masked frames")
     parser.add_argument("--synthetic-worker", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.synthetic_worker:
@@ -122,11 +96,12 @@ def main(argv=None):
         return report["exit_code"]
     report = {"report_kind": "synthetic_recognition_pipeline", "status": "not_run", "exit_code": 3,
               "live_input_verified": False, "hardware_trial_ready": False}
-    if (args.validate_overlay or args.synthetic_hud) and not args.synthetic_check:
-        parser.error("--validate-overlay and --synthetic-hud require --synthetic-check")
+    if (args.validate_overlay or args.synthetic_hud or args.detector) and not args.synthetic_check:
+        parser.error("--validate-overlay, --synthetic-hud and --detector require --synthetic-check")
     if args.synthetic_check:
+        detector = DEFAULT_DETECTOR if args.detector in (None, "real") else args.detector
         report = supervise_synthetic({"seconds": args.seconds, "validate_overlay": args.validate_overlay,
-                                      "synthetic_hud": args.synthetic_hud})
+                                      "synthetic_hud": args.synthetic_hud, "detector": detector})
     print(json.dumps(report, indent=2))
     return report["exit_code"]
 

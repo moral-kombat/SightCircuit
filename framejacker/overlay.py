@@ -11,18 +11,36 @@ import threading
 import time
 
 from .gates import LIVE_HUD_OUTPUT
-from .hud.contract import HUD_CONFIG
+from .hud.contract import (EXPIRING_FRAME_PREFIX_FORMAT, FRAME_PREFIX_FORMAT, HUD_CONFIG, MAX_DISPLAY_AGE_NS, MAX_SIDE,
+                           OPCODE_EXPIRING_FRAME, OPCODE_FRAME, OPCODE_SETTINGS, OPCODE_STOP, PACKET_HEADER_FORMAT,
+                           PACKET_MAGIC, RGBA_BYTES, SETTINGS_FORMAT)
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BRIDGE = ROOT / "artifacts/overlay-bridge/framejacker-overlay-bridge"
-MAX_SIDE = 512
-# (name, low, high); the native bridge repeats these in tools/overlay_bridge.cpp and
-# tests/test_overlay_bridge.py checks that the copies agree.
+# (name, low, high); the native bridge takes these from the generated tools/hud_contract.hpp.
 PANEL_LIMITS = (("width", .25, 1.5), ("distance", .5, 3), ("x", -1, 1), ("y", -1, 1), ("opacity", .2, 1))
 
 
 def packet(kind, payload=b""):
-    return struct.pack("<4sII", b"FJO1", kind, len(payload)) + payload
+    return struct.pack(PACKET_HEADER_FORMAT, PACKET_MAGIC, kind, len(payload)) + payload
+
+
+def _zero(value):
+    return type(value) is int and value == 0
+
+
+def bridge_closed_cleanly(report):
+    """The one "bridge closed cleanly" check for an ``OverlayClient.close()`` report.
+
+    True only when the helper was reaped with exit 0, both transport threads
+    stopped, nothing was forced or failed, and the native final report claims
+    exit 0 and cleanup. A missing field is a failure. It is software cleanup,
+    never physical display recovery.
+    """
+    native = report.get("native_report") or {}
+    return (report.get("worker_reaped") is True and _zero(report.get("worker_exit_code")) and
+            report.get("transport_threads_stopped") is True and report.get("forced_termination") is False and
+            report.get("error") is None and native.get("cleanup_ok") is True and _zero(native.get("exit_code")))
 
 
 @dataclass(frozen=True)
@@ -41,7 +59,7 @@ class PanelSettings:
                 raise ValueError("Panel setting out of range")
         if not isinstance(self.visible, bool):
             raise ValueError("Panel visibility must be boolean")
-        return packet(2, struct.pack("<5fI", self.width, self.distance, self.x,
+        return packet(OPCODE_SETTINGS, struct.pack(SETTINGS_FORMAT, self.width, self.distance, self.x,
                                      self.y, self.opacity, int(self.visible)))
 
 
@@ -78,6 +96,7 @@ class OverlayClient:
         self.frame_expired = threading.Event()
         self.last_expiry = None
         self.forced_termination = False
+        self.stop_requested = False
         self.process = self.reader = self.writer = None
 
     def _fail(self, error):
@@ -170,7 +189,7 @@ class OverlayClient:
                     frame, self.pending_frame = self.pending_frame, None
                     settings = self.settings
                 if self.stopping.is_set():
-                    self._send(packet(3))
+                    self._send(packet(OPCODE_STOP))
                     break
                 if settings != previous_settings or time.monotonic() - last_heartbeat >= 1:
                     self._send(settings.encode())
@@ -205,16 +224,16 @@ class OverlayClient:
             self.condition.notify()
 
     def submit_frame(self, width, height, rgba, *, expires_ns=None):
-        if not 0 < width <= MAX_SIDE or not 0 < height <= MAX_SIDE or len(rgba) != width * height * 4:
+        if not 0 < width <= MAX_SIDE or not 0 < height <= MAX_SIDE or len(rgba) != width * height * RGBA_BYTES:
             raise ValueError("Invalid RGBA overlay frame")
         if expires_ns is not None:
             # Expiring frames are permitted only on a validation bridge that supports expiry.
             LIVE_HUD_OUTPUT.require(self.validation_only is True and self.frame_expiry_supported is True,
                                     "expiring_live_output_not_approved_or_supported")
-            if type(expires_ns) is not int or not 0 < expires_ns <= time.monotonic_ns() + 1000000000:
+            if type(expires_ns) is not int or not 0 < expires_ns <= time.monotonic_ns() + MAX_DISPLAY_AGE_NS:
                 raise ValueError("invalid_frame_expiry")
-        data = (packet(1, struct.pack("<II", width, height) + rgba) if expires_ns is None else
-                packet(4, struct.pack("<QII", expires_ns, width, height) + rgba))
+        data = (packet(OPCODE_FRAME, struct.pack(FRAME_PREFIX_FORMAT, width, height) + rgba) if expires_ns is None else
+                packet(OPCODE_EXPIRING_FRAME, struct.pack(EXPIRING_FRAME_PREFIX_FORMAT, expires_ns, width, height) + rgba))
         with self.condition:
             self.pending_frame = data
             self.condition.notify()
@@ -227,9 +246,12 @@ class OverlayClient:
         with self.condition:
             self.condition.notify_all()
         if self.process:
+            running = self.process.poll() is None
             if self.writer:
                 self.writer.join(timeout=2)
-            self._end_process(cooperative=bool(self.writer) and not self.writer.is_alive())
+            cooperative = self._request_stop()
+            self.stop_requested = self.stop_requested or (running and cooperative)
+            self._end_process(cooperative=cooperative)
             if self.writer:
                 self.writer.join(timeout=1)
             if self.reader:
@@ -244,26 +266,33 @@ class OverlayClient:
                 self._fail("Overlay bridge required forced termination; cleanup is unconfirmed")
             if self.process.returncode != 0:
                 self._fail("Overlay bridge exit disagrees with successful cleanup")
-        native = self.final_report or {}
-        cleanup_confirmed = (native.get("exit_code") == 0 and native.get("cleanup_ok") is True
-                             and not self.forced_termination and self.error is None
-                             and (self.process is None or self.process.returncode == 0))
-        return {"requested": True, "validation_only": self.validation_only,
-                "cleanup_confirmed": cleanup_confirmed,
-                "physical_display_recovery_verified": False,
-                "frames_sent": self.frames_sent, "error": self.error,
-                "native_report": self.final_report, "forced_termination": self.forced_termination,
-                "worker_reaped": self.process is None or self.process.poll() is not None,
-                "worker_exit_code": self.process.returncode if self.process else None,
-                "transport_threads_stopped": not any(t and t.is_alive() for t in (self.writer, self.reader))}
+        report = {"requested": True, "validation_only": self.validation_only,
+                  "physical_display_recovery_verified": False,
+                  "frames_sent": self.frames_sent, "error": self.error,
+                  "native_report": self.final_report, "forced_termination": self.forced_termination,
+                  # A cooperative stop request and SIGTERM/SIGKILL escalation, reported apart.
+                  "stop_requested": self.stop_requested, "escalated": self.forced_termination,
+                  "worker_reaped": self.process is None or self.process.poll() is not None,
+                  "worker_exit_code": self.process.returncode if self.process else None,
+                  "transport_threads_stopped": not any(t and t.is_alive() for t in (self.writer, self.reader))}
+        report["cleanup_confirmed"] = bridge_closed_cleanly(report)
+        return report
+
+    def _request_stop(self):
+        """True once the writer has sent the stop packet and closed stdin (EOF)."""
+        return bool(self.writer) and not self.writer.is_alive()
+
+    def _wait_cooperative(self):
+        """Bounded wait for the helper to exit after a stop request."""
+        try:
+            self.process.wait(timeout=2)
+            return True
+        except subprocess.TimeoutExpired:
+            return False
 
     def _end_process(self, cooperative):
-        if cooperative:
-            try:
-                self.process.wait(timeout=2)
-                return
-            except subprocess.TimeoutExpired:
-                pass
+        if cooperative and self._wait_cooperative():
+            return
         if self.process.poll() is not None:
             return
         self.forced_termination = True
@@ -352,8 +381,5 @@ class OverlaySink:
             return True
         report = self.report = self.client.close()
         native = report.get("native_report") or {}
-        return (report.get("validation_only") is True and not report.get("error") and
-                report.get("forced_termination") is False and report.get("worker_reaped") is True and
-                report.get("worker_exit_code") == 0 and report.get("transport_threads_stopped") is True and
-                native.get("cleanup_ok") is True and native.get("exit_code") == 0 and
+        return (bridge_closed_cleanly(report) and report.get("validation_only") is True and
                 native.get("mode") == "--validate-stdin" and native.get("runtime_initialized") is False)

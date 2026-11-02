@@ -9,8 +9,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from framejacker.hud import HUD_CONFIG, HudMask, viewports
+from framejacker.hud import HUD_CONFIG, Calibration, HudMask, viewports
 from framejacker.hud.geometry import eye_viewports
+from framejacker.hud.mask import mask_regions
 from framejacker.hud.qualification import MappingCandidate, ValidationLedger, config_digest
 from scripts.hud_validation_report import main, read_record
 
@@ -103,6 +104,40 @@ class QualificationRecordTests(unittest.TestCase):
         for index, record in enumerate(records):
             with self.subTest(index=index), self.assertRaises(ValueError):
                 MappingCandidate.from_mapping(record)
+
+    def test_unknown_error_terms_are_explicit_nulls_with_reasons_never_zero(self):
+        record = candidate_record()
+        record["unknowns"] = {"localization_error_px": "corner uncertainty not measured",
+                              "operating_limits": "pose and display state not monitored",
+                              "eye_composition": "no eye-selective evidence"}
+        for copy in record["copies"]:
+            copy["localization_error_px"] = None
+        record["operating_limits"] = dict.fromkeys(record["operating_limits"])
+        candidate = MappingCandidate.from_mapping(record)
+        report = candidate.report()
+        self.assertEqual(report["status"], "candidate_valid_unqualified")
+        self.assertEqual(report["exit_code"], 2)
+        self.assertEqual(report["unknown_error_terms"], record["unknowns"])
+        self.assertFalse(report["mapping_qualified"])
+        self.assertIsNone(candidate.as_dict()["copies"][0]["localization_error_px"])
+        self.assertEqual(MappingCandidate.from_mapping(candidate_record()).report()["unknown_error_terms"], {})
+        rejected = []
+        item = deepcopy(record); item["copies"][0]["localization_error_px"] = 0; rejected.append(item)
+        item = deepcopy(record); item["operating_limits"]["yaw_degrees"] = 0; rejected.append(item)
+        item = deepcopy(record); del item["unknowns"]["localization_error_px"]; rejected.append(item)
+        item = deepcopy(record); del item["unknowns"]["operating_limits"]; rejected.append(item)
+        item = deepcopy(record); item["unknowns"]["eye_composition"] = ""; rejected.append(item)
+        item = deepcopy(record); item["unknowns"]["guessed_term"] = "not a schema term"; rejected.append(item)
+        item = deepcopy(record); item["unknowns"] = {}; rejected.append(item)
+        item = deepcopy(record); item["unknowns"] = ["localization_error_px"]; rejected.append(item)
+        item = candidate_record(); item["copies"][0]["filter_support_px"] = None; rejected.append(item)
+        # Known terms still bound the margin (8 + 2 + 2 px); the unknown one adds nothing and is reported.
+        item = deepcopy(record); item["copies"][0]["margin_px"] = 11; rejected.append(item)
+        accepted = deepcopy(record); accepted["copies"][0]["margin_px"] = 12
+        MappingCandidate.from_mapping(accepted)
+        for index, item in enumerate(rejected):
+            with self.subTest(index=index), self.assertRaises(ValueError):
+                MappingCandidate.from_mapping(item)
 
     def test_full_hud_geometry_digest_changes_with_individual_setting(self):
         self.assertEqual(config_digest({"width": 320, "x": .55}), config_digest({"x": .55, "width": 320}))
@@ -228,20 +263,22 @@ class RuntimeCalibrationTests(unittest.TestCase):
         self.assertEqual(calibration.provenance, "observed_unqualified")
         with self.assertRaisesRegex(ValueError, "calibration_unvalidated"):
             HudMask(calibration, source_kind="synthetic")
-        # Even a forged validation flag cannot pass the hardware-mapping gate.
-        with self.assertRaisesRegex(ValueError, "hardware_mapping_not_approved"):
-            HudMask(replace(calibration, validated=True), source_kind="synthetic")
+        # A validation flag cannot be forged: a calibration has no constructor or replace path.
+        with self.assertRaisesRegex(TypeError, "factory_required"):
+            replace(calibration, validated=True)
+        # Even a forced validation flag cannot pass the mask's own hardware-mapping gate.
+        with patch.object(Calibration, "validated", property(lambda self: True)), \
+                self.assertRaisesRegex(ValueError, "hardware_mapping_not_approved"):
+            HudMask(calibration, source_kind="synthetic")
 
     def test_candidate_geometry_equals_runtime_mask_regions_and_eye_partition(self):
         record = self.record()
         calibration = MappingCandidate.from_mapping(record).calibration()
-        # Test-only relabelling as a synthetic fixture checks geometry agreement,
-        # not approval: the runtime mask accepts every qualified-schema region.
-        mask = HudMask(replace(calibration, validated=True, provenance="synthetic_fixture"),
-                       source_kind="synthetic")
+        # The runtime mask's own geometry rule, without approval, accepts every
+        # qualified-schema region and removes exactly the expanded copies.
         expected = tuple((x0-copy["margin_px"], y0-copy["margin_px"], x1+copy["margin_px"], y1+copy["margin_px"])
                          for copy in record["copies"] for x0, y0, x1, y1 in [copy["rect_native"]])
-        self.assertEqual(mask.regions, expected)
+        self.assertEqual(mask_regions(calibration), expected)
         context = record["context"]
         self.assertEqual(viewports(calibration.capture_format, calibration.capture_layout),
                          eye_viewports(tuple(context["crop_xyxy"]), context["capture_layout"]))

@@ -1,13 +1,15 @@
-"""Detector registry, YOLOX decoding, letterbox mapping, labels and asset checks."""
+"""Detector registry, SSD and YOLOX decoding, letterbox mapping, labels and asset checks."""
 import importlib.util
 import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from framejacker import assets, detection
 from framejacker.labels import COCO_CLASSES, canonical
 from framejacker.preprocess import Letterbox
+from tests.asset_gate import model_assets, requires_assets
 
 ROOT = Path(__file__).resolve().parents[1]
 AVAILABLE = all(importlib.util.find_spec(name) for name in ("cv2", "numpy"))
@@ -36,6 +38,69 @@ class AssetTests(unittest.TestCase):
         names = [*detection.MODEL_FILES, *(spec[0] for spec in detection.YoloxDetector.MODELS.values())]
         entries = assets.manifest_entries(names)
         self.assertTrue(all(len(entry["sha256"]) == 64 for entry in entries.values()))
+
+    def test_registered_detectors_own_their_pinned_model_files(self):
+        for name in detection.DETECTORS:
+            with self.subTest(detector=name):
+                files = detection.model_files(name)
+                self.assertTrue(files and all(isinstance(item, str) for item in files))
+                entries = assets.manifest_entries(files)
+                self.assertTrue(all(len(entry["sha256"]) == 64 for entry in entries.values()))
+        self.assertEqual(detection.model_files("mobilenet-ssd"), detection.MODEL_FILES)
+        self.assertEqual(detection.model_files("yolox-nano"), ("yolox_nano.onnx",))
+        with self.assertRaisesRegex(ValueError, "Unknown detector"):
+            detection.model_files("rug-detector")
+
+    def test_absent_downloads_skip_with_their_names(self):
+        skipped = requires_assets("absent-model.bin")(lambda self: None)
+        self.assertTrue(skipped.__unittest_skip__)
+        self.assertIn("absent-model.bin", skipped.__unittest_skip_why__)
+        self.assertIn("setup_window.sh", skipped.__unittest_skip_why__)
+        self.assertEqual(model_assets("yolox-nano"), ("dog.jpg", "yolox_nano.onnx"))
+        self.assertEqual(model_assets("mobilenet-ssd", "yolox-nano", "mobilenet-ssd"),
+                         ("dog.jpg", *detection.MODEL_FILES, "yolox_nano.onnx"))
+        # Every registered detector, however many there are: the fixture first, then each file once.
+        everything = model_assets()
+        self.assertEqual((everything[0], len(set(everything))), ("dog.jpg", len(everything)))
+        self.assertEqual(set(everything), {"dog.jpg", *(item for name in detection.DETECTORS
+                                                        for item in detection.model_files(name))})
+
+
+class DetectorOwnershipTests(unittest.TestCase):
+    """Each registered class owns its model files and preprocessing; callers branch on neither."""
+    KEYS = {"input_size", "resize", "interpolation", "color_order", "layout", "dtype", "mean", "scale",
+            "padding_value", "box_mapping"}
+
+    def test_detectors_describe_their_preprocessing(self):
+        for name in detection.DETECTORS:
+            with self.subTest(detector=name):
+                description = detection.preprocessing(name)
+                self.assertEqual(set(description), self.KEYS)
+                self.assertEqual(json.loads(json.dumps(description)), description)
+        ssd = detection.preprocessing("mobilenet-ssd")
+        self.assertEqual((ssd["input_size"], ssd["resize"], ssd["color_order"], ssd["layout"], ssd["dtype"]),
+                         ([300, 300], "stretch", "BGR", "NCHW", "float32"))
+        self.assertEqual((ssd["mean"], ssd["scale"], ssd["padding_value"]), ([127.5, 127.5, 127.5], 0.007843, None))
+        yolox = detection.preprocessing("yolox-nano")
+        self.assertEqual((yolox["input_size"], yolox["resize"], yolox["color_order"]),
+                         ([416, 416], "letterbox_top_left", "BGR"))
+        self.assertEqual((yolox["mean"], yolox["scale"], yolox["padding_value"]), ([0, 0, 0], 1, 114))
+        self.assertEqual(yolox["box_mapping"], "inverse realized x/y resize ratios")
+        with self.assertRaisesRegex(ValueError, "Unknown detector"):
+            detection.preprocessing("rug-detector")
+
+    def test_factory_passes_each_registered_name_to_its_class(self):
+        calls = []
+
+        class Third:
+            def __init__(self, name, **options):
+                calls.append((name, options))
+
+        with mock.patch.dict(detection.DETECTORS, {"third": Third}):
+            detection.create_detector("third", threads=1)
+        self.assertEqual(calls, [("third", {"threads": 1})])
+        with self.assertRaisesRegex(ValueError, "Unknown MobileNet-SSD model"):
+            detection.MobileNetSSD("yolox-nano")
 
 
 class LabelAndTransformTests(unittest.TestCase):
@@ -147,7 +212,7 @@ class YoloxDecodeTests(unittest.TestCase):
         detector = FakeYolox(self.raw({0: ((np.nan, 0), (0, 0), 1.0, 1, 1.0)}))
         self.assertEqual(detector.detect(np.zeros((8, 8, 3), dtype=np.uint8), 0.5).detections, ())
 
-    @unittest.skipUnless((MODELS / "yolox_nano.onnx").is_file(), "Run scripts/setup_window.sh for the model")
+    @requires_assets(*model_assets("yolox-nano"))
     def test_real_model_runtimes_agree_on_fixture(self):
         import cv2
 
@@ -165,6 +230,100 @@ class YoloxDecodeTests(unittest.TestCase):
             self.assertEqual([item.label for item in first], [item.label for item in second])
             for a, b in zip(first, second):
                 self.assertLessEqual(max(abs(x - y) for x, y in zip(a.box_xyxy, b.box_xyxy)), 2)
+
+
+@unittest.skipUnless(AVAILABLE, "Run scripts/setup_window.sh for OpenCV checks")
+class PreprocessingDescriptionTests(unittest.TestCase):
+    def test_descriptions_match_the_tensors_each_detector_builds(self):
+        import cv2
+        import numpy as np
+
+        image = np.full((90, 160, 3), (10, 80, 240), dtype=np.uint8)
+        ssd = detection.MobileNetSSD.__new__(detection.MobileNetSSD)
+        ssd.cv2 = cv2
+        spec = detection.preprocessing("mobilenet-ssd")
+        blob, transform = ssd.prepare_input(image)
+        self.assertIsNone(transform)
+        self.assertEqual((blob.shape, str(blob.dtype)), ((1, 3, *spec["input_size"][::-1]), spec["dtype"]))
+        np.testing.assert_allclose(blob[0, :, 0, 0], (np.array([10, 80, 240]) - spec["mean"]) * spec["scale"],
+                                   rtol=1e-6)
+        yolox = detection.YoloxDetector.__new__(detection.YoloxDetector)
+        yolox.np, yolox.size = np, 416
+        spec = detection.preprocessing("yolox-nano")
+        blob, transform = yolox.prepare_input(image)
+        self.assertEqual((blob.shape, str(blob.dtype)), ((1, 3, *spec["input_size"][::-1]), spec["dtype"]))
+        np.testing.assert_array_equal(blob[0, :, 0, 0], (np.array([10, 80, 240]) - spec["mean"]) * spec["scale"])
+        np.testing.assert_array_equal(blob[0, :, -1, -1], [spec["padding_value"]] * 3)
+
+
+class FakeSsdNet:
+    """Stands in for the Caffe network: records the blob and returns a hand-built DetectionOutput."""
+
+    def __init__(self, output):
+        self.output, self.blob = output, None
+
+    def setInput(self, blob):
+        self.blob = blob
+
+    def forward(self):
+        return self.output
+
+
+@unittest.skipUnless(AVAILABLE, "Run scripts/setup_window.sh for OpenCV checks")
+class SsdDecodeTests(unittest.TestCase):
+    """MobileNet-SSD postprocessing on synthetic network output, with no downloaded model."""
+
+    @staticmethod
+    def output(rows):
+        import numpy as np
+
+        return np.array(rows, dtype=np.float32).reshape(1, 1, -1, 7)
+
+    def test_rows_are_filtered_labelled_and_mapped_to_input_pixels(self):
+        import numpy as np
+
+        dog, car, chair, person = (detection.CLASSES.index(name) for name in ("dog", "car", "chair", "person"))
+        rows = [[0, dog, 0.9, 0.1, 0.2, 0.5, 0.75],        # (64, 96, 320, 360) on 640 x 480
+                [0, car, 0.5, 0.25, 0.25, 0.5, 0.5],        # Exactly the threshold: kept.
+                [0, car, 0.49999, 0.0, 0.0, 0.5, 0.5],      # Below the threshold.
+                [0, 0, 0.99, 0.0, 0.0, 1.0, 1.0],           # Background.
+                [0, len(detection.CLASSES), 0.99, 0.0, 0.0, 1.0, 1.0],  # Outside the label map.
+                [0, person, np.nan, 0.0, 0.0, 1.0, 1.0],    # Non-finite score.
+                [0, person, 0.7, -0.2, -0.1, 1.3, 1.2],     # Clamped to the input.
+                [0, chair, 0.8, 0.5, 0.5, 0.5, 0.9]]        # Empty after mapping.
+        detections = detection.decode_ssd(self.output(rows), 640, 480, 0.5)
+        self.assertEqual([(item.label, item.confidence, item.box_xyxy) for item in detections],
+                         [("dog", 0.9, (64, 96, 320, 360)), ("car", 0.5, (160, 120, 320, 240)),
+                          ("person", 0.7, (0, 0, 639, 479))])
+        self.assertEqual(detection.decode_ssd(self.output(rows), 640, 480, 0.95), ())
+
+    def test_decode_reads_the_label_map_at_call_time(self):
+        swapped = list(detection.CLASSES)
+        dog, cat = swapped.index("dog"), swapped.index("cat")
+        swapped[dog], swapped[cat] = swapped[cat], swapped[dog]
+        with mock.patch.object(detection, "CLASSES", swapped):
+            detections = detection.decode_ssd(self.output([[0, dog, 0.9, 0.1, 0.1, 0.5, 0.5]]), 10, 10, 0.5)
+        self.assertEqual([item.label for item in detections], ["cat"])
+
+    def test_unexpected_output_shape_is_rejected(self):
+        import numpy as np
+
+        with self.assertRaisesRegex(RuntimeError, "output shape"):
+            detection.decode_ssd(np.zeros((1, 1, 2, 6), dtype=np.float32), 10, 10, 0.5)
+
+    def test_detect_feeds_the_real_blob_to_the_network_and_decodes_its_output(self):
+        import cv2
+        import numpy as np
+
+        tv = detection.CLASSES.index("tvmonitor")
+        ssd = detection.MobileNetSSD.__new__(detection.MobileNetSSD)
+        ssd.cv2, ssd.np = cv2, np
+        ssd.net = FakeSsdNet(self.output([[0, tv, 0.6, 0.5, 0.5, 1.0, 1.0]]))
+        result = ssd.detect(np.zeros((540, 960, 3), dtype=np.uint8), 0.5)
+        self.assertEqual(ssd.net.blob.shape, (1, 3, 300, 300))
+        self.assertEqual([(item.label, item.box_xyxy) for item in result.detections],
+                         [("tvmonitor", (480, 270, 959, 539))])
+        self.assertGreaterEqual(result.inference_ms, 0)
 
 
 if __name__ == "__main__":

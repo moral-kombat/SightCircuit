@@ -1,5 +1,7 @@
 // Shared packet decoding and teardown sequencing; no OpenVR or device access.
+// Packet layout and limits come from the generated hud_contract.hpp.
 #pragma once
+#include "hud_contract.hpp"
 #include <cstdint>
 #include <stdexcept>
 #include <vector>
@@ -15,20 +17,26 @@ struct FrameView {
     const std::uint8_t* rgba;
 };
 inline FrameView decode_frame(std::uint32_t kind, const std::vector<std::uint8_t>& payload) {
-    if (kind != 1 && kind != 4) throw std::runtime_error("invalid_frame_kind");
-    const unsigned dimensions = kind == 4 ? 8 : 0;
-    const unsigned pixels = dimensions + 8;
+    namespace contract = framejacker_contract;
+    if (kind != contract::kOpcodeFrame && kind != contract::kOpcodeExpiringFrame)
+        throw std::runtime_error("invalid_frame_kind");
+    const bool expiring = kind == contract::kOpcodeExpiringFrame;
+    const unsigned pixels = expiring ? contract::kExpiringFramePrefixBytes : contract::kFramePrefixBytes;
     if (payload.size() < pixels) throw std::runtime_error("invalid_rgba_frame");
-    const auto w = read_u32(payload.data() + dimensions);
-    const auto h = read_u32(payload.data() + dimensions + 4);
-    if (!w || !h || w > 512 || h > 512 || payload.size() != pixels + w*h*4)
+    const auto w = read_u32(payload.data() +
+        (expiring ? contract::kExpiringFramePrefixWidthOffset : contract::kFramePrefixWidthOffset));
+    const auto h = read_u32(payload.data() +
+        (expiring ? contract::kExpiringFramePrefixHeightOffset : contract::kFramePrefixHeightOffset));
+    if (!w || !h || w > contract::kMaxSide || h > contract::kMaxSide ||
+            payload.size() != pixels + w*h*contract::kRgbaBytes)
         throw std::runtime_error("invalid_rgba_frame");
-    const auto expiry = kind == 4 ? std::uint64_t(read_u32(payload.data())) |
-        (std::uint64_t(read_u32(payload.data() + 4)) << 32) : 0;
+    const auto* deadline = payload.data() + contract::kExpiringFramePrefixExpiresNsOffset;
+    const auto expiry = expiring ? std::uint64_t(read_u32(deadline)) |
+        (std::uint64_t(read_u32(deadline + 4)) << 32) : 0;
     return {w, h, expiry, payload.data() + pixels};
 }
 inline bool deadline_current(const FrameView& frame, std::uint64_t now) {
-    if (!frame.expiry || frame.expiry > now + 1000000000ULL)
+    if (!frame.expiry || frame.expiry > now + framejacker_contract::kMaxDisplayAgeNs)
         throw std::runtime_error("invalid_frame_expiry");
     return frame.expiry > now;
 }

@@ -17,3 +17,4 @@ jobs:
     uses: ./.github/workflows/check-jobs.yml
     with:
       runner: ubuntu-24.04-arm
+      pacing: true  # Realtime replay of the synthetic stand-in; uploads runner-CPU reports, not Frame results.

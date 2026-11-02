@@ -525,6 +525,13 @@
       "file": "e075.md",
       "kind": "mixed",
       "reconstructed": false
+    },
+    {
+      "id": "E76",
+      "title": "Offline work packages A–H, cloud checks",
+      "file": "e076.md",
+      "kind": "offline",
+      "reconstructed": false
     }
   ]
 }

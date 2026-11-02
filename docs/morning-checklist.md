@@ -20,9 +20,12 @@ may remain unanswered in the summary. Setup, regression, pacing, mirror,
 replay-overlay and window-mirror commands have been exercised remotely on
 Frame. Overlay visibility and passthrough/tracking still need user confirmation;
 the window-mirror attempt was inconclusive; labelled stills and detector
-comparison remain pending. The manifest helper has a unit test and the shell
-script syntax has been checked. Stage-to-step mapping: setup = 1,
-regression + overlay = 2,
+comparison remain pending. From the 2026-10-30 consolidation until 2026-11-01,
+`mirror_recognize.py` rejected the `stills` stage's `--detector` and `--still`
+(argparse exit 2); both are restored. The manifest helper has unit tests, the
+shell script syntax has been checked, and a contract test parses every Python
+command line in the script with that script's own parser. Stage-to-step
+mapping: setup = 1, regression + overlay = 2,
 pacing = 3, stills + evaluate = 4, window-mirror = 5 (mirror = E48 recognition).
 
 Manual equivalents follow. Run from the graphical session on Frame. Everything here is bounded; do not
@@ -40,8 +43,11 @@ labelled device-confirmed, and keep cloud/CI results separate.
    Record `realtime_ratio` (about 1.0 is real time), `processed_fps`, `decode_fps`,
    `catch_ups`, `mean_processing_ms`, and whether playback looks real-time
    rather than slow motion.
-4. Detector comparison: capture stills with `--still` (include the rug and sofa),
-   describe them in `evaluation/local/frame.json`, run `scripts/evaluate_detectors.py`.
+4. Detector comparison: capture stills with `--still` (include the rug and sofa)
+   and keep each JSON report; add each still to `evaluation/local/frame.json` with
+   `scripts/frame_session_manifest.py --still-report <report>`, which pins its
+   SHA-256 (the `stills` stage does both); run `scripts/evaluate_detectors.py`,
+   which then also passes `--require-input-digests` for these stills.
    Choose the default detector from this, not the outdoor seed.
 5. Window-in-mirror check (design-review next step 5): does the desktop window
    appear in the SteamVR mirror like the VR panel did (E18)?

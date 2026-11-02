@@ -174,6 +174,11 @@ must carry, as one numbered evidence entry separate from cloud results:
   view.
 - The supervisor, worker and native cleanup fields, reported separately from
   physical recovery.
+- The latency statistics the
+  [device report template](templates/hud-device-validation-report.json) names
+  under `g6_acceptance.latency`: nearest-rank p50, p95 and maximum input age,
+  inference, processing and output age in milliseconds, copied from the run
+  report's `pipeline` block ([definitions](development.md#latency-statistics)).
 - The wearer's answers on HUD visibility, arrow direction against the agreed
   tolerance, and passthrough and tracking during and after the run.
 
@@ -252,8 +257,19 @@ cd "$HOME/framejacker"
 QT_QPA_PLATFORM=offscreen .venv-replay/bin/python -m unittest \
   tests.test_hud_mask tests.test_live_pipeline tests.test_display_expiry
 QT_QPA_PLATFORM=offscreen .venv-replay/bin/python -m scripts.live_pipeline \
-  --synthetic-check --synthetic-hud --validate-overlay --seconds 3
+  --synthetic-check --synthetic-hud --detector fixture --validate-overlay --seconds 3
 ```
+
+Since 2026-11-01 a synthetic HUD run is also a validation run. With
+`--detector fixture`, which reports no detections and loads no model, the
+second command checks the mask, the validation ledger and the native
+transport, and ends `completed` with exit 0 and `g5_software.status`
+`checked_unqualified`. Without it, the default MobileNetSSD reports the zeroed
+footprint region of the generated frames itself as `tvmonitor`; the runtime
+drops that box, but a validation run fails on any box touching the mask, so
+that form ends `validation_failed` with exit 1 and clean cleanup. Whether G5
+should treat such a box differently is an open design question; see
+[synthetic validation counts](hud-qualification.md#synthetic-validation-counts-and-one-maximum-age-2026-11-01).
 
 ## Synthetic input and feedback contract review
 
@@ -271,7 +287,8 @@ results older than one second are dropped. Do not label a real source
 **HUD contract.** `HudMask` in `framejacker/hud/` accepts only synthetic calibration and
 rejects hardware mappings. It masks the full HUD footprint at native
 resolution before any resize. Detections that overlap the mask or cross an eye
-boundary are rejected.
+boundary are dropped from presentation and counted, and a synthetic validation
+run with any of them fails.
 
 **Output contract.** The overlay sink only requests the bridge's
 `--validate-stdin` mode, so it cannot initialize real VR output. Synthetic

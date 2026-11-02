@@ -4,7 +4,9 @@ One supervisor on the main thread owns a fresh process group. On Linux it
 temporarily becomes a subreaper so an orphaned helper in that group can be
 reaped, not merely killed. Never wait for or signal unrelated children.
 Linux uses a separate guardian and a private parent lifeline; catchable signals
-are not the only trigger for worker cleanup. Windows callers must be single-
+are not the only trigger for worker cleanup. The guardian reports its worker's
+process group, so if the guardian is killed the supervisor (its subreaper)
+terminates and reaps that orphaned group itself. Windows callers must be single-
 process workers (no native overlay helper) and have no parent-death guarantee.
 
 Callers pass their own module-level ``validate(report, returncode, **options)``
@@ -12,6 +14,14 @@ from ``scripts/`` or ``framejacker/``. The guardian imports that validator by
 dotted module name from this checkout only, so it knows no command and never
 imports worker code beyond the validator's module (no detector, decoder or VR
 library is loaded at import time).
+
+Stop on a signal, the one convention for both sides of a bounded run: a
+launcher runs inside ``sigterm_cancels()``, where SIGTERM raises
+``StopRequested`` as Ctrl+C raises ``KeyboardInterrupt`` (together
+``CANCELLATION``), and ``cancelled(report, error)`` records either as a
+``cancelled`` report with exit 128 + signal. A worker calls
+``stop_on_signals()`` once: SIGINT and SIGTERM then set its stop event, so its
+own cleanup runs.
 """
 import contextlib
 import importlib
@@ -30,6 +40,51 @@ MAX_REPORT_BYTES = 256 * 1024
 COOPERATIVE_GRACE = 5.0
 TERM_GRACE = 1.0
 KILL_GRACE = 1.0
+
+
+class StopRequested(BaseException):
+    """SIGTERM on a launcher's main thread, raised by ``stop_on_signal``."""
+
+    def __init__(self, number):
+        self.number = number
+
+
+def stop_on_signal(number, _frame):
+    """Signal handler that turns SIGTERM into a catchable cancellation."""
+    raise StopRequested(number)
+
+
+CANCELLATION = (KeyboardInterrupt, StopRequested)
+
+
+@contextlib.contextmanager
+def sigterm_cancels():
+    """Within the block SIGTERM raises ``StopRequested``; the previous handler is restored afterwards."""
+    previous = signal.signal(signal.SIGTERM, stop_on_signal)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+def signal_number(error):
+    """The signal behind a ``CANCELLATION``: its ``StopRequested`` number, else SIGINT."""
+    return error.number if isinstance(error, StopRequested) else signal.SIGINT
+
+
+def cancelled(report, error):
+    """Record a launcher's ``CANCELLATION``: status ``cancelled``, reason ``signal`` and exit 128 + signal."""
+    number = signal_number(error)
+    report.update(status="cancelled", reason="signal", signal=number, exit_code=128 + number)
+    return report
+
+
+def stop_on_signals(stop=None):
+    """A worker's cooperative stop: SIGINT and SIGTERM set ``stop`` (by default a new event), which is returned."""
+    stop = threading.Event() if stop is None else stop
+    for number in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(number, lambda *_: stop.set())
+    return stop
 
 
 @contextlib.contextmanager
@@ -70,13 +125,70 @@ def child_reaper():
             raise OSError(ctypes.get_errno(), "cannot_restore_worker_child_reaper")
 
 
+def _reap_members(pgid):
+    """Reap exited members of process group ``pgid`` that are this process's children."""
+    while True:
+        try:
+            pid, _ = os.waitpid(-pgid, os.WNOHANG)
+        except ChildProcessError:
+            return
+        if not pid:
+            return
+
+
+def _group_exists(pgid):
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+
+
+def _reported_group(fd):
+    """The worker group a guardian wrote to ``fd`` and never confirmed gone, else None."""
+    os.set_blocking(fd, False)
+    try:
+        lines = os.read(fd, 32).decode("ascii", "replace").split()
+    except BlockingIOError:
+        return None
+    if len(lines) != 1 or not lines[0].isdigit() or int(lines[0]) <= 1:
+        return None  # Nothing reported, or the guardian confirmed its tree "reaped".
+    return int(lines[0])
+
+
+def _contain_orphaned_group(pgid):
+    """SIGTERM, then SIGKILL, a killed guardian's worker group; True once it is gone.
+
+    The guardian never confirmed this group gone. While any member lives, or
+    the worker waits unreaped as this subreaper's child, ``pgid`` names it.
+    """
+    for number, grace in ((signal.SIGTERM, TERM_GRACE), (signal.SIGKILL, KILL_GRACE)):
+        try:
+            os.killpg(pgid, number)
+        except ProcessLookupError:
+            return True
+        deadline = time.monotonic() + grace
+        while True:
+            _reap_members(pgid)
+            if not _group_exists(pgid):
+                return True
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.01)
+    return False
+
+
 def _supervise_owned(command, base_report, timeout, validate, *, descendants=False,
-                     parent_fd=None, pass_fds=(), cleanup_grace=COOPERATIVE_GRACE):
+                     parent_fd=None, pass_fds=(), cleanup_grace=COOPERATIVE_GRACE,
+                     group_fd=None, nested_group_fd=None):
     """Consume bounded bytes off-thread; a partial report can never block the watchdog.
 
     SIGINT/TERM request cooperative worker shutdown first. Every escalation and
     surviving process is reflected in cleanup_ok, independently of child claims.
     Descendants must stay in the owned group; worker code cannot detach helpers.
+    A guardian writes its worker's group to ``group_fd``, then "reaped" once
+    that tree is gone. The supervisor reads ``nested_group_fd`` and contains an
+    unconfirmed group if the guardian is killed.
     """
     if descendants and not sys.platform.startswith("linux"):
         raise ValueError("native_helper_supervision_requires_linux")
@@ -110,18 +222,8 @@ def _supervise_owned(command, base_report, timeout, validate, *, descendants=Fal
             return process.poll() is None
         # poll reaps our direct child first; only then reap adopted group members.
         if process.poll() is not None and sys.platform.startswith("linux"):
-            while True:
-                try:
-                    pid, _ = os.waitpid(-process.pid, os.WNOHANG)
-                except ChildProcessError:
-                    break
-                if not pid:
-                    break
-        try:
-            os.killpg(process.pid, 0)
-            return True
-        except ProcessLookupError:
-            return False
+            _reap_members(process.pid)
+        return _group_exists(process.pid)
 
     def signal_group(number):
         try:
@@ -150,6 +252,10 @@ def _supervise_owned(command, base_report, timeout, validate, *, descendants=Fal
             process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                        bufsize=0, start_new_session=(os.name == "posix"), **extra)
             report["worker_pid"] = process.pid
+            if group_fd is not None:
+                # A dead supervisor is detected below through the lifeline.
+                with contextlib.suppress(BrokenPipeError):
+                    os.write(group_fd, b"%d\n" % process.pid)
             reader = threading.Thread(target=read_report, daemon=True)
             reader.start()
             deadline = started + timeout
@@ -199,6 +305,20 @@ def _supervise_owned(command, base_report, timeout, validate, *, descendants=Fal
                     if not tree_gone:
                         signal_group(getattr(signal, "SIGKILL", signal.SIGTERM))
                         tree_gone = wait_tree(KILL_GRACE)
+                if group_fd is not None and tree_gone:
+                    with contextlib.suppress(BrokenPipeError):
+                        os.write(group_fd, b"reaped\n")
+                orphan = (_reported_group(nested_group_fd) if nested_group_fd is not None and
+                          process.returncode is not None and process.returncode < 0 else None)
+                if orphan is not None:
+                    # A killed guardian ran no cleanup; its worker group is ours to end.
+                    _reap_members(orphan)
+                    signalled = _group_exists(orphan)
+                    orphan_gone = not signalled or _contain_orphaned_group(orphan)
+                    forced = forced or signalled
+                    tree_gone = tree_gone and orphan_gone
+                    owned.update(orphaned_worker_group=orphan, orphaned_worker_tree_signalled=signalled,
+                                 orphaned_worker_tree_reaped=orphan_gone)
                 reader.join(timeout=0.2)
                 forced = forced or (process.returncode is not None and process.returncode < 0)
                 owned.update(worker_pid=process.pid, worker_reaped=process.poll() is not None,
@@ -305,22 +425,35 @@ def supervise(command, base_report, timeout, validate, *, descendants=False, val
     # Only the calling process holds the write end. Worker/helper execs cannot
     # inherit it, so an abrupt parent death is observable without PID polling.
     read_fd, write_fd = os.pipe()
+    # The guardian writes its worker's group here, for containment if it is killed.
+    try:
+        group_read, group_write = os.pipe()
+    except OSError:
+        os.close(write_fd)
+        os.close(read_fd)
+        raise
     guard_base = {"report_kind": "bounded_worker_guard"}
     options = {"command": command, "base_report": base_report, "timeout": timeout,
-               "descendants": descendants, "parent_fd": read_fd, "validator": reference}
+               "descendants": descendants, "parent_fd": read_fd, "group_fd": group_write,
+               "validator": reference}
     try:
         guarded = _supervise_owned([sys.executable, str(Path(__file__).resolve()),
                                    "--guard", json.dumps(options)], guard_base,
-                                  timeout + 8, _validate_guard_report, pass_fds=(read_fd,),
-                                  cleanup_grace=8)
+                                  timeout + 8, _validate_guard_report, pass_fds=(read_fd, group_write),
+                                  cleanup_grace=8, nested_group_fd=group_read)
     finally:
-        os.close(write_fd)
-        os.close(read_fd)
+        for fd in (write_fd, read_fd, group_write, group_read):
+            os.close(fd)
     report = guarded.get("result")
     if report is None:
+        # Reaping is confirmed only by containment of a reported orphaned group.
+        contained = guarded.get("orphaned_worker_tree_reaped", False)
         report = dict(base_report, status="guardian_failed", exit_code=1, cleanup_ok=False,
-                      worker_reaped=False, worker_tree_reaped=False,
+                      worker_reaped=contained, worker_tree_reaped=contained,
                       reason=guarded.get("reason", guarded.get("status")))
+    for key in ("orphaned_worker_group", "orphaned_worker_tree_signalled", "orphaned_worker_tree_reaped"):
+        if key in guarded:
+            report[key] = guarded[key]
     report.update(parent_death_containment="linux_lifeline_guardian",
                   guardian_pid=guarded.get("worker_pid"), guardian_reaped=guarded.get("worker_reaped", False),
                   guardian_exit_code=guarded.get("worker_exit_code"),
@@ -345,10 +478,12 @@ def _guard_main(options):
     validate = load_validator(options.get("validator") or {})
     result = _supervise_owned(options["command"], options["base_report"], options["timeout"],
                              validate, descendants=options["descendants"],
-                             parent_fd=options["parent_fd"])
+                             parent_fd=options["parent_fd"], group_fd=options.get("group_fd"))
     report = {"report_kind": "bounded_worker_guard", "status": result["status"],
               "exit_code": result["exit_code"], "cleanup_ok": result["cleanup_ok"], "result": result}
     os.close(options["parent_fd"])
+    if options.get("group_fd") is not None:
+        os.close(options["group_fd"])
     try:
         print(json.dumps(report), flush=True)
     except BrokenPipeError:

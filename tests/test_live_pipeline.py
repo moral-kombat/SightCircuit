@@ -9,9 +9,10 @@ import unittest
 from unittest.mock import patch
 
 from framejacker.frame import Frame, native_format
+from framejacker.hud import HUD_CONFIG, HudPipelineAdapter
 from framejacker.overlay import OverlaySink
-from framejacker.runtime import synthetic
-from scripts import live_pipeline as live
+from framejacker.runtime import live, synthetic
+from scripts import live_pipeline as command
 
 
 @unittest.skipUnless(importlib.util.find_spec("numpy"), "NumPy required for generated image tests")
@@ -116,7 +117,7 @@ class LivePipelineTests(unittest.TestCase):
     def test_native_padded_stride_is_owned_then_fully_masked_before_inference_resize(self):
         import cv2
         import numpy as np
-        from framejacker.hud import Calibration, CaptureFormat, Footprint
+        from framejacker.hud import CaptureFormat, Footprint
 
         width, height, stride = 1920, 1080, 5824
         storage = np.full((height, stride), 231, np.uint8)
@@ -149,11 +150,10 @@ class LivePipelineTests(unittest.TestCase):
                 self.assertFalse(image.flags.writeable)
                 return super().detect(image, threshold)
 
-        calibration = Calibration("synthetic:native", CaptureFormat.from_mapping(native_format(owned)),
-                                  "mono", (Footprint(0, (1500, 850, 1820, 1020), 8),),
-                                  validated=True, provenance="synthetic_fixture")
-        report = live.run_pipeline(Source(), Detector(), synthetic.HeadlessSink(), .5,
-                                   hud_mode=True, calibration=calibration)
+        calibration = synthetic.fixture_calibration("synthetic:native", CaptureFormat.from_mapping(native_format(owned)),
+                                                    "mono", (Footprint(0, (1500, 850, 1820, 1020), 8),))
+        source, sink = Source(), synthetic.HeadlessSink()
+        report = live.run_pipeline(source, Detector(), sink, .5, hud=HudPipelineAdapter(source, sink, calibration))
         self.assertEqual(report["frames_submitted"], 1, report)
         self.assertTrue(report["cleanup_ok"], report)
         self.assertEqual(report["last_result"]["native_format"]["stride_bytes"], stride)
@@ -175,17 +175,17 @@ class LivePipelineTests(unittest.TestCase):
             self.assertTrue(report["cleanup_ok"])
 
     def test_context_change_during_hud_render_is_checked_at_submission_boundary(self):
-        source = synthetic.SyntheticSource(rate=1)
-        original = live.HudPipelineAdapter.render
+        source, sink = synthetic.SyntheticSource(rate=1), synthetic.HeadlessSink()
+        original = HudPipelineAdapter.render
 
         def render(adapter, *args):
             result = original(adapter, *args)
             source.session_id = "changed-during-render"
             return result
 
-        with patch.object(live.HudPipelineAdapter, "render", render):
-            report = live.run_pipeline(source, synthetic.FixtureDetector(), synthetic.HeadlessSink(), .2,
-                                       hud_mode=True, calibration=synthetic.synthetic_hud_calibration())
+        with patch.object(HudPipelineAdapter, "render", render):
+            report = live.run_pipeline(source, synthetic.FixtureDetector(), sink, .2,
+                                       hud=HudPipelineAdapter(source, sink, synthetic.synthetic_hud_calibration()))
         self.assertEqual(report["status"], "error", report)
         self.assertEqual(report["frames_submitted"], 0)
         self.assertEqual(report["reason"], "source_or_session_changed")
@@ -253,13 +253,12 @@ class LivePipelineTests(unittest.TestCase):
         self.assertGreater(report["pending_inputs_replaced"], 0)
         self.assertGreater(report["frames_received"], report["frames_submitted"])
         self.assertFalse(report["live_input_verified"])
-        from framejacker.runtime.live import LEGACY_FIELDS
         expected = {"frames_processed": "frames_processed", "frames_submitted": "frames_submitted",
                     "frames_received": "frames_received", "stale_inputs_dropped": "stale_inputs_skipped",
                     "stale_results_dropped": "stale_results_skipped", "pending_inputs_replaced": "pending_replaced",
                     "maximum_observation_age_ms": "max_output_age_ms", "total_processing_ms": "total_processing_ms",
                     "total_inference_ms": "total_inference_ms", "labels_seen": "labels_seen"}
-        self.assertEqual(LEGACY_FIELDS, expected)  # Literal, so a mis-mapped alias fails here.
+        self.assertEqual(live.LEGACY_FIELDS, expected)  # Literal, so a mis-mapped alias fails here.
         self.assert_legacy_fields_follow_the_block(report, expected)
         # Rounded once from the stats; the block's rounded milliseconds agree within that rounding.
         self.assertAlmostEqual(report["elapsed_seconds"], report["pipeline"]["elapsed_ms"] / 1000, delta=0.001)
@@ -419,11 +418,68 @@ class LivePipelineTests(unittest.TestCase):
         for key in ("live_input_verified", "feedback_exclusion_verified", "hardware_trial_ready",
                     "vr_runtime_initialized"):
             with self.assertRaises(ValueError):
-                live.validate_worker_report(dict(report, **{key: True}), report["exit_code"])
+                command.validate_worker_report(dict(report, **{key: True}), report["exit_code"])
         with self.assertRaises(ValueError):
-            live.validate_worker_report(report, 7)
+            command.validate_worker_report(report, 7)
 
     def test_default_does_not_start_pipeline_or_overlay(self):
-        with patch.object(live, "supervise_synthetic") as supervised, contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(live.main([]), 3)
+        with patch.object(command, "supervise_synthetic") as supervised, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(command.main([]), 3)
         supervised.assert_not_called()
+
+    def test_synthetic_and_mirror_runs_share_one_report_runner(self):
+        from framejacker.sources import mirror_device
+
+        class Unread:
+            capabilities, format = {"driver": "fixture"}, mirror_device.validate_format(2, 2, "GREY", 2, 4)
+
+            def __init__(self, candidate):
+                pass
+
+            def open(self):
+                pass
+
+            def read_frame(self, timeout):
+                return None
+
+            def close(self):
+                pass
+
+        with patch.object(live, "run_report", wraps=live.run_report) as runner:
+            synthetic_report = live.run_pipeline(synthetic.SyntheticSource(), synthetic.FixtureDetector(),
+                                                 synthetic.HeadlessSink(), .1)
+            mirror_report, _ = live.run_recognition({}, .1, threading.Event(), backend_factory=Unread,
+                                                    detector_factory=synthetic.FixtureDetector)
+        self.assertEqual([call.args[1] for call in runner.call_args_list], [live.SYNTHETIC, live.MIRROR])
+        self.assertEqual((synthetic_report["status"], mirror_report["status"]), ("completed", "no_frames"))
+
+    def test_hud_adapter_requires_the_fixed_configuration_of_a_sink_with_a_contract(self):
+        class Contracted(synthetic.HeadlessSink):
+            checked = 0
+
+            def __init__(self, hud=None):
+                self.hud = hud
+
+            def check_contract(self, config):
+                self.checked += 1
+
+        calibration = synthetic.synthetic_hud_calibration()
+        HudPipelineAdapter(synthetic.SyntheticSource(), synthetic.HeadlessSink(), calibration).start()  # No contract.
+        with self.assertRaisesRegex(ValueError, "^hud_requires_fixed_validation_sink$"):
+            HudPipelineAdapter(synthetic.SyntheticSource(), Contracted(), calibration).start()
+        sink = Contracted(HUD_CONFIG)
+        adapter = HudPipelineAdapter(synthetic.SyntheticSource(), sink, calibration)
+        adapter.start()
+        adapter.check_sink()
+        self.assertEqual(sink.checked, 2)
+
+    def test_worker_builds_the_requested_registered_or_fixture_detector(self):
+        from framejacker.detection import DEFAULT_DETECTOR
+
+        for options, built in (({}, DEFAULT_DETECTOR), ({"detector": "yolox-nano"}, "yolox-nano"),
+                               ({"detector": "fixture"}, None)):
+            with self.subTest(options=options), patch.object(command, "stop_on_signals", return_value=threading.Event()), \
+                    patch.object(command, "create_detector", return_value=synthetic.FixtureDetector()) as create:
+                report = command._worker(dict(options, seconds=.1))
+            self.assertEqual((report["status"], report["detector"]), ("completed", built or "fixture"), report)
+            self.assertEqual([call.args for call in create.call_args_list], [(built,)] if built else [])

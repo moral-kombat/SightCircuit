@@ -194,12 +194,17 @@ class PanelLimitConsistencyTests(unittest.TestCase):
     def test_python_limits_match_native_bridge(self):
         import re
 
-        source = (Path(__file__).resolve().parents[1] / "tools/overlay_bridge.cpp").read_text()
-        native = {name: (float(low), float(high)) for name, low, high in
-                  re.findall(r"bounded\(s\.(\w+),\s*(-?[\d.]+)f?,\s*(-?[\d.]+)f?\)", source)}
+        tools = Path(__file__).resolve().parents[1] / "tools"
+        # The bridge applies the generated header's values, never its own literals.
+        header = (tools / "hud_contract.hpp").read_text()
+        values = {name: float(value) for name, value in
+                  re.findall(r"constexpr float (kPanel\w+) = (-?[\d.]+)f;", header)}
+        source = (tools / "overlay_bridge.cpp").read_text()
+        native = {name: (values[low], values[high]) for name, low, high in
+                  re.findall(r"bounded\(s\.(\w+),\s*contract::(kPanel\w+Min),\s*contract::(kPanel\w+Max)\)", source)}
         native["opacity"] = native.pop("alpha")
         self.assertEqual({name: (float(low), float(high)) for name, low, high in PANEL_LIMITS}, native)
-        self.assertEqual(MAX_SIDE, int(re.search(r"kMaxSide = (\d+)", source).group(1)))
+        self.assertEqual(MAX_SIDE, int(re.search(r"kMaxSide = (\d+)", header).group(1)))
 
     def test_defaults_are_within_limits(self):
         defaults = PanelSettings()

@@ -39,7 +39,10 @@ int main() {
     bool rejected = false;
     try { decode_frame(1, payload); } catch (const std::runtime_error&) { rejected = true; }
     assert(rejected);
-    for (auto expiry : {0ULL, now + 1000000001ULL}) {
+    // The generated display-age cap is accepted exactly and rejected one nanosecond later.
+    constexpr auto cap = framejacker_contract::kMaxDisplayAgeNs;
+    assert(deadline_current({1, 1, now + cap, nullptr}, now));
+    for (auto expiry : {std::uint64_t{0}, now + cap + 1}) {
         rejected = false;
         try { deadline_current({1, 1, expiry, nullptr}, now); }
         catch (const std::runtime_error&) { rejected = true; }

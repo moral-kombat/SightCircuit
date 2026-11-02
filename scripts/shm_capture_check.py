@@ -1,7 +1,6 @@
 """Inspect an existing MRHAND luma file; explicitly opt in to bounded reading."""
 import argparse
 import json
-import os
 from pathlib import Path
 import signal
 import stat
@@ -13,6 +12,7 @@ import time
 if not __package__:  # Run as a file: import this checkout's packages without installation.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from framejacker.runtime.output import publish_new  # noqa: E402
 from framejacker.sources.mirror_device import grayscale_png  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -169,13 +169,7 @@ def main(argv=None):
                 if args.preview and report["exit_code"] == 0:
                     png, width, height = encode_preview(pgm)
                     # Publish atomically without replacing any existing target, even in a race.
-                    fd, name = tempfile.mkstemp(prefix=".framejacker-shm-", suffix=".png.part", dir=target.parent)
-                    try:
-                        with os.fdopen(fd, "wb") as output:
-                            output.write(png)
-                        os.link(name, target, follow_symlinks=False)
-                    finally:
-                        Path(name).unlink()
+                    publish_new(target, png, ".framejacker-shm-")
                     report.update(images_saved=True, preview_path=str(target),
                                   preview_width=width, preview_height=height)
     except (OSError, ValueError) as error:

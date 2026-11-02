@@ -2,29 +2,27 @@
 import argparse
 import json
 from pathlib import Path
-import signal
 import sys
-import threading
 import time
 
 if not __package__:  # Run as a file: import this checkout's packages without installation.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from framejacker.hud.contract import MARKER_MAX_SECONDS, MARKER_MIN_SECONDS  # noqa: E402
 from framejacker.hud.marker import (  # noqa: E402
     MarkerClient, new_report, validate_visibility_evidence, validate_worker_report)
-from framejacker.runtime.guard import supervise  # noqa: E402
+from framejacker.overlay import bridge_closed_cleanly  # noqa: E402
+from framejacker.runtime.guard import stop_on_signals, supervise  # noqa: E402
 
 
 def worker(options):
     seconds = options["seconds"]
     validation_only = options["validation_only"]
-    if type(validation_only) is not bool or type(seconds) is not int or not 1 <= seconds <= 20:
+    if type(validation_only) is not bool or type(seconds) is not int or not MARKER_MIN_SECONDS <= seconds <= MARKER_MAX_SECONDS:
         raise ValueError("invalid_marker_options")
     report = new_report(validation_only)
     report.update(status="error", exit_code=1, cleanup_ok=False, seconds_requested=seconds)
-    stop = threading.Event()
-    for number in (signal.SIGINT, signal.SIGTERM):
-        signal.signal(number, lambda *_: stop.set())
+    stop = stop_on_signals()
     client = MarkerClient(validation_only=validation_only)
     started = time.monotonic()
     try:
@@ -51,9 +49,7 @@ def worker(options):
             report["bridge"] = bridge
             native = bridge.get("native_report") or {}
             report["native_cleanup_report_ok"] = native.get("cleanup_ok") is True
-            clean = (bridge.get("worker_reaped") is True and bridge.get("worker_exit_code") == 0 and
-                     bridge.get("transport_threads_stopped") is True and not bridge.get("forced_termination") and
-                     not bridge.get("error") and native.get("cleanup_ok") is True and native.get("exit_code") == 0)
+            clean = bridge_closed_cleanly(bridge)
             report["cleanup_ok"] = clean
             if report["status"] == "completed" and (
                     not clean or native.get("mode") != client.mode or
@@ -79,7 +75,7 @@ def main(argv=None):
     modes.add_argument("--validate", action="store_true", help="Generated marker and native timer only; never initializes VR")
     modes.add_argument("--calibrate", action="store_true", help="Separate real-marker path; requires explicit output opt-in")
     parser.add_argument("--allow-calibration-output", action="store_true")
-    parser.add_argument("--seconds", type=int, choices=range(1, 21), default=10)
+    parser.add_argument("--seconds", type=int, choices=range(MARKER_MIN_SECONDS, MARKER_MAX_SECONDS + 1), default=10)
     parser.add_argument("--worker", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.worker:

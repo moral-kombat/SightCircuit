@@ -41,7 +41,7 @@ no threshold or model changes to make one image pass; skipped tests fail CI.
 
 Change:
 
-- One coordinator allocates evidence IDs (E76 onward after this delivery) and is the only editor of
+- One coordinator allocates evidence IDs (E77 onward; E76 is the 2026-11-02 offline delivery) and is the only editor of
   the `status.md` matrix; coders put evidence in their PR description and the
   coordinator records it. Parallel branches reused E50, E52 and E54–E62; those
   results are now recorded as E63–E71.
@@ -146,6 +146,34 @@ already-saved Arcturus/camera/compositor logs and exact runtime versions for
 October 24 around 22:48 EDT. Tag/bit mismatch and green passthrough causes
 remain unknown. G2 must be resolved before another marker/output proposal;
 no new device run is authorized by this plan update.
+
+### Offline handoff delivery (2026-11-02)
+
+Packages A–H of the [2026-11-01 offline handoff](execution-prompt.md#offline-handoff-2026-11-01)
+are implemented and verified offline ([E76](evidence/e076.md)). No device result
+is implied, and no device-dependent work package closed.
+
+- **WP2:** the `frame_session.sh` stills stage works again in cloud tests
+  (package A), and stills carry pinned digests.
+- **WP1 and WP2:** the evaluator gained a mirror-preview variant, per-label
+  diagnostics and a CI seed pin (package G).
+- **WP10 and G2 software:** a rejected marker run now stops without a forced
+  termination, and a killed guardian's worker group is contained (package B).
+- **G3 prerequisites:** one generated Python/C++ HUD contract (package D) and
+  the checkpoint artifact manifest (package C).
+- **WP9, WP11 and G4/G5 offline support:** the observer report converts to an
+  unqualified candidate, calibrations come only from factories with expiry and
+  session tokens, and exclusion counters feed the validation ledger in
+  synthetic runs (package E).
+- **WP12 measurement:** latency percentiles and a runner-CPU stand-in job
+  (package H). Package F consolidated the live runner and the mirror launcher.
+
+Open decision: on generated frames, the default detector boxes the zeroed HUD
+mask as `tvmonitor`, so a synthetic validation run with the real detector
+fails under the strict G5 rule. See
+[synthetic validation counts](hud-qualification.md#synthetic-validation-counts-and-one-maximum-age-2026-11-01).
+Each device step these packages unlock still needs its own approval. The
+handoff lists them.
 
 ## Upstream reuse plan (2026-10-31)
 

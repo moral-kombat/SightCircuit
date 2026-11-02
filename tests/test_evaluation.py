@@ -5,17 +5,19 @@ import io
 import json
 from pathlib import Path
 import tempfile
-from types import SimpleNamespace
 import unittest
 from unittest import mock
 
-from framejacker import evaluation
-from framejacker.frame import Detection
+from framejacker import assets, detection, evaluation
+from framejacker.frame import Detection, DetectionResult
+from tests.asset_gate import model_assets, requires_assets
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / ".cache/framejacker/assets"
 AVAILABLE = all(importlib.util.find_spec(name) for name in ("cv2", "numpy"))
 VOC = ("sofa", "chair", "dog", "car")
+COUNTS = {"images": 6, "present_checks": 9, "present_hits": 7, "absence_checks": 22, "absent_violations": 2,
+          "confusions": 0}
 
 
 def found(label, box, confidence=0.9):
@@ -78,6 +80,125 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(empty["false_positives"], 1)
         self.assertEqual(evaluation.totals([empty])["box_precision"], 0)
 
+    def test_best_below_threshold_for_each_supported_expected_label(self):
+        entry = {"id": "room", "present": ["dog", ["car", "truck"], "giraffe", "cat"], "absent": ["couch", "horse"]}
+        candidates = [found("dog", [0, 0, 5, 5], 0.9), found("dog", [5, 5, 9, 9], 0.4), found("truck", [0, 0, 2, 2], 0.3),
+                      found("car", [0, 0, 2, 2], 0.2), found("cat", [0, 0, 2, 2], 0.5),
+                      found("sofa", [0, 0, 3, 3], 0.31), found("sofa", [0, 0, 3, 3], 0.12)]
+        vocabulary = ("dog", "car", "truck", "cat", "sofa", "horse")
+        self.assertEqual(evaluation.best_below_threshold(entry, candidates, vocabulary, 0.5), {
+            "present": {"dog": 0.4, "car|truck": 0.3, "cat": None}, "absent": {"couch": 0.31, "horse": None}})
+
+    def test_label_outcomes_and_per_label_table(self):
+        vocabulary = ("dog", "horse", "sheep", "cat")
+        first = evaluation.score_image({"id": "a", "present": ["dog", "horse", "giraffe"], "absent": ["sheep", "cat"]},
+                                       [found("dog", [0, 0, 5, 5]), found("sheep", [0, 0, 5, 5], 0.6)], vocabulary)
+        self.assertEqual(first["label_outcomes"], {
+            "present": {"dog": "hit", "horse": "miss", "giraffe": "unsupported"},
+            "absent": {"sheep": "violation", "cat": "clean"}})
+        self.assertEqual(first["absent_clean"], ["cat"])
+        # Below-threshold scores from a hit or a violation image are not near misses: the horse hit's 0.45 and
+        # the sheep violation's 0.48 must not reach the table, only the horse miss and the clean cats.
+        first["best_below_threshold"] = {"present": {"dog": None, "horse": 0.41}, "absent": {"sheep": 0.48, "cat": 0.2}}
+        second = evaluation.score_image({"id": "b", "present": ["horse"], "absent": ["cat", "zebra"]},
+                                        [found("horse", [0, 0, 5, 5])], vocabulary)
+        second["best_below_threshold"] = {"present": {"horse": 0.45}, "absent": {"cat": 0.45}}
+        table = evaluation.label_table([first, second])
+        self.assertEqual(table["present"]["horse"], {"hit": 1, "miss": 1, "unsupported": 0, "best_below_threshold": 0.41})
+        self.assertEqual(table["present"]["giraffe"], {"hit": 0, "miss": 0, "unsupported": 1,
+                                                       "best_below_threshold": None})
+        self.assertEqual(table["absent"]["cat"], {"clean": 2, "violation": 0, "unsupported": 0,
+                                                  "best_below_threshold": 0.45})
+        self.assertEqual(table["absent"]["sheep"], {"clean": 0, "violation": 1, "unsupported": 0,
+                                                    "best_below_threshold": None})
+        self.assertEqual(table["absent"]["zebra"]["unsupported"], 1)
+        self.assertEqual(evaluation.totals([first, second])["absent_clean"], 2)
+        lines = evaluation.format_label_table({"ssd": table, "yolox": evaluation.label_table([second])}, 0.5)
+        self.assertIn("ssd", lines[1])
+        self.assertIn("yolox", lines[1])
+        horse = next(line for line in lines if line.startswith("horse") and "present" in line)
+        self.assertIn("1/2 hit (best miss 0.410)", horse)
+        giraffe = next(line for line in lines if line.startswith("giraffe"))
+        self.assertIn("unsupported", giraffe)
+        self.assertTrue(giraffe.endswith(" -"), giraffe)  # Never expected in the second detector's images.
+        sheep = next(line for line in lines if line.startswith("sheep"))
+        self.assertIn("0/1 clean", sheep)
+
+
+class PinTests(unittest.TestCase):
+    """Committed count pins: regressions fail, improvements pass, scores never enter."""
+
+    def pin(self, **detectors):
+        return {"schema_version": 1, "manifest_sha256": "a" * 64, "threshold": 0.5, "iou_threshold": 0.5,
+                "detectors": detectors}
+
+    def test_pin_counts_are_discrete_totals(self):
+        score = evaluation.score_image({"id": "a", "present": ["dog", "car", "giraffe"], "absent": ["sofa", "chair"]},
+                                       [found("dog", [0, 0, 5, 5], 0.51234), found("chair", [0, 0, 5, 5])], VOC)
+        self.assertEqual(evaluation.pin_counts(evaluation.totals([score])), {
+            "images": 1, "present_checks": 2, "present_hits": 1, "absence_checks": 2, "absent_violations": 1,
+            "confusions": 0})
+
+    def test_regressions_fail_and_improvements_pass(self):
+        pin = self.pin(ssd=dict(COUNTS), yolox=dict(COUNTS, present_checks=12, present_hits=12))
+        yolox = dict(COUNTS, present_checks=12, present_hits=12)
+        self.assertEqual(evaluation.check_pin(pin, {"ssd": dict(COUNTS), "yolox": yolox}),
+                         {"status": "passed", "failures": [], "improvements": [], "unpinned": []})
+        cases = ((dict(COUNTS, present_hits=6), "ssd present_hits 6 < pinned 7"),
+                 (dict(COUNTS, absent_violations=3), "ssd absent_violations 3 > pinned 2"),
+                 (dict(COUNTS, confusions=1), "ssd confusions 1 > pinned 0"),
+                 (dict(COUNTS, present_checks=8), "ssd present_checks 8 != pinned 9"),
+                 (dict(COUNTS, absence_checks=21), "ssd absence_checks 21 != pinned 22"),
+                 (dict(COUNTS, images=5), "ssd images 5 != pinned 6"))
+        for counts, failure in cases:
+            with self.subTest(failure=failure):
+                result = evaluation.check_pin(pin, {"ssd": counts, "yolox": yolox})
+                self.assertEqual((result["status"], result["failures"]), ("regressed", [failure]))
+        better = evaluation.check_pin(pin, {"ssd": dict(COUNTS, present_hits=8, absent_violations=1), "yolox": yolox,
+                                            "third": dict(COUNTS)})
+        self.assertEqual(better["status"], "passed")
+        self.assertEqual(better["improvements"], ["ssd present_hits 8 > pinned 7", "ssd absent_violations 1 < pinned 2"])
+        self.assertEqual(better["unpinned"], ["third"])
+        missing = evaluation.check_pin(pin, {"ssd": dict(COUNTS)})
+        self.assertEqual((missing["status"], missing["failures"]), ("regressed", ["yolox pinned but not evaluated"]))
+
+    def test_invalid_pins_are_rejected(self):
+        bad = ({"schema_version": 2}, {"detectors": {}}, {"manifest_sha256": "unknown"}, {"threshold": 0},
+               {"iou_threshold": float("nan")}, {"unexpected": 1}, {"detectors": {"ssd": dict(COUNTS, images=True)}},
+               {"detectors": {"ssd": dict(COUNTS, present_hits=-1)}},
+               {"detectors": {"ssd": dict(COUNTS, present_hits=7.0)}},
+               {"detectors": {"ssd": dict(COUNTS, scores=0.9)}},
+               {"detectors": {"ssd": {key: value for key, value in COUNTS.items() if key != "confusions"}}},
+               {"detectors": {"ssd": dict(COUNTS, present_hits=10)}})
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "pin.json"
+            path.write_text(json.dumps(self.pin(ssd=dict(COUNTS))))
+            self.assertEqual(evaluation.load_pin(path)["detectors"], {"ssd": COUNTS})
+            for fields in bad:
+                with self.subTest(fields=fields), self.assertRaises(evaluation.PinError):
+                    path.write_text(json.dumps({**self.pin(ssd=dict(COUNTS)), **fields}))
+                    evaluation.load_pin(path)
+
+    def test_pin_applies_only_to_its_manifest_threshold_and_iou(self):
+        pin = self.pin(ssd=dict(COUNTS))
+        evaluation.require_pin_applies(pin, ["a" * 64], 0.5, 0.5)
+        for manifests, threshold, iou, message in ((["b" * 64], 0.5, 0.5, "manifest"),
+                                                   (["a" * 64, "a" * 64], 0.5, 0.5, "one manifest"),
+                                                   (["a" * 64], 0.4, 0.5, "threshold"),
+                                                   (["a" * 64], 0.5, 0.3, "IoU")):
+            with self.subTest(message=message), self.assertRaisesRegex(evaluation.PinError, message):
+                evaluation.require_pin_applies(pin, manifests, threshold, iou)
+
+    def test_committed_seed_pin_matches_the_seed_manifest_and_e73_counts(self):
+        pin = evaluation.load_pin(ROOT / "evaluation/seed-expected.json")
+        self.assertEqual(pin["manifest_sha256"], assets.checksum(ROOT / "evaluation/seed.json"))
+        self.assertEqual((pin["threshold"], pin["iou_threshold"]), (0.5, 0.5))
+        self.assertLessEqual(set(pin["detectors"]), set(detection.DETECTORS))
+        self.assertEqual(pin["detectors"]["mobilenet-ssd"], COUNTS)
+        self.assertEqual(pin["detectors"]["yolox-nano"], dict(COUNTS, present_checks=12, present_hits=12,
+                                                               absence_checks=24, absent_violations=0))
+        self.assertIn("not Frame evidence", pin["description"])
+
 
 class ManifestTests(unittest.TestCase):
     def write(self, folder, manifest):
@@ -103,6 +224,23 @@ class ManifestTests(unittest.TestCase):
             local, remote = manifest["images"]
             self.assertEqual(evaluation.resolve_image(manifest, local, "/downloads"), Path(folder) / "stills/room.png")
             self.assertEqual(evaluation.resolve_image(manifest, remote, "/downloads"), Path("/downloads/r.jpg"))
+
+    def test_a_label_repeated_under_any_name_is_rejected(self):
+        """One check per canonical label, so per-label tables, totals and pins count the same checks."""
+        repeated = (({"present": ["tvmonitor", "tv"]}, "present.*tv"), ({"absent": ["sofa", "couch"]}, "absent.*couch"),
+                    ({"present": [["car", "truck"], ["car", "truck"]]}, r"present.*car\|truck"),
+                    ({"absent": ["dog", "dog"]}, "absent.*dog"))
+        with tempfile.TemporaryDirectory() as folder:
+            for fields, message in repeated:
+                with self.subTest(fields=fields), self.assertRaisesRegex(evaluation.ManifestError, message):
+                    evaluation.load_manifest(self.write(folder, {"schema_version": 1, "images": [
+                        {"id": "repeated", "path": "generated.png", **fields}]}))
+            # The same label may still be expected present in one entry and absent in another, or be one of
+            # several alternatives next to its own separate check.
+            manifest = evaluation.load_manifest(self.write(folder, {"schema_version": 1, "images": [
+                {"id": "a", "path": "a.png", "present": ["tv", ["car", "truck"], "car"], "absent": ["couch"]},
+                {"id": "b", "path": "b.png", "present": ["sofa"], "absent": ["tvmonitor"]}]}))
+            self.assertEqual(len(manifest["images"]), 2)
 
     def test_seed_manifest_is_valid_and_pinned(self):
         manifest = evaluation.load_manifest(ROOT / "evaluation/seed.json")
@@ -138,19 +276,20 @@ class ProvenanceTests(unittest.TestCase):
         self.assertIn("framejacker/preprocess.py", source["source_files_sha256"])
 
     def test_detector_preprocessing_is_explicit(self):
-        from scripts.evaluate_detectors import model_preprocessing
+        from framejacker.detection import preprocessing  # Owned by each detector class, not the evaluator.
 
-        ssd = model_preprocessing(SimpleNamespace(name="mobilenet-ssd"))
+        ssd = preprocessing("mobilenet-ssd")
         self.assertEqual(ssd["input_size"], [300, 300])
         self.assertEqual(ssd["resize"], "stretch")
         self.assertEqual(ssd["color_order"], "BGR")
-        yolox = model_preprocessing(SimpleNamespace(name="yolox-nano", size=416))
+        yolox = preprocessing("yolox-nano")
         self.assertEqual(yolox["input_size"], [416, 416])
         self.assertEqual(yolox["resize"], "letterbox_top_left")
         self.assertEqual(yolox["box_mapping"], "inverse realized x/y resize ratios")
 
 
-@unittest.skipUnless(AVAILABLE and (ASSETS / "yolox_nano.onnx").is_file(), "Run scripts/setup_window.sh first")
+@unittest.skipUnless(AVAILABLE, "Run scripts/setup_window.sh for OpenCV checks")
+@requires_assets(*model_assets())
 class CommandTests(unittest.TestCase):
     def test_compares_detectors_on_local_stills_and_refuses_overwrite(self):
         from scripts import evaluate_detectors
@@ -165,7 +304,7 @@ class CommandTests(unittest.TestCase):
                 code = evaluate_detectors.main(["--manifest", str(manifest), "--report", str(report_path)])
             report = json.loads(output.getvalue())
             self.assertEqual(code, 0, report)
-            self.assertEqual(report["schema_version"], 3)
+            self.assertEqual(report["schema_version"], 4)
             self.assertTrue(report["code"]["revision"])
             self.assertIn("working_tree_dirty", report["code"])
             self.assertIn(str(manifest), report["manifest_sha256"])
@@ -174,7 +313,8 @@ class CommandTests(unittest.TestCase):
             self.assertEqual(report["warmup"]["runs_per_detector"], 1)
             self.assertFalse(report["warmup"]["included_in_timing"])
             self.assertEqual(json.loads(report_path.read_text()), report)
-            self.assertEqual(set(report["detectors"]), {"mobilenet-ssd", "yolox-nano"})
+            self.assertLessEqual({"mobilenet-ssd", "yolox-nano"}, set(report["detectors"]))
+            self.assertEqual(set(report["detectors"]), set(detection.DETECTORS))  # Every registered detector.
             for result in report["detectors"].values():
                 self.assertEqual(result["totals"]["present_hits"], 2)
                 self.assertEqual(result["totals"]["true_positives"], 1)
@@ -184,6 +324,9 @@ class CommandTests(unittest.TestCase):
                 self.assertIn("preprocessing", result)
                 self.assertTrue(all(len(item["sha256"]) == 64 for item in result["model_files"]))
                 self.assertTrue(all(len(item["input_sha256"]) == 64 for item in result["images"]))
+                self.assertEqual(result["labels"]["present"]["dog"]["hit"], 1)
+                self.assertEqual(result["labels"]["absent"]["cat"]["clean"], 1)
+                self.assertIn("cat", result["images"][0]["best_below_threshold"]["absent"])
             with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 evaluate_detectors.main(["--manifest", str(manifest), "--report", str(report_path)])
             missing = Path(folder) / "missing.json"
@@ -215,7 +358,7 @@ class PreprocessingAuditTests(unittest.TestCase):
         self.assertEqual(trace["native_to_processing"]["scale_y"], 540 / 1081)
         self.assertEqual(trace["native_to_processing"]["crop_xyxy"], [0, 0, 1920, 1081])
         yolox = YoloxDetector.__new__(YoloxDetector)
-        yolox.np, yolox.size = np, 416
+        yolox.np, yolox.size, yolox.name = np, 416, "yolox-nano"  # Every Detector has its registry name.
         blob, transform = yolox.prepare_input(bgr)
         np.testing.assert_array_equal(blob[0, :, 0, 0], (10, 80, 240))
         np.testing.assert_array_equal(blob[0, :, -1, -1], (114, 114, 114))
@@ -223,6 +366,33 @@ class PreprocessingAuditTests(unittest.TestCase):
         trace = preprocessing_audit(yolox, image, bgr, {"stored_channels": 3})
         self.assertEqual(trace["model_tensor"]["shape"], [1, 3, 416, 416])
         self.assertEqual(trace["processing_to_model"]["kind"], "letterbox_top_left")
+        self.assertEqual(trace["processing_to_model"]["inverse"], detection.preprocessing("yolox-nano")["box_mapping"])
+
+    def test_audit_mapping_comes_from_the_detector_description(self):
+        """A centered letterbox detector is audited as its description says, not as YOLOX's top-left."""
+        import numpy as np
+        from framejacker.preprocess import letterbox
+        from scripts.evaluate_detectors import prepare_image, preprocessing_audit
+
+        class Centered:
+            name = "centered"
+
+            @classmethod
+            def preprocessing(cls, name):
+                return {"input_size": [64, 64], "resize": "letterbox_center", "interpolation": "INTER_LINEAR",
+                        "color_order": "BGR", "layout": "HWC", "dtype": "uint8", "mean": [0, 0, 0], "scale": 1,
+                        "padding_value": 0, "box_mapping": "subtract centered padding, divide by realized scale"}
+
+            def prepare_input(self, bgr):
+                return letterbox(bgr, 64, pad_value=0, center=True)
+
+        image = np.full((90, 160, 3), 60, dtype=np.uint8)
+        bgr = prepare_image(image)
+        with mock.patch.dict(detection.DETECTORS, {"centered": Centered}):
+            mapping = preprocessing_audit(Centered(), image, bgr, {})["processing_to_model"]
+        self.assertEqual((mapping["kind"], mapping["inverse"]),
+                         ("letterbox_center", "subtract centered padding, divide by realized scale"))
+        self.assertEqual((mapping["pad_x"], mapping["pad_y"]), (0, 14))
 
     def test_padded_rgb_and_bgr_convert_identically_without_mixing_padding(self):
         import numpy as np
@@ -270,8 +440,13 @@ class PreprocessingAuditTests(unittest.TestCase):
             self.assertEqual(code, 0)
             report = json.loads(output.getvalue())
             result = report["detectors"]["mobilenet-ssd"]
-            self.assertEqual(len(calls), 8)  # One untimed warm-up + one measurement for each of four cases.
-            self.assertTrue(all(threshold == 0.5 for _, threshold in calls))
+            # Per case: one untimed warm-up and one measurement at 0.5, then one untimed diagnostic call
+            # at the below-threshold floor that is never scored.
+            floor = command.evaluation.BELOW_THRESHOLD_FLOOR
+            self.assertEqual([threshold for _, threshold in calls], [0.5, 0.5, floor] * 4)
+            self.assertEqual(report["below_threshold"]["floor"], floor)
+            self.assertEqual(result["images"][0]["best_below_threshold"], {"present": {"tv": None}, "absent": {}})
+            self.assertEqual(result["labels"]["present"]["tv"]["miss"], 1)
             baseline = result["images"][0]
             self.assertEqual(baseline["input_sha256"], digest)
             self.assertEqual(baseline["input_digest_provenance"], "manifest_verified")
@@ -306,6 +481,286 @@ class PreprocessingAuditTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "independently supplied"):
                 command.load_images([manifest], False, require_digests=True)
             self.assertEqual(len(command.load_images([manifest], False)), 1)
+
+
+class FakeSsdNet:
+    """The Caffe network's place: a fixed DetectionOutput for whatever blob arrives."""
+
+    def __init__(self, rows):
+        import numpy as np
+
+        self.output = np.array(rows, dtype=np.float32).reshape(1, 1, -1, 7)
+
+    def setInput(self, blob):
+        assert blob.shape == (1, 3, 300, 300)
+
+    def forward(self):
+        return self.output
+
+
+class ThirdDetector:
+    """A new registry entry: only detection.py (and its asset entry) would change to add it."""
+    runtime, classes = "opencv-dnn", ("dog", "bicycle", "car", "cat")
+
+    def __init__(self, name, **options):
+        self.name = name
+
+    @classmethod
+    def model_files(cls, name):
+        return ("third-detector.bin",)
+
+    @classmethod
+    def preprocessing(cls, name):
+        return {"input_size": [64, 64], "resize": "stretch", "interpolation": "INTER_AREA", "color_order": "RGB",
+                "layout": "NHWC", "dtype": "uint8", "mean": [0, 0, 0], "scale": 1, "padding_value": None,
+                "box_mapping": "fixture"}
+
+    def detect(self, bgr, threshold):
+        candidates = (Detection("dog", 0.9, (1, 1, 5, 5)), Detection("bicycle", 0.8, (1, 1, 5, 5)),
+                      Detection("car", 0.7, (1, 1, 5, 5)), Detection("cat", 0.3, (1, 1, 5, 5)))
+        return DetectionResult(tuple(item for item in candidates if item.confidence >= threshold), 1.0)
+
+
+@unittest.skipUnless(AVAILABLE, "Run scripts/setup_window.sh for OpenCV checks")
+class DetectorOwnershipCommandTests(unittest.TestCase):
+    def write_still(self, folder, **fields):
+        import cv2
+        import numpy as np
+
+        cv2.imwrite(str(Path(folder) / "scene.png"), np.full((120, 160, 3), 90, dtype=np.uint8))
+        manifest = Path(folder) / "manifest.json"
+        manifest.write_text(json.dumps({"schema_version": 1, "images": [{"id": "generated", "path": "scene.png",
+                                                                         **fields}]}))
+        return manifest
+
+    def test_a_registered_third_detector_reaches_the_evaluator_and_smoke_check(self):
+        import numpy as np
+        from scripts import evaluate_detectors as command
+        from scripts import smoke_check
+
+        with tempfile.TemporaryDirectory() as folder:
+            manifest = self.write_still(folder, present=["dog", "bicycle"], absent=["cat"])
+            (Path(folder) / "third-detector.bin").write_bytes(b"third weights")
+            with mock.patch.dict(detection.DETECTORS, {"third": ThirdDetector}, clear=True), \
+                    mock.patch.object(assets, "ASSETS", Path(folder)), \
+                    redirect_stdout(io.StringIO()) as output, redirect_stderr(io.StringIO()) as errors:
+                code = command.main(["--manifest", str(manifest)])
+                detectors, checked = smoke_check.check_detectors(np.zeros((8, 8, 3), dtype=np.uint8))
+            report = json.loads(output.getvalue())
+            self.assertEqual(code, 0, report)
+            result = report["detectors"]["third"]
+            self.assertEqual(set(report["detectors"]), {"third"})
+            self.assertEqual(result["preprocessing"], ThirdDetector.preprocessing("third"))
+            self.assertEqual(result["model_files"], [{"name": "third-detector.bin",
+                                                      "sha256": assets.checksum(Path(folder) / "third-detector.bin")}])
+            self.assertEqual(result["totals"]["present_hits"], 2)
+            self.assertEqual(result["images"][0]["best_below_threshold"], {
+                "present": {"dog": None, "bicycle": None}, "absent": {"cat": 0.3}})
+            self.assertIn("third", errors.getvalue())
+            self.assertEqual(list(detectors), ["third"])
+            self.assertEqual(checked["third"]["labels"], ["bicycle", "car", "dog"])
+
+    def test_smoke_check_requires_each_fixture_label_a_detector_can_name(self):
+        import numpy as np
+        from scripts import smoke_check
+
+        class Blind(ThirdDetector):
+            def detect(self, bgr, threshold):
+                return DetectionResult((Detection("dog", 0.9, (1, 1, 5, 5)),), 1.0)
+
+        with mock.patch.dict(detection.DETECTORS, {"blind": Blind}, clear=True), \
+                self.assertRaisesRegex(RuntimeError, "blind.*bicycle"):
+            smoke_check.check_detectors(np.zeros((8, 8, 3), dtype=np.uint8))
+
+    def ssd(self, rows):
+        import cv2
+        import numpy as np
+
+        detector = detection.MobileNetSSD.__new__(detection.MobileNetSSD)
+        detector.cv2, detector.np, detector.net = cv2, np, FakeSsdNet(rows)
+        return detector
+
+    def test_label_map_break_fails_the_pinned_check(self):
+        """Done condition, model-free: swapping two VOC labels turns pinned counts into a failing exit."""
+        from scripts import evaluate_detectors as command
+
+        dog, car = detection.CLASSES.index("dog"), detection.CLASSES.index("car")
+        detector = self.ssd([[0, dog, 0.9, 0.1, 0.1, 0.5, 0.5], [0, car, 0.8, 0.5, 0.5, 0.9, 0.9]])
+        with tempfile.TemporaryDirectory() as folder:
+            manifest = self.write_still(folder, present=["dog", "car"], absent=["cat"])
+            pin = Path(folder) / "pin.json"
+            pin.write_text(json.dumps({
+                "schema_version": 1, "description": "generated", "manifest_sha256": assets.checksum(manifest),
+                "threshold": 0.5, "iou_threshold": 0.5, "detectors": {"mobilenet-ssd": {
+                    "images": 1, "present_checks": 2, "present_hits": 2, "absence_checks": 1, "absent_violations": 0,
+                    "confusions": 0}}}))
+            arguments = ["--manifest", str(manifest), "--detector", "mobilenet-ssd", "--expect", str(pin)]
+
+            def run():
+                with mock.patch.object(command, "create_detector", return_value=detector), \
+                        mock.patch.object(command, "model_provenance", return_value={}), \
+                        redirect_stdout(io.StringIO()) as output, redirect_stderr(io.StringIO()) as errors:
+                    code = command.main(arguments)
+                return code, json.loads(output.getvalue()), errors.getvalue()
+
+            code, report, errors = run()
+            self.assertEqual(code, 0, report)
+            self.assertEqual(report["expectation"]["status"], "passed")
+            self.assertEqual(report["expectation"]["pin_sha256"], assets.checksum(pin))
+            self.assertIn("passed", errors)
+            swapped = list(detection.CLASSES)
+            swapped[dog], swapped[detection.CLASSES.index("cat")] = "cat", "dog"
+            with mock.patch.object(detection, "CLASSES", swapped):
+                code, report, errors = run()
+            self.assertEqual((code, report["status"]), (1, "evaluated"))
+            self.assertEqual(report["expectation"]["status"], "regressed")
+            self.assertEqual(report["expectation"]["failures"], ["mobilenet-ssd present_hits 1 < pinned 2",
+                                                                 "mobilenet-ssd absent_violations 1 > pinned 0"])
+            self.assertIn("REGRESSED", errors)
+
+    def test_expect_refuses_another_manifest_or_threshold_before_inference(self):
+        from scripts import evaluate_detectors as command
+
+        with tempfile.TemporaryDirectory() as folder:
+            manifest = self.write_still(folder, present=["dog"])
+            other = Path(folder) / "other.json"
+            other.write_text(manifest.read_text().replace("generated", "other"))
+            pin = Path(folder) / "pin.json"
+            pin.write_text(json.dumps({"schema_version": 1, "manifest_sha256": assets.checksum(manifest),
+                                       "threshold": 0.5, "iou_threshold": 0.5,
+                                       "detectors": {"mobilenet-ssd": dict(COUNTS)}}))
+            for arguments, message in ((["--manifest", str(other)], "manifest"),
+                                       (["--manifest", str(manifest), "--threshold", "0.4"], "threshold")):
+                with self.subTest(message=message), mock.patch.object(command, "create_detector") as factory, \
+                        redirect_stdout(io.StringIO()) as output, redirect_stderr(io.StringIO()):
+                    self.assertEqual(command.main([*arguments, "--expect", str(pin)]), 1)
+                factory.assert_not_called()
+                self.assertIn(message, json.loads(output.getvalue())["error"])
+            with mock.patch.object(command, "create_detector") as factory, \
+                    redirect_stdout(io.StringIO()) as output, redirect_stderr(io.StringIO()):
+                self.assertEqual(command.main(["--expect", str(Path(folder) / "absent.json")]), 1)
+            factory.assert_not_called()
+
+
+@unittest.skipUnless(AVAILABLE, "Run scripts/setup_window.sh for OpenCV checks")
+@requires_assets(*model_assets())
+class RegistryGrowthTests(unittest.TestCase):
+    """A real third detector registered beside the current ones needs no edit outside detection.py."""
+
+    def test_registry_dependent_tests_and_smoke_wiring_accept_a_real_third_detector(self):
+        import cv2
+        from scripts import smoke_check
+        from tests.test_detection import AssetTests, DetectorOwnershipTests
+
+        # Another registry entry for the pinned YOLOX-Nano file: real inference, no new download.
+        third = type("YoloxCopy", (detection.YoloxDetector,), {"MODELS": {"yolox-copy": ("yolox_nano.onnx", 416)}})
+        cases = [CommandTests("test_compares_detectors_on_local_stills_and_refuses_overwrite"),
+                 AssetTests("test_absent_downloads_skip_with_their_names"),
+                 AssetTests("test_registered_detectors_own_their_pinned_model_files"),
+                 DetectorOwnershipTests("test_detectors_describe_their_preprocessing")]
+        result = unittest.TestResult()
+        with mock.patch.dict(detection.DETECTORS, {"yolox-copy": third}):
+            unittest.TestSuite(cases).run(result)
+            _, checked = smoke_check.check_detectors(cv2.imread(str(ASSETS / "dog.jpg")))
+        problems = [f"{case}: {trace}" for case, trace in (*result.failures, *result.errors)]
+        self.assertEqual((problems, result.skipped, result.testsRun), ([], [], len(cases)))
+        self.assertEqual(list(checked), [*(name for name in detection.DETECTORS), "yolox-copy"])
+        self.assertEqual(checked["yolox-copy"]["labels"], checked["yolox-nano"]["labels"])
+
+
+class SmokeCheckOrderTests(unittest.TestCase):
+    def test_previous_readiness_is_invalidated_before_framejacker_is_imported(self):
+        """A broken framejacker import must not leave the last passing readiness report in place."""
+        import os
+        import subprocess
+        import sys
+
+        program = (
+            "import importlib.abc, importlib.util, sys\n"
+            "from pathlib import Path\n"
+            "class Broken(importlib.abc.MetaPathFinder):\n"
+            "    def find_spec(self, name, path=None, target=None):\n"
+            "        if name.split('.')[0] == 'framejacker':\n"
+            "            raise ImportError('generated framejacker import failure')\n"
+            "sys.meta_path.insert(0, Broken())\n"
+            "spec = importlib.util.spec_from_file_location('smoke_check', sys.argv[1])\n"
+            "module = importlib.util.module_from_spec(spec)\n"
+            "try:\n"
+            "    spec.loader.exec_module(module)\n"
+            "    module.RESULTS = Path(sys.argv[2])\n"
+            "    module.main()\n"
+            "except ImportError as error:\n"
+            "    sys.exit(f'import failed: {error}')\n")
+        with tempfile.TemporaryDirectory() as folder:
+            results = Path(folder) / "smoke"
+            results.mkdir()
+            report = results / "readiness.json"
+            report.write_text(json.dumps({"status": "passed"}))
+            completed = subprocess.run(
+                [sys.executable, "-I", "-c", program, str(ROOT / "scripts/smoke_check.py"), str(results)],
+                capture_output=True, text=True, timeout=120, cwd=folder,
+                env={**os.environ, "QT_QPA_PLATFORM": "offscreen", "XDG_CACHE_HOME": folder})
+            self.assertEqual(completed.returncode, 1, completed.stderr)
+            self.assertIn("import failed", completed.stderr)
+            self.assertFalse(report.exists(), "a stale passing readiness report survived a failed run")
+
+
+@unittest.skipUnless(AVAILABLE, "Run scripts/setup_window.sh for OpenCV checks")
+class MirrorPreviewVariantTests(unittest.TestCase):
+    def test_variant_is_the_mirror_check_grayscale_sample_replicated(self):
+        """E61's detector input: grayscale_sample's every-third-pixel integer luma, in three channels."""
+        import numpy as np
+        from framejacker.sources.mirror_device import grayscale_sample, validate_format
+        from scripts.evaluate_detectors import AUDIT_VARIANTS, prepare_image
+
+        self.assertIn("mirror-preview", AUDIT_VARIANTS)
+        image = np.random.default_rng(61).integers(0, 256, (1080, 1920, 3), dtype=np.uint8)
+        width, height, gray = grayscale_sample(image.tobytes(), validate_format(1920, 1080, "BGR3", 5760, image.nbytes),
+                                               640)
+        variant = prepare_image(image, "mirror-preview")
+        self.assertEqual((variant.shape, variant.dtype), ((height, width, 3), np.uint8))
+        self.assertEqual((width, height), (640, 360))
+        for channel in range(3):
+            self.assertEqual(np.ascontiguousarray(variant[:, :, channel]).tobytes(), gray)
+        sampled = image[::3, ::3].astype(np.uint32)  # Independently: every third pixel, integer BT.601 luma.
+        luma = (77 * sampled[:, :, 2] + 150 * sampled[:, :, 1] + 29 * sampled[:, :, 0]) >> 8
+        np.testing.assert_array_equal(variant[:, :, 0], luma.astype(np.uint8))
+
+    def test_variant_runs_through_the_command_with_its_own_results(self):
+        import cv2
+        import numpy as np
+        from framejacker.sources.mirror_device import grayscale_sample, validate_format
+        from scripts import evaluate_detectors as command
+
+        seen = []
+        recording = detection.MobileNetSSD.__new__(detection.MobileNetSSD)
+        recording.cv2 = cv2
+
+        def detect(bgr, threshold):
+            seen.append(bgr.copy())
+            return ThirdDetector("third").detect(bgr, threshold)
+
+        recording.detect = detect
+
+        with tempfile.TemporaryDirectory() as folder:
+            pixels = np.random.default_rng(1).integers(0, 256, (90, 1300, 3), dtype=np.uint8)
+            cv2.imwrite(str(Path(folder) / "wide.png"), pixels)
+            manifest = Path(folder) / "manifest.json"
+            manifest.write_text(json.dumps({"schema_version": 1, "images": [
+                {"id": "wide", "path": "wide.png", "present": ["dog"]}]}))
+            with mock.patch.object(command, "create_detector", return_value=recording), \
+                    mock.patch.object(command, "model_provenance", return_value={}), \
+                    redirect_stdout(io.StringIO()) as output, redirect_stderr(io.StringIO()):
+                code = command.main(["--manifest", str(manifest), "--detector", "mobilenet-ssd",
+                                     "--audit-variant", "mirror-preview"])
+            report = json.loads(output.getvalue())
+            self.assertEqual(code, 0, report)
+            comparison = report["detectors"]["mobilenet-ssd"]["audit_variants"]["mirror-preview"]
+            self.assertIn("grayscale_sample", comparison["change"])
+            self.assertEqual(comparison["images"][0]["processing_width"], 434)  # ceil(1300 / 3)
+            self.assertEqual(comparison["labels"]["present"]["dog"]["hit"], 1)
+            _, _, gray = grayscale_sample(pixels.tobytes(), validate_format(1300, 90, "BGR3", 3900, pixels.nbytes), 640)
+            self.assertEqual(np.ascontiguousarray(seen[-1][:, :, 1]).tobytes(), gray)
 
 
 if __name__ == "__main__":

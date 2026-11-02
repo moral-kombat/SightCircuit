@@ -10,13 +10,16 @@ import tempfile
 import time
 import unittest
 
+from framejacker import assets
+from tests.asset_gate import FIXTURE, model_assets, requires_assets
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/replay_window.py"
-ASSETS = ROOT / ".cache/framejacker/assets"
 AVAILABLE = all(importlib.util.find_spec(name) for name in ("av", "cv2", "numpy", "PySide6"))
 
 
 @unittest.skipUnless(AVAILABLE, "Run scripts/setup_window.sh for display integration tests")
+@requires_assets(*model_assets())  # The sample image and both detectors' models.
 class ReplayWindowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -28,9 +31,9 @@ class ReplayWindowTests(unittest.TestCase):
         cls.addClassCleanup(cls.temporary.cleanup)
         cls.directory = Path(cls.temporary.name)
         cls.clip = cls.directory / "two-video.mp4"
-        image = cv2.imread(str(ASSETS / "dog.jpg"))
-        if image is None:
-            raise AssertionError("Missing test fixture; run bash scripts/setup_window.sh")
+        image = cv2.imread(str(assets.ASSETS / FIXTURE))
+        if image is None:  # Present (the gate checked) but unreadable: fail, never skip.
+            raise AssertionError(f"Unreadable test fixture {FIXTURE}; run bash scripts/setup_window.sh")
         cls.dimensions = image.shape[:2]
         with av.open(str(cls.clip), mode="w") as output:
             streams = []
@@ -80,9 +83,14 @@ class ReplayWindowTests(unittest.TestCase):
         self.assertEqual(report["decode_threads"], 3)
         self.assertGreaterEqual(report["frames_decoded"], report["frames_processed"])
         for field in ("realtime_ratio", "media_seconds_played", "frames_skipped", "catch_ups", "frames_replaced",
-                      "decode_fps", "mean_presentation_latency_ms", "max_schedule_lateness_ms"):
+                      "decode_fps", "mean_presentation_latency_ms", "max_schedule_lateness_ms",
+                      "processed_media_fraction", "media_frames_spanned"):
             self.assertIn(field, report)
         self.assertGreater(report["realtime_ratio"], 0)
+        # Frames inferred on, as a share of the frames the played span covered.
+        self.assertGreaterEqual(report["media_frames_spanned"], report["frames_processed"])
+        self.assertEqual(report["processed_media_fraction"],
+                         round(report["frames_processed"] / report["media_frames_spanned"], 3))
         from scripts.replay_window import LEGACY_FIELDS
         expected = {"frames_replaced": "pending_replaced", "processed_fps": "processed_fps",
                     "mean_processing_ms": "mean_processing_ms", "max_input_age_ms": "max_input_age_ms"}

@@ -189,7 +189,11 @@ own file and generate the status matrix, and state each caveat once.
   fallback) behind the `Detector` interface with letterbox input; `--detector`
   in replay and mirror recognition; `--still` captures unannotated evaluation
   inputs; `scripts/evaluate_detectors.py` with a seed manifest and a format for
-  private Frame stills. Correction to finding 3: MobileNet-SSD keeps its
+  private Frame stills. The 2026-10-30 consolidation (`3bd3d4c`) dropped both
+  mirror flags; they were restored on 2026-11-01, with the still saved at native
+  size and its SHA-256 pinned in the manifest entry
+  ([bounded mirror recognition](development.md#bounded-mirror-recognition)).
+  Correction to finding 3: MobileNet-SSD keeps its
   stretched 300 × 300 input, because SSD models are trained that way;
   letterboxing applies to the YOLOX family. The representative evaluation set
   (including the rug) must be captured on Frame.
@@ -265,6 +269,7 @@ supplies no new headset evidence.
   required fixture is not successful validation.
 - Branch checks run through PRs (`push` is limited to `main`). CI on ARM64
   checks that architecture; it is not a Frame headset result.
-- `PANEL_LIMITS` remains the Python source of panel limits; native consistency
-  is covered by tests. Keep native acquisition limits separate from detector
+- `PANEL_LIMITS` remains the Python source of panel limits; the bridge takes
+  them from the [generated contract header](development.md#generated-hud-contract-header),
+  and tests fail when the two differ. Keep native acquisition limits separate from detector
   resize limits and preserve native masking before resize.

@@ -22,7 +22,7 @@ from framejacker.hud import observation as hud_observation
 from scripts import hud_marker_observer as observer
 from framejacker.hud import CaptureFormat, HUD_CONFIG
 from framejacker.sources import mirror as mirror_check
-from framejacker.overlay import DEFAULT_BRIDGE
+from framejacker.overlay import DEFAULT_BRIDGE, bridge_closed_cleanly
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -46,12 +46,26 @@ def clean_bridge_fixture(seconds=1):
                 forced_termination=False, error=None, native_report=native)
 
 
-def scene(positions=((100, 100),), *, width=1000, height=600):
+def scene(positions=((100, 100),), *, width=1000, height=600, template=None):
     image = np.full((height, width, 3), 90, np.uint8)
-    template = hud_observation.marker_template()
+    template = hud_observation.marker_template() if template is None else template
     for x, y in positions:
         image[y:y+128, x:x+320] = template[:, :, None]
     return image
+
+
+def tag_mismatch_template():
+    """The generated marker with the top-left tag's four code bits inverted.
+
+    Its rejection matches V4's recorded shape (E75): no complete copy, orphan
+    fragments and failed tag-pattern/code-bit checks. It is not a
+    reconstruction of V4's unsaved image.
+    """
+    template = hud_observation.marker_template()
+    for bit in range(4):
+        x, y = 8 + 4 + (bit % 2) * 8, 8 + 4 + (bit // 2) * 8
+        template[y:y+6, x:x+6] = 255 - template[y:y+6, x:x+6]
+    return template
 
 
 class MarkerGeometryTests(unittest.TestCase):
@@ -175,6 +189,19 @@ class MarkerGeometryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "expected_copy_count"):
             hud_observation.EmpiricalObservation(hud_observation.ObserverConfig(expected_copies=2)).accept(
                 image, descriptor, 1, 1, config_id=HUD_CONFIG.layout_id)
+
+    def test_skipped_read_between_marker_samples_rejects(self):
+        # Reads are numbered consecutively, so a gap is a dropped frame (G4 method step 3).
+        image = scene()
+        descriptor = CaptureFormat.bgr(image)
+        track = hud_observation.EmpiricalObservation()
+        track.accept(image, descriptor, 3, 1, config_id=HUD_CONFIG.layout_id)
+        track.accept(image, descriptor, 4, 2, config_id=HUD_CONFIG.layout_id)
+        with self.assertRaisesRegex(ValueError, "observer_sequence_gap"):
+            track.accept(image, descriptor, 6, 3, config_id=HUD_CONFIG.layout_id)
+        evidence = track.evidence()
+        self.assertEqual([sample[0] for sample in evidence["samples"]], [3, 4])
+        self.assertEqual(evidence["last_detected_corners"], [])
 
     def test_native_rgb_stride_conversion_preserves_pixel_geometry(self):
         image = scene()
@@ -592,8 +619,12 @@ class ObserverLifecycleTests(unittest.TestCase):
         self.assertEqual(options["approved_scope"], "marker_observation_only")
 
 
-def native_synthetic_worker(seconds):
-    """Test entry point: generated source plus actual no-VR marker process."""
+def native_synthetic_worker(seconds, tag_mismatch=False):
+    """Test entry point: generated source plus actual no-VR marker process.
+
+    With ``tag_mismatch``, every marker frame carries the V4-shaped tag/bit
+    mismatch, so the first marker frame (frame 3) is rejected.
+    """
     client = observer.MarkerClient(validation_only=True)
     stop = threading.Event()
     for number in (signal.SIGINT, signal.SIGTERM):
@@ -613,7 +644,10 @@ def native_synthetic_worker(seconds):
             if visible and not state["ready_sent"]:
                 print("SYNTHETIC OBSERVER READY", file=sys.stderr, flush=True)
                 state["ready_sent"] = True
-            image = scene(((70, 80), (570, 270)) if visible else ())
+            if tag_mismatch:
+                image = scene(((100, 100),) if visible else (), template=tag_mismatch_template())
+            else:
+                image = scene(((70, 80), (570, 270)) if visible else ())
             image[0, 0] = state["reads"] % 100
             return image.tobytes()
         def close(self):
@@ -678,7 +712,48 @@ class CombinedNativeTests(unittest.TestCase):
             process.stderr.close()
 
 
+@unittest.skipUnless(sys.platform.startswith("linux") and DEFAULT_BRIDGE.is_file(),
+                     "real validation bridge not built: run bash scripts/build_overlay_bridge.sh (CI builds it)")
+class V4ShapedRejectionNativeTests(unittest.TestCase):
+    """E75's V4 sequence against the real validation bridge, worker and guardian."""
+
+    def test_frame_three_tag_mismatch_closes_the_real_bridge_without_forced_termination(self):
+        report = observer.supervise([sys.executable, "-m", "tests.test_hud_marker_observer",
+                                     "--synthetic-tag-mismatch-worker", "2"],
+                                    observer.new_report(), 14, observer.validate_worker_report, descendants=True)
+        # Two clear baseline frames start the marker; frame 3 fails the tag/bit checks.
+        self.assertEqual(report["status"], "rejected", report)
+        self.assertEqual(report["exit_code"], 1)
+        self.assertEqual(report["reason"], "orphan_marker_tag_or_incomplete_copy")
+        self.assertEqual(report["baseline_sequence"], 2)
+        details = report["last_match_diagnostics"]
+        self.assertEqual(details["sequence"], 3)
+        self.assertEqual(details["complete_copy_count"], 0)
+        self.assertGreater(details["orphan_fragment_count"], 0)
+        self.assertTrue(any({"tag_pattern_error", "code_bit_error"} <= set(candidate["failed_checks"])
+                            for candidate in details["best_candidates"]), details)
+        self.assertEqual(report["sample_count"], 0)
+        # The rejection requests a stop; the bridge ends on its own timer, unforced.
+        bridge = report["bridge"]
+        self.assertFalse(bridge["forced_termination"], bridge)
+        self.assertTrue(bridge_closed_cleanly(bridge), bridge)
+        self.assertTrue(bridge["stop_requested"])
+        self.assertFalse(bridge["escalated"])
+        native = bridge["native_report"]
+        self.assertEqual(native["status"], "validated_marker")
+        self.assertGreaterEqual(native["cutoff_requested_ns"], native["display_deadline_ns"])
+        self.assertFalse(native["runtime_initialized"])
+        self.assertTrue(report["cleanup_ok"], report)
+        for key in ("worker_forced_termination", "guardian_forced_termination"):
+            self.assertFalse(report[key], key)
+        for key in ("synthetic_source_closed", "worker_reaped", "worker_tree_reaped", "guardian_reaped"):
+            self.assertTrue(report[key], key)
+        self.assertNotIn("orphaned_worker_group", report)  # The guardian ran its own cleanup.
+        for key in ("physical_display_recovery_verified", "mapping_qualified", "images_saved", "inference_started"):
+            self.assertFalse(report[key], key)
+
+
 if __name__ == "__main__":
-    if len(sys.argv) == 3 and sys.argv[1] == "--synthetic-worker":
-        sys.exit(native_synthetic_worker(int(sys.argv[2])))
+    if len(sys.argv) == 3 and sys.argv[1] in ("--synthetic-worker", "--synthetic-tag-mismatch-worker"):
+        sys.exit(native_synthetic_worker(int(sys.argv[2]), tag_mismatch=sys.argv[1] != "--synthetic-worker"))
     unittest.main()

@@ -99,15 +99,14 @@ class ValidatedFrameAndHudBindingTests(unittest.TestCase):
         return Frame.owned_bgr(np.zeros((height, width, 3), np.uint8), sequence, time.monotonic_ns(), source)
 
     def calibration(self):
-        from framejacker.hud import Calibration, CaptureFormat, Footprint
-        return Calibration("synthetic:generated", CaptureFormat(96, 64, "BGR3", 288, 18432, 18432),
-                           "mono", (Footprint(0, (68, 42, 89, 56), 3),), validated=True,
-                           provenance="synthetic_fixture")
+        from framejacker.runtime.synthetic import synthetic_hud_calibration
+        return synthetic_hud_calibration()
 
     def source(self, **changes):
+        from framejacker.runtime.synthetic import SyntheticSession
         attributes = dict(kind="synthetic", source_id="synthetic:generated", capture_layout="mono")
         attributes.update(changes)
-        return type("Source", (), attributes)()
+        return type("Source", (SyntheticSession,), attributes)()
 
     def test_owned_native_descriptor_change_is_a_format_change(self):
         context = CaptureContext(self.source())
