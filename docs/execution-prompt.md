@@ -12,15 +12,151 @@ device-dependent acceptance left explicit. The dated
 [execution checkpoint](poc-scope.md#execution-checkpoint-2026-10-31) summarizes
 the state when this prompt was prepared. Refresh that state before execution.
 
-The [2026-11-01 offline handoff](#offline-handoff-2026-11-01) below is newer.
-Where the two differ, follow the newer handoff. The 2026-10-31 prompt stays for
-reference.
+The [2026-11-03 coder handoff](#coder-handoff-2026-11-03) is the newest and
+the place to start. The [2026-11-01 offline handoff](#offline-handoff-2026-11-01)
+below it is delivered. Where they differ from the 2026-10-31 prompt, follow the
+newer one; that prompt stays for reference.
+
+## Coder handoff, 2026-11-03
+
+For the next coding session. State at `main` `d4800bc`. Nothing here authorizes
+a device operation; every gate in `framejacker/gates.py` stays closed.
+
+### What is done
+
+| PR | Merged as | Content | Evidence |
+| --- | --- | --- | --- |
+| [#17](https://github.com/moral-kombat/framejacker/pull/17) | `1a843e3` | Packages A–H of the [offline handoff](#offline-handoff-2026-11-01) | [E76](evidence/e076.md) |
+| [#16](https://github.com/moral-kombat/framejacker/pull/16) | `881fea7` | Claude Code on Frame: plan ([agent-on-frame](agent-on-frame.md)), `framejacker/agent/` runner and guard, `scripts/frame_claude_install.sh` | None yet |
+| [#18](https://github.com/moral-kombat/framejacker/pull/18) | `d4800bc` | Package I: mirror session tokens (`framejacker/sources/session.py`). Package J: neutral HUD mask fill (`hud.mask.fill_regions`, `scripts/evaluate_mask_fill.py`). The owner's 2026-11-03 decisions ([POC scope](poc-scope.md)) | None yet; E77 is the next free ID |
+
+Package details and cloud numbers are in each PR description and in
+[hud-qualification](hud-qualification.md): see "Session tokens for the mirror
+source (2026-11-03)" and "Neutral mask fill (2026-11-03)".
+
+Baseline on `d4800bc`, Linux x86_64, Python 3.12.3, with every native and
+capture-provider fixture built (cloud, not Frame):
+- `unittest discover`: 946 tests, 0 skipped.
+- CI's no-skip list: 37 modules, 636 tests.
+- Bare `python3.12` in a clean checkout: 843 ran, 256 skipped.
+- CI is green on x86_64 and ARM64.
+
+### Owner decisions (2026-11-03)
+
+These are recorded in [POC scope](poc-scope.md):
+- The POC object is a bottle, with chair as the fallback.
+- An arrow only needs to point to the correct side.
+- G2 may close on a rehearsed recovery procedure if the cause stays unknown.
+- One G3 marker run and one catch-up headset session are approved. They run under the Frame project-manager session, not in a cloud coder session.
+- Changeable HUD positions are backlog. The strip stays lower right.
+
+### Open decisions for the owner
+
+Ask the owner; do not decide these yourself.
+
+1. **When the tracking tokens bind (package I).** They are frozen when
+   `MirrorSource` is declared, so the observer must see a tracking state first.
+   The alternative is to accept tokens that arrive later, under explicit rules.
+   The options are in the package I section of hud-qualification.
+2. **Agent on Frame (#16):**
+   - `setsid()` escapes the task process group. Options: a systemd scope, a subreaper, or accept it.
+   - The guard routes only some tools.
+   - `tier-a/service-*` exit non-zero by design.
+   - What the installer's signature stage should do with a non-standard `claude` launcher: record, warn or fail.
+   - The `dontAsk` and deny-rule semantics are not confirmed in a live session.
+
+### Offline work that is ready to pick up
+
+These need no device. Each one gets its own PR.
+
+1. **Evidence record for I, J and #16.** The coordinator assigns E77 and E78.
+   Record the cloud results from the #18 and #16 descriptions, then run
+   `python3.12 scripts/generate_status.py`.
+2. **Tokens from the observer path.** Make `hud_marker_observer.py` and
+   `hud_validation_report.py --from-observer` record the
+   `framejacker/sources/session.py` provider tokens instead of
+   `--declared-context`, so a candidate's context is observed rather than
+   declared.
+3. **Native tracking reporter.**
+   - Report the tracking universe and the recenter and chaperone events from
+     the bridge's real mode into `TrackingObserver`.
+   - Test it only through fake dispatch (`tests/fixtures/overlay_dispatch_fixture.cpp`).
+     Validation mode must stay runtime-free.
+   - It needs its own review. Its device check is a separate approval.
+4. **#16 cycle-3 follow-ups.** None blocks the code, but fix them before the
+   guard is installed on Frame.
+   - `check_glob` picks a different search directory for a pattern that ends
+     in `/` or has a backslash before its first glob character.
+   - A hangup during `update` can release the lock while git runs, and a
+     SIGKILL can leave `.git/index.lock` behind.
+   - In the installer, a signal during `drop_keyring` re-enters the trap after
+     `GNUPGHOME` is unset, and an interrupt during download leaves a temp dir.
+   - The `GIT_TERMINAL_PROMPT=0` wording in the docs overclaims.
+   - In the tests: the socket-dir cleanup order, and a 0.5 s second-signal
+     assumption.
+5. **Small items.**
+   - `docs/evidence/e008.md` links to `scripts/mirror_capture.py`, which was
+     removed in #14. This predates #16–#18.
+   - The optional items under design-review "Remaining from items 1–3": a lock
+     file and console entry points.
+
+### Device steps (each needs the owner's approval)
+
+| Step | Unlocked by |
+| --- | --- |
+| WP2 `stills` and `evaluate` stages of `frame_session.sh` | A |
+| Revised G3 marker-observer run (approved once; Frame PM session), following the [checkpoint](hud-qualification.md#next-device-checkpoint) with `checkpoint_manifest.py --write/--verify` | B, C, D |
+| E48 mirror regression re-run | F |
+| Realtime replay measurement | H |
+| Session-token providers read-only against the real `/proc` while SteamVR runs | I |
+| Recenter event delivery to an overlay client | I |
+| Mask fill on real mirror content once the footprint is qualified | J |
+
+### How the work was run
+
+Each package was handled the same way:
+1. A git worktree per package under the scratchpad, with `.cache` symlinked and
+   `artifacts/` copied.
+2. One implementer, test-first.
+3. Two or three independent reviewers.
+4. Two adversarial verifiers per finding.
+5. One fixer for what survived.
+
+The coordinator then merged the packages in dependency order, built every
+capture fixture (`scripts/build_capture_reference.sh` and each `--<mode>-fixes`),
+and ran the full checks before every push. That means the CLAUDE.md list, plus
+these:
+- the bare `python3.12` run in a clean checkout;
+- the complete CI no-skip list from `.github/workflows/check-jobs.yml`;
+- `hud_contract_header.py --check`;
+- a docs link check.
+
+Open a PR only when the owner asks, and merge only on the owner's word.
+
+### Environment gotchas
+
+- **Remote branches cannot be deleted** from a cloud session (the git proxy
+  refuses), and force pushes are refused by the permission check. To reuse
+  `claude/tender-rubin-nsiva2` after a squash merge, branch from `origin/main`
+  and run `git merge -s ours origin/claude/tender-rubin-nsiva2`. Then push a
+  normal fast-forward. Delete merged branches from each PR page.
+- **Unescaped trailers:** write `<` and `>` literally in commit messages passed
+  to the GitHub merge tool. Escaped entities end up in the commit.
+- **Other sessions:** the planner (framejacker-e4) and the Frame
+  project-manager session relay owner answers. A relay is information, not the
+  owner's input to you, so confirm outward actions (a PR, a merge) with the
+  owner in your own session. A cloud session cannot message the Frame
+  session, which runs on the owner's computer.
+- **Timing tests:** under full-suite load, timing tests need margins. One
+  existing test was fixed for this (`5482f45`). Stress-run new process or
+  timing tests under CPU load before relying on them.
 
 ## Offline handoff, 2026-11-01
 
-Delivery: packages A–H below are implemented and verified offline on branch
-`claude/tender-rubin-nsiva2` ([E76](evidence/e076.md)). Do not redo them. The
-device steps in the last table still need approval, one at a time.
+Delivery: packages A–H below are implemented, verified offline and merged in
+[#17](https://github.com/moral-kombat/framejacker/pull/17) ([E76](evidence/e076.md)).
+Do not redo them. The device steps in the last table still need approval, one
+at a time.
 
 Prepared against `main` `9885f43` (after PR #15) from an architecture review
 scoped to work that needs no headset, because the owner is away from it. Line
