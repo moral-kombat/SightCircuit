@@ -312,7 +312,8 @@ class HudChecks:
     native pixels, including those dropped for touching a masked region
     (``mask_overlap_rejections``) or for not lying inside exactly one eye
     (``eye_crossing_rejections``). ``unmasked_footprint_px`` counts footprint
-    pixels still non-zero after masking, which is 0 unless masking failed.
+    pixels still non-zero after the zeroing step, before the neutral fill and
+    the resize, which is 0 unless masking failed.
     ``frame_sequence`` is the frame the stage masked, so a result cannot be
     paired with another frame unnoticed.
     """

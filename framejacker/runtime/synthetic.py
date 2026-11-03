@@ -87,20 +87,24 @@ class HeadlessSink:
 
 
 def fixture_calibration(source_id, capture_format, capture_layout, footprints, *, config=HUD_CONFIG,
-                        lifetime_ns=MAX_MAPPING_LIFETIME_NS):
+                        lifetime_ns=MAX_MAPPING_LIFETIME_NS, session=SYNTHETIC_SESSION):
     """A synthetic-fixture ``Calibration`` of generated frames, valid from now for ``lifetime_ns``.
 
-    ``source_id`` must be ``synthetic:...``; the tokens are ``SYNTHETIC_SESSION``
-    and the crop is the full, upright frame. Never a hardware mapping.
+    ``source_id`` must be ``synthetic:...``; the tokens are ``session``, a
+    mapping of exactly ``SESSION_TOKENS`` (default ``SYNTHETIC_SESSION``; tests
+    pass the tokens their fixture providers declare), and the crop is the full,
+    upright frame. Never a hardware mapping.
     """
     if type(source_id) is not str or not source_id.startswith("synthetic:"):
         raise ValueError("hud_synthetic_fixture_source_required")
     if type(lifetime_ns) is not int or not 1 <= lifetime_ns <= MAX_MAPPING_LIFETIME_NS:
         raise ValueError("hud_calibration_lifetime_invalid")
+    if not isinstance(session, dict) or set(session) != set(SESSION_TOKENS):
+        raise ValueError("hud_synthetic_session_invalid")
     observed_ns = time.monotonic_ns()
     return Calibration._issue(
         source_id=source_id, capture_format=capture_format, capture_layout=capture_layout, footprints=footprints,
-        config=config, provenance=SYNTHETIC_PROVENANCE, **SYNTHETIC_SESSION,
+        config=config, provenance=SYNTHETIC_PROVENANCE, **{name: session[name] for name in SESSION_TOKENS},
         crop_xyxy=getattr(capture_format, "bounds", None), orientation_degrees=0,
         hud_config_sha256=config_digest(config), observed_ns=observed_ns, expires_ns=observed_ns + lifetime_ns)
 

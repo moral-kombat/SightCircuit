@@ -5,7 +5,9 @@ an injected fixture backend) at a bounded rate until its deadline, reporting
 progress and passing each complete read to ``on_frame``. ``MirrorSource`` turns
 those reads into owned ``Frame``s carrying their ``native_format`` and retains
 the acquisition report; a report with status ``error`` raises, so the pipeline
-stops presenting results from a failed capture.
+stops presenting results from a failed capture. With a ``session``
+(``sources.session.MirrorSession``) it declares the HUD session tokens its
+providers observe and stamps each frame with the tokens read for it.
 
 ``launch`` is the one launcher of the mirror commands (``mirror_check.py`` and
 ``mirror_recognize.py``): it selects the verified candidate, reserves each
@@ -22,6 +24,7 @@ import time
 from ..context import SOURCE_FIELDS
 from ..errors import FramejackerError
 from ..frame import Frame
+from ..hud.contract import SESSION_TOKENS
 from ..runtime import guard, output, process
 from .mirror_device import NativeMirror, grayscale_sample, select_candidate
 
@@ -126,20 +129,38 @@ def capture(candidate, seconds, stop, progress=lambda report: None, want_preview
 
 
 class MirrorSource:
-    def __init__(self, acquire, source="steamvr-mirror", *, identity=None):
+    def __init__(self, acquire, source="steamvr-mirror", *, identity=None, session=None):
         """``acquire(stop, on_frame, progress)`` reads until done and returns its report.
 
         ``on_frame(data, fmt, number, observed_ns)`` receives the read bytes and the
         validated V4L2 format dictionary; ``progress(report)`` receives snapshots.
         ``identity``, when given, declares ``SOURCE_FIELDS`` (for example a fixture
         backend's kind, source_id and capture_layout) to ``CaptureContext``.
+
+        ``session``, when given, is a ``sources.session.MirrorSession`` and the
+        only source of the session tokens (``hud.contract.SESSION_TOKENS``):
+        an ``identity`` that also declares one is refused. It is declared here,
+        before the source opens; a token no provider observed then stays
+        undeclared (``None``) for the whole run. Each frame's metadata then
+        carries the tokens read for it, and a declared token lost since is
+        ``None``. Once a read differs from the declaration the source declares
+        the latest read, and a live provider (the tracking observer) is
+        consulted at every admission, so ``CaptureContext`` fails closed and
+        ``HudMask.check_session`` names the token.
         """
-        self.acquire, self.source, self.identity = acquire, source, identity
+        self.acquire, self.source, self.identity, self.session = acquire, source, identity, session
         self.lock = threading.Lock()
         self._report = {}
+        if session is not None:
+            if any(getattr(identity, name, None) is not None for name in SESSION_TOKENS):
+                raise ValueError("mirror_session_tokens_declared_twice")
+            session.declare()
 
     def __getattr__(self, name):
         if name in SOURCE_FIELDS:
+            session = self.__dict__.get("session")
+            if session is not None and name in SESSION_TOKENS:
+                return session.current().get(name)
             return getattr(self.__dict__.get("identity"), name, None)
         raise AttributeError(name)
 
@@ -148,14 +169,22 @@ class MirrorSource:
         with self.lock:
             return self._report.copy()
 
+    @property
+    def session_report(self):
+        """Where each session token came from and the first change seen, or ``None`` without a session."""
+        return self.session.report() if self.session is not None else None
+
     def _update(self, report):
         with self.lock:
             self._report = report.copy()
 
     def run(self, emit, stop):
         def on_frame(data, fmt, number, observed_ns):
+            metadata = {"native_format": dict(fmt)}
+            if self.session is not None:
+                metadata.update(self.session.read())
             emit(Frame(bytes(data), fmt["fourcc"], fmt["width"], fmt["height"], fmt["stride_bytes"],
-                       self.source, number, observed_ns, metadata={"native_format": dict(fmt)}))
+                       self.source, number, observed_ns, metadata=metadata))
 
         report = self.acquire(stop, on_frame, self._update)
         self._update(report)

@@ -27,9 +27,10 @@ development; exact tested pins remain in the `requirements-*.txt` files.
 | `framejacker/detection.py` | `Detector` interface, `MobileNetSSD` baseline (model-free `decode_ssd()`), `YoloxDetector` candidate, the `DETECTORS` registry whose classes own their `model_files()` and `preprocessing()` description, `create_detector()`, separate `annotate()` and `require_result()` (rejects malformed detector output before any output) |
 | `framejacker/preprocess.py`, `framejacker/labels.py` | Letterbox input and inverse box mapping; COCO vocabulary and VOC-to-canonical label names |
 | `framejacker/evaluation.py`, `framejacker/assets.py` | Detector evaluation scoring; checksum-verified model/fixture download and verification |
-| `framejacker/sources/` | `ReplaySource` (PyAV); `standin` (the synthetic realtime-replay [stand-in clip](#continuous-integration)); `mirror_device` (read-only V4L2 SteamVR mirror discovery and reads); `mirror` (bounded acquisition loop `capture`, `MirrorSource`, and `launch`, the one launcher of both mirror commands: candidate selection, output reservation, the bounded worker and all-or-nothing publication); `recording` (one MP4 box-header decoder for finished-file inspection and the growing-file scan used by `recording_growth_check`; newest recording); `PolledSource` (adapter for `open`/`read`/`close` sources). Adapters forward the wrapped source's declared identity |
+| `framejacker/mask_fill_evaluation.py` | Offline comparison of HUD mask fills (the runtime's `hud.mask.fill_regions` and the candidates it was chosen over) on the gray sweep and the seed stills, used by `evaluate_mask_fill.py`; the runtime never imports it ([HUD mask fill evaluation](#hud-mask-fill-evaluation)) |
+| `framejacker/sources/` | `ReplaySource` (PyAV); `standin` (the synthetic realtime-replay [stand-in clip](#continuous-integration)); `mirror_device` (read-only V4L2 SteamVR mirror discovery and reads); `mirror` (bounded acquisition loop `capture`, `MirrorSource` (its optional `session` declares the HUD session tokens and stamps each frame), and `launch`, the one launcher of both mirror commands: candidate selection, output reservation, the bounded worker and all-or-nothing publication); `recording` (one MP4 box-header decoder for finished-file inspection and the growing-file scan used by `recording_growth_check`; newest recording); `PolledSource` (adapter for `open`/`read`/`close` sources); `session` (read-only [session-token providers](hud-qualification.md#session-tokens-for-the-mirror-source-2026-11-03) for a mirror run: `HostClock`, `RuntimeProcess`, `TrackingObserver` and `MirrorSession`). Adapters forward the wrapped source's declared identity |
 | `framejacker/overlay.py` | Overlay bridge client and `OverlaySink`, the one panel sink: with a caller-owned client (replay's interactive panel) it only submits images; otherwise it owns a validation-only client through `open`/`clear`/`close`, optionally with the frozen HUD placement and payload contract |
-| `framejacker/hud/` | Fixed edge HUD contract, shared eye/rectangle geometry, the one margin rule, synthetic-only native mask (calibrations from two factories only, with expiry, session tokens and view fields), tile rendering, the `HudStage` engine stage (and `HudPipelineAdapter`, the stage bound to its sink's fixed output contract, used by `live_pipeline.py`), offline mapping qualification, the calibration marker client, `observation` (empirical marker-copy location in native pixels and the observer report contract, used by `hud_marker_observer.py`), `candidate` (an observer report to an unqualified mapping candidate, used by `hud_validation_report.py --from-observer`) and `validation` (the synthetic HUD run's ledger feed and G5 software counts) |
+| `framejacker/hud/` | Fixed edge HUD contract, shared eye/rectangle geometry, the one margin rule, synthetic-only native mask (calibrations from two factories only, with expiry, session tokens and view fields; zeroed regions refilled from their surround by `fill_regions`), tile rendering, the `HudStage` engine stage (and `HudPipelineAdapter`, the stage bound to its sink's fixed output contract, used by `live_pipeline.py`), offline mapping qualification, the calibration marker client, `observation` (empirical marker-copy location in native pixels and the observer report contract, used by `hud_marker_observer.py`), `candidate` (an observer report to an unqualified mapping candidate, used by `hud_validation_report.py --from-observer`) and `validation` (the synthetic HUD run's ledger feed and G5 software counts) |
 | `framejacker/runtime/` | `process` (bounded spawned workers, parent-death signalling), `guard` (owned process-group supervision with the Linux parent-loss guardian, and the one stop-on-signal convention: `sigterm_cancels` and `cancelled` for launchers, `stop_on_signals` for workers), `output` (reserve, write, publish all or none, withdraw and discard explicit image outputs; `publish_new` for finished bytes), `live` (`run_report`, the one report runner on `Pipeline`, used by `run_pipeline`, the gated synthetic run, whose HUD run also feeds the validation ledger, and by `run_recognition`, the mirror recognizer), `synthetic` (the generated source and its declared `SyntheticSession`, the fixture calibration factory and its candidate record, `FixtureDetector` and `HeadlessSink`) and `manifest` (the [checkpoint artifact manifest](#checkpoint-artifact-manifest): software identity written and verified on Frame) |
 | `framejacker/agent/` | On-device agent support: the fixed task table, the `frame_agent_run.py` runner (timeouts, lock, run budget, `result.json`), the PreToolUse guard and the Frame-only Claude Code settings template; standard library only ([plan](agent-on-frame.md)) |
 
@@ -1485,8 +1486,8 @@ head-motion leakage or physical hiding. Those require the separately approved
 For a future justified rerun in the local Linux replay/window environment:
 
 ```bash
-python -m unittest tests.test_hud_mask tests.test_live_pipeline tests.test_display_expiry tests.test_mirror_recognize -v
-python -m scripts.live_pipeline --synthetic-check --synthetic-hud --detector fixture --validate-overlay --seconds 3
+python -m unittest tests.test_hud_mask tests.test_hud_fill tests.test_live_pipeline tests.test_display_expiry tests.test_mirror_recognize -v
+python -m scripts.live_pipeline --synthetic-check --synthetic-hud --validate-overlay --seconds 3
 ```
 
 These use generated input and native validation only, with the existing built
@@ -1496,11 +1497,13 @@ input/real output. `--detector` takes a registered model name (`DETECTORS`
 through `create_detector`; the default is `mobilenet-ssd`, and `real` remains
 an alias for it) or `fixture`. Since the
 [synthetic HUD validation counts](#synthetic-hud-validation-counts), the second
-command is also a validation run. `--detector fixture` reports no detections,
-so it checks the mask, ledger and transport and ends `completed` (exit 0).
-With the default detector it ends `validation_failed` (exit 1), because
-MobileNetSSD boxes the zeroed footprint region of the generated frames. The earlier
-session reported 57 tests; that absent log is not a new execution result.
+command is also a validation run. With the default detector it ends
+`completed` (exit 0) since the [neutral mask fill](#hud-mask-fill-evaluation);
+with the zero-filled mask it ended `validation_failed` (exit 1), because
+MobileNetSSD boxed the black footprint region of the generated frames.
+`--detector fixture` reports no detections and checks the mask, ledger and
+transport without a model. The earlier session reported 57 tests; that absent
+log is not a new execution result.
 
 The later [marker-only harness](status.md#e70-offline-marker-only-harness) adds
 `hud_marker_check.py` and native generated-marker validation. Its final saved
@@ -1590,13 +1593,14 @@ is also a validation run. `framejacker/hud/validation.py` puts a
 `ValidationLedger` built from `synthetic.fixture_candidate(calibration)` with
 the run's own maximum age. The engine counts the stage's exclusion checks in
 the `pipeline` block's `hud_checks`, which is null without a HUD stage:
-frames checked, footprint pixels left non-zero after masking, and boxes
-dropped for touching the mask or crossing an eye. The report adds
+frames checked, footprint pixels left non-zero after zeroing (before the
+[neutral fill](#hud-mask-fill-evaluation)), and boxes dropped for touching the
+mask or crossing an eye. The report adds
 `validation_ledger` and `g5_software`, whose counts use the names in
 `docs/templates/hud-device-validation-report.json`.
 
 The runtime alone only drops such a box from presentation. In a validation
-run, a footprint pixel left after masking, a dropped box or any ledger
+run, a footprint pixel left after zeroing, a dropped box or any ledger
 rejection ends the run `validation_failed` with exit 1, and a rejected result
 never reaches the result sink. A run that already failed on its own, for
 example on a capture-context change, keeps its status and reason, and
@@ -1614,14 +1618,66 @@ python -m scripts.live_pipeline --synthetic-check --synthetic-hud --seconds 3
 ```
 
 Both commands use generated input, with no overlay. The first uses the fixture
-detector, which reports no detections and loads no model, and ends `completed`
-with exit 0 and `g5_software.status` `checked_unqualified`. The second uses the
-default MobileNetSSD and ends `validation_failed` with exit 1 and clean
-cleanup: on these frames the detector reports the zeroed footprint region
-itself as `tvmonitor`, and a validation run fails on any box touching the mask.
-The same holds with `--validate-overlay`. Which of the two a G5 diagnostic
-should treat as feedback is an open design question. These are cloud results,
-not Frame evidence; they observe no device or physical expiry and open no gate.
+detector, which reports no detections and loads no model. The second uses the
+default MobileNetSSD. Both end `completed` with exit 0 and
+`g5_software.status` `checked_unqualified`, and so does the second with
+`--validate-overlay`. With the zero-filled mask (881fea7) the second ended
+`validation_failed` with exit 1, because the detector reported the black
+footprint region itself as `tvmonitor`. The mask now refills that region from
+its surround ([HUD mask fill evaluation](#hud-mask-fill-evaluation)), and a
+validation run still fails on any box touching the mask. These are cloud
+results, not Frame evidence; they observe no device or physical expiry and open
+no gate.
+
+## HUD mask fill evaluation
+
+`HudMask` zeroes each masked region (footprint plus margin, per eye) at native
+resolution and counts the footprint pixels still non-zero. Then
+`hud.mask.fill_regions` refills each region with one neutral color: the rounded
+mean of an 8-pixel ring outside it, in the same eye and outside every region.
+Only after that does the resize run. The fill reads only the zeroed copy, so a
+count of 0 still proves that no HUD pixel reaches the detector, and the strict
+overlap and eye rule is unchanged.
+
+`scripts/evaluate_mask_fill.py` (library `framejacker/mask_fill_evaluation.py`,
+outside the runtime path) reproduces the comparison that chose this fill. It
+compares six fills:
+
+- `zero`, the baseline;
+- `ring_mean`, the runtime fill;
+- `nearest`, nearest-pixel replication;
+- `inpaint_telea` and `inpaint_ns`, two `cv2.inpaint` modes;
+- `surround_blur`, a blurred surround patch.
+
+Each fill runs with every registered detector over two inputs: the synthetic
+source's 127 odd gray levels with the fixture calibration (`--gray-levels all`
+for all 255), and the seed stills with a mask at five positions. The JSON
+report holds, per fill and detector:
+
+- the gray levels and seed boxes that touch the mask, and the artifact-like
+  boxes among them;
+- changes to detections that touch no mask (lost, added, relabelled, and
+  rescored beyond a stated 0.05 tolerance);
+- seed pin counts per position, both of the detector's whole output and of the
+  boxes the runtime keeps (`runtime_kept`), which shows what the strict rule
+  costs next to the HUD;
+- leak and determinism checks;
+- time per frame at 96x64 and 1920x1080 on the runner CPU.
+
+`--expect-clean-gray-sweep` exits 1 if any detector boxes the mask on the sweep
+with the runtime fill. From the checkout:
+
+```bash
+.venv-replay/bin/python scripts/evaluate_mask_fill.py --fetch --expect-clean-gray-sweep \
+  --report /tmp/mask-fill.json
+.venv-replay/bin/python scripts/evaluate_mask_fill.py --no-seeds --gray-levels all --fill zero --fill ring_mean
+.venv-replay/bin/python -m unittest tests.test_hud_fill tests.test_mask_fill_evaluation
+```
+
+The full run takes about 2.5 minutes on a 4-core x86_64 cloud runner. The
+[qualification design](hud-qualification.md#neutral-mask-fill-2026-11-03)
+records the results and the choice. They are runner-CPU results on generated
+frames and public stills, not Frame evidence.
 
 ## Offline foundation for the minimum live POC
 

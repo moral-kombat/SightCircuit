@@ -7,9 +7,9 @@ fixture calibrations only; this stage approves nothing. ``expires_ns`` caps
 every HUD result's deadline at the calibration's own expiry.
 
 Each frame's exclusion checks travel with its output as ``HudOutput.checks``:
-the footprint pixels left non-zero after masking (returned by ``prepare``, so
-the engine can stop before the detector), the boxes dropped for touching the
-mask or crossing an eye, and the masked frame's sequence.
+the footprint pixels left non-zero after zeroing, before the neutral fill
+(returned by ``prepare``, so the engine can stop before the detector), the boxes
+dropped for touching the mask or crossing an eye, and the masked frame's sequence.
 
 ``HudPipelineAdapter`` is the stage bound to its run's sink, as the synthetic
 live command (``scripts/live_pipeline.py``) uses it: a sink with an output
@@ -48,7 +48,7 @@ class HudStage:
         return self.mask.calibration.expires_ns if self.mask is not None else None
 
     def prepare(self, frame):
-        """``(image, unmasked_px)``: read-only masked detector input and its footprint pixels left non-zero.
+        """``(image, unmasked_px)``: read-only masked detector input and its footprint pixels left non-zero by zeroing.
 
         ``unmasked_px`` should be 0; the engine stops the run before the
         detector when it is not.

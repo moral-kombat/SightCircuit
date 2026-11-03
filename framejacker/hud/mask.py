@@ -5,8 +5,11 @@ Only ``validated`` synthetic-fixture calibrations are accepted; a calibration
 derived from a hardware mapping candidate is rejected until a separate gate.
 The mask fails closed once its calibration expires and checks the calibration's
 session tokens and view fields against the capture context (``check_session``).
-It counts the footprint pixels still non-zero after masking (``prepare_counted``)
-and reports the boxes it drops for touching the mask or crossing an eye (``select``).
+It zeroes every masked region, counts the footprint pixels still non-zero after
+that step (``prepare_counted``), and then refills each region with one neutral
+color taken only from its surround (``fill_regions``), so the detector sees
+neither HUD pixels nor a black rectangle. It reports the boxes it drops for
+touching the mask or crossing an eye (``select``).
 """
 from dataclasses import dataclass
 import math
@@ -19,7 +22,9 @@ from .contract import (HUD_CONFIG, SESSION_TOKENS, VIEW_FIELDS, Calibration, Cap
 from .geometry import contains, exclusion, expand, within_blind_budget
 from .render import draw_tile
 
-__all__ = ("HudMask", "mask_regions")
+__all__ = ("FILL_RING_PX", "HudMask", "fill_regions", "mask_regions")
+
+FILL_RING_PX = 8  # Width of the surround the fill averages: the margin floor.
 
 
 def _comparable(value):
@@ -60,6 +65,48 @@ def mask_regions(calibration):
             raise ValueError("hud_footprint_or_margin_out_of_bounds")
         regions.append(expanded)
     return tuple(regions)
+
+
+def surround(region, regions, eyes, pad):
+    """``(crop, usable)``: ``region`` grown by ``pad`` and clipped to its own eye, and the crop pixels a fill may read.
+
+    ``usable`` is True only outside every masked region, and the crop never
+    leaves the eye that contains ``region``, so a fill built from it cannot see
+    a footprint, a margin or the other eye. Raises when nothing is usable.
+    """
+    import numpy as np
+    eye = next((eye for eye in eyes if contains(eye, region)), None)
+    if eye is None:
+        raise ValueError("hud_mask_region_outside_eyes")
+    x0, y0, x1, y1 = region
+    crop = (max(eye[0], x0 - pad), max(eye[1], y0 - pad), min(eye[2], x1 + pad), min(eye[3], y1 + pad))
+    usable = np.ones((crop[3] - crop[1], crop[2] - crop[0]), bool)
+    for rx0, ry0, rx1, ry1 in regions:
+        ix0, iy0, ix1, iy1 = max(rx0, crop[0]), max(ry0, crop[1]), min(rx1, crop[2]), min(ry1, crop[3])
+        if ix0 < ix1 and iy0 < iy1:
+            usable[iy0 - crop[1]:iy1 - crop[1], ix0 - crop[0]:ix1 - crop[0]] = False
+    if not usable.any():
+        raise ValueError("hud_mask_fill_without_surround")
+    return crop, usable
+
+
+def fill_regions(native, regions, eyes):
+    """Fill each region of a zeroed native image in place with one neutral color from its surround.
+
+    The color is the rounded per-channel mean of the pixels within
+    ``FILL_RING_PX`` of the region, inside the region's own eye and outside
+    every masked region (``surround``). Nothing inside a footprint or its
+    margin is read, so a region's content cannot reach the result. Integer
+    arithmetic gives the same bytes on every CPU, and the cost is bounded by
+    the ring and the region, which the blind budget bounds in turn.
+    """
+    import numpy as np
+    for region in regions:
+        (a0, b0, a1, b1), usable = surround(region, regions, eyes, FILL_RING_PX)
+        pixels = native[b0:b1, a0:a1][usable]
+        count = len(pixels)
+        x0, y0, x1, y1 = region
+        native[y0:y1, x0:x1] = ((2 * pixels.sum(axis=0, dtype=np.int64) + count) // (2 * count)).astype(np.uint8)
 
 
 @dataclass(frozen=True)
@@ -142,11 +189,14 @@ class HudMask:
         return image
 
     def prepare_counted(self, bgr, *, source_id, capture_format, capture_layout, config=HUD_CONFIG):
-        """Masked detector input and its count of footprint pixels still non-zero before the resize.
+        """Masked detector input and its count of footprint pixels still non-zero after zeroing.
 
-        The count should be 0. It is taken from the geometry rule
+        The count should be 0. It is taken after the zeroing step and before
+        the neutral fill and the resize, from the geometry rule
         (``mask_regions``), not from the regions the zeroing used, and the
-        caller decides what a non-zero count stops.
+        caller decides what a non-zero count stops. The fill then reads only
+        this zeroed copy, outside every region in each region's own eye, so a
+        count of 0 means no HUD pixel can reach the detector.
         """
         import cv2
         import numpy as np
@@ -159,6 +209,8 @@ class HudMask:
         for x0, y0, x1, y1 in self.regions:
             image[y0:y1, x0:x1] = 0
         unmasked = self.unmasked_pixels(image)
+        # A neutral fill, so the detector sees no black rectangle (E76): only this zeroed copy is read.
+        fill_regions(image, self.regions, viewports(self.calibration.capture_format, self.calibration.capture_layout))
         height, width = self.inference_shape()
         if image.shape[:2] != (height, width):
             image = cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)
@@ -166,7 +218,7 @@ class HudMask:
         return image, unmasked
 
     def unmasked_pixels(self, native):
-        """Footprint pixels with any non-zero channel in a masked native image (one region per eye)."""
+        """Footprint pixels with any non-zero channel in a zeroed native image, before the fill (one region per eye)."""
         import numpy as np
         return sum(int(np.count_nonzero(native[y0:y1, x0:x1].any(axis=2)))
                    for x0, y0, x1, y1 in mask_regions(self.calibration))

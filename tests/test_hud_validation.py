@@ -270,11 +270,12 @@ def documented_live_pipeline_commands(document):
 
 
 class G1RerunTests(unittest.TestCase):
-    """The documented G1 rerun has a passing form: the fixture detector, which reports nothing.
+    """The documented G1 rerun runs the default detector on the masked generated frames.
 
-    With the default MobileNetSSD the generated frames' zeroed footprint is
-    itself detected, so that form ends ``validation_failed`` (an open G5 design
-    question); the fixture form checks the mask, ledger and transport plumbing.
+    With the zero-filled mask (881fea7) MobileNetSSD boxed the footprint itself,
+    so the rerun used the fixture detector. The neutral fill removed that
+    artifact (``tests/test_hud_fill.py`` runs the real form, runner CPU); the
+    fixture form still checks the mask, ledger and transport without a model.
     """
 
     def run_main(self, arguments):
@@ -300,7 +301,7 @@ class G1RerunTests(unittest.TestCase):
                     self.assertRaises(SystemExit):
                 self.run_main(arguments)
 
-    def test_documented_commands_parse_and_the_g1_rerun_uses_the_fixture_detector(self):
+    def test_documented_commands_parse_and_the_g1_rerun_uses_the_default_detector(self):
         commands = {document: documented_live_pipeline_commands(document)
                     for document in ("live-capture.md", "development.md", "hud-qualification.md")}
         self.assertGreaterEqual(sum(map(len, commands.values())), 4)
@@ -316,7 +317,8 @@ class G1RerunTests(unittest.TestCase):
             hud_runs = [line for line in block.replace("\\\n", " ").splitlines() if "--synthetic-hud" in line]
             with self.subTest(document=document):
                 self.assertEqual(len(hud_runs), 1)
-                self.assertIn("--detector fixture", hud_runs[0])
+                self.assertNotIn("--detector", hud_runs[0])  # The default model, not the fixture.
+                self.assertIn("--validate-overlay", hud_runs[0])
 
     @unittest.skipUnless(NUMPY_CV2, "NumPy and OpenCV required for the synthetic HUD pipeline")
     def test_fixture_detector_synthetic_hud_check_passes_through_the_supervisor(self):

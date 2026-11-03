@@ -168,10 +168,13 @@ is implied, and no device-dependent work package closed.
 - **WP12 measurement:** latency percentiles and a runner-CPU stand-in job
   (package H). Package F consolidated the live runner and the mirror launcher.
 
-Open decision: on generated frames, the default detector boxes the zeroed HUD
-mask as `tvmonitor`, so a synthetic validation run with the real detector
-fails under the strict G5 rule. See
-[synthetic validation counts](hud-qualification.md#synthetic-validation-counts-and-one-maximum-age-2026-11-01).
+Decided on 2026-11-03: on generated frames, the default detector boxed the
+zero-filled HUD mask as `tvmonitor`, so a synthetic validation run with the
+real detector failed under the strict G5 rule. The owner chose to fill the
+mask differently and keep the rule. The mask now refills its zeroed region
+from the surround, and that run passes; this is a cloud result on generated
+frames, not a Frame result. See the
+[neutral mask fill](hud-qualification.md#neutral-mask-fill-2026-11-03).
 Each device step these packages unlock still needs its own approval. The
 handoff lists them.
 
@@ -298,3 +301,23 @@ that object, and any world position, are not claimed.
   class both models support, or accept a detector change).
 - Whether the head-locked replay panel stays as a fallback display.
 - Whether world-locked labels return after acceptance.
+
+## Owner decisions (2026-11-03)
+
+The owner answered these in a decision interview. Each device step still needs
+the owner present at the time it runs. None of these decisions is evidence, and
+none opens a gate in `framejacker/gates.py`.
+
+| Topic | Decision |
+| --- | --- |
+| Who authorizes device runs | The owner. Each step below is approved once; repeating a step, or changing it, needs a new approval. |
+| G2 without a root cause | If the saved logs do not explain the green input, G2 may close on a written recovery procedure. The owner rehearses that procedure on the headset first, and any green input aborts the run. Unexplained physical failures remain recorded as unknown. |
+| G2 log analysis | Approved: read-only analysis of the saved green-event logs on Frame, written up as an evidence draft for the coordinator. |
+| WP9 / G3 | One bounded marker-observer run with the owner wearing the headset, approved for after G2 closes and the recovery rehearsal. It follows the [device checkpoint](hud-qualification.md#next-device-checkpoint) and a verified checkpoint manifest. |
+| Catch-up session | One session through `scripts/frame_session.sh`. It covers the E47 replay and VR-panel regression, the E48 mirror regression, the replay pacing measurement, and WP2 stills with the evaluation. The stills include the bottle in view and out of view, the rug, the sofa and a chair. |
+| WP1 | If the original E61 still exists on Frame, its digest is checked locally; nothing is uploaded. If it is gone, WP1 is retired as unreproducible and WP2's new stills take its place. |
+| POC object | **Bottle**. Both detectors have the class, and it is easy to move in and out of view for the expiry check. If the catch-up stills show weak bottle detection on Frame, chair is the fallback; switching needs a new decision. |
+| Arrow tolerance | The arrow is one of eight directions, or a dot near the centre. It must point toward the side of the view where the object is. No bearing accuracy is claimed. |
+| Strip edge | Lower right (the current `HudConfig`). Choosing among several named positions comes after acceptance. Each position needs its own qualified mapping, because a mask is bound to its configuration digest. |
+| Mask fill (G5, E76) | The coder tests a neutral fill for the masked area offline. The strict overlap rule stays as it is. |
+| Frame agent (PR #16) | Approved: install the guarded setup following `docs/agent-on-frame.md` Phase 0. |

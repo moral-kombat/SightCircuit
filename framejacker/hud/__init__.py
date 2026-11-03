@@ -7,9 +7,10 @@
 * ``native``: generates ``tools/hud_contract.hpp``, the bridge's copy of those
   values (``scripts/hud_contract_header.py``).
 * ``geometry``: the single eye-partition and rectangle rules.
-* ``mask``: ``HudMask``, native-resolution exclusion before any resize and
-  selection of names/directions. It accepts unexpired synthetic fixtures only
-  and checks their session tokens; ``mask_regions`` is its geometry rule alone.
+* ``mask``: ``HudMask``, native-resolution exclusion before any resize (zero,
+  count, then ``fill_regions``' neutral fill from the surround) and selection
+  of names/directions. It accepts unexpired synthetic fixtures only and checks
+  their session tokens; ``mask_regions`` is its geometry rule alone.
 * ``render``: the fixed tile, drawn from ``HudRow``s without any scene image.
 * ``stage``: ``HudStage``, the engine stage that masks before the detector and
   renders after it, with each frame's exclusion checks (``HudChecks``), and

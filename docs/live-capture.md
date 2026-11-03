@@ -244,7 +244,7 @@ and offline report checks do not authorize or implement a live device run.
 | Gate | Requires | Status |
 | --- | --- | --- |
 | G1. Synthetic mask, fail-closed mapping and expiry | Offline tests: full-footprint mask before resize, margin and eye union, fail-closed mapping and format changes, stale expiry independent of inference | Passes offline ([E69](status.md#e69-offline-edge-hud-and-native-mask-validation)) |
-| G2. Lifecycle and cleanup (WP10) | Recovered software termination account; evidenced physical failure/recovery account; reconciled guardian, calibration expiry and truthful reporting with failure-path tests | Open: software account established, green physical failure/recovery unresolved ([E75](evidence/e075.md)) |
+| G2. Lifecycle and cleanup (WP10) | Recovered software termination account; evidenced physical failure/recovery account; reconciled guardian, calibration expiry and truthful reporting with failure-path tests. If the cause stays unknown, a written recovery procedure that the owner has rehearsed on the headset satisfies the physical part ([owner decision, 2026-11-03](poc-scope.md#owner-decisions-2026-11-03)) | Open: software account established, green physical failure/recovery unresolved ([E75](evidence/e075.md)) |
 | G3. Mapping observed on Frame (WP9) | [Calibration checkpoint](on-device.md#bounded-edge-hud-calibration-checkpoint) ends `observed_unqualified` with clean cleanup; normal passthrough confirmed | Historical V4 attempt rejected ([E75](evidence/e075.md)); no accepted observation |
 | G4. Mapping qualified | Versioned evidence for eye composition, all HUD copies, conservative margins and bounded operating limits; see the [proposed method](hud-qualification.md#proposed-g4-method). Candidate schema validation is not qualification | Proposed method; device qualification pending |
 | G5. Feedback exclusion and physical expiry (WP11) | With the HUD visible, no detections from its footprint during head motion; stale names disappear on the headset within the expiry | Not run |
@@ -255,21 +255,24 @@ G1 can be rerun at any time without a device:
 ```bash
 cd "$HOME/framejacker"
 QT_QPA_PLATFORM=offscreen .venv-replay/bin/python -m unittest \
-  tests.test_hud_mask tests.test_live_pipeline tests.test_display_expiry
+  tests.test_hud_mask tests.test_hud_fill tests.test_live_pipeline tests.test_display_expiry
 QT_QPA_PLATFORM=offscreen .venv-replay/bin/python -m scripts.live_pipeline \
-  --synthetic-check --synthetic-hud --detector fixture --validate-overlay --seconds 3
+  --synthetic-check --synthetic-hud --validate-overlay --seconds 3
 ```
 
-Since 2026-11-01 a synthetic HUD run is also a validation run. With
-`--detector fixture`, which reports no detections and loads no model, the
-second command checks the mask, the validation ledger and the native
-transport, and ends `completed` with exit 0 and `g5_software.status`
-`checked_unqualified`. Without it, the default MobileNetSSD reports the zeroed
-footprint region of the generated frames itself as `tvmonitor`; the runtime
-drops that box, but a validation run fails on any box touching the mask, so
-that form ends `validation_failed` with exit 1 and clean cleanup. Whether G5
-should treat such a box differently is an open design question; see
-[synthetic validation counts](hud-qualification.md#synthetic-validation-counts-and-one-maximum-age-2026-11-01).
+Since 2026-11-01 a synthetic HUD run is also a validation run: any box touching
+the mask, or not inside exactly one eye, fails it. With the zero-filled mask the
+default MobileNetSSD reported the black footprint region of the generated
+frames itself as `tvmonitor`, so that run ended `validation_failed` and this
+recipe used `--detector fixture` instead. Since 2026-11-03 the mask refills the
+zeroed region from its surround
+([neutral mask fill](hud-qualification.md#neutral-mask-fill-2026-11-03)), and
+the recipe is back on the default detector. The second command now runs
+MobileNetSSD on the masked frames, checks the mask, the validation ledger and
+the native transport, and ends `completed` with exit 0 and
+`g5_software.status` `checked_unqualified` (cloud run, runner CPU, generated
+frames; not a Frame result). `--detector fixture`, which reports no detections
+and loads no model, still checks the same plumbing where the models are absent.
 
 ## Synthetic input and feedback contract review
 

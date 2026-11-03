@@ -281,7 +281,8 @@ records, not Frame evidence.
   come from one of the two. Otherwise admission fails with
   `hud_<token>_changed` or `hud_<token>_undeclared`, and the failure latches.
   `SyntheticSource` declares the synthetic session (`SyntheticSession`) that
-  fixtures pin.
+  fixtures pin. A mirror source takes them from read-only providers; see
+  [session tokens for the mirror source](#session-tokens-for-the-mirror-source-2026-11-03).
 - **View fields.** `HudMask.check_session` also compares `crop_xyxy`,
   `orientation_degrees` and `hud_config_sha256` (`VIEW_FIELDS` in
   `contract.py`) wherever the source declares them or a frame reports them,
@@ -343,7 +344,8 @@ gate in `framejacker/gates.py` stays closed.
 
 - **Engine counters.** With a HUD stage, the report's `pipeline` block gains
   `hud_checks`; without one it is null. It counts `frames_checked`, the
-  footprint pixels still non-zero after masking and before the resize
+  footprint pixels still non-zero after zeroing and before the resize (since
+  2026-11-03, before the [neutral fill](#neutral-mask-fill-2026-11-03))
   (`unmasked_footprint_px`, which should be 0, and `mask_zeroing_failures`,
   the frames that had any), and the boxes the stage dropped
   (`mask_overlap_rejections` and `eye_crossing_rejections`). The mask counts
@@ -403,7 +405,10 @@ gate in `framejacker/gates.py` stays closed.
   `--detector fixture`, which reports no detections and loads no model; that
   form checks the mask, the ledger and the transport, and ends `completed`
   with exit 0 and `g5_software.status` `checked_unqualified`. This is not a
-  Frame result.
+  Frame result. **Update 2026-11-03:** the owner chose to try a different fill
+  and keep the rule strict. The [neutral mask fill](#neutral-mask-fill-2026-11-03)
+  removes this artifact: the default-detector run now ends `completed`, and the
+  G1 rerun is back on the default detector.
 
 The report adds `validation_ledger`, the ledger's own report with
 `failure_kind` and `max_age_ns`, and `g5_software`:
@@ -446,6 +451,383 @@ template agree. From the checkout:
   tests.test_hud_qualification tests.test_live_pipeline tests.test_pipeline
 ```
 
+## Session tokens for the mirror source (2026-11-03)
+
+[E76](evidence/e076.md) recorded that no hardware source declares the HUD
+session tokens, so a bound mask could never accept a mirror frame.
+`framejacker/sources/session.py` now names a read-only source for each token.
+`MirrorSource(session=MirrorSession(...))` declares the tokens and stamps every
+frame with them. The tests are cloud runs on a fake /proc root (a temporary
+directory laid out like /proc) and on hand-written runtime events. Nothing ran
+on Frame, no test read the real /proc of any process, and no command passes a
+session yet. Nothing here opens a gate. In HUD mode `run_recognition` still
+refuses every backend that does not declare the synthetic kind
+(`hud_live_mirror_not_approved`, through `LIVE_IMAGE_INPUT`), and `HudMask`
+still accepts synthetic fixtures only.
+
+No provider invents a value. A token it cannot observe stays undeclared, with
+a named reason in the run report's `session_tokens.undeclared`.
+
+| Token | Real-run source | Value | Unknowns |
+| --- | --- | --- | --- |
+| `timebase_id` | `HostClock`: `/proc/sys/kernel/random/boot_id`, `/proc/self/ns/time` and that namespace's `CLOCK_MONOTONIC` offset (`/proc/self/timens_offsets`) of the process that stamps `Frame.observed_ns` with `time.monotonic_ns()` (`CLOCK_MONOTONIC`) | `clock_monotonic:boot:<boot id>:timens:<inode>:offset:<s>:<ns>` | The process that writes the calibration (the marker observer) must run in the same time namespace with the same offset, or every frame is rejected; that is unverified on Frame. The offset is part of the token because the kernel reuses a freed namespace's inode number, so two namespaces created one after the other can share an inode with clocks far apart. The offsets file describes the namespace of the process's children, so the token stays undeclared after the process unshares its time namespace (`/proc/self/ns/time_for_children` differs: `host_time_namespace_for_children_differs`). `CLOCK_MONOTONIC` stops during suspend, so a suspend changes neither the token nor a calibration's remaining lifetime. The time-namespace files need Linux 5.6 or later |
+| `session_id` | `RuntimeProcess`: the one process whose `/proc/<pid>/comm` is `vrserver`, its start time (`/proc/<pid>/stat` field 22) and the boot id. The kernel keeps the first 15 bytes of a command name, so a longer name is matched by those bytes and confirmed by the executable's full file name | `steamvr:boot:<boot id>:pid:<pid>:start:<ticks>` | `vrserver` is the desktop Linux name; the runtime's process name on Frame is unverified. It is also unverified whether that process is visible from the recognizer's pid namespace (for example inside Steam's container runtime). A session change that does not restart `vrserver` is not seen. When `/proc/<pid>/exe` cannot be inspected, the per-frame check rests on the stat line alone (command name, state, start time): an exec of another program that is also named `vrserver` would not be seen, but `runtime_id` is then undeclared, so a bound mask rejects every frame anyway |
+| `runtime_id` | `RuntimeProcess`: SHA-256 of the binary the process runs, opened through `/proc/<pid>/exe`, whose target's file name must be `vrserver`. After an update by rename the link reads `<install path> (deleted)` and the token is still the running build's digest. Never the install path or an installed manifest: the Frame PM reported an installed-manifest version that differed from the running runtime | `steamvr:vrserver:sha256:<digest>` | It covers `vrserver` only, not `vrcompositor`, drivers or shared libraries. Reading the link needs ptrace read access to the process: the same user and a dumpable process (not setuid, no file capabilities), or `CAP_SYS_PTRACE`. Yama's `ptrace_scope` restricts attaching, not this read. Under an emulator such as FEX, or an explicit loader, the link names that program, so the token stays undeclared (`runtime_executable_unexpected`). The binary is hashed once, before the source opens, up to 256 MiB |
+| `tracking_origin` | `TrackingObserver`: a `tracking_state` event carrying the HMD's `Prop_CurrentUniverseId_Uint64` and a SHA-256 of the runtime's zero-pose transforms (`GetRawZeroPoseToStandingAbsoluteTrackingPose`, `GetSeatedZeroPoseToStandingAbsoluteTrackingPose`) | `openvr:universe:<id>:zero-pose:<32 hex>` | No reporter emits these events yet (see below). Unverified on Frame: whether an overlay client gets a universe id there, and whether the zero-pose transforms stay bit-identical between recenters (if they drift, every comparison fails closed). A scene application's own tracking space cannot be observed from an overlay process and is not part of the token. Universe id 0, which OpenVR returns on a property error, is rejected. The first `tracking_state` must reach the observer before the `MirrorSource` is created; a state first seen later leaves both tracking tokens undeclared for the run |
+| `recenter_epoch` | `TrackingObserver`: the number of `tracking_changed` events (`TRACKING_CHANGES`: universe changed, seated or standing zero pose reset, room setup committed) since its first `tracking_state` | `0`, `1`, ... | The count covers this observer only. A recenter between the calibration run and this run shows only through `tracking_origin`. Unverified: whether Frame's recenter emits one of these events to an overlay client. Events lost while the reporter is down end the observer (`tracking_observer_ended`). A change is seen only once its event reaches `observe()`: a frame captured after a physical recenter but admitted before the event arrives carries the old `tracking_origin` and `recenter_epoch` and passes. That delivery delay is unmeasured |
+
+- **Declared before the source opens.** `MirrorSession.declare()` runs when
+  `MirrorSource` is created, so `CaptureContext` checks the declaration
+  against the calibration when it is built. An unobservable token is `None`.
+  Its reason names the provider's problem: `session_token_provider_missing`,
+  `host_boot_id_unreadable`, `host_boot_id_invalid`,
+  `host_time_namespace_unreadable`, `host_time_namespace_invalid`,
+  `host_time_namespace_for_children_differs`, `host_time_offsets_unreadable`,
+  `host_time_offsets_invalid`, `runtime_process_not_found`,
+  `runtime_process_ambiguous`, `runtime_process_unreadable`,
+  `runtime_process_scan_limit`, `runtime_process_exited`,
+  `runtime_process_changed` (the runtime exited, is a zombie, or changed
+  while it was being declared, including a pid reused after the scan),
+  `runtime_executable_unreadable`, `runtime_executable_unexpected`,
+  `runtime_executable_too_large`, `tracking_state_not_observed`,
+  `tracking_event_invalid` or `tracking_observer_ended`. A bound mask then
+  rejects the first frame with `hud_<token>_undeclared`, and the failure
+  latches.
+- **The declaration fixes the token set.** A token undeclared at
+  `declare()` stays undeclared for the run, even if its provider observes it
+  later: it is never stamped on a frame or declared by the source. This
+  matters for the tracking tokens: `run_recognition` creates the source
+  before the model loads, and a first `tracking_state` that arrives in
+  between does not bind. A caller feeds the observer its first state before
+  creating the source.
+- **Every frame.** Each frame's metadata carries the tokens read for it.
+  - `HostClock` re-reads the boot id, the time-namespace links and the
+    offset.
+  - `RuntimeProcess` re-reads the same pid's stat line (command name, state
+    and start time) and, when it could be inspected at declaration, the
+    binary's inode. It never rescans or re-hashes. It reports its declared
+    tokens as `None` with `runtime_process_exited` (exited, or a zombie not
+    yet reaped) or `runtime_process_changed` (pid reused, or another program
+    executed).
+  - The observer gives its current state. A malformed tracking event or the
+    end of its stream loses both tracking tokens for good.
+  - A declared token that can no longer be observed is `None`, never left
+    out.
+- **A change during a run.** Once a frame's tokens differ from the
+  declaration, the source declares the latest read. The observer is consulted
+  at every admission, so a recenter refuses even the result of a frame read
+  before it, without waiting for the next read. `CaptureContext` fails with
+  `source_or_session_changed`, and the failure latches. A new context, or the
+  old mask checking a later frame's metadata, names the token:
+  `hud_recenter_epoch_changed`, `hud_timebase_id_changed` or
+  `hud_session_id_changed`. The report's `session_tokens.first_change` gives
+  the frame, the token and the reason.
+- **One source per token.** A backend identity that declares a session token
+  beside a session is refused (`mirror_session_tokens_declared_twice`). A
+  `MirrorSession` serves one source (`session_already_declared`).
+  `run_recognition` reports either failure before the model loads or anything
+  opens. In HUD mode `run_recognition` checks the live-image gate before the
+  session is declared, so a refused run scans no /proc and hashes nothing.
+- **Fixture calibrations.** `fixture_calibration(..., session=...)` lets a
+  synthetic fixture pin the tokens that the tests' fixture providers declare.
+  The default is still `SYNTHETIC_SESSION`. The provenance, the `synthetic:`
+  source and the mask's synthetic-only rule are unchanged.
+
+**No native reporter yet.** This change adds the Python observer and its event
+schema. It does not change `tools/overlay_bridge.cpp`. The bridge's real
+`--stdin` mode is the confirmed replay-panel path ([E47](evidence/e047.md)),
+and it is the pinned bridge of the next G3 checkpoint. A reporter would add
+OpenVR property, pose and event reads to both, unchecked on a device. The
+fake-dispatch fixture covers helpers that need no OpenVR: packet decoding,
+deadlines and teardown order. What a reporter must get right is runtime
+behaviour: which events an overlay client receives on Frame, and what the
+universe id and zero poses are. A fake cannot establish that; it would only
+test a four-case mapping. A later reporter should emit `tracking_state` at
+start and after every change, and `tracking_changed` for each
+`TRACKING_CHANGES` event, in real mode only; validation modes stay
+runtime-free. `OverlayClient` would forward those lines to a
+`TrackingObserver` and call `end()` when the bridge exits.
+
+Follow-ups. None of these has run, and each needs its own review; the device
+step needs the user's approval. They are separate from the [next device
+checkpoint](#next-device-checkpoint) and do not replace it.
+
+1. **Provider check on Frame (device step, not run).** Run the providers once,
+   read-only, against the real /proc while SteamVR runs, with no capture,
+   overlay or inference. Record the tokens, their reasons and timing. Check
+   the runtime's process name, its visibility from the recognizer's
+   namespace, permission to read `/proc/<pid>/exe` and its target (the same
+   user and a dumpable `vrserver`, or `CAP_SYS_PTRACE`), and the time
+   namespace and its offset. No command for this exists yet.
+2. **Native tracking reporter.** As described above, with its own fixture,
+   review and device check. The device check also measures the delay from a
+   recenter to its event reaching `observe()`, relative to mirror frames.
+3. **Observed candidate context.** The marker observer and
+   `hud_validation_report.py --from-observer` take session tokens from
+   `--declared-context`. They should record the same providers' tokens, so a
+   candidate's context is observed rather than declared.
+4. **Command path.** No command passes a session to the mirror recognizer.
+   HUD input from the mirror stays refused by `LIVE_IMAGE_INPUT` until G4–G6
+   pass.
+
+From the checkout:
+
+```bash
+.venv-replay/bin/python -m unittest tests.test_mirror_session tests.test_capture_context \
+  tests.test_hud_calibration tests.test_hud_mask
+```
+
+## Neutral mask fill (2026-11-03)
+
+This resolves the G5 design question that the
+[synthetic validation counts](#synthetic-validation-counts-and-one-maximum-age-2026-11-01)
+left open. On the generated 96x64 frames, MobileNetSSD reported the zero-filled
+mask itself as `tvmonitor`, so a synthetic validation run with the real
+detector failed. The owner chose to try a different fill and to keep the rule
+strict. Everything below is a cloud result: runner CPU (x86_64, 4-core Xeon
+under KVM, Python 3.12.3, OpenCV 4.12.0, ONNX Runtime 1.31.0), generated frames
+and six public seed stills. None of it is Frame, headset or composited-mirror
+evidence, and no gate opens.
+
+**What changed.** `HudMask.prepare_counted` still copies the native frame and
+zeroes every masked region (footprint plus margin, per eye) at native
+resolution, before any resize. It still counts the footprint pixels left
+non-zero (`unmasked_footprint_px`), taken from the geometry rule
+(`mask_regions`). Then `hud.mask.fill_regions` gives each region one color:
+the rounded per-channel mean of the pixels within `FILL_RING_PX` (8) of the
+region that lie inside the region's own eye and outside every masked region
+(`hud.mask.surround`). The resize comes after that. The fill reads only the
+zeroed copy and never the frame it came from. It uses integer arithmetic, so
+every CPU gives the same bytes, and its cost is bounded by the ring and the
+region, which the blind budget bounds in turn.
+
+**Counters and the strict rule.** `unmasked_footprint_px` now means footprint
+pixels still non-zero *after zeroing, before the fill and the resize*. A count
+of 0 still proves that no HUD pixel survives into the copy the fill reads, and
+`prepare` and the engine still stop on any non-zero count
+(`hud_mask_zeroing_failed`). The strict rule is unchanged: `geometry.exclusion`
+drops any box that touches a masked region or does not lie inside exactly one
+eye, and the validation ledger and the engine counts still fail a validation
+run on such a box.
+
+**Leak tests** (`tests/test_hud_fill.py`, `tests/test_mask_fill_evaluation.py`):
+
+- Changing any pixel inside footprint plus margin leaves the detector input
+  byte-identical, both the native image the resize receives and the resized
+  input. The tests use random content, the real HUD tile with text, white,
+  black and inverted content. The calibrations are the 96x64 fixture, 1280x720
+  mono, 1920x1080, and both stereo layouts twice: with each region 12 px from
+  the seam between the eyes, and with both regions touching the seam, one from
+  each side.
+- Every single pixel of the fixture's region is checked, one at a time. So are
+  the edge rows and columns of every region at 1080p and in stereo.
+- Changing everything in the other eye leaves an eye's native and resized
+  input unchanged. With the regions on the seam, the 8 px ring would reach the
+  other eye if it were not clipped to the region's own eye, so this exercises
+  the clip.
+- An independent oracle pins the runtime fill to the rule above. It computes
+  each region's color without `hud.mask.surround`, as the rounded per-channel
+  mean of the pixels within 8 px of the region, inside its eye and outside
+  every region. The native image the resize receives must equal that oracle on
+  textured frames for every calibration.
+- The same leak and other-eye checks run for every candidate fill below.
+- In one-off checks, each of these mutations failed the runtime tests:
+  - a fill that reads the original region;
+  - a mask that keeps one footprint pixel;
+  - a ring not clipped to its eye, in `fill_regions` or in `surround`;
+  - the mono viewport passed for a stereo frame;
+  - a fill that also reads one pixel of the zeroed region;
+  - a whole-eye mean;
+  - a ring of 4 or 16 px.
+
+**Evaluation.** `scripts/evaluate_mask_fill.py` (library
+`framejacker/mask_fill_evaluation.py`, which the runtime never imports) writes
+a JSON report; the command is in
+[development](development.md#hud-mask-fill-evaluation). It compares six fills,
+each run on the zeroed copy under the same surround rule:
+
+- `zero`, the baseline;
+- `ring_mean`, the runtime fill;
+- `nearest`, nearest-outside-pixel replication;
+- `inpaint_telea` and `inpaint_ns`, `cv2.inpaint` with a mask covering exactly
+  the region;
+- `surround_blur`, a blurred patch: the mean of the surround in a box of
+  half-size max(w, h).
+
+Both detectors ran at threshold 0.5. The gray sweep uses the synthetic source's
+127 odd uniform levels with the real fixture calibration (region
+`(59, 34, 96, 64)`). The seed comparison pastes a mask on the six seed stills at
+five positions, 30 cases per fill:
+
+- `lower_right`, the default HUD position: a footprint 16% of the width at the
+  tile's 2.5:1 aspect, inset 5% and 8%, with an 8 px margin;
+- the same footprint at `lower_left`, `upper_left` and `center`;
+- `fixture_scaled`, the fixture's footprint and margin scaled to the still.
+
+Seed photos are not a capture source, so these cases use the same geometry
+rules and fill function but never build a `Calibration`.
+
+A box "on the mask" touches the masked region. It is "new" when no unmasked
+detection of its label matches it at IoU 0.5 or more. It is "artifact-like"
+when it is new, at least 25% of its native box lies on the region, and no
+unmasked detection of any label reaches IoU 0.3 with it. That is the closest
+proxy for a box the fill itself caused.
+
+"Clear" detections are the ones that touch no mask. For them the report counts
+lost, added, relabelled and rescored detections against the unmasked image:
+
+- a rescored detection is a same-label match at IoU 0.5 or more whose score
+  moved by more than the stated tolerance of 0.05;
+- a lost or added detection is "marginal" when its counterpart on the other
+  image scores within 0.05 below the threshold.
+
+Over the 30 cases the unmasked images had 42 clear MobileNetSSD detections and
+61 clear YOLOX detections. They had 23 and 24 detections that touch a mask
+position, which are real objects under the HUD.
+
+| Detector | Fill | Gray levels with a box on the mask | Seed boxes on the mask (new; artifact-like) | Clear lost (marginal) | Clear added (marginal) | Relabelled | Rescored > 0.05 | Max score change |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| mobilenet-ssd | zero | **93/127** | 19 (2; 0) | 0 (0) | 4 (2) | 0 | 3 | 0.33 |
+| mobilenet-ssd | ring_mean | **0/127** | 21 (2; 0) | 0 (0) | 2 (1) | 0 | 2 | 0.35 |
+| mobilenet-ssd | nearest | 0/127 | 20 (1; 0) | 1 (0) | 1 (0) | 0 | 3 | 0.14 |
+| mobilenet-ssd | inpaint_telea | 0/127 | 20 (1; 1) | 0 (0) | 2 (1) | 0 | 3 | 0.24 |
+| mobilenet-ssd | inpaint_ns | 0/127 | 19 (1; 1) | 1 (0) | 3 (3) | 0 | 3 | 0.08 |
+| mobilenet-ssd | surround_blur | 0/127 | 20 (2; 0) | 0 (0) | 3 (2) | 0 | 2 | 0.33 |
+| yolox-nano | zero | 0/127 | 18 (2; 0) | 1 (1) | 3 (1) | 0 | 1 | 0.06 |
+| yolox-nano | ring_mean | **0/127** | 22 (3; 0) | 0 (0) | 1 (0) | 0 | 0 | 0.05 |
+| yolox-nano | nearest | 0/127 | 20 (2; 0) | 2 (0) | 0 (0) | 0 | 0 | 0.04 |
+| yolox-nano | inpaint_telea | 0/127 | 23 (3; 0) | 2 (1) | 1 (0) | 0 | 0 | 0.03 |
+| yolox-nano | inpaint_ns | 0/127 | 22 (2; 0) | 1 (0) | 0 (0) | 0 | 0 | 0.02 |
+| yolox-nano | surround_blur | 0/127 | 22 (3; 0) | 0 (0) | 1 (0) | 0 | 0 | 0.05 |
+
+- **Gray sweep.** At the zero fill, MobileNetSSD boxed the mask on 93 of 127
+  levels, as E76 found. On this runner the confidence was 0.50–0.87; E76
+  recorded 0.51–0.81. Every other fill: 0/127 for both detectors, and also
+  0/255 over every level 0–254 the source emits (zero: 187/255). On a uniform
+  frame the surround fill reproduces the frame exactly, so the detector input
+  equals the unmasked input. Neither detector reports anything on any unmasked
+  level. MobileNetSSD's highest sub-threshold score for a box touching the mask
+  is 0.43 with the ring-mean fill. That is the same as without the mask,
+  0.07 below the threshold.
+- **Seeds.** Most boxes on the mask are real objects partly under it. Their
+  boxes change shape, or the label changes (horse to cow, for example), so a
+  few count as new for every fill, zero included. Only the two inpainting fills
+  produced an artifact-like box: a `pottedplant` in the foliage on the giraffe
+  still at `upper_left` (0.63 with Telea, 0.70 with Navier–Stokes), with no
+  unmasked detection near it. With the ring-mean fill neither detector lost a
+  clear detection. Its added detections (two for MobileNetSSD, one marginal;
+  one for YOLOX) are objects whose unmasked box touched the mask position. With
+  the mask, the box covers only the visible part and no longer touches it; one
+  of them also changed label, sheep to horse. The differences between the neutral fills are one or
+  two events in 30 cases, within the noise of six stills.
+
+**Seed pin counts.** Without a mask the counts (present hits of present checks,
+absent violations; no confusions anywhere) are MobileNetSSD 7/9 and 2 and YOLOX
+12/12 and 0, which equal the committed pin. Each masked still is scored twice:
+
+- *raw*: the detector's whole output, boxes touching the mask included;
+- *kept*: only the boxes the runtime keeps for presentation
+  (`mask_fill_evaluation.runtime_kept`, the `geometry.exclusion` rule). The
+  boxes it leaves out are the ones a validation run fails on.
+
+Each cell is "raw present hits, raw absent violations / kept present hits,
+kept absent violations":
+
+| Detector | Fill | `lower_right` | `lower_left` | `upper_left` | `center` | `fixture_scaled` |
+| --- | --- | --- | --- | --- | --- | --- |
+| mobilenet-ssd | ring_mean | 8, 2 / 8, 1 | 7, 2 / 4, 2 | 7, 2 / 6, 2 | 7, 1 / 2, 1 | 8, 1 / 5, 1 |
+| mobilenet-ssd | zero | 8, 1 / 8, 1 | 7, 2 / 4, 2 | 7, 2 / 6, 2 | 7, 1 / 3, 1 | 8, 2 / 5, 2 |
+| yolox-nano | ring_mean | 12, 0 / 9, 0 | 12, 0 / 9, 0 | 12, 0 / 11, 0 | 12, 1 / 5, 0 | 12, 0 / 7, 0 |
+| yolox-nano | zero | 12, 0 / 9, 0 | 12, 0 / 9, 0 | 12, 0 / 11, 0 | 11, 1 / 5, 0 | 12, 1 / 9, 0 |
+
+- The raw counts hide what the strict rule costs next to the HUD. At the
+  default `lower_right` position YOLOX keeps 9 of its 12 present hits with
+  either fill. MobileNetSSD keeps all 8 of its raw present hits there (of 9
+  checks), but with the ring-mean fill one of its two raw absent violations is
+  a box on the mask.
+- The dropped hits are objects whose box covers the mask position, such as the
+  horse on the person still and the giraffe. Every fill drops them.
+- The neutral fills keep slightly fewer hits than zero at two positions:
+  - YOLOX at `fixture_scaled` keeps 7 rather than 9. The horse on the person
+    still and the zebra on the giraffe still are now boxed over the neutral
+    patch; the black patch had cut their boxes short.
+  - MobileNetSSD at `center` keeps 2 rather than 3. With the neutral patch it
+    no longer reports the horse on the person still.
+
+  That is one or two events in 30 cases. The zero fill fails the strict rule
+  on 93 of 127 gray frames instead.
+- Kept absent violations are no higher with the ring-mean fill than with zero:
+  7 against 8 over the five positions for MobileNetSSD, and 0 for YOLOX.
+- A masked still is a different input, so these counts describe the mask, not
+  a regression. `evaluate_detectors.py --expect`, which applies no mask, is
+  unchanged and still passes.
+
+**Cost per frame** (milliseconds, p50/p95 of 30 runs, runner CPU, not Frame).
+The fill alone runs on an already zeroed copy:
+
+| Fill | 96x64 fixture (1,110 px) | 1920x1080, lower right (44,897 px) | 1920x1080, blind-budget maximum (518,400 px) |
+| --- | --- | --- | --- |
+| zero | 0.000 | 0.001 | 0.001 |
+| ring_mean | 0.06 / 0.11 | 0.69 / 0.87 | 4.1 / 4.7 |
+| nearest | 0.11 / 0.15 | 1.6 / 2.1 | 18.6 / 23.5 |
+| inpaint_telea | 1.4 / 1.5 | 25.3 / 39.4 | 283 / 337 |
+| inpaint_ns | 1.2 / 1.2 | 28.8 / 37.3 | 309 / 369 |
+| surround_blur | 0.31 / 0.40 | 9.7 / 10.0 | 97 / 114 |
+
+The whole runtime `HudMask.prepare` with the ring-mean fill takes 0.16 / 0.24,
+2.7 / 3.7 and 14.6 / 15.1 ms in the same three cases. That covers validation,
+zeroing, the count, the fill and the resize. For comparison, MobileNetSSD
+inference took about 26–31 ms per frame in the runs below.
+
+**Choice: `ring_mean`.**
+
+- It clears the gray sweep for both detectors and produced no artifact-like box
+  on the seeds. Both inpainting fills did.
+- Neither detector lost a clear detection with it.
+- It is the cheapest neutral fill. In the table above, `nearest` costs about
+  twice as much at 96x64 and at the default 1080p position, and inpainting up
+  to 75 times as much at the blind-budget maximum.
+- Next to the HUD it keeps, for presentation, at most two present hits fewer
+  than zero at any seed position (the kept counts above), and no more absent
+  violations.
+- Its integer result is identical on any CPU, including ARM64.
+- It reads a fixed 8-pixel ring, so it is the easiest fill to reason about for
+  leaks.
+
+**Strict-rule validation with the real default detector:**
+
+- On 881fea7 (zero fill), `live_pipeline.py --synthetic-check --synthetic-hud
+  --seconds 3` ended `validation_failed`, exit 1, `hud_validation_mask_overlap`
+  after 3 frames.
+- With the ring-mean fill, the same command ends `completed`, exit 0, with
+  clean cleanup. It checked 15 frames and found 0 mask overlaps, 0 eye
+  crossings and 0 unmasked footprint pixels; `g5_software.status` is
+  `checked_unqualified` and the ledger is `telemetry_checked_unqualified`.
+- With `--validate-overlay` the result is the same, over 15 frames.
+- `--seconds 60` checks 300 frames over about seven cycles of the source's
+  gray levels and ends `completed` with every count 0.
+- `tests/test_hud_fill.py` runs the 127-level sweep through `HudStage` with
+  both detectors, and both supervised commands with the default detector. It
+  failed on 881fea7: MobileNetSSD 93/127, and both commands ended
+  `validation_failed`.
+- The [G1 rerun](live-capture.md#edge-hud-acceptance-gates) is therefore back
+  on the default detector.
+
+**Limits.**
+
+- Frame's mirror content, its real HUD footprint size and its margin are not
+  known. Six outdoor stills and uniform gray frames do not show that no scene
+  makes a flat patch look like an object.
+- If one does, the strict rule still fails that validation run visibly. It is
+  not hidden.
+- A device G5 run still needs the separately scoped diagnostic and its own
+  approval.
+
+```bash
+.venv-replay/bin/python -m unittest tests.test_hud_fill tests.test_mask_fill_evaluation tests.test_hud_mask
+.venv-replay/bin/python scripts/evaluate_mask_fill.py --fetch --expect-clean-gray-sweep --report /tmp/mask-fill.json
+```
+
 ## Separately scoped device validation
 
 G5 needs real output to test exclusion and physical expiry, while production
@@ -464,9 +846,10 @@ bound scope; they do not substitute for the evidence review.
 
 Use a generated opaque HUD tile with a diagnostic identifier plus controlled
 names/arrows, and the same masking/rendering code as production. The detector
-receives only a native-resolution owned image after the union mask is applied,
-then the normal resize. The test checks every copied pixel in the mask is
-zero before resize and rejects boxes touching the mask or eye boundary.
+receives only a native-resolution owned image after the union mask is applied
+(zeroed, then refilled from its surround), then the normal resize. The test
+checks every copied pixel in the mask is zero after zeroing, before the fill
+and the resize, and rejects boxes touching the mask or eye boundary.
 Record the checks as counts, frame/result identities and context hashes; keep
 raw private images local unless separately authorized. Count post-mask zeroing
 failures and HUD-footprint detections separately. A detector failing to recognize

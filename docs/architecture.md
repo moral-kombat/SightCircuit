@@ -51,6 +51,40 @@ changes. Existing native expiring-frame transport is reused without a new
 bridge/protocol change. Only synthetic calibration is accepted; live mirror HUD
 input is rejected before opening, and real HUD output remains blocked.
 
+A calibration pins five session tokens, and a bound mask rejects a frame
+when any of them is neither declared by its source nor reported by the frame.
+`framejacker/sources/session.py` gives the mirror source a read-only source
+for each. `MirrorSource(session=...)` declares them before it opens and stamps
+every frame with the values read for it. A token that cannot be observed then
+stays undeclared for the run with a named reason, so the mask rejects the
+frame (`hud_<token>_undeclared`). A token that changes during a run fails the
+capture context closed. All of this is tested offline only, on a fake /proc
+root and injected events; no gate changed and nothing ran on Frame. The
+[token table](hud-qualification.md#session-tokens-for-the-mirror-source-2026-11-03)
+has the details and the follow-up device check:
+
+- `timebase_id`: boot id, time namespace and that namespace's
+  `CLOCK_MONOTONIC` offset, of the process that stamps `Frame.observed_ns`.
+  Unknown: whether the calibrating observer shares that namespace on Frame.
+  A suspend does not change it.
+- `session_id`: boot id, pid and start time of the running `vrserver`, found
+  under `/proc`. Unknown: the runtime's process name on Frame and its
+  visibility from the recognizer, and session changes that keep `vrserver`.
+- `runtime_id`: SHA-256 of the binary `vrserver` runs, read through
+  `/proc/<pid>/exe`, never an installed manifest. Unknown: permission to read
+  it (the same user and a dumpable process, or `CAP_SYS_PTRACE`), emulator or
+  loader indirection, and the components it does not cover (compositor,
+  drivers, libraries).
+- `tracking_origin`: the HMD's universe id and a digest of the zero-pose
+  transforms, from a `tracking_state` event fed to `TrackingObserver` before
+  the source is created. Unknown: no reporter emits these events yet, and
+  whether Frame exposes those values to an overlay client and keeps them
+  stable between recenters.
+- `recenter_epoch`: recenter and chaperone events counted since that
+  observer's first state. Unknown: whether Frame's recenter emits them, and
+  how long an event takes to arrive (frames admitted before it carry the old
+  epoch). A recenter between two runs shows only through `tracking_origin`.
+
 The fixed panel position is a candidate, not a calibrated mirror-pixel mapping.
 Actual mapping, projection stability, head-motion leakage, latency, physical VR
 expiry and end-to-end operation remain unproven. See the

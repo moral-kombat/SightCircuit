@@ -32,7 +32,9 @@ exit 1, unless it already failed on its own (see ``add_validation``).
 Mirror run. ``run_recognition`` reads a verified SteamVR mirror through
 ``MirrorSource``, with the contract's one-second age limit and no exit code
 (its launcher derives it). Its HUD mode accepts fixture backends only and feeds
-no validation ledger.
+no validation ledger. An injected ``session`` (``sources.session.MirrorSession``)
+gives the source its session tokens and adds ``session_tokens`` to the report;
+no command passes one yet, and it lifts no gate.
 """
 from dataclasses import dataclass
 import threading
@@ -305,7 +307,7 @@ MIRROR = ReportStyle(MIRROR_LEGACY_FIELDS, "recognized", False, mirror_failure, 
 
 def run_recognition(candidate, seconds, stop, progress=lambda report: None, *, max_fps=5, threshold=0.5,
                     detector=DEFAULT_DETECTOR, backend_factory=None, detector_factory=None,
-                    hud_mode=False, calibration=None, hud_config=HUD_CONFIG):
+                    hud_mode=False, calibration=None, hud_config=HUD_CONFIG, session=None):
     """Bounded recognition from a verified SteamVR mirror; return the report and its last result, or None.
 
     The result (a ``Processed``) is returned only for a recognized run with
@@ -313,7 +315,10 @@ def run_recognition(candidate, seconds, stop, progress=lambda report: None, *, m
     describe the reported ``last_result``. ``detector`` names a ``DETECTORS``
     entry; an injected ``detector_factory`` replaces it and is not described
     in the report. ``progress`` receives the report before the model loads and
-    then a snapshot at most once a second.
+    then a snapshot at most once a second. ``session`` is declared when the
+    source is created, before the model loads. In HUD mode the gate is checked
+    first: a backend that does not declare the synthetic kind is refused
+    before any session provider reads ``/proc`` or hashes the runtime binary.
     """
     report = new_mirror_report()
     report.update(candidate=candidate, phase="loading_detector", maximum_processing_fps=max_fps,
@@ -337,14 +342,28 @@ def run_recognition(candidate, seconds, stop, progress=lambda report: None, *, m
     def acquire(capture_stop, on_frame, update):
         return capture(candidate, seconds, capture_stop, update, backend_factory=backend_factory, on_frame=on_frame)[0]
 
-    source = MirrorSource(acquire, getattr(backend_factory, "source_id", None) or "mirror:observed",
-                          identity=backend_factory)
+    if stage is not None and session is not None:
+        try:  # The same refusal as in load(), before the session's providers do any work.
+            require_synthetic(backend_factory, "hud_live_mirror_not_approved")
+        except ValueError as error:
+            MIRROR.set_status(report, "error")
+            report.update(mirror_failure(error), capture={}, phase="closed")
+            return report, None
+    try:
+        source = MirrorSource(acquire, getattr(backend_factory, "source_id", None) or "mirror:observed",
+                              identity=backend_factory, session=session)
+    except ValueError as error:  # A session that cannot be declared stops the run before anything opens.
+        MIRROR.set_status(report, "error")
+        report.update(mirror_failure(error), reason=str(error), phase="closed")
+        return report, None
 
     def close(report, pipeline):
         if pipeline is not None and pipeline.capture_thread_alive:
             report.update(status="error", reason="capture_thread_did_not_exit", cleanup_ok=False)
         captured = source.report
         report["capture"] = captured
+        if session is not None:
+            report["session_tokens"] = source.session_report
         if captured:
             report["cleanup_ok"] = report["cleanup_ok"] and captured["cleanup_ok"]
             if captured["status"] == "error":

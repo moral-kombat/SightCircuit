@@ -75,10 +75,13 @@ class HudMaskTests(unittest.TestCase):
         resize = cv2.resize
         def checked(image, *args, **kwargs):
             self.assertEqual(image.shape, (1080, 1920, 3))
-            self.assertFalse(image[y0:y1, x0:x1].any())
+            # No HUD pixel is left: the region holds its surround's fill, here the uniform 20.
+            self.assertTrue((image[y0:y1, x0:x1] == 20).all())
+            np.testing.assert_array_equal(image, clean)
             return resize(image, *args, **kwargs)
-        with patch.object(cv2, "resize", side_effect=checked):
+        with patch.object(cv2, "resize", side_effect=checked) as resized:
             actual = prepare(mask, native)
+        self.assertEqual(resized.call_count, 1)
         self.assertEqual(actual.shape, (540, 960, 3))
         np.testing.assert_array_equal(actual, prepare(mask, clean))
         self.assertTrue((storage[:, 5760:] == 173).all())
@@ -98,7 +101,9 @@ class HudMaskTests(unittest.TestCase):
         resize = cv2.resize
         def checked(image, *args, **kwargs):
             self.assertEqual(image.shape, (720, 1280, 3))
-            self.assertFalse(image[y0:y1, x0:x1].any())
+            # The random HUD content is gone before the resize; the region holds its surround's fill.
+            self.assertTrue((image[y0:y1, x0:x1] == 20).all())
+            np.testing.assert_array_equal(image, clean)
             return resize(image, *args, **kwargs)
         with patch.object(cv2, "resize", side_effect=checked) as resized:
             actual = prepare(mask, contaminated)
@@ -242,9 +247,19 @@ class HudIntegrationTests(unittest.TestCase):
 
     def test_pipeline_inference_sees_mask_and_sink_receives_only_hud(self):
         cal = synthetic.synthetic_hud_calibration()
+        class Source(synthetic.SyntheticSource):
+            def read(inner, *args, **kwargs):  # Generated frames with HUD-bright pixels on the footprint.
+                frame = super().read(*args, **kwargs)
+                if frame is None:
+                    return None
+                pixels = np.array(frame.pixels)
+                pixels[42:56, 67:88] = 255
+                return Frame.owned_bgr(pixels, frame.sequence, frame.observed_ns, frame.source)
         class Detector(synthetic.FixtureDetector):
             def detect(inner, image, threshold):
-                self.assertFalse(image[34:64, 59:96].any())
+                # Footprint plus margin holds the surround's fill (this uniform frame's level), never 255.
+                self.assertTrue((image[34:64, 59:96] == image[0, 0]).all())
+                self.assertLess(int(image.max()), 255)
                 self.assertFalse(image.flags.writeable)
                 return DetectionResult((detected("chair", .9, [10, 10, 20, 20]),), 0.0)
         class Sink(synthetic.HeadlessSink):
@@ -259,8 +274,9 @@ class HudIntegrationTests(unittest.TestCase):
                 self.assertGreater(processed.expires_ns, frame.observed_ns)
                 self.assertEqual(frame.source, cal.source_id)
                 super().submit(processed)
-        report = run_hud(synthetic.SyntheticSource(), Detector(), Sink(), .3, cal)
+        report = run_hud(Source(), Detector(), Sink(), .3, cal)
         self.assertEqual(report["status"], "completed", report)
+        self.assertGreater(report["frames_submitted"], 0, report)
         self.assertTrue(report["cleanup_ok"])
         self.assertFalse(report["hardware_mapping_verified"])
         self.assertFalse(report["feedback_exclusion_verified"])
@@ -357,6 +373,7 @@ class HudIntegrationTests(unittest.TestCase):
         pixels = np.full((720, cal.capture_format.stride_bytes), 199, dtype=np.uint8)
         image = np.ndarray((720, 1280, 3), dtype=np.uint8, buffer=pixels, strides=(cal.capture_format.stride_bytes, 3, 1))
         image[:] = (10, 20, 30)
+        image[650:700, 1180:1260] = 255  # HUD-bright pixels on the footprint.
         source = type("Source", (), dict(kind="synthetic", source_id=cal.source_id, capture_layout="mono"))()
         stage = hud.HudStage(source, cal)
         stage.start()
@@ -368,7 +385,9 @@ class HudIntegrationTests(unittest.TestCase):
         self.assertEqual(result.shape, (540, 960, 3))
         self.assertFalse(result.flags.writeable)
         x0, y0, x1, y1 = (round(value * 0.75) for value in stage.mask.regions[0])
-        self.assertFalse(result[y0 + 1:y1 - 1, x0 + 1:x1 - 1].any())
+        # The masked region holds its surround's fill, the uniform BGR (30, 20, 10), not the HUD's 255.
+        self.assertTrue((result[y0 + 1:y1 - 1, x0 + 1:x1 - 1] == (30, 20, 10)).all())
+        self.assertTrue((result == (30, 20, 10)).all())
         changed = replace(frame, metadata={"native_format": dict(fmt, colorspace_code=1)})
         with self.assertRaisesRegex(ValueError, "format_changed"):
             stage.prepare(changed)
@@ -402,7 +421,9 @@ class HudIntegrationTests(unittest.TestCase):
                     for key in hud.CaptureFormat.__dataclass_fields__ if key != "metadata"}
                 if self.bad:
                     self.format["colorspace_code"] = 1
-                self.data = bytes([63]) * cal.capture_format.buffer_bytes
+                pixels = np.full((720, 1280, 3), 63, np.uint8)
+                pixels[650:700, 1180:1260] = 255  # HUD-bright pixels on the footprint.
+                self.data = pixels.tobytes()
             def open(self):
                 type(self).closed = False
             def read_frame(self, timeout):
@@ -412,7 +433,9 @@ class HudIntegrationTests(unittest.TestCase):
         class Detector(synthetic.FixtureDetector):
             def detect(inner, image, threshold):
                 self.assertEqual(image.shape, (540, 960, 3))
-                self.assertFalse(image[490:520, 890:940].any())
+                # The footprint's 255 is gone: the whole input is the surround's uniform 63.
+                self.assertTrue((image[490:520, 890:940] == 63).all())
+                self.assertTrue((image == 63).all())
                 self.assertEqual(int(image[0, 0, 0]), 63)
                 return DetectionResult((detected("chair", .9, [10, 10, 20, 20]),), 0.0)
         detector = Detector()

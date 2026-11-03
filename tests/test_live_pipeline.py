@@ -127,7 +127,7 @@ class LivePipelineTests(unittest.TestCase):
         native[850:1020, 1500:1820] = 255
         owned = Frame.owned_bgr(native, 1, time.monotonic_ns(), "synthetic:native")
         expected_native = native.copy()
-        expected_native[842:1028, 1492:1828] = 0
+        expected_native[842:1028, 1492:1828] = 17  # Footprint plus margin refilled from its uniform surround.
         expected = cv2.resize(expected_native, (960, 540), interpolation=cv2.INTER_AREA)
         storage[:] = 99  # Reusing the padded acquisition buffer cannot change the owned frame.
         self.assertEqual(native_format(owned)["stride_bytes"], stride)
