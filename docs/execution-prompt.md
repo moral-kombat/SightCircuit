@@ -27,10 +27,11 @@ a device operation; every gate in `framejacker/gates.py` stays closed.
 | PR | Merged as | Content | Evidence |
 | --- | --- | --- | --- |
 | [#17](https://github.com/moral-kombat/framejacker/pull/17) | `1a843e3` | Packages A–H of the [offline handoff](#offline-handoff-2026-11-01) | [E76](evidence/e076.md) |
-| [#16](https://github.com/moral-kombat/framejacker/pull/16) | `881fea7` | Claude Code on Frame: plan ([agent-on-frame](agent-on-frame.md)), `framejacker/agent/` runner and guard, `scripts/frame_claude_install.sh` | None yet |
-| [#18](https://github.com/moral-kombat/framejacker/pull/18) | `d4800bc` | Package I: mirror session tokens (`framejacker/sources/session.py`). Package J: neutral HUD mask fill (`hud.mask.fill_regions`, `scripts/evaluate_mask_fill.py`). The owner's 2026-11-03 decisions ([POC scope](poc-scope.md)) | None yet; E77 is the next free ID |
+| [#16](https://github.com/moral-kombat/framejacker/pull/16) | `881fea7` | Claude Code on Frame: plan ([agent-on-frame](agent-on-frame.md)), `framejacker/agent/` runner and guard, `scripts/frame_claude_install.sh` | [E77](evidence/e077.md) |
+| [#18](https://github.com/moral-kombat/framejacker/pull/18) | `d4800bc` | Package I: mirror session tokens (`framejacker/sources/session.py`). Package J: neutral HUD mask fill (`hud.mask.fill_regions`, `scripts/evaluate_mask_fill.py`). The owner's 2026-11-03 decisions ([POC scope](poc-scope.md)) | [E78](evidence/e078.md); E79 is the next free ID |
 
-Package details and cloud numbers are in each PR description and in
+Package details and cloud numbers are recorded in [E77](evidence/e077.md) and
+[E78](evidence/e078.md). They are also in each PR description and in
 [hud-qualification](hud-qualification.md): see "Session tokens for the mirror
 source (2026-11-03)" and "Neutral mask fill (2026-11-03)".
 
@@ -49,15 +50,18 @@ These are recorded in [POC scope](poc-scope.md):
 - G2 may close on a rehearsed recovery procedure if the cause stays unknown.
 - One G3 marker run and one catch-up headset session are approved. They run under the Frame project-manager session, not in a cloud coder session.
 - Changeable HUD positions are backlog. The strip stays lower right.
+- Later on 2026-11-03 (open decision 1 below): the tracking tokens stay bound
+  when `MirrorSource` is declared, so the observer must see a tracking state
+  first. Late binding was not adopted.
 
 ### Open decisions for the owner
 
-Ask the owner; do not decide these yourself.
+Ask the owner; do not decide these yourself. Item 1 has since been decided
+and keeps its number.
 
-1. **When the tracking tokens bind (package I).** They are frozen when
-   `MirrorSource` is declared, so the observer must see a tracking state first.
-   The alternative is to accept tokens that arrive later, under explicit rules.
-   The options are in the package I section of hud-qualification.
+1. **When the tracking tokens bind (package I).** Decided: see
+   [owner decisions](#owner-decisions-2026-11-03) above and in
+   [POC scope](poc-scope.md#owner-decisions-2026-11-03).
 2. **Agent on Frame (#16):**
    - `setsid()` escapes the task process group. Options: a systemd scope, a subreaper, or accept it.
    - The guard routes only some tools.
@@ -67,11 +71,11 @@ Ask the owner; do not decide these yourself.
 
 ### Offline work that is ready to pick up
 
-These need no device. Each one gets its own PR.
+These need no device. Each one gets its own PR. Item 1 is done and keeps its
+number.
 
-1. **Evidence record for I, J and #16.** The coordinator assigns E77 and E78.
-   Record the cloud results from the #18 and #16 descriptions, then run
-   `python3.12 scripts/generate_status.py`.
+1. **Evidence record for I, J and #16.** Done: [E77](evidence/e077.md) for
+   #16 and [E78](evidence/e078.md) for #18, by merge order.
 2. **Tokens from the observer path.** Make `hud_marker_observer.py` and
    `hud_validation_report.py --from-observer` record the
    `framejacker/sources/session.py` provider tokens instead of
@@ -446,7 +450,9 @@ their own section).
 - Do not run any device operation, and do not make any change that opens a
   gate.
 - Only the coordinator allocates evidence IDs. E76 records this delivery, so
-  the next free one is E77. Put cloud results in the PR description.
+  the next free one was E77 at this handoff (see the
+  [2026-11-03 handoff](#coder-handoff-2026-11-03) for the current one). Put
+  cloud results in the PR description.
 - Update the owning documents in the same change.
 
 ### Device work these packages unlock (for the project manager)

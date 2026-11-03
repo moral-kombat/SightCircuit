@@ -454,7 +454,8 @@ template agree. From the checkout:
 ## Session tokens for the mirror source (2026-11-03)
 
 [E76](evidence/e076.md) recorded that no hardware source declares the HUD
-session tokens, so a bound mask could never accept a mirror frame.
+session tokens, so a bound mask could never accept a mirror frame. The cloud
+results of this change are [E78](evidence/e078.md).
 `framejacker/sources/session.py` now names a read-only source for each token.
 `MirrorSource(session=MirrorSession(...))` declares the tokens and stamps every
 frame with them. The tests are cloud runs on a fake /proc root (a temporary
@@ -499,7 +500,9 @@ a named reason in the run report's `session_tokens.undeclared`.
   matters for the tracking tokens: `run_recognition` creates the source
   before the model loads, and a first `tracking_state` that arrives in
   between does not bind. A caller feeds the observer its first state before
-  creating the source.
+  creating the source. On 2026-11-03 the owner decided that the tracking
+  tokens stay bound when `MirrorSource` is declared; late binding was not
+  adopted ([owner decisions](poc-scope.md#owner-decisions-2026-11-03)).
 - **Every frame.** Each frame's metadata carries the tokens read for it.
   - `HostClock` re-reads the boot id, the time-namespace links and the
     offset.
@@ -584,7 +587,8 @@ This resolves the G5 design question that the
 left open. On the generated 96x64 frames, MobileNetSSD reported the zero-filled
 mask itself as `tvmonitor`, so a synthetic validation run with the real
 detector failed. The owner chose to try a different fill and to keep the rule
-strict. Everything below is a cloud result: runner CPU (x86_64, 4-core Xeon
+strict. Its cloud results are recorded in [E78](evidence/e078.md).
+Everything below is a cloud result: runner CPU (x86_64, 4-core Xeon
 under KVM, Python 3.12.3, OpenCV 4.12.0, ONNX Runtime 1.31.0), generated frames
 and six public seed stills. None of it is Frame, headset or composited-mirror
 evidence, and no gate opens.

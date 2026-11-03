@@ -41,7 +41,7 @@ no threshold or model changes to make one image pass; skipped tests fail CI.
 
 Change:
 
-- One coordinator allocates evidence IDs (E77 onward; E76 is the 2026-11-02 offline delivery) and is the only editor of
+- One coordinator allocates evidence IDs (E79 onward; E76–E78 record #17, #16 and #18) and is the only editor of
   the `status.md` matrix; coders put evidence in their PR description and the
   coordinator records it. Parallel branches reused E50, E52 and E54–E62; those
   results are now recorded as E63–E71.
@@ -173,7 +173,7 @@ zero-filled HUD mask as `tvmonitor`, so a synthetic validation run with the
 real detector failed under the strict G5 rule. The owner chose to fill the
 mask differently and keep the rule. The mask now refills its zeroed region
 from the surround, and that run passes; this is a cloud result on generated
-frames, not a Frame result. See the
+frames, not a Frame result ([E78](evidence/e078.md)). See the
 [neutral mask fill](hud-qualification.md#neutral-mask-fill-2026-11-03).
 Each device step these packages unlock still needs its own approval. The
 handoff lists them.
@@ -304,7 +304,8 @@ that object, and any world position, are not claimed.
 
 ## Owner decisions (2026-11-03)
 
-The owner answered these in a decision interview. Each device step still needs
+The owner answered these in a decision interview; the last row was answered
+later the same day. Each device step still needs
 the owner present at the time it runs. None of these decisions is evidence, and
 none opens a gate in `framejacker/gates.py`.
 
@@ -321,3 +322,4 @@ none opens a gate in `framejacker/gates.py`.
 | Strip edge | Lower right (the current `HudConfig`). Choosing among several named positions comes after acceptance. Each position needs its own qualified mapping, because a mask is bound to its configuration digest. |
 | Mask fill (G5, E76) | The coder tests a neutral fill for the masked area offline. The strict overlap rule stays as it is. |
 | Frame agent (PR #16) | Approved: install the guarded setup following `docs/agent-on-frame.md` Phase 0. |
+| Tracking-token binding (package I) | Answered later on 2026-11-03, in the coder session that recorded E77 and E78. The tokens stay bound when `MirrorSource` is declared: a first `tracking_state` must reach the `TrackingObserver` before the source is created. A state first seen later leaves `tracking_origin` and `recenter_epoch` undeclared for the run, so a bound mask rejects every frame. Late binding was not adopted. |

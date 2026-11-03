@@ -1,9 +1,17 @@
 # Plan: run Claude Code on Frame for automated testing
 
-Status: **proposal, 2026-11-01.** Nothing in this plan has been installed or
-run on Frame. It authorizes no device execution; each phase below needs its own
-approval, and its results are recorded in [status](status.md) like any other
-device result.
+Status: **proposal, 2026-11-01; Phase 1 implemented and cloud-tested only
+([E77](evidence/e077.md)).** No phase has a recorded Frame result. A Phase 0
+report relayed by the Frame project-manager session on 2026-11-01 is a relayed
+device report whose raw output is not in PR #16 or E77; E77 notes it but does
+not record it as evidence. On 2026-11-03 the owner decided: "Approved: install
+the guarded setup following `docs/agent-on-frame.md` Phase 0"
+([owner decisions](poc-scope.md#owner-decisions-2026-11-03)). The
+[2026-11-03 handoff](execution-prompt.md#coder-handoff-2026-11-03) asks for the
+review's cycle-3 follow-ups ([E77](evidence/e077.md)) to be fixed before the
+guard is installed. This plan
+authorizes no device execution; each phase below needs its own approval, and
+its results are recorded in [status](status.md) like any other device result.
 
 ## Goal
 
@@ -262,7 +270,7 @@ The manual equivalent:
 ### Phase 1: runner, guard and settings (cloud work)
 
 **Implemented 2026-11-01, cloud-tested only** (`tests/test_frame_agent.py`;
-no Frame execution yet).
+no Frame execution yet; [E77](evidence/e077.md)).
 
 1. Implement `framejacker/agent/` and `scripts/frame_agent_run.py` with the
    Tier A table; Tier B and C IDs exist only as refusals with a reason.

@@ -532,6 +532,20 @@
       "file": "e076.md",
       "kind": "offline",
       "reconstructed": false
+    },
+    {
+      "id": "E77",
+      "title": "Claude Code on Frame runner, guard and installer, cloud checks",
+      "file": "e077.md",
+      "kind": "offline",
+      "reconstructed": false
+    },
+    {
+      "id": "E78",
+      "title": "Mirror session tokens and neutral HUD mask fill, cloud checks",
+      "file": "e078.md",
+      "kind": "offline",
+      "reconstructed": false
     }
   ]
 }

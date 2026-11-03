@@ -271,8 +271,9 @@ the recipe is back on the default detector. The second command now runs
 MobileNetSSD on the masked frames, checks the mask, the validation ledger and
 the native transport, and ends `completed` with exit 0 and
 `g5_software.status` `checked_unqualified` (cloud run, runner CPU, generated
-frames; not a Frame result). `--detector fixture`, which reports no detections
-and loads no model, still checks the same plumbing where the models are absent.
+frames; not a Frame result; [E78](evidence/e078.md)). `--detector fixture`,
+which reports no detections and loads no model, still checks the same plumbing
+where the models are absent.
 
 ## Synthetic input and feedback contract review
 
