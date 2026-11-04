@@ -1834,7 +1834,9 @@ feed to a real `TrackingObserver`. It also drives the bridge's tracking glue
 from the same header: the option decision, the reporter's start and event
 hook, the runtime event pass and the reporter-only loop, with a fake runtime
 queue, clock and stdin. A source check pins that the bridge calls those
-helpers once and nowhere bypasses them. The same module checks that the built bridge
+helpers once and nowhere bypasses them. It also pins verbatim the OpenVR-side
+lines next to them (the reads, the event-type copy and the reporter-only
+input), which only the device check runs. The same module checks that the built bridge
 refuses the tracking options outside their modes before any OpenVR call, and it
 drives `OverlayClient(tracking=...)` and `TrackingReporter` with a fake bridge
 executable. No test runs a tracking mode against a runtime. See [native

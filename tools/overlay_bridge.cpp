@@ -339,19 +339,25 @@ void stream(Overlay& overlay, bool validate, Json::Value& report) {
         expire();
     }
 }
-// The only OpenVR reads the tracking reporter makes (tools/tracking_report.hpp); constructed
-// only with --report-tracking or --report-tracking-only.
+// The only OpenVR reads the tracking reporter makes (tools/tracking_report.hpp). It holds the
+// bridge's one Overlay and reads its IVRSystem at call time, so it has no pointer of its own to
+// copy or forget; only a Reporter (made only with --report-tracking or --report-tracking-only,
+// after VR_Init) calls it.
 struct TrackingSystem {
-    vr::IVRSystem* system = nullptr;
+    const Overlay& overlay;
     std::uint64_t universe_id(std::uint32_t& error) const {
         vr::ETrackedPropertyError property_error = vr::TrackedProp_Success;
-        const auto value = system->GetUint64TrackedDeviceProperty(
+        const auto value = overlay.system->GetUint64TrackedDeviceProperty(
             vr::k_unTrackedDeviceIndex_Hmd, vr::Prop_CurrentUniverseId_Uint64, &property_error);
         error = static_cast<std::uint32_t>(property_error);
         return value;
     }
-    vr::HmdMatrix34_t raw_zero_pose() const { return system->GetRawZeroPoseToStandingAbsoluteTrackingPose(); }
-    vr::HmdMatrix34_t seated_zero_pose() const { return system->GetSeatedZeroPoseToStandingAbsoluteTrackingPose(); }
+    vr::HmdMatrix34_t raw_zero_pose() const {
+        return overlay.system->GetRawZeroPoseToStandingAbsoluteTrackingPose();
+    }
+    vr::HmdMatrix34_t seated_zero_pose() const {
+        return overlay.system->GetSeatedZeroPoseToStandingAbsoluteTrackingPose();
+    }
 };
 void emit_tracking(const framejacker_tracking::Event& event) {
     Json::Value value;
@@ -563,7 +569,7 @@ int main(int argc, char* argv[]) {
     }
     if (getppid()!=parent || parent==1) stopping=1;
     Overlay overlay;
-    TrackingSystem tracking_system;
+    TrackingSystem tracking_system{overlay};
     std::optional<framejacker_tracking::Reporter<TrackingSystem>> reporter;
     int exit_code=0;
     const auto tracking_start=reporter_only ? monotonic_ns() : 0;
@@ -614,7 +620,6 @@ int main(int argc, char* argv[]) {
         emit(ready);
         // With the options, the first state before any packet, then a change and a fresh state per
         // tracking event through on_system_event; without them nothing is read or hooked.
-        tracking_system.system=overlay.system;
         framejacker_tracking::start_if_requested(tracking_options,reporter,tracking_system,emit_tracking,
                                                  overlay.on_system_event);
         if (marker) {

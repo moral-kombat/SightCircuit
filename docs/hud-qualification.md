@@ -661,9 +661,15 @@ the cloud, and neither mode below has run on Frame.
   and stdin: the lifetime, EOF and stop just before and just after it, stalled
   and partial packets, other packets and a poll failure. A source check pins
   that `tools/overlay_bridge.cpp` calls each of those helpers once, makes and
-  feeds a reporter nowhere else, and that the reporter-only mode creates no
-  overlay. Only the bridge's few lines around those calls, such as the order
-  of the `ready` line and the first state, rest on the device check.
+  feeds a reporter nowhere else, sets the runtime-event hook only through the
+  tested helper and clears it once after the run, and that the reporter-only
+  mode creates no overlay. It also pins the OpenVR-side lines next to those
+  calls verbatim: the three reads, the copy of each event's type into the
+  tested pass, and the reporter-only mode's stdin, clock and signal input. A
+  change to one fails until it is reviewed. The reads go through the bridge's
+  one `Overlay`, so no system pointer is copied. A pin is not a run: those
+  lines, and the order of the `ready` line and the first state, rest on the
+  device check.
 - **Unverified.** Whether an overlay client receives these events on Frame,
   and what the universe id is there. Whether the zero poses stay bit-identical
   between recenters. The delay from a recenter to `observe()` (a later step

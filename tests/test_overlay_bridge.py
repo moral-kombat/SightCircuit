@@ -285,6 +285,50 @@ def compile_fixture(name, directory):
     return binary
 
 
+def fixture_cases(result):
+    """The cases a finished fixture run printed, by name.
+
+    A failed assert aborts the fixture, and abort() drops the rest of its buffered stdout, so the
+    last line can stop mid-string. A failed run therefore raises with its stderr (the assertion that
+    failed) before any line is parsed, and a line that is not JSON raises with the same stderr.
+    """
+    stderr = result.stderr.decode(errors="replace")[-2000:]
+    if result.returncode:
+        raise AssertionError(f"{result.args[0]} exited {result.returncode}; stderr:\n{stderr}")
+    cases = {}
+    for line in result.stdout.splitlines():
+        try:
+            case = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise AssertionError(f"{result.args[0]} printed a line that is not JSON ({error}): {line[:200]!r}; "
+                                 f"stderr:\n{stderr}") from None
+        cases[case.pop("case")] = case
+    return cases
+
+
+class FixtureOutputTests(unittest.TestCase):
+    def test_a_failed_fixture_reports_its_assertion_not_a_cut_line(self):
+        # What a failed glue assert leaves: whole cases, then a line cut off where abort() dropped the buffer.
+        aborted = subprocess.CompletedProcess(
+            ["tracking_report_fixture"], -6,
+            stdout=b'{"case":"start","events":[]}\n{"case":"sha256_lengths","digests":["e3b0c442',
+            stderr=b"tracking_report_fixture.cpp:160: void option_cases(): Assertion `on.enabled()' failed.\n")
+        with self.assertRaisesRegex(AssertionError, r"(?s)tracking_report_fixture exited -6; stderr:\n"
+                                                    r".*Assertion `on\.enabled\(\)' failed"):
+            fixture_cases(aborted)
+        # An abort after a flush leaves only whole lines; the exit status still fails the run.
+        flushed = subprocess.CompletedProcess(["tracking_report_fixture"], -6, stdout=b'{"case":"start","events":[]}\n',
+                                              stderr=b"Assertion `x' failed.\n")
+        with self.assertRaisesRegex(AssertionError, "(?s)exited -6.*Assertion `x' failed"):
+            fixture_cases(flushed)
+        cut = subprocess.CompletedProcess(["tracking_report_fixture"], 0, stdout=b'{"case":"start","ev', stderr=b"note")
+        with self.assertRaisesRegex(AssertionError, r"(?s)not JSON .*'\{\"case\":\"start\",\"ev'.*stderr:\nnote"):
+            fixture_cases(cut)
+        clean = subprocess.CompletedProcess(["tracking_report_fixture"], 0, stderr=b"",
+                                            stdout=b'{"case":"start","events":[]}\n{"case":"extremes","n":1}\n')
+        self.assertEqual(fixture_cases(clean), {"start": {"events": []}, "extremes": {"n": 1}})
+
+
 # The fixture's known zero poses (tests/fixtures/tracking_report_fixture.cpp, kRaw and kSeated), row-major.
 KNOWN_RAW = ((1, 0, 0, .25), (0, 1, 0, 1.5), (0, 0, 1, -.75))
 KNOWN_SEATED = ((0, 0, -1, .5), (0, 1, 0, 1.25), (1, 0, 0, -2))
@@ -312,10 +356,7 @@ class TrackingReportFixtureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             binary = compile_fixture("tracking_report_fixture.cpp", temporary)
             cls.result = subprocess.run([str(binary)], capture_output=True, timeout=30)
-        cls.cases = {}
-        for line in cls.result.stdout.splitlines():
-            case = json.loads(line)
-            cls.cases[case.pop("case")] = case
+        cls.cases = fixture_cases(cls.result)  # A failed fixture assert is reported here, with its text.
 
     def events(self, name):
         return self.cases[name]["events"]
@@ -686,7 +727,9 @@ class TrackingWiringSourceTests(unittest.TestCase):
 
     No test may run either real tracking mode, so the few OpenVR-side lines that call those helpers
     in tools/overlay_bridge.cpp are checked as source: each helper is called once, nothing else
-    makes, starts or feeds a reporter, and the reporter-only mode initializes no overlay.
+    makes, starts or feeds a reporter, the runtime event hook is set only by the tested helper and
+    cleared once after the run, the reporter-only mode initializes no overlay, and the adapter lines
+    that only Frame runs are pinned verbatim.
     """
 
     def setUp(self):
@@ -710,6 +753,57 @@ class TrackingWiringSourceTests(unittest.TestCase):
                        "any_of(", "--report-tracking\""):
             with self.subTest(bypass=bypass):
                 self.assertNotIn(bypass, self.flat)
+
+    def test_the_runtime_event_hook_is_set_by_the_helper_and_cleared_once_after_the_run(self):
+        # The member, the tested event pass reading it, start_if_requested setting it and one reset
+        # once the run is over: any other write or clear would drop recenters on Frame only.
+        self.assertEqual(self.flat.count("on_system_event"), 4)
+        for use in ("std::function<void(std::uint32_t)>on_system_event;",
+                    "drain_runtime_events(poll,vr::VREvent_Quit,on_system_event)",
+                    "tracking_system,emit_tracking,overlay.on_system_event);", "overlay.on_system_event=nullptr;"):
+            with self.subTest(use=use):
+                self.assertEqual(self.flat.count(use), 1)
+        main = self.flat[self.flat.index("intmain(intargc,char*argv[]){"):]
+        reset = main.index("overlay.on_system_event=nullptr;")
+        self.assertGreater(reset, main.rindex("}catch(conststd::exception&error){"))
+        self.assertGreater(reset, main.index("framejacker_tracking::start_if_requested("))
+
+    def test_the_openvr_side_tracking_lines_are_pinned(self):
+        """The tracking lines that only Frame runs, verbatim, so a change to one fails until reviewed.
+
+        A pin is not a behaviour test. These lines read the runtime, give each runtime event's own
+        type to the tested event pass, feed stdin, the clock and signals to the reporter-only loop and
+        write the reporter's lines; a dropped or altered one would lose a state, a recenter or a stop
+        on Frame alone, where the device check is the only run.
+        """
+        for line in (
+            # The reads go through the bridge's one Overlay at call time: no system pointer to copy.
+            "TrackingSystemtracking_system{overlay};", "structTrackingSystem{constOverlay&overlay;",
+            "constautovalue=overlay.system->GetUint64TrackedDeviceProperty(vr::k_unTrackedDeviceIndex_Hmd,"
+            "vr::Prop_CurrentUniverseId_Uint64,&property_error);error=static_cast<std::uint32_t>(property_error);"
+            "returnvalue;",
+            "vr::HmdMatrix34_traw_zero_pose()const{returnoverlay.system->GetRawZeroPoseToStandingAbsoluteTrackingPose();}",
+            "vr::HmdMatrix34_tseated_zero_pose()const{"
+            "returnoverlay.system->GetSeatedZeroPoseToStandingAbsoluteTrackingPose();}",
+            # Each event's own type reaches the pass, so recenters are reported and VREvent_Quit stops every mode.
+            "constautopoll=[&](std::uint32_t&type){if(!system->PollNextEvent(&e,sizeof(e)))returnfalse;"
+            "type=e.eventType;returntrue;};",
+            "if(!framejacker_tracking::drain_runtime_events(poll,vr::VREvent_Quit,on_system_event)){"
+            "system->AcknowledgeQuit_Exiting();throwStopped{};}",
+            # The reporter-only loop's input: signals, the event pass, the clock, stdin and the lifetime.
+            "structReporterInput{Overlay&overlay;boolstop_requested()const{returnstopping;}"
+            "voidevents(){overlay.events();}std::uint64_tnow_ns()const{returnmonotonic_ns();}",
+            "pollfdinput{STDIN_FILENO,POLLIN,0};constautoavailable=poll(&input,1,timeout_ms);"
+            "returnavailable<0&&errno==EINTR?0:available;",
+            "returnread_exact(data,size,true,overlay,expire);",
+            "ReporterInputinput{overlay};constautoend=framejacker_tracking::run_reporter_only(input,deadline_ns);"
+            "if(end==framejacker_tracking::LoopEnd::stopped)throwStopped{};",
+            # Every reporter line is written.
+            "value[key]=Json::UInt64(field);elsevalue[key]=field;});emit(value);}",
+        ):
+            with self.subTest(line=line):
+                self.assertEqual(self.flat.count(line), 1)
+        self.assertNotIn("tracking_system.", self.flat)  # Nothing reassigns the reads' source.
 
     def test_the_reporter_only_mode_initializes_no_overlay(self):
         import re
