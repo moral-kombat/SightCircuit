@@ -120,6 +120,14 @@ class GeneratedHeaderTests(unittest.TestCase):
         header = native.header_text()
         changes = contract.TRACKING_CHANGE_EVENTS
         self.assertIs(session.TRACKING_CHANGES, contract.TRACKING_CHANGES)
+        # The pairing itself, written out from the pinned openvr.h and the change names' meaning. The
+        # generator, the fixture and the bridge's static_assert all read the table, so none of them
+        # catches a swapped name.
+        self.assertEqual({name: (event, value) for name, event, value in changes}, {
+            "chaperone_universe_changed": ("VREvent_ChaperoneUniverseHasChanged", 801),
+            "seated_zero_pose_reset": ("VREvent_SeatedZeroPoseReset", 804),
+            "standing_zero_pose_reset": ("VREvent_StandingZeroPoseReset", 808),
+            "chaperone_room_setup_committed": ("VREvent_ChaperoneRoomSetupCommitted", 807)})
         self.assertEqual(contract.TRACKING_CHANGES, {name: event for name, event, _ in changes})
         self.assertEqual(len({name for name, _, _ in changes}), len(changes))
         self.assertEqual(len({value for _, _, value in changes}), len(changes))

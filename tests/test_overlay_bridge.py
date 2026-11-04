@@ -288,13 +288,18 @@ def compile_fixture(name, directory):
 # The fixture's known zero poses (tests/fixtures/tracking_report_fixture.cpp, kRaw and kSeated), row-major.
 KNOWN_RAW = ((1, 0, 0, .25), (0, 1, 0, 1.5), (0, 0, 1, -.75))
 KNOWN_SEATED = ((0, 0, -1, .5), (0, 1, 0, 1.25), (1, 0, 0, -2))
+# Bit patterns, not floats: 0x7f800001 and 0x7fa00000 are signaling NaNs, which CPython's float32
+# struct.pack may quiet, so only "<24I" is exact for them (tools/tracking_report.hpp).
 EXTREME_RAW_BITS = (0x7fc00001, 0x7f800000, 0xff800000, 0x80000000, 0x00000001, 0x7f7fffff,
-                    0xff7fffff, 0x00800000, 0x3f800000, 0, 0, 0xffffffff)
-EXTREME_SEATED_BITS = (0x7fc00000, 0, 0, 0, 0, 0x3f800000, 0, 0, 0, 0, 0x3f800000, 0)
+                    0xff7fffff, 0x00800000, 0x3f800000, 0x7f800001, 0, 0xffffffff)
+EXTREME_SEATED_BITS = (0x7fc00000, 0x7fa00000, 0, 0, 0, 0x3f800000, 0, 0, 0, 0, 0x3f800000, 0)
 
 
 def zero_pose_digest(raw, seated):
-    """The documented layout: raw standing then seated, row-major, each float little-endian."""
+    """The documented layout: raw standing then seated, row-major, each float little-endian.
+
+    ``<24f`` over the flattened values is exact here because every value is finite.
+    """
     return hashlib.sha256(struct.pack("<24f", *(value for row in (*raw, *seated) for value in row))).hexdigest()
 
 
@@ -318,7 +323,11 @@ class TrackingReportFixtureTests(unittest.TestCase):
     def test_fixture_assertions_pass_and_every_case_is_printed(self):
         self.assertEqual(self.result.returncode, 0, self.result.stderr.decode()[-2000:])
         self.assertEqual(set(self.cases), {"sha256_lengths", "start", "changes", "ignored", "property_error",
-                                           "property_error_and_zero", "universe_zero", "extremes"})
+                                           "property_error_and_zero", "universe_zero", "extremes", "bridge_glue"})
+        # The bridge's glue from the same header, asserted inside the fixture: the option decision, the
+        # reporter's start and event hook, the runtime event pass and the reporter-only loop.
+        self.assertEqual(self.cases["bridge_glue"]["checks"],
+                         ["options", "start_and_hook", "runtime_events", "reporter_only_loop"])
 
     def test_sha256_matches_hashlib_around_every_padding_boundary(self):
         text = bytes((index * 7 + 3) & 255 for index in range(300))
@@ -453,6 +462,11 @@ class TrackingClientTests(unittest.TestCase):
         "exits": "say(**ready)\nsay(**STATE)\nwait_go()\nsay(**CHANGED)\nsay(**MOVED)\nclosed('lifetime_elapsed')",
         "fails": ("say(**ready)\nsay(**STATE)\nwait_go()\n"
                   "say(event='error', status='error', error='fake_failure', exit_code=1, cleanup_ok=True)\nsys.exit(1)"),
+        # exit_code 0 with failed or unreported cleanup; the shipped bridge pairs cleanup_ok false with
+        # exit_code 1 (tools/overlay_bridge.cpp), so these pin the client's defensive half of the check.
+        "cleanup_fails": ("say(**ready)\nsay(**STATE)\nwait_go()\n"
+                          "say(event='closed', status='closed', exit_code=0, cleanup_ok=False)"),
+        "cleanup_unreported": "say(**ready)\nsay(**STATE)\nwait_go()\nsay(event='closed', status='closed', exit_code=0)",
         "disconnects": "say(**ready)\nsay(**STATE)\nwait_go()\nsys.exit(1)",
         "garbage": ("say(**ready)\nsay(**STATE)\nwait_go()\nprint('not json', flush=True)\nsys.stdin.buffer.read()\n"
                     "closed()"),
@@ -461,6 +475,8 @@ class TrackingClientTests(unittest.TestCase):
         "unavailable": ("say(**ready)\nsay(event='tracking_unavailable', reason='universe_id_zero')\n"
                         "sys.stdin.buffer.read()\nclosed()"),
         "no_flag": "ready.pop('tracking_report', None)\nsay(**ready)\nsys.stdin.buffer.read()\nclosed()",
+        # A recenter between close()'s end() and the bridge reading its stop packet or EOF.
+        "late": "say(**ready)\nsay(**STATE)\nsys.stdin.buffer.read()\nsay(**CHANGED)\nsay(**MOVED)\nclosed()",
         "ignores_eof": "say(**ready)\nsay(**STATE)\nsys.stdin.buffer.read()\ntime.sleep(60)",
         "ignores_term": "signal.signal(signal.SIGTERM, signal.SIG_IGN)\nsay(**ready)\nsay(**STATE)\ntime.sleep(60)",
     }
@@ -502,6 +518,9 @@ class TrackingClientTests(unittest.TestCase):
                 OverlayClient(tracking=tracking)
             with self.subTest(tracking=tracking), self.assertRaisesRegex(ValueError, "tracking_observer_invalid"):
                 TrackingReporter(tracking, seconds=5)
+        # A reporter-only bridge needs an observer; None is refused here, not left to time out in start().
+        with self.assertRaisesRegex(ValueError, "tracking_observer_invalid"):
+            TrackingReporter(None, seconds=5)
 
     def test_overlay_client_forwards_tracking_lines_in_order_and_ends_once_on_close(self):
         recorder, observer = Recorder(), TrackingObserver()
@@ -533,6 +552,8 @@ class TrackingClientTests(unittest.TestCase):
     def test_end_is_called_exactly_once_when_the_bridge_exits_fails_or_disconnects(self):
         for behavior, reason, forwarded in (("exits", "tracking_bridge_exited", 3),
                                             ("fails", "tracking_bridge_failed", 1),
+                                            ("cleanup_fails", "tracking_bridge_failed", 1),
+                                            ("cleanup_unreported", "tracking_bridge_failed", 1),
                                             ("disconnects", "tracking_bridge_disconnected", 1),
                                             ("garbage", "tracking_bridge_stream_invalid", 1)):
             for make in ("overlay", "reporter"):
@@ -550,6 +571,20 @@ class TrackingClientTests(unittest.TestCase):
                     report = client.close()
                     self.assertEqual(recorder.snapshot(), calls)
                     self.assertEqual(report["tracking"]["ended"], reason)
+
+    def test_lines_after_close_began_are_not_forwarded(self):
+        for make in ("overlay", "reporter"):
+            with self.subTest(client=make):
+                recorder = Recorder()
+                client = (self.overlay_client("late", tracking=recorder) if make == "overlay" else
+                          self.reporter("late", recorder)).start()
+                self.assertEqual(recorder.wait_for(1), [("observe", STATE)])
+                report = client.close()
+                # The final report followed the late lines on stdout, so the reader did read them.
+                self.assertTrue(report["cleanup_confirmed"], report)
+                self.assertEqual(recorder.snapshot(), [("observe", STATE), ("end", "tracking_client_closed")])
+                self.assertEqual(report["tracking"], {"events_forwarded": 1, "first_event": "tracking_state",
+                                                      "ended": "tracking_client_closed"})
 
     def test_an_observer_whose_end_fails_does_not_stall_the_client(self):
         class Failing(Recorder):
@@ -577,12 +612,11 @@ class TrackingClientTests(unittest.TestCase):
 
     def test_reporter_starts_the_reporter_only_mode_and_waits_for_the_first_state(self):
         observer = TrackingObserver()
-        client = self.reporter("slow_state", observer, seconds=contract.TRACKING_REPORT_MAX_SECONDS)
+        client = self.reporter("slow_state", observer, seconds=37)  # Neither bound nor the helper's default.
         started = time.monotonic()
         self.assertIs(client.start(), client)
         self.assertGreaterEqual(time.monotonic() - started, .3)
-        self.assertEqual(client.process.args[1:],
-                         ["--report-tracking-only", "--seconds", str(contract.TRACKING_REPORT_MAX_SECONDS)])
+        self.assertEqual(client.process.args[1:], ["--report-tracking-only", "--seconds", "37"])
         # The first state reached the observer before start() returned, so a session declared now binds it.
         self.assertEqual(observer.declare().values["recenter_epoch"], 0)
         self.assertEqual(client.first_tracking_event, "tracking_state")
@@ -638,10 +672,56 @@ class TrackingClientTests(unittest.TestCase):
         for seconds in (low - 1, high + 1, True, 5.0, "5", None):
             with self.subTest(seconds=seconds), self.assertRaisesRegex(ValueError, "tracking_report_duration"):
                 TrackingReporter(TrackingObserver(), seconds=seconds)
+        for seconds in (low, high):  # Both bounds are accepted; no process starts.
+            with self.subTest(seconds=seconds):
+                self.assertEqual(TrackingReporter(TrackingObserver(), seconds=seconds).seconds, seconds)
         missing = TrackingReporter(TrackingObserver(), seconds=low, binary=Path(self.temporary.name) / "absent")
         with self.assertRaisesRegex(RuntimeError, "build_overlay_bridge"):
             missing.start()
         self.assertIsNone(missing.process)
+
+
+class TrackingWiringSourceTests(unittest.TestCase):
+    """The bridge reaches the reporter only through the helpers the tracking fixture covers.
+
+    No test may run either real tracking mode, so the few OpenVR-side lines that call those helpers
+    in tools/overlay_bridge.cpp are checked as source: each helper is called once, nothing else
+    makes, starts or feeds a reporter, and the reporter-only mode initializes no overlay.
+    """
+
+    def setUp(self):
+        import re
+
+        source = (Path(__file__).resolve().parents[1] / "tools" / "overlay_bridge.cpp").read_text()
+        self.code = re.sub(r"//[^\n]*", "", source)
+        self.flat = re.sub(r"\s+", "", self.code)  # Calls are matched whatever their line breaks.
+
+    def test_each_tested_helper_is_the_only_path(self):
+        for call in ("framejacker_tracking::parse_options(argc,argv)", "constbooltracking=tracking_options.enabled();",
+                     "seconds=tracking_options.seconds;",
+                     "framejacker_tracking::lifetime_deadline_ns(tracking_start,seconds)",
+                     "framejacker_tracking::start_if_requested(tracking_options,reporter,tracking_system,emit_tracking,"
+                     "overlay.on_system_event)",
+                     "framejacker_tracking::drain_runtime_events(poll,vr::VREvent_Quit,on_system_event)",
+                     "framejacker_tracking::run_reporter_only(input,deadline_ns)", "PollNextEvent("):
+            with self.subTest(call=call):
+                self.assertEqual(self.flat.count(call), 1)
+        for bypass in ("emplace(", "->start(", "->event(", "on_system_event(", "Reporter<TrackingSystem>(",
+                       "any_of(", "--report-tracking\""):
+            with self.subTest(bypass=bypass):
+                self.assertNotIn(bypass, self.flat)
+
+    def test_the_reporter_only_mode_initializes_no_overlay(self):
+        import re
+
+        (body,) = re.findall(r"void init_reporter\(\) \{(.*?)\n    \}", self.code, re.S)
+        self.assertIn("runtime();", body)
+        for overlay_call in ("VROverlay", "CreateOverlay", "api", "init("):
+            with self.subTest(call=overlay_call):
+                self.assertNotIn(overlay_call, body)
+        self.assertEqual(re.findall(r"if \(reporter_only\) overlay\.(\w+)\(\);", self.code), ["init_reporter"])
+        # The ready line and closing report measure the handle rather than assert a constant.
+        self.assertNotIn('["overlay_created"]=false', self.code.replace(" ", ""))
 
 
 class PanelLimitConsistencyTests(unittest.TestCase):

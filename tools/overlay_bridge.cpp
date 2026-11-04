@@ -4,7 +4,6 @@
 #include "hud_contract.hpp"
 #include "overlay_frame.hpp"
 #include "tracking_report.hpp"
-#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <chrono>
@@ -120,7 +119,8 @@ public:
     bool overlay_shown_event_seen = false, overlay_hidden_event_seen = false;
     std::uint64_t calibration_show_deadline_ns = 0;
     Settings config;
-    // Set only while the tracking reporter runs: the type of every runtime event but VREvent_Quit.
+    // Set only while the tracking reporter runs (framejacker_tracking::start_if_requested): the
+    // type of every runtime event but VREvent_Quit.
     std::function<void(std::uint32_t)> on_system_event;
     ~Overlay() { close(); }
     void check(vr::EVROverlayError e, const char* op) {
@@ -201,11 +201,13 @@ public:
     void events() {
         if (!system) return;
         vr::VREvent_t e{};
-        while (system->PollNextEvent(&e,sizeof(e))) {
-            if (e.eventType == vr::VREvent_Quit) {
-                system->AcknowledgeQuit_Exiting(); throw Stopped{};
-            }
-            if (on_system_event) on_system_event(e.eventType);
+        const auto poll=[&](std::uint32_t& type) {
+            if (!system->PollNextEvent(&e,sizeof(e))) return false;
+            type=e.eventType;
+            return true;
+        };
+        if (!framejacker_tracking::drain_runtime_events(poll,vr::VREvent_Quit,on_system_event)) {
+            system->AcknowledgeQuit_Exiting(); throw Stopped{};
         }
         if (handle == vr::k_ulOverlayHandleInvalid) return;  // The reporter-only mode has no overlay.
         while (api->PollNextOverlayEvent(handle,&e,sizeof(e))) {
@@ -231,6 +233,8 @@ public:
         return ok;
     }
 };
+// expire() runs before every read pass, the first included (framejacker_tracking::run_reporter_only
+// relies on that, and the tracking fixture's fake input models it).
 bool read_exact(std::uint8_t* data, std::size_t size, bool eof_allowed, Overlay& overlay,
                 const std::function<void()>& expire) {
     const auto deadline = Clock::now()+std::chrono::seconds(eof_allowed ? 10 : 3);
@@ -357,44 +361,27 @@ void emit_tracking(const framejacker_tracking::Event& event) {
     });
     emit(value);
 }
-int parse_seconds(const char* text, int low, int high) {
-    const std::string value(text);
-    if (value.empty() || value.size() > 9 || !std::all_of(value.begin(), value.end(), [](char c) {
-            return c >= '0' && c <= '9'; }))
-        throw std::runtime_error("seconds_out_of_range");
-    const int seconds = std::stoi(value);
-    if (seconds < low || seconds > high) throw std::runtime_error("seconds_out_of_range");
-    return seconds;
-}
-void report_tracking_only(Overlay& overlay, std::uint64_t deadline_ns, Json::Value& report) {
-    // Runtime events until stdin EOF, one stop packet, a signal, VREvent_Quit or the lifetime.
-    // Any other input is an error; a partial packet waits as in --stdin.
-    const auto lifetime = [&] {
-        if (monotonic_ns() >= deadline_ns) throw std::runtime_error("tracking_lifetime_elapsed_during_input");
-    };
-    std::array<std::uint8_t,contract::kPacketHeaderBytes> header{};
-    for (;;) {
-        if (stopping) throw Stopped{};
-        overlay.events();
-        if (monotonic_ns() >= deadline_ns) { report["status"]="lifetime_elapsed"; return; }
+// The reporter-only loop's input (framejacker_tracking::run_reporter_only): stdin, the clock and
+// the runtime event pass, as --stdin uses them.
+struct ReporterInput {
+    Overlay& overlay;
+    bool stop_requested() const { return stopping; }
+    void events() { overlay.events(); }
+    std::uint64_t now_ns() const { return monotonic_ns(); }
+    int wait_input(int timeout_ms) {
         pollfd input{STDIN_FILENO,POLLIN,0};
-        const auto available=poll(&input,1,20);
-        if (available<0) {
-            if (errno==EINTR) continue;
-            throw std::runtime_error("stdin_poll_failed");
-        }
-        if (!available) continue;
-        if (read_exact(header.data(),header.size(),true,overlay,lifetime)) {
-            if (std::memcmp(header.data()+contract::kPacketHeaderMagicOffset, contract::kPacketMagic,
-                            sizeof contract::kPacketMagic - 1))
-                throw std::runtime_error("invalid_packet_magic");
-            if (read_u32(header.data()+contract::kPacketHeaderOpcodeOffset)!=contract::kOpcodeStop ||
-                    read_u32(header.data()+contract::kPacketHeaderPayloadBytesOffset))
-                throw std::runtime_error("tracking_reporter_accepts_only_stop");
-        }
-        report["status"]="closed";
-        return;
+        const auto available=poll(&input,1,timeout_ms);
+        return available<0 && errno==EINTR ? 0 : available;
     }
+    bool read_header(std::uint8_t* data, std::size_t size, const std::function<void()>& expire) {
+        return read_exact(data,size,true,overlay,expire);
+    }
+};
+void report_tracking_only(Overlay& overlay, std::uint64_t deadline_ns, Json::Value& report) {
+    ReporterInput input{overlay};
+    const auto end=framejacker_tracking::run_reporter_only(input,deadline_ns);
+    if (end==framejacker_tracking::LoopEnd::stopped) throw Stopped{};
+    report["status"]=end==framejacker_tracking::LoopEnd::closed ? "closed" : "lifetime_elapsed";
 }
 std::vector<std::uint8_t> pattern() {
     constexpr unsigned w=256,h=128;
@@ -525,11 +512,12 @@ int main(int argc, char* argv[]) {
     }
     // The tracking reporter is opt-in and real-mode only: --stdin --report-tracking, or the
     // reporter-only mode. Any other use of either option is a usage error before any OpenVR call.
-    const bool tracking_flag=std::any_of(argv+1,argv+argc,[](const char* arg) {
-        return std::string(arg)=="--report-tracking"; });
-    const bool stdin_tracking=mode=="--stdin" && argc==3 && tracking_flag;
-    const bool reporter_only=mode=="--report-tracking-only";
-    const bool tracking=stdin_tracking || reporter_only;
+    // Only tracking_options (tools/tracking_report.hpp, covered by the tracking fixture) decides.
+    const auto tracking_options=framejacker_tracking::parse_options(argc,argv);
+    const bool tracking_flag=tracking_options.flag;
+    const bool stdin_tracking=tracking_options.stdin_tracking;
+    const bool reporter_only=tracking_options.reporter_only;
+    const bool tracking=tracking_options.enabled();
     if (mode=="--render-calibration-marker" && !tracking_flag) return render_marker(argc,argv);
     Json::Value report;
     report["event"]="closed"; report["runtime_initialized"]=false;
@@ -542,13 +530,11 @@ int main(int argc, char* argv[]) {
     const bool validate=mode=="--validate-stdin" || mode=="--validate-calibration-marker";
     int seconds=10;
     try {
-        if (tracking_flag && !stdin_tracking) throw std::runtime_error("report_tracking_requires_stdin_mode");
+        if (tracking_options.error) throw std::runtime_error(tracking_options.error);
         if (reporter_only) {
-            if (argc!=4 || std::string(argv[2])!="--seconds")
-                throw std::runtime_error("tracking_report_requires_seconds");
-            seconds=parse_seconds(argv[3],contract::kTrackingReportMinSeconds,contract::kTrackingReportMaxSeconds);
+            seconds=tracking_options.seconds;
         } else if (stdin_tracking) {
-            // Real --stdin with the reporter; the flag was checked above.
+            // Real --stdin with the reporter; the options were checked above.
         } else if (marker) {
             if (argc!=(validate ? 4 : 5) || std::string(argv[2])!="--seconds" ||
                     (!validate && std::string(argv[4])!="--allow-calibration-output"))
@@ -581,9 +567,9 @@ int main(int argc, char* argv[]) {
     std::optional<framejacker_tracking::Reporter<TrackingSystem>> reporter;
     int exit_code=0;
     const auto tracking_start=reporter_only ? monotonic_ns() : 0;
-    const auto tracking_deadline=tracking_start+std::uint64_t(seconds)*1000000000ULL;
+    const auto tracking_deadline=framejacker_tracking::lifetime_deadline_ns(tracking_start,seconds);
     if (reporter_only) {
-        report["seconds_requested"]=seconds; report["overlay_created"]=false;
+        report["seconds_requested"]=seconds;
         report["native_started_ns"]=Json::UInt64(tracking_start);
         report["lifetime_deadline_ns"]=Json::UInt64(tracking_deadline);
     }
@@ -618,19 +604,19 @@ int main(int argc, char* argv[]) {
         ready["frame_expiry_supported"]=mode=="--validate-stdin";
         ready["runtime_initialized"]=!validate;
         if (reporter_only) {
-            ready["overlay_created"]=false; ready["seconds_requested"]=seconds;
+            // Measured, not asserted: init_reporter() creates no overlay handle.
+            ready["overlay_created"]=overlay.handle!=vr::k_ulOverlayHandleInvalid;
+            ready["seconds_requested"]=seconds;
             ready["lifetime_deadline_ns"]=Json::UInt64(tracking_deadline);
         } else ready["overlay_interface"]=vr::IVROverlay_Version;
         if (tracking) ready["tracking_report"]=true;
         if (marker) ready["display_deadline_ns"]=Json::UInt64(marker_deadline);
         emit(ready);
-        if (tracking) {
-            // The first state, before any packet, then a change and a fresh state per tracking event.
-            tracking_system.system=overlay.system;
-            reporter.emplace(tracking_system);
-            reporter->start(emit_tracking);
-            overlay.on_system_event=[&](std::uint32_t type) { reporter->event(type,emit_tracking); };
-        }
+        // With the options, the first state before any packet, then a change and a fresh state per
+        // tracking event through on_system_event; without them nothing is read or hooked.
+        tracking_system.system=overlay.system;
+        framejacker_tracking::start_if_requested(tracking_options,reporter,tracking_system,emit_tracking,
+                                                 overlay.on_system_event);
         if (marker) {
             auto pixels=calibration_marker(report["marker"],overlay.config);
             report["generated_marker_frames"]=1U;
@@ -674,6 +660,7 @@ int main(int argc, char* argv[]) {
         report["error"]=error.what(); exit_code=1;
     }
     report["runtime_initialized"]=overlay.active;
+    if (reporter_only) report["overlay_created"]=overlay.handle!=vr::k_ulOverlayHandleInvalid;
     overlay.on_system_event=nullptr;
     if (tracking) {
         report["tracking_report"]=true;

@@ -567,11 +567,13 @@ the cloud, and neither mode below has run on Frame.
   `vr::IVRSystem` through a thin adapter; the fixture passes a fake.
 - **Events.** It emits exactly the `TrackingObserver` schema. The first line
   is `{"event": "tracking_state", "universe_id": <1 .. 2**64-1>,
-  "zero_pose_sha256": <64 hex>}`. Each `TRACKING_CHANGES` event
-  (`VREvent_ChaperoneUniverseHasChanged` 801, `VREvent_SeatedZeroPoseReset` 804,
-  `VREvent_StandingZeroPoseReset` 808, `VREvent_ChaperoneRoomSetupCommitted`
-  807) emits `{"event": "tracking_changed", "change": <name>}`, then a fresh
-  state read after it. Other runtime events emit and read nothing. A property
+  "zero_pose_sha256": <64 hex>}`. Each `TRACKING_CHANGES` event emits
+  `{"event": "tracking_changed", "change": <name>}`, then a fresh state read
+  after it: `VREvent_ChaperoneUniverseHasChanged` (801) reports
+  `chaperone_universe_changed`, `VREvent_SeatedZeroPoseReset` (804)
+  `seated_zero_pose_reset`, `VREvent_StandingZeroPoseReset` (808)
+  `standing_zero_pose_reset`, and `VREvent_ChaperoneRoomSetupCommitted` (807)
+  `chaperone_room_setup_committed`. Other runtime events emit and read nothing. A property
   error emits `{"event": "tracking_unavailable", "reason":
   "universe_id_property_error", "property_error": <code>}`, and universe id 0
   emits `{"event": "tracking_unavailable", "reason": "universe_id_zero"}`.
@@ -583,8 +585,11 @@ the cloud, and neither mode below has run on Frame.
   `GetSeatedZeroPoseToStandingAbsoluteTrackingPose`. Each 3×4 matrix is
   row-major (`m[0][0]`, `m[0][1]`, …, `m[2][3]`), and each float is its exact
   IEEE-754 binary32 bit pattern, little-endian. In Python that is
-  `hashlib.sha256(struct.pack("<24f", *raw_rows, *seated_rows))`. Values are
-  not normalized or judged: NaN payloads, infinities, signed zeros and
+  `hashlib.sha256(struct.pack("<24I", *raw_bits, *seated_bits))` over the 24
+  bit patterns, raw matrix first, row-major. `struct.pack("<24f", ...)` over
+  the 24 flattened values gives the same bytes except for a signaling NaN,
+  which CPython's float32 pack may quiet (3.12 packs `0x7f800001` as
+  `0x7fc00001`). Values are not normalized or judged: NaN payloads, infinities, signed zeros and
   subnormals are digested by their bits, so `-0.0` and `0.0` give different
   digests. The header implements SHA-256 itself.
 - **One contract.** The event and field names, the change names with their
@@ -610,8 +615,12 @@ the cloud, and neither mode below has run on Frame.
   `VREvent_Quit`, SIGTERM or SIGINT (`stopped`), or the required lifetime
   (`lifetime_elapsed`). The lifetime is at most 600 s (`TRACKING_REPORT_MAX_SECONDS`):
   a bound mask needs a calibration at most 300 s old, so a longer reporter
-  serves no HUD run. Any other input is an error. It then calls `VR_Shutdown`
-  and emits a closing report with the tracking counts. A caller can start it,
+  serves no HUD run. EOF or a whole stop packet that the bridge sees pending
+  just after the lifetime ends is still `closed`; a packet still incomplete
+  when the lifetime ends is an error, and so is any other input. It then calls
+  `VR_Shutdown` and emits a closing report with the tracking counts. Its
+  `ready` line and closing report give `overlay_created` from the overlay
+  handle rather than as a constant. A caller can start it,
   receive the first state, and only then declare its session (owner decision
   3, [POC scope](poc-scope.md#owner-decisions-2026-11-03)).
 - **Python.** `OverlayClient(..., tracking=observer)` starts
@@ -642,12 +651,24 @@ the cloud, and neither mode below has run on Frame.
   `tracking_unavailable` loses both tokens. The built bridge refuses every
   misuse of the options with exit 64 and no `ready` line, while the VR path
   registry is a FIFO that would block an attempted `VR_Init`. A fake bridge
-  executable drives both clients.
+  executable drives both clients. The same header holds the bridge's tracking
+  glue, and the fixture drives it as well. That covers the option decision:
+  every mode without the flag reads and hooks nothing, both accepted forms and
+  both `--seconds` bounds work, and every refusal gives the bridge's error. It
+  covers the reporter's start and its runtime-event hook, and the runtime event
+  pass, where a change reaches the reporter and `VREvent_Quit` stops the pass
+  before later events. It also covers the reporter-only loop with a fake clock
+  and stdin: the lifetime, EOF and stop just before and just after it, stalled
+  and partial packets, other packets and a poll failure. A source check pins
+  that `tools/overlay_bridge.cpp` calls each of those helpers once, makes and
+  feeds a reporter nowhere else, and that the reporter-only mode creates no
+  overlay. Only the bridge's few lines around those calls, such as the order
+  of the `ready` line and the first state, rest on the device check.
 - **Unverified.** Whether an overlay client receives these events on Frame,
   and what the universe id is there. Whether the zero poses stay bit-identical
-  between recenters. The delay from a recenter to `observe()`. Using either
-  mode on Frame is a separate device check that needs the owner's approval
-  (decision 2).
+  between recenters. The delay from a recenter to `observe()` (a later step
+  with mirror capture, follow-up 2). Using either mode on Frame is a separate
+  device check that needs the owner's approval (decision 2).
 
 Follow-ups. Follow-up 3 is done in the cloud (below); none of the others has
 run, and each needs its own review; the device step needs the user's approval. They are separate from the [next device
@@ -666,9 +687,12 @@ checkpoint](#next-device-checkpoint) and do not replace it.
    runs `--report-tracking-only` once on Frame, with no overlay, capture or
    inference. It records whether the first state arrives, the universe id,
    whether the zero-pose digest stays the same without a recenter and changes
-   after one, and which change events arrive. It also measures the delay from
-   a recenter to its event reaching `observe()`, relative to mirror frames.
-   Wiring the reporter-only mode into a command is a later step.
+   after one, and which change events arrive. It does not measure the delay
+   from a recenter to its event reaching `observe()`. That needs mirror frames
+   as the reference for the physical recenter, so it is a second step that
+   runs with mirror capture and needs its own approval; nothing timestamps
+   event arrival for it yet. No command for either step exists yet. Wiring
+   the reporter-only mode into a command is a later step.
 3. **Observed candidate context.** Done (2026-11-03, cloud checks only): the
    marker observer records the providers' tokens with
    `--record-session-tokens`, and `hud_validation_report.py --from-observer`

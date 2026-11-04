@@ -1830,7 +1830,11 @@ fake-dispatch fixtures with strict warnings and no OpenVR include path.
 deadlines and teardown order. `tests/fixtures/tracking_report_fixture.cpp`
 covers SHA-256 vectors, the zero-pose digest, the change mapping and the
 unavailable reasons from a fake system, and prints its lines for the test to
-feed to a real `TrackingObserver`. The same module checks that the built bridge
+feed to a real `TrackingObserver`. It also drives the bridge's tracking glue
+from the same header: the option decision, the reporter's start and event
+hook, the runtime event pass and the reporter-only loop, with a fake runtime
+queue, clock and stdin. A source check pins that the bridge calls those
+helpers once and nowhere bypasses them. The same module checks that the built bridge
 refuses the tracking options outside their modes before any OpenVR call, and it
 drives `OverlayClient(tracking=...)` and `TrackingReporter` with a fake bridge
 executable. No test runs a tracking mode against a runtime. See [native

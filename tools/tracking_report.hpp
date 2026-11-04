@@ -13,19 +13,30 @@
 // zero_pose_sha256 is SHA-256 (FIPS 180-4) of 96 bytes: the raw standing zero pose, then the
 // seated one, each row-major (m[0][0], m[0][1], ..., m[2][3]), each float as its exact
 // IEEE-754 binary32 bit pattern, little-endian. Values are not normalized or judged: NaN
-// payloads, infinities, signed zeros and subnormals are digested by their bits. In Python:
-//   hashlib.sha256(struct.pack("<24f", *raw_rows, *seated_rows)).hexdigest()
-// (docs/hud-qualification.md, "Session tokens for the mirror source").
+// payloads, infinities, signed zeros and subnormals are digested by their bits. In Python, with
+// raw_bits and seated_bits the 12 row-major uint32 bit patterns of each matrix:
+//   hashlib.sha256(struct.pack("<24I", *raw_bits, *seated_bits)).hexdigest()
+// struct.pack("<24f", ...) over the 24 flattened values gives the same bytes except for a
+// signaling NaN, which CPython's float32 pack may quiet (3.12 packs 0x7f800001 as 0x7fc00001).
+// See docs/hud-qualification.md, "Session tokens for the mirror source".
+//
+// The rest of the bridge's tracking glue is here too, so the fixture covers it: the option
+// decision (parse_options), the only place a Reporter is made (start_if_requested), the runtime
+// event pass that feeds it (drain_runtime_events) and the reporter-only loop (run_reporter_only).
 #pragma once
 #include "hud_contract.hpp"
+#include "overlay_frame.hpp"
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <iterator>
 #include <limits>
+#include <optional>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <utility>
 
 namespace framejacker_tracking {
 namespace contract = framejacker_contract;
@@ -226,4 +237,124 @@ private:
     }
     System& system_;
 };
+
+// The bridge's tracking options, decided from argv alone before any OpenVR call; main() uses
+// nothing else to turn the reporter on (owner decision 2: off by default). The reporter runs only
+// for exactly `--stdin --report-tracking` or `--report-tracking-only --seconds N`. Any other use
+// of --report-tracking, and a malformed reporter-only command line, is a usage error (exit 64).
+// Other modes and their own usage errors are main()'s.
+struct Options {
+    bool flag = false;            // --report-tracking appears anywhere
+    bool stdin_tracking = false;  // --stdin --report-tracking
+    bool reporter_only = false;   // --report-tracking-only (valid only with --seconds N and no error)
+    int seconds = 0;              // reporter_only: contract::kTrackingReportMinSeconds .. Max
+    const char* error = nullptr;  // the usage error, or nullptr
+    bool enabled() const { return !error && (stdin_tracking || reporter_only); }
+};
+inline Options parse_options(int argc, const char* const* argv) {
+    Options result;
+    if (argc < 2) return result;
+    const std::string mode(argv[1]);
+    for (int i = 1; i < argc; ++i) result.flag = result.flag || std::string(argv[i]) == "--report-tracking";
+    result.stdin_tracking = mode == "--stdin" && argc == 3 && result.flag;
+    result.reporter_only = mode == "--report-tracking-only";
+    if (result.flag && !result.stdin_tracking) {
+        result.error = "report_tracking_requires_stdin_mode";
+    } else if (result.reporter_only) {
+        if (argc != 4 || std::string(argv[2]) != "--seconds") {
+            result.error = "tracking_report_requires_seconds";
+            return result;
+        }
+        // 1 to 9 ASCII digits (no sign, no space), then the contract bounds.
+        const std::string text(argv[3]);
+        bool digits = !text.empty() && text.size() <= 9;
+        long value = 0;
+        for (const char c : text) {
+            digits = digits && c >= '0' && c <= '9';
+            if (digits) value = value * 10 + (c - '0');
+        }
+        if (!digits || value < contract::kTrackingReportMinSeconds || value > contract::kTrackingReportMaxSeconds)
+            result.error = "seconds_out_of_range";
+        else
+            result.seconds = static_cast<int>(value);
+    }
+    return result;
+}
+// The reporter-only mode's lifetime deadline on CLOCK_MONOTONIC.
+inline std::uint64_t lifetime_deadline_ns(std::uint64_t start_ns, int seconds) {
+    return start_ns + std::uint64_t(seconds) * 1000000000ULL;
+}
+
+// The only place a Reporter is made. Without enabled options it reads, emits and hooks nothing.
+// Otherwise it emits the first state (or tracking_unavailable) and sets hook, the runtime event
+// callback (Overlay::on_system_event), to report each event through the new reporter. The caller
+// calls it after the ready line and before any packet; emit must outlive hook.
+template <class System, class Emit, class Hook>
+bool start_if_requested(const Options& options, std::optional<Reporter<System>>& reporter, System& system,
+                        Emit& emit, Hook& hook) {
+    if (!options.enabled()) return false;
+    reporter.emplace(system);
+    reporter->start(emit);
+    auto* const made = &reporter;
+    auto* const sink = &emit;
+    hook = [made, sink](std::uint32_t type) { (*made)->event(type, *sink); };
+    return true;
+}
+
+// One pass over the runtime's event queue (Overlay::events). poll(type) returns false once the
+// queue is empty. Each event but quit_type goes to on_event, when it is set, in order. quit_type
+// ends the pass at once, before any later event is read, and returns false; the bridge then
+// acknowledges the quit and stops. Returns true when the queue is empty.
+template <class Poll, class OnEvent>
+bool drain_runtime_events(Poll&& poll, std::uint32_t quit_type, const OnEvent& on_event) {
+    std::uint32_t type = 0;
+    while (poll(type)) {
+        if (type == quit_type) return false;
+        if (on_event) on_event(type);
+    }
+    return true;
+}
+
+// --report-tracking-only after its first state: runtime events until stdin EOF or one stop packet
+// (closed), a signal (stopped; VREvent_Quit throws from io.events() in the bridge) or the
+// lifetime (lifetime_elapsed). Any other input is an error. The bridge supplies Io; the fixture
+// fakes it:
+//   bool stop_requested();           // SIGTERM/SIGINT, or the parent is gone
+//   void events();                   // one runtime event pass
+//   std::uint64_t now_ns();          // CLOCK_MONOTONIC
+//   int wait_input(int timeout_ms);  // poll(): > 0 input or EOF pending, 0 none yet (EINTR too), < 0 failed
+//   bool read_header(std::uint8_t* data, std::size_t size, const Expire& expire);
+//       // read_exact: runs expire() before every read pass, the first included; false at EOF
+//       // before any byte
+enum class LoopEnd { closed, lifetime_elapsed, stopped };
+template <class Io> LoopEnd run_reporter_only(Io& io, std::uint64_t deadline_ns) {
+    // wait_input() has just reported input, so read_header's first pass reads it whatever the
+    // time: EOF or a whole stop packet that lands just after the deadline is still a clean stop.
+    // A packet still incomplete after that pass waits as in --stdin, but only until the lifetime.
+    bool input_reported = false;
+    const auto lifetime = [&] {
+        if (std::exchange(input_reported, false)) return;
+        if (io.now_ns() >= deadline_ns) throw std::runtime_error("tracking_lifetime_elapsed_during_input");
+    };
+    std::array<std::uint8_t, contract::kPacketHeaderBytes> header{};
+    for (;;) {
+        if (io.stop_requested()) return LoopEnd::stopped;
+        io.events();
+        if (io.now_ns() >= deadline_ns) return LoopEnd::lifetime_elapsed;
+        const int available = io.wait_input(20);
+        if (available < 0) throw std::runtime_error("stdin_poll_failed");
+        if (!available) continue;
+        input_reported = true;
+        if (io.read_header(header.data(), header.size(), lifetime)) {
+            if (std::memcmp(header.data() + contract::kPacketHeaderMagicOffset, contract::kPacketMagic,
+                            sizeof contract::kPacketMagic - 1))
+                throw std::runtime_error("invalid_packet_magic");
+            if (framejacker_overlay::read_u32(header.data() + contract::kPacketHeaderOpcodeOffset) !=
+                    contract::kOpcodeStop ||
+                    framejacker_overlay::read_u32(header.data() + contract::kPacketHeaderPayloadBytesOffset))
+                throw std::runtime_error("tracking_reporter_accepts_only_stop");
+        }
+        return LoopEnd::closed;
+    }
+}
 } // namespace framejacker_tracking
