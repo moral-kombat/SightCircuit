@@ -8,16 +8,22 @@ copies, requires a changed clear baseline before the marker is shown
 composition or unseen copy is inferred, so ``mapping_qualified`` stays False.
 Used by ``scripts/hud_marker_observer.py``. ``validate_observer_report`` is
 that command's worker report contract, applied by its supervisor and before a
-report becomes a mapping candidate (``framejacker.hud.candidate``).
+report becomes a mapping candidate (``framejacker.hud.candidate``). Every
+worker report carries ``session_tokens`` (``validate_session_tokens``): the
+report of the run's ``sources.session.MirrorSession`` when the observer was
+given one, otherwise why none was recorded. The tokens identify the run; they
+qualify nothing.
 """
 from dataclasses import dataclass
 import hashlib
 import itertools
 import math
+import sys
 
 from ..convert import buffer_bgr
 from ..gates import HARDWARE_MAPPING, claims
-from .contract import HUD_CONFIG, MARKER, MARKER_MAX_SECONDS, MARKER_MIN_SECONDS, CaptureFormat, margin_valid
+from .contract import (HUD_CONFIG, MARKER, MARKER_MAX_SECONDS, MARKER_MIN_SECONDS, SESSION_TOKENS, CaptureFormat,
+                       margin_valid)
 from .marker import new_report as marker_report, validate_worker_report as validate_marker_report
 
 MAX_PIXELS = 8 * 1024 * 1024
@@ -28,6 +34,23 @@ MAX_DIAGNOSTIC_CANDIDATES = 4
 MAX_DIAGNOSTIC_FRAGMENTS = 16
 MAX_CORNER_REFINEMENT_PX = 2
 TAG_ORIGINS = tuple(MARKER.tag_origin(tag) for tag in range(len(MARKER.corner_ids)))
+# Why a worker report's ``session_tokens`` holds no session report.
+SESSION_TOKENS_NOT_REQUESTED = "session_tokens_not_requested"  # No session: the default observer run.
+# The supervisor kept its base report: no worker report arrived, the worker's report failed this contract
+# (any tokens it carried are discarded with it) or the guardian failed. The supervisor report's status and
+# reason say which.
+SESSION_TOKENS_NOT_REPORTED = "session_tokens_not_reported"
+SESSION_TOKENS_DECLARATION_FAILED = "session_tokens_declaration_failed"
+SESSION_TOKENS_REPORT_INVALID = "session_tokens_report_invalid"  # The session report raised or failed this contract.
+UNRECORDED_SESSION_REASONS = (SESSION_TOKENS_NOT_REQUESTED, SESSION_TOKENS_NOT_REPORTED,
+                              SESSION_TOKENS_DECLARATION_FAILED, SESSION_TOKENS_REPORT_INVALID)
+# ``MirrorSession.report()`` fields, plus ``recorded`` and the declaration's duration.
+RECORDED_SESSION_FIELDS = ("recorded", "declared", "undeclared", "frames_read", "first_change", "runtime_process",
+                           "scope", "declaration_elapsed_ms")
+STRING_SESSION_TOKENS = tuple(name for name in SESSION_TOKENS if name != "recenter_epoch")
+RUNTIME_PROCESS_FIELDS = {"pid": int, "start_ticks": int, "executable": str, "executable_deleted": bool}
+MAX_SESSION_TEXT = 256  # Characters in a token, reason or scope; the record's token rule is stricter.
+MAX_EXECUTABLE_PATH = 4096
 
 
 def bit_sample(bit, inset=1, offset=0):
@@ -388,6 +411,81 @@ def validate_marker_evidence(bridge, seconds, validation_only):
         raise ValueError("native_marker_config_mismatch")
 
 
+def unrecorded_session_tokens(reason=SESSION_TOKENS_NOT_REQUESTED):
+    """``session_tokens`` of a report that holds no session report, with the reason."""
+    return {"recorded": False, "reason": reason}
+
+
+def session_tokens_record(session, declaration_elapsed_ms):
+    """``session_tokens`` of a run whose ``session`` was declared: its report, if this contract accepts it."""
+    try:
+        record = {"recorded": True, **session.report(), "declaration_elapsed_ms": declaration_elapsed_ms}
+        validate_session_tokens(record)
+    except Exception:
+        return unrecorded_session_tokens(SESSION_TOKENS_REPORT_INVALID)
+    return record
+
+
+def _text(value, *, minimum=0, limit=MAX_SESSION_TEXT):
+    return type(value) is str and minimum <= len(value) <= limit
+
+
+def _count(value):
+    return type(value) is int and value >= 0
+
+
+def _duration(value):
+    """A non-negative ``int`` or finite ``float``; a ``bool`` is not one.
+
+    An ``int`` is compared with the largest finite float, never converted to
+    one, so a huge integer is refused here instead of overflowing.
+    """
+    if type(value) is int:
+        return 0 <= value <= sys.float_info.max
+    return type(value) is float and math.isfinite(value) and value >= 0
+
+
+def validate_session_tokens(value):
+    """The shape of a worker report's ``session_tokens``; never a check that a token is true.
+
+    Unrecorded: ``recorded`` false and one of ``UNRECORDED_SESSION_REASONS``.
+    Recorded: exactly ``RECORDED_SESSION_FIELDS``. ``declared`` names all five
+    session tokens; a token is ``None`` exactly when ``undeclared`` gives its
+    reason. ``first_change``, when set, names a declared token and a frame
+    within ``frames_read``. Token values are bounded strings (a non-negative
+    integer for ``recenter_epoch``); the candidate record applies the stricter
+    token rule. ``declaration_elapsed_ms`` is a non-negative int or finite float.
+    """
+    if type(value) is not dict or type(value.get("recorded")) is not bool:
+        raise ValueError("invalid_observer_session_tokens")
+    if value["recorded"] is False:
+        if set(value) != {"recorded", "reason"} or value["reason"] not in UNRECORDED_SESSION_REASONS:
+            raise ValueError("invalid_observer_session_tokens")
+        return
+    declared, undeclared, frames = value.get("declared"), value.get("undeclared"), value.get("frames_read")
+    change, process, elapsed = value.get("first_change"), value.get("runtime_process"), value.get("declaration_elapsed_ms")
+    if (set(value) != set(RECORDED_SESSION_FIELDS) or
+            type(declared) is not dict or set(declared) != set(SESSION_TOKENS) or
+            type(undeclared) is not dict or not set(undeclared) <= set(SESSION_TOKENS) or
+            not all(_text(reason, minimum=1) for reason in undeclared.values()) or
+            any((declared[name] is None) != (name in undeclared) for name in SESSION_TOKENS) or
+            any(declared[name] is not None and not _text(declared[name]) for name in STRING_SESSION_TOKENS) or
+            not (declared["recenter_epoch"] is None or _count(declared["recenter_epoch"])) or
+            not _count(frames) or not _text(value["scope"]) or not _duration(elapsed)):
+        raise ValueError("invalid_observer_session_tokens")
+    if change is not None and (type(change) is not dict or set(change) != {"frame", "token", "reason"} or
+                               type(change["frame"]) is not int or not 1 <= change["frame"] <= frames or
+                               change["token"] not in SESSION_TOKENS or declared[change["token"]] is None or
+                               not _text(change["reason"], minimum=1)):
+        raise ValueError("invalid_observer_session_tokens")
+    if process is not None and (type(process) is not dict or not set(process) <= set(RUNTIME_PROCESS_FIELDS) or
+                                any(type(process[key]) is not kind for key, kind in RUNTIME_PROCESS_FIELDS.items()
+                                    if key in process) or
+                                any(process.get(key, 0) < 0 for key in ("pid", "start_ticks")) or
+                                len(process.get("executable", "")) > MAX_EXECUTABLE_PATH):
+        raise ValueError("invalid_observer_session_tokens")
+
+
 def validate_observer_report(report, returncode):
     """The ``hud_marker_observer`` worker report contract; never evidence of qualification."""
     if (not isinstance(report, dict) or report.get("report_kind") != "hud_marker_observation" or
@@ -403,6 +501,8 @@ def validate_observer_report(report, returncode):
             (report["exit_code"] == 2 and (report.get("status") != "observed_unqualified" or not report["cleanup_ok"] or
                                            not 3 <= report.get("sample_count", 0) <= 100))):
         raise ValueError("invalid_observer_worker_report")
+    # Required in every report, so a worker that drops it is invalid rather than silently unrecorded.
+    validate_session_tokens(report.get("session_tokens"))
     if report["exit_code"] == 2:
         baseline = report.get("baseline")
         if (type(baseline) is not dict or baseline.get("established") is not True or

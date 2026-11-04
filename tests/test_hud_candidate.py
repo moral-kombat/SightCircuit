@@ -1,4 +1,8 @@
-"""Observer report to mapping candidate from generated frames; never qualification or device evidence."""
+"""Observer report to mapping candidate from generated frames; never qualification or device evidence.
+
+Each observer run records its session tokens from providers on a fake /proc
+root (``tests.test_mirror_session.FakeProc``); no test reads the real /proc.
+"""
 import contextlib
 from copy import deepcopy
 import hashlib
@@ -25,9 +29,12 @@ from framejacker.hud import contract
 from framejacker.hud.geometry import expand
 from framejacker.hud.mask import mask_regions
 from framejacker.hud.qualification import MappingCandidate
+from framejacker.sources.session import TrackingObserver
 from scripts import hud_marker_observer as observer
 from scripts import hud_validation_report
-from tests.test_hud_marker_observer import FakeClock, FakeStop, clean_bridge_fixture, scene, tag_mismatch_template
+from tests.test_hud_marker_observer import (FakeClock, FakeStop, clean_bridge_fixture, fake_session, scene,
+                                            tag_mismatch_template)
+from tests.test_mirror_session import BOOT_A, BOOT_B, PID, RECENTER, STATE, FakeProc
 
 ROOT = Path(__file__).resolve().parents[1]
 NATIVE_FORMAT = dict(width=1000, height=600, fourcc="BGR3", stride_bytes=3000,
@@ -38,9 +45,27 @@ SHIFTS = (0, 2, -2)  # Horizontal movement between marker reads.
 TIGHT_RECTS = [[68, 80, 392, 208], [568, 270, 892, 398]]
 
 
-def observer_report(*, seconds=1, template=None):
-    """A complete report from the real observer and observation algorithm on generated frames."""
-    clock = FakeClock()
+def observer_report(*, seconds=1, template=None, session=True, events=(STATE,), prepare=None, on_marker=None,
+                    on_read=None, clock=None):
+    """A complete report from the real observer and observation algorithm on generated frames.
+
+    With ``session`` (the default) every token provider runs on a new fake /proc
+    root: ``prepare(proc)`` runs and ``events`` reach the tracking observer before
+    the declaration, ``on_marker(proc, tracking)`` runs when the marker starts and
+    ``on_read(proc, tracking, number)`` before each read's frame is generated.
+    ``clock`` (a ``FakeClock``) is the observer's clock, new when not given.
+    """
+    with tempfile.TemporaryDirectory() as directory:
+        proc, tracking = FakeProc(directory), TrackingObserver()
+        if prepare is not None:
+            prepare(proc)
+        observed = fake_session(proc, *events, tracking=tracking) if session else None
+        return _observe(seconds, template, observed, lambda: on_marker and on_marker(proc, tracking),
+                        lambda number: on_read and on_read(proc, tracking, number),
+                        FakeClock() if clock is None else clock)
+
+
+def _observe(seconds, template, session, on_marker, on_read, clock):
     stop = FakeStop(clock)
     state = {"marker": False, "reads": 0, "marker_reads": 0}
 
@@ -56,6 +81,7 @@ def observer_report(*, seconds=1, template=None):
 
         def read_frame(self, timeout):
             state["reads"] += 1
+            on_read(state["reads"])
             positions = ()
             if state["marker"]:
                 shift = SHIFTS[state["marker_reads"] % len(SHIFTS)]
@@ -74,6 +100,7 @@ def observer_report(*, seconds=1, template=None):
 
         def start_marker(self, seconds, stop, **kwargs):
             state["marker"] = True
+            on_marker()
             self.end = clock.now + seconds
             self.process = Mock()
             self.process.poll.side_effect = lambda: 0 if clock.now >= self.end else None
@@ -81,18 +108,23 @@ def observer_report(*, seconds=1, template=None):
         def close(self):
             return clean_bridge_fixture(seconds)
 
+    options = {} if session is None else {"session": session}
     with patch.object(observer.time, "monotonic", clock.monotonic), \
             patch.object(observer.time, "monotonic_ns", clock.monotonic_ns):
         return observer.observe({"node": "synthetic:fixture"}, seconds, stop, backend_factory=Source,
-                                marker_client=Marker())
+                                marker_client=Marker(), **options)
 
 
 def declared_context(**changes):
-    context = {"source_id": "synthetic:mirror", "session_id": "generated-session", "runtime_id": "fixture-runtime",
-               "timebase_id": "generated-boot:monotonic", "tracking_origin": "seated", "recenter_epoch": 0,
-               "native_format": dict(NATIVE_FORMAT), "crop_xyxy": [0, 0, 1000, 600], "orientation_degrees": 0,
-               "capture_layout": "stereo_sbs", "hud_config_sha256": config_digest(HUD_CONFIG)}
+    """The non-token context fields; the session tokens come from the observer report."""
+    context = {"source_id": "synthetic:mirror", "native_format": dict(NATIVE_FORMAT), "crop_xyxy": [0, 0, 1000, 600],
+               "orientation_degrees": 0, "capture_layout": "stereo_sbs", "hud_config_sha256": config_digest(HUD_CONFIG)}
     return dict(context, **changes)
+
+
+def observed_tokens(report):
+    """The session tokens the observer's providers declared for its run."""
+    return dict(report["session_tokens"]["declared"])
 
 
 def encode(report):
@@ -167,7 +199,7 @@ class ObserverCandidateTests(unittest.TestCase):
         samples = self.report["samples"]
         self.assertEqual(record["observed_ns"], samples[-1][1])
         self.assertEqual(record["expires_ns"], samples[0][1] + 60 * 1_000_000_000)
-        self.assertEqual(record["context"], declared_context())
+        self.assertEqual(record["context"], dict(declared_context(), **observed_tokens(self.report)))
         self.assertEqual([copy["declared_eye"] for copy in record["copies"]], [0, 1])
         # The record round-trips through the schema, and nothing it yields lifts a gate.
         self.assertEqual(MappingCandidate.from_mapping(record).as_dict(), record)
@@ -362,8 +394,10 @@ class ObserverCandidateTests(unittest.TestCase):
                  (declared_context(hud_config_sha256="a" * 64), 60, "hud_config_changed"),
                  (declared_context(capture_layout="stereo_tb"), 60, "outside_declared_eye"),
                  (declared_context(crop_xyxy=[0, 0, 600, 600], capture_layout="mono"), 60, "outside_declared_eye"),
-                 ({key: value for key, value in declared_context().items() if key != "session_id"}, 60,
+                 ({key: value for key, value in declared_context().items() if key != "source_id"}, 60,
                   "context_fields_invalid"),
+                 (dict(declared_context(), operator="unexpected"), 60, "context_fields_invalid"),
+                 ([declared_context()], 60, "context_fields_invalid"),
                  (declared_context(), 0, "lifetime_invalid"),
                  (declared_context(), 301, "lifetime_invalid"),
                  (declared_context(), True, "lifetime_invalid"))
@@ -400,7 +434,10 @@ class ObserverCandidateTests(unittest.TestCase):
             record = json.loads(written)
             self.assertEqual(printed["candidate"], record)
             self.assertEqual(record["evidence"][0]["sha256"], hashlib.sha256(report_path.read_bytes()).hexdigest())
-            code, checked = run_cli(["--check-candidate", output, "--current-context", context,
+            # Check mode compares a complete current context: the declared fields and this run's tokens.
+            current = folder / "current-context.json"
+            current.write_text(json.dumps(dict(declared_context(), **observed_tokens(self.report))))
+            code, checked = run_cli(["--check-candidate", output, "--current-context", current,
                                      "--now-ns", record["observed_ns"]])
             self.assertEqual(code, 2, checked)
             self.assertEqual(checked["status"], "candidate_valid_unqualified")
@@ -457,6 +494,226 @@ class ObserverCandidateTests(unittest.TestCase):
         for args in misuse:
             with self.subTest(args=args), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 hud_validation_report.parse_args(args)
+
+    def rejected_by_cli(self, report, context=None):
+        """The CLI's printed rejection of ``report``; it must write no candidate."""
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            report_path, context_path, output = (folder / name for name in
+                                                 ("observer-report.json", "context.json", "candidate.json"))
+            report_path.write_bytes(encode(report))
+            context_path.write_text(json.dumps(declared_context() if context is None else context))
+            code, printed = run_cli(["--from-observer", report_path, "--declared-context", context_path,
+                                     "--lifetime-seconds", "60", "--candidate-output", output])
+            self.assertEqual((code, printed["status"], printed["exit_code"]), (1, "rejected", 1), printed)
+            self.assertNotIn("candidate", printed)
+            self.assertFalse(output.exists())
+            self.assertFalse(any(printed[key] for key in claims()))
+            return printed
+
+    def test_session_tokens_come_from_the_observer_report_never_from_the_declared_context(self):
+        tokens = observed_tokens(self.report)
+        self.assertEqual(set(tokens), set(contract.SESSION_TOKENS))
+        self.assertEqual(self.report["session_tokens"]["undeclared"], {})
+        self.assertTrue(tokens["timebase_id"].startswith(f"clock_monotonic:boot:{BOOT_A}:"))
+        self.assertTrue(tokens["session_id"].startswith(f"steamvr:boot:{BOOT_A}:"))
+        self.assertIn(f":pid:{PID}:", tokens["session_id"])
+        self.assertTrue(tokens["runtime_id"].startswith("steamvr:vrserver:sha256:"))
+        self.assertTrue(tokens["tracking_origin"].startswith("openvr:universe:"))
+        self.assertEqual(tokens["recenter_epoch"], 0)
+        record = convert(self.report).as_dict()
+        self.assertEqual({name: record["context"][name] for name in contract.SESSION_TOKENS}, tokens)
+        # A token in the declared context is refused, even the observed value: each has one source.
+        for name in contract.SESSION_TOKENS:
+            for value in (tokens[name], 1 if name == "recenter_epoch" else "declared-instead", None):
+                with self.subTest(token=name, value=value), \
+                        self.assertRaisesRegex(ValueError, "^hud_observer_context_declares_session_tokens$"):
+                    convert(self.report, declared_context(**{name: value}))
+        printed = self.rejected_by_cli(self.report, dict(declared_context(), **tokens))
+        self.assertEqual(printed["reason"], "hud_observer_context_declares_session_tokens")
+
+    def test_a_report_without_recorded_session_tokens_never_becomes_a_candidate(self):
+        unrecorded = observer_report(session=False)  # The observer run without --record-session-tokens.
+        self.assertEqual((unrecorded["status"], unrecorded["exit_code"]), ("observed_unqualified", 2), unrecorded)
+        self.assertEqual(unrecorded["session_tokens"], {"recorded": False, "reason": "session_tokens_not_requested"})
+        cases = {"not_requested": unrecorded,
+                 "older_report": {key: value for key, value in self.report.items() if key != "session_tokens"},
+                 "declaration_failed": dict(self.report, session_tokens={"recorded": False,
+                                                                         "reason": "session_tokens_declaration_failed"}),
+                 "recorded_not_true": dict(self.report, session_tokens=dict(self.report["session_tokens"], recorded=1))}
+        for name, report in cases.items():
+            with self.subTest(case=name):
+                with self.assertRaisesRegex(ValueError, "^hud_observer_session_tokens_not_recorded$"):
+                    convert(report)
+                self.assertEqual(self.rejected_by_cli(report)["reason"], "hud_observer_session_tokens_not_recorded")
+
+    def test_an_unobserved_session_token_rejects_and_names_the_provider_reason(self):
+        # A first tracking state that arrives once the marker bridge starts, after the baseline and the declaration.
+        late = observer_report(events=(), on_marker=lambda proc, tracking: tracking.observe(STATE))
+        self.assertEqual((late["status"], late["exit_code"]), ("observed_unqualified", 2), late)
+        observer.validate_worker_report(late, 2)
+        tokens = late["session_tokens"]
+        self.assertEqual((tokens["declared"]["tracking_origin"], tokens["declared"]["recenter_epoch"]), (None, None))
+        self.assertEqual(tokens["undeclared"], dict.fromkeys(("tracking_origin", "recenter_epoch"),
+                                                              "tracking_state_not_observed"))
+        self.assertIsNone(tokens["first_change"])  # Never adopted later, so never a change.
+        cases = ((late, "tracking_origin", "tracking_state_not_observed"),
+                 (observer_report(prepare=lambda proc: proc.remove_process(PID)), "session_id",
+                  "runtime_process_not_found"),
+                 (observer_report(prepare=lambda proc: (proc.root / "self/ns/time").unlink()), "timebase_id",
+                  "host_time_namespace_unreadable"))
+        for report, token, reason in cases:
+            with self.subTest(token=token, reason=reason):
+                self.assertEqual(report["status"], "observed_unqualified", report)
+                self.assertEqual(report["session_tokens"]["undeclared"][token], reason)
+                with self.assertRaisesRegex(ValueError, "^hud_observer_session_token_unobserved$") as raised:
+                    convert(report)
+                self.assertEqual(raised.exception.details, {"session_token": token, "session_token_reason": reason})
+                printed = self.rejected_by_cli(report)
+                self.assertEqual((printed["reason"], printed["session_token"], printed["session_token_reason"]),
+                                 ("hud_observer_session_token_unobserved", token, reason))
+                # No declared fallback: a context that gives every unobserved token a valid value still rejects,
+                # for the same token and provider reason.
+                substitute = declared_context(**{name: observed_tokens(self.report)[name]
+                                                 for name in report["session_tokens"]["undeclared"]})
+                with self.assertRaisesRegex(ValueError, "^hud_observer_session_token_unobserved$") as raised:
+                    convert(report, substitute)
+                self.assertEqual(raised.exception.details, {"session_token": token, "session_token_reason": reason})
+                printed = self.rejected_by_cli(report, substitute)
+                self.assertEqual((printed["reason"], printed["session_token"], printed["session_token_reason"]),
+                                 ("hud_observer_session_token_unobserved", token, reason))
+
+    def test_a_frame_read_after_the_observation_deadline_keeps_the_frame_counts_equal_and_converts(self):
+        # capture() checks its deadline before each read; the read, its format query and its digest can end
+        # after it, and that frame is still counted and passed on, so the session reads it too.
+        for late in (6, 8, 10):
+            clock = FakeClock()
+
+            def on_read(proc, tracking, number, late=late, clock=clock):
+                if number == late:
+                    clock.tick(1.5)  # Past the two-second deadline before this frame reaches the observer.
+
+            report = observer_report(seconds=2, on_read=on_read, clock=clock)
+            with self.subTest(late_read=late):
+                self.assertEqual((report["status"], report["exit_code"]), ("observed_unqualified", 2), report)
+                self.assertEqual(report["capture"]["frames_read"], late)
+                self.assertEqual(report["session_tokens"]["frames_read"], report["capture"]["frames_read"])
+                record = convert(report).as_dict()
+                self.assertEqual({name: record["context"][name] for name in contract.SESSION_TOKENS},
+                                 observed_tokens(report))
+
+    def test_a_session_token_change_during_the_observation_rejects(self):
+        def at_read(number, change):
+            return lambda proc, tracking, read: change(proc, tracking) if read == number else None
+
+        cases = (("timebase_id", "token_changed", lambda proc, tracking: proc.set_boot(BOOT_B)),
+                 ("session_id", "runtime_process_exited", lambda proc, tracking: proc.remove_process(PID)),
+                 ("recenter_epoch", "token_changed", lambda proc, tracking: tracking.observe(RECENTER)))
+        for token, reason, change in cases:
+            with self.subTest(token=token):
+                report = observer_report(on_read=at_read(4, change))  # Read 4 is the second marker sample.
+                self.assertEqual((report["status"], report["exit_code"]), ("observed_unqualified", 2), report)
+                observer.validate_worker_report(report, 2)
+                self.assertEqual(report["session_tokens"]["first_change"],
+                                 {"frame": 4, "token": token, "reason": reason})
+                with self.assertRaisesRegex(ValueError, "^hud_observer_session_tokens_changed$") as raised:
+                    convert(report)
+                self.assertEqual(raised.exception.details, {"session_token": token, "session_token_reason": reason})
+                printed = self.rejected_by_cli(report)
+                self.assertEqual((printed["reason"], printed["session_token"]),
+                                 ("hud_observer_session_tokens_changed", token))
+
+    def test_session_frame_count_and_the_record_token_rule_are_checked(self):
+        for change in (-1, 1):
+            forged = deepcopy(self.report)
+            forged["session_tokens"]["frames_read"] += change
+            with self.subTest(change=change), self.assertRaisesRegex(ValueError, "^hud_observer_session_frames_mismatch$"):
+                convert(forged)
+        for name, value in (("session_id", "steamvr:\nforged"), ("runtime_id", ""), ("timebase_id", "x" * 161),
+                            ("tracking_origin", "openvr\x7f"), ("recenter_epoch", 2**63)):
+            forged = deepcopy(self.report)
+            forged["session_tokens"]["declared"][name] = value
+            observer.validate_worker_report(forged, 2)  # The worker contract checks types; the record rule is stricter.
+            with self.subTest(token=name), \
+                    self.assertRaisesRegex(ValueError, "^hud_observer_session_token_invalid$") as raised:
+                convert(forged)
+            self.assertEqual(raised.exception.details, {"session_token": name})
+
+    def test_malformed_session_tokens_are_rejected_by_the_worker_contract(self):
+        tokens = self.report["session_tokens"]
+        observer.validate_worker_report(self.report, 2)
+        nullable = {("first_change",), ("runtime_process",)}
+        cases = 0
+        for path in json_paths(tokens):
+            original = tokens
+            for key in path:
+                original = original[key]
+            for substitute in ("x", [1], 7, 1.5, True, None, {}):
+                same = type(substitute) is type(original) or (
+                    path == ("declaration_elapsed_ms",) and type(substitute) in (int, float))
+                if same or (substitute is None and path in nullable):
+                    continue
+                cases += 1
+                with self.subTest(path=path, substitute=substitute), \
+                        self.assertRaisesRegex(ValueError, "invalid_observer_session_tokens"):
+                    observer.validate_worker_report(replaced(self.report, ("session_tokens",) + path, substitute), 2)
+        self.assertGreater(cases, 60)
+        declared, process = tokens["declared"], tokens["runtime_process"]
+        change = {"frame": 2, "token": "session_id", "reason": "runtime_process_exited"}
+        undeclared_tracking = dict(tokens, declared=dict(declared, tracking_origin=None, recenter_epoch=None),
+                                   undeclared=dict.fromkeys(("tracking_origin", "recenter_epoch"), "tracking_event_invalid"))
+        invalid = {"name_missing": dict(tokens, declared={k: v for k, v in declared.items() if k != "recenter_epoch"}),
+                   "name_added": dict(tokens, declared=dict(declared, operator_id="x")),
+                   "none_without_reason": dict(tokens, declared=dict(declared, session_id=None)),
+                   "reason_for_declared": dict(tokens, undeclared={"session_id": "runtime_process_not_found"}),
+                   "reason_for_unknown": dict(tokens, undeclared={"operator_id": "x"}),
+                   "empty_reason": dict(undeclared_tracking, undeclared=dict(undeclared_tracking["undeclared"],
+                                                                            recenter_epoch="")),
+                   "long_reason": dict(undeclared_tracking, undeclared=dict(undeclared_tracking["undeclared"],
+                                                                           recenter_epoch="x" * 257)),
+                   "long_token": dict(tokens, declared=dict(declared, session_id="x" * 257)),
+                   "negative_epoch": dict(tokens, declared=dict(declared, recenter_epoch=-1)),
+                   "negative_frames": dict(tokens, frames_read=-1),
+                   "change_fields": dict(tokens, first_change={"frame": 1, "token": "session_id"}),
+                   "change_after_last_frame": dict(tokens, first_change={"frame": tokens["frames_read"] + 1,
+                                                                        "token": "session_id", "reason": "token_changed"}),
+                   "change_frame_zero": dict(tokens, first_change={"frame": 0, "token": "session_id",
+                                                                   "reason": "token_changed"}),
+                   "change_unknown_token": dict(tokens, first_change={"frame": 1, "token": "operator_id",
+                                                                      "reason": "token_changed"}),
+                   "change_of_undeclared_token": dict(undeclared_tracking, first_change={
+                       "frame": 1, "token": "tracking_origin", "reason": "token_changed"}),
+                   **{f"change_{name}": dict(tokens, first_change=dict(change, **edit)) for name, edit in (
+                       ("field_added", {"approved": True}), ("frame_bool", {"frame": True}),
+                       ("frame_float", {"frame": 1.5}), ("frame_text", {"frame": "1"}),
+                       ("reason_number", {"reason": 7}), ("reason_empty", {"reason": ""}),
+                       ("reason_long", {"reason": "x" * 257}))},
+                   "process_field_added": dict(tokens, runtime_process=dict(process, uid=0)),
+                   "process_negative_pid": dict(tokens, runtime_process=dict(process, pid=-1)),
+                   "process_negative_start_ticks": dict(tokens, runtime_process=dict(process, start_ticks=-1)),
+                   "process_long_path": dict(tokens, runtime_process=dict(process, executable="/" * 4097)),
+                   "elapsed_negative": dict(tokens, declaration_elapsed_ms=-1),
+                   "elapsed_infinite": dict(tokens, declaration_elapsed_ms=float("inf")),
+                   "elapsed_nan": dict(tokens, declaration_elapsed_ms=float("nan")),
+                   # Larger than any finite float: refused as a shape, never converted (an OverflowError).
+                   "elapsed_huge_int": dict(tokens, declaration_elapsed_ms=10**400),
+                   "elapsed_huge_negative_int": dict(tokens, declaration_elapsed_ms=-10**400),
+                   "field_added": dict(tokens, approved=False),
+                   "scope_missing": {key: value for key, value in tokens.items() if key != "scope"},
+                   "scope_long": dict(tokens, scope="x" * 257),
+                   "absent": None}
+        for name, value in invalid.items():
+            report = dict(self.report, session_tokens=value)
+            if value is None:
+                del report["session_tokens"]
+            with self.subTest(case=name), self.assertRaisesRegex(ValueError, "invalid_observer_session_tokens"):
+                observer.validate_worker_report(report, 2)
+        # Undeclared tokens with their reasons, a change, no runtime provider and an int or float
+        # duration (a bool is refused above) are valid shapes.
+        for value in (undeclared_tracking, dict(tokens, runtime_process=None), dict(tokens, first_change=change),
+                      dict(tokens, declaration_elapsed_ms=0), dict(tokens, declaration_elapsed_ms=4001),
+                      dict(tokens, declaration_elapsed_ms=0.0), dict(tokens, declaration_elapsed_ms=2**1000)):
+            observer.validate_worker_report(dict(self.report, session_tokens=value), 2)
 
     def test_documented_commands_parse_with_the_real_parser(self):
         found = 0

@@ -304,8 +304,8 @@ that object, and any world position, are not claimed.
 
 ## Owner decisions (2026-11-03)
 
-The owner answered these in a decision interview; the last row was answered
-later the same day. Each device step still needs
+The owner answered these in a decision interview; the rows after "Frame agent"
+were answered later the same day. Each device step still needs
 the owner present at the time it runs. None of these decisions is evidence, and
 none opens a gate in `framejacker/gates.py`.
 
@@ -323,3 +323,5 @@ none opens a gate in `framejacker/gates.py`.
 | Mask fill (G5, E76) | The coder tests a neutral fill for the masked area offline. The strict overlap rule stays as it is. |
 | Frame agent (PR #16) | Approved: install the guarded setup following `docs/agent-on-frame.md` Phase 0. |
 | Tracking-token binding (package I) | Answered later on 2026-11-03, in the coder session that recorded E77 and E78. The tokens stay bound when `MirrorSource` is declared: a first `tracking_state` must reach the `TrackingObserver` before the source is created. A state first seen later leaves `tracking_origin` and `recenter_epoch` undeclared for the run, so a bound mask rejects every frame. Late binding was not adopted. |
+| Unobserved session token (handoff item 2) | Answered on 2026-11-03, in the coder session that recorded E77 and E78. A session token that the marker observer did not observe rejects the observer-to-candidate conversion (`hud_validation_report.py --from-observer`). There is no declared fallback, behind a flag or otherwise; `--declared-context` keeps only the non-token context fields, and its `native_format` must equal the observer's capture format. |
+| Observer /proc reads (handoff item 2) | Answered on 2026-11-03, in the coder session that recorded E77 and E78. The marker observer reads session tokens from the real /proc only behind an explicit flag, `--record-session-tokens`, which is off by default, so the approved G3 run is unchanged. Using the flag on Frame is a separate approval. |

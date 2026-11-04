@@ -162,7 +162,8 @@ report has been converted, and no accepted G3 observation exists.
   converts. It must pass the observer's own worker-report contract
   (`observation.validate_observer_report`, which its supervisor applies), carry
   the observer's expected reason, a captured and cleanly closed mirror read and
-  clean marker cleanup, and have no cleanup error or forced termination. A
+  clean marker cleanup, and have no cleanup error or forced termination. It
+  must also carry the session tokens the observer recorded (see Context). A
   rejected, cancelled, incomplete or erroneous report, or one whose samples
   disagree with its union or drift, gets a structured rejection with exit 1
   and no candidate file. So does a report whose `baseline`, `bridge` or a
@@ -179,13 +180,23 @@ report has been converted, and no accepted G3 observation exists.
   its expanded rectangle, the region a mask would exclude, is exactly the
   observer's union. A union that counts the margin twice, omits it or cuts
   into a sampled corner is rejected.
-- **Context.** Only the native format is checked against the observer's
-  capture. Source, session, runtime, timebase, tracking origin, recenter epoch,
-  crop, orientation and capture layout come from `--declared-context` as
-  declarations. `hud_config_sha256` must be the current `HudConfig` digest,
-  which the observer's marker evidence pins. `declared_eye` is the declared
-  layout's eye viewport that holds the expanded copy. A copy outside exactly
-  one viewport, or a declared eye without a copy, rejects.
+- **Context.** Since 2026-11-03 the five session tokens (`session_id`,
+  `runtime_id`, `timebase_id`, `tracking_origin`, `recenter_epoch`) are
+  observed, not declared. They come only from the report's `session_tokens`,
+  which the observer records with `--record-session-tokens`. A report without
+  them, a token the providers could not observe, or a token that changed
+  during the run rejects, with no declared fallback
+  ([observed session tokens](#observed-session-tokens-for-the-candidate-2026-11-03)).
+  `--declared-context` carries only the non-token context fields: source,
+  native format, crop, orientation, capture layout and `hud_config_sha256`. A
+  context file that carries any session token is rejected
+  (`hud_observer_context_declares_session_tokens`), so each token has one
+  source. Only the declared `native_format` is checked against the observer's
+  report: it must equal the observer's capture format. `hud_config_sha256`
+  must be the current `HudConfig` digest, which the observer's marker evidence
+  pins. `declared_eye` is the declared layout's eye viewport that holds the
+  expanded copy. A copy outside exactly one viewport, or a declared eye
+  without a copy, rejects.
 - **Lifetime.** `observed_ns` is the last marker sample's read time and
   `expires_ns` is the first sample's read time plus `--lifetime-seconds`
   (1-300). A lifetime that ends before the last sample rejects. These are the
@@ -219,13 +230,16 @@ python3 scripts/hud_validation_report.py --from-observer /tmp/observer-report.js
   --declared-context /tmp/declared-context.json --lifetime-seconds 60 \
   --candidate-output /tmp/candidate.json
 python3 scripts/hud_validation_report.py --check-candidate /tmp/candidate.json \
-  --current-context /tmp/declared-context.json --now-ns 123456789
+  --current-context /tmp/current-context.json --now-ns 123456789
 ```
 
-`--candidate-output` is optional and is created exclusively; an existing file
-is never replaced. The example paths are local metadata records, and the time
-must come from the record's declared timebase. These options were checked
-against the command's `--help`.
+`/tmp/declared-context.json` holds only the six declared fields and must not
+carry a session token. `--check-candidate` still compares a complete current
+context, all eleven fields including the current run's session tokens, so it
+takes a different file. `--candidate-output` is optional and is created
+exclusively; an existing file is never replaced. The example paths are local
+metadata records, and the time must come from the record's declared timebase.
+These options were checked against the command's `--help`.
 
 ## Runtime calibration and one margin rule (2026-11-01)
 
@@ -460,8 +474,11 @@ results of this change are [E78](evidence/e078.md).
 `MirrorSource(session=MirrorSession(...))` declares the tokens and stamps every
 frame with them. The tests are cloud runs on a fake /proc root (a temporary
 directory laid out like /proc) and on hand-written runtime events. Nothing ran
-on Frame, no test read the real /proc of any process, and no command passes a
-session yet. Nothing here opens a gate. In HUD mode `run_recognition` still
+on Frame and no test read the real /proc of any process. The mirror
+recognizer passes no session. The marker observer passes one only with its
+`--record-session-tokens` opt-in
+([observed session tokens](#observed-session-tokens-for-the-candidate-2026-11-03)).
+Nothing here opens a gate. In HUD mode `run_recognition` still
 refuses every backend that does not declare the synthetic kind
 (`hud_live_mirror_not_approved`, through `LIVE_IMAGE_INPUT`), and `HudMask`
 still accepts synthetic fixtures only.
@@ -530,7 +547,8 @@ a named reason in the run report's `session_tokens.undeclared`.
   `MirrorSession` serves one source (`session_already_declared`).
   `run_recognition` reports either failure before the model loads or anything
   opens. In HUD mode `run_recognition` checks the live-image gate before the
-  session is declared, so a refused run scans no /proc and hashes nothing.
+  session is declared, so a refused run scans no /proc for session tokens and
+  hashes no runtime binary.
 - **Fixture calibrations.** `fixture_calibration(..., session=...)` lets a
   synthetic fixture pin the tokens that the tests' fixture providers declare.
   The default is still `SYNTHETIC_SESSION`. The provenance, the `synthetic:`
@@ -551,8 +569,8 @@ start and after every change, and `tracking_changed` for each
 runtime-free. `OverlayClient` would forward those lines to a
 `TrackingObserver` and call `end()` when the bridge exits.
 
-Follow-ups. None of these has run, and each needs its own review; the device
-step needs the user's approval. They are separate from the [next device
+Follow-ups. Follow-up 3 is done in the cloud (below); none of the others has
+run, and each needs its own review; the device step needs the user's approval. They are separate from the [next device
 checkpoint](#next-device-checkpoint) and do not replace it.
 
 1. **Provider check on Frame (device step, not run).** Run the providers once,
@@ -565,10 +583,17 @@ checkpoint](#next-device-checkpoint) and do not replace it.
 2. **Native tracking reporter.** As described above, with its own fixture,
    review and device check. The device check also measures the delay from a
    recenter to its event reaching `observe()`, relative to mirror frames.
-3. **Observed candidate context.** The marker observer and
-   `hud_validation_report.py --from-observer` take session tokens from
-   `--declared-context`. They should record the same providers' tokens, so a
-   candidate's context is observed rather than declared.
+3. **Observed candidate context.** Done (2026-11-03, cloud checks only): the
+   marker observer records the providers' tokens with
+   `--record-session-tokens`, and `hud_validation_report.py --from-observer`
+   takes them only from its report
+   ([observed session tokens](#observed-session-tokens-for-the-candidate-2026-11-03)).
+   What remains: the tracking tokens need a reporter that delivers a first
+   `tracking_state` before the session is declared. The marker bridge cannot
+   be that reporter, because it starts after the baseline, after the
+   declaration. Until one exists, `--from-observer` rejects every real report,
+   at `tracking_origin` at the latest (an earlier token is named first if its
+   provider also fails on Frame).
 4. **Command path.** No command passes a session to the mirror recognizer.
    HUD input from the mirror stays refused by `LIVE_IMAGE_INPUT` until G4–G6
    pass.
@@ -578,6 +603,144 @@ From the checkout:
 ```bash
 .venv-replay/bin/python -m unittest tests.test_mirror_session tests.test_capture_context \
   tests.test_hud_calibration tests.test_hud_mask
+```
+
+## Observed session tokens for the candidate (2026-11-03)
+
+Follow-up 3 above. The marker observer can now record the session tokens of
+its own run, and `--from-observer` takes a candidate's tokens only from them.
+These are cloud results only. Every test uses a fake /proc root and
+hand-written tracking events, and no test read the real /proc of any process.
+`--record-session-tokens` has never run on Frame. Using it there is a separate
+device approval. No evidence ID is allocated in this change.
+
+- **Opt-in, off by default.** `hud_marker_observer.py --record-session-tokens`
+  needs the complete calibration opt-in (the three flags and `--device`), like
+  `--bridge`. A partial opt-in is a parser error. Only with the flag does the
+  worker build `MirrorSession(HostClock(), RuntimeProcess(),
+  TrackingObserver())`. Without it the worker builds no provider, reads
+  nothing under /proc for session tokens and hashes no runtime binary. Its
+  report then records
+  `"session_tokens": {"recorded": false, "reason":
+  "session_tokens_not_requested"}`, which `--from-observer` rejects. This was
+  an owner decision of 2026-11-03
+  ([owner decisions](poc-scope.md#owner-decisions-2026-11-03)).
+- **Declared before the observation's clock.** The worker declares the
+  session before it computes the observation deadline and before capture
+  opens. It then reads the session once for every complete frame read, before
+  that frame is converted or checked, so its frame count equals the capture's
+  `frames_read`. The declaration scans /proc and hashes the running
+  `vrserver` binary (up to 256 MiB). It runs inside the existing supervisor
+  bound of `--seconds` plus 12 seconds, which was not extended, and its
+  duration is recorded as `session_tokens.declaration_elapsed_ms`. In the
+  cloud (x86_64, 4 vCPUs) a 256 MiB declaration on a fake /proc took about
+  1.4 s cold and about 0.24 to 0.75 s warm, a figure that varies between cloud
+  runs with the host's SHA-256 speed, and a per-frame read about 0.1 ms. On
+  Frame both are unmeasured.
+- **A declaration budget of 4 s.** The 12 seconds also hold worker start-up,
+  the baseline window (at most 2 s), the bridge's process start until its
+  display timer runs, the bridge's exit after that timer (the client waits at
+  most 2 s more) and cleanup. The bridge starts its timer before it
+  initializes the runtime and prints its ready line, so a slow initialization
+  does not lengthen the run; a slow process start does. A declaration longer
+  than 4 s (`SESSION_DECLARATION_BUDGET_SECONDS`, half of what the baseline
+  window and that exit grace leave) rejects the run
+  (`observer_session_tokens_declaration_too_slow`) before capture or the
+  marker opens. The budget is checked when the declaration returns. A
+  declaration that does not return within the supervisor bound ends the run
+  `timed_out` with `cleanup_ok` false, also before any capture or marker
+  opens; the supervisor forces the worker's termination if the declaration
+  still has not returned after its stop request. Without the budget check, a
+  slow declaration that did return could let the bound expire while the
+  marker was shown. The supervisor then stopped the worker, the marker client
+  stopped the bridge before its display timer ended (the forced stop that
+  [E75](evidence/e075.md) records for V4, here reached through a timeout), and
+  the run ended `timed_out` with `cleanup_ok` false. Supervised
+  cloud runs with the runtime-free validation bridge, `--seconds 5` and a
+  fake /proc showed both cases. Before the check, a 12 s declaration ended
+  that way after the marker had opened. With it, a 3.5 s declaration still
+  completed with exit 2, and 4.5 s and 12 s declarations were rejected with
+  exit 1, `cleanup_ok` true and no capture or marker. The budget is a cloud
+  choice and is unmeasured on Frame. Without any declaration, the worst cases
+  of the baseline window and of a bridge that is slow to start its timer or
+  hangs (the client waits up to 8 s for its ready line, then up to 2 s past
+  the display deadline it derives from that line) can still reach the bound;
+  that predates this change. A longer budget or bound needs its own reviewed
+  change.
+- **Report.** With the flag, `session_tokens` is `{"recorded": true, ...}`
+  plus the fields of `MirrorSession.report()` (`declared`, `undeclared`,
+  `frames_read`, `first_change`, `runtime_process`, `scope`) and
+  `declaration_elapsed_ms`. No reporter feeds the tracking observer yet
+  ([follow-up 2](#session-tokens-for-the-mirror-source-2026-11-03)). On a real
+  run both tracking tokens therefore stay undeclared with
+  `tracking_state_not_observed`. That is the expected result, and
+  `--from-observer` rejects such a report. The owner kept the tracking tokens
+  bound at declaration, so a state that arrives later, for example from the
+  marker bridge, which starts after the baseline, is never adopted.
+- **Worker contract.** `validate_observer_report` now requires
+  `session_tokens` in every worker report, so a worker that drops it is
+  invalid (`invalid_observer_session_tokens`). The check covers types, the
+  five names, bounded reason strings, `recorded` as a bool, a `None` token
+  exactly where `undeclared` gives its reason, and a `first_change` that names
+  a declared token within the frames read. An unrecorded entry has one of
+  four reasons. `session_tokens_not_requested` means no session was asked for.
+  `session_tokens_not_reported` means the supervisor kept its base report:
+  no worker report arrived (for example the worker crashed or printed
+  nothing), the worker's report failed the contract and was discarded with
+  any tokens it carried, or the guardian failed. The supervisor report's
+  `status` and `reason` say which. A timed-out worker that still printed a
+  valid report keeps its own `session_tokens`.
+  `session_tokens_declaration_failed` and `session_tokens_report_invalid`
+  record a session failure.
+- **A failing session.** A session that raises any exception while it is
+  declared rejects the run (`observer_session_tokens_declaration_failed`)
+  before the capture or marker opens, so nothing needs closing. A declaration
+  over the budget is rejected at the same point
+  (`observer_session_tokens_declaration_too_slow`); it did complete, so its
+  `session_tokens` entry stays recorded with its duration and no frames read.
+  One that raises on a read rejects the run
+  (`observer_session_tokens_read_failed`), and the capture and marker still
+  close normally. A frame whose read ends after the observation deadline is
+  still counted by the capture, so the session reads it too and the two frame
+  counts agree. A session report that raises any exception or fails the
+  contract is replaced by an unrecorded entry
+  (`session_tokens_report_invalid`) before the marker closes. A run that would
+  otherwise be `observed_unqualified` is then rejected
+  (`observer_session_tokens_report_invalid`). A cancelled or already rejected
+  run keeps its own status and reason, and only `session_tokens` records the
+  failure.
+- **Conversion.** `--from-observer` gives a structured rejection, exit 1 and
+  no candidate file in these cases:
+  - `session_tokens` is missing or not recorded
+    (`hud_observer_session_tokens_not_recorded`). That includes a report from
+    before this change.
+  - A token is undeclared (`hud_observer_session_token_unobserved`). The
+    rejection report adds `session_token` (the first missing token) and
+    `session_token_reason` (the provider's reason). This holds even when
+    `--declared-context` gives the missing token a valid value: there is no
+    declared fallback.
+  - A token changed during the run (`hud_observer_session_tokens_changed`,
+    with the token and reason of `first_change`).
+  - The session's frame count differs from the capture's `frames_read`
+    (`hud_observer_session_frames_mismatch`).
+  - A token fails the record's token rule
+    (`hud_observer_session_token_invalid`).
+  - `--declared-context` carries a token
+    (`hud_observer_context_declares_session_tokens`).
+
+  The record's `context` is the declared fields plus the observed tokens,
+  and it must still pass the version 1 schema. The candidate stays at best
+  `candidate_valid_unqualified` with exit 2, and the evidence kind rules are
+  unchanged. Observed tokens identify the run; they qualify nothing, and no
+  gate changes.
+
+The [next device checkpoint](#next-device-checkpoint) does not pass the flag,
+so the approved G3 run reads nothing under /proc for session tokens, and its
+report cannot become a candidate. From the checkout:
+
+```bash
+QT_QPA_PLATFORM=offscreen .venv-replay/bin/python -m unittest tests.test_hud_marker_observer \
+  tests.test_hud_candidate tests.test_mirror_session
 ```
 
 ## Neutral mask fill (2026-11-03)
@@ -1007,7 +1170,10 @@ later change to use.
 
 `hud_marker_observer.py --help` and `hud_marker_check.py --help` confirm the
 existing flags below. This is the existing procedure for a future approved run,
-not an instruction to execute it in the current task:
+not an instruction to execute it in the current task. These approved G3
+commands are unchanged and do not pass `--record-session-tokens`, so the run
+reads nothing under /proc for session tokens; using that flag on Frame is a
+separate approval:
 
 ```bash
 .venv-replay/bin/python scripts/hud_marker_check.py --validate --seconds 3

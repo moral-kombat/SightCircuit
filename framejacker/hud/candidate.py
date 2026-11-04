@@ -6,11 +6,18 @@ report must pass the observer's own worker contract
 (``observation.validate_observer_report``) and agree with its samples. The
 observer's footprint union already includes its margin, so each candidate
 ``rect_native`` is that union shrunk by the margin once, checked against the
-sampled corners; ``margin_px`` adds it back. The capture layout, session and
-other context fields are declarations the report cannot confirm; only the
-native format is checked against it. What the observer cannot establish is
-an explicit unknown with a reason (``OBSERVER_UNKNOWNS``), never 0. The
-result stays ``observed_unqualified``, and its report is at best
+sampled corners; ``margin_px`` adds it back. The five session tokens
+(``contract.SESSION_TOKENS``) come only from the report's ``session_tokens``,
+which the observer's providers recorded (``--record-session-tokens``): a
+report without them, a token they could not observe, a token that changed
+during the run or a frame count that disagrees with the capture rejects, and
+nothing substitutes a declared value. The remaining context fields (source,
+native format, crop, orientation, capture layout and HUD digest) are
+declarations the report cannot confirm and must not carry a token; only the
+native format is checked against the capture. What the observer cannot
+establish is an explicit unknown with a reason (``OBSERVER_UNKNOWNS``), never
+0. Observed tokens identify the run; they qualify nothing. The result stays
+``observed_unqualified``, and its report is at best
 ``candidate_valid_unqualified`` with exit 2. No gate is read or changed.
 """
 from copy import deepcopy
@@ -18,7 +25,8 @@ import hashlib
 import math
 
 from ..gates import HARDWARE_MAPPING, claims
-from .contract import HUD_CONFIG, NATIVE_FORMAT_FIELDS, CaptureFormat, config_digest, margin_valid
+from .contract import (HUD_CONFIG, NATIVE_FORMAT_FIELDS, SESSION_TOKENS, CaptureFormat, config_digest, margin_valid,
+                       token_valid)
 from .geometry import contains, expand, eye_viewports
 from .observation import MAX_COPIES, validate_observer_report
 from .qualification import OPERATING_LIMIT_FIELDS, MappingCandidate, parse_record, validate_context
@@ -42,6 +50,16 @@ OBSERVER_UNKNOWNS = {
 }
 
 
+class SessionTokenRejection(ValueError):
+    """A rejection about one session token; ``details`` names it and the provider's reason for the report."""
+
+    def __init__(self, reason, token, token_reason=None):
+        super().__init__(reason)
+        self.details = {"session_token": str(token)[:64]}
+        if token_reason is not None:
+            self.details["session_token_reason"] = str(token_reason)[:240]
+
+
 def observer_candidate(data, *, artifact_id, declared_context, lifetime_seconds):
     """The unqualified candidate an observer report's exact bytes support; ``ValueError`` rejects."""
     if type(data) is not bytes or len(data) > MAX_OBSERVER_REPORT_BYTES:
@@ -56,7 +74,7 @@ def candidate_record(report, report_sha256, artifact_id, declared_context, lifet
     capture_format = _accepted_observation(report)
     rects = _footprints(report, capture_format)
     samples, margin = report["samples"], report["margin_px"]
-    context = _declared_context(declared_context, capture_format)
+    context = _context(declared_context, _observed_tokens(report), capture_format)
     eyes = eye_viewports(tuple(context["crop_xyxy"]), context["capture_layout"])
     declared_eyes = []
     for rect in rects:
@@ -94,8 +112,9 @@ def candidate_report(candidate):
 
 
 def rejection_report(reason):
+    """A structured rejection; a ``SessionTokenRejection`` adds the token and the provider's reason."""
     return {"report_kind": REPORT_KIND, "schema_version": 1, "status": "rejected", "exit_code": 1,
-            "reason": str(reason)[:512], **claims()}
+            "reason": str(reason)[:512], **getattr(reason, "details", {}), **claims()}
 
 
 def _accepted_observation(report):
@@ -104,6 +123,10 @@ def _accepted_observation(report):
         raise ValueError("hud_observer_report_invalid")
     if report.get("status") != "observed_unqualified" or report.get("exit_code") != 2:
         raise ValueError("hud_observer_report_not_observed_unqualified")
+    # Checked before the worker contract, which also refuses a report without the field.
+    tokens = report.get("session_tokens")
+    if type(tokens) is not dict or tokens.get("recorded") is not True:
+        raise ValueError("hud_observer_session_tokens_not_recorded")
     validate_observer_report(report, 2)
     if (report.get("reason") != OBSERVED_REASON or "cleanup_error" in report or
             any(report.get(key) is not False for key in ("worker_forced_termination", "guardian_forced_termination")
@@ -187,14 +210,38 @@ def _footprints(report, capture_format):
     return rects
 
 
-def _declared_context(context, capture_format):
-    """The declared acquisition context, which must describe the observed native format and HUD."""
+def _observed_tokens(report):
+    """The session tokens the observer's providers declared, unchanged for every frame it read."""
+    session = report["session_tokens"]  # Recorded, and its shape checked by the worker contract.
+    declared, undeclared, change = session["declared"], session["undeclared"], session["first_change"]
+    for name in SESSION_TOKENS:
+        if declared[name] is None:
+            raise SessionTokenRejection("hud_observer_session_token_unobserved", name, undeclared.get(name))
+    if change is not None:
+        raise SessionTokenRejection("hud_observer_session_tokens_changed", change["token"], change["reason"])
+    # The providers were read once for every complete frame the capture read.
+    if session["frames_read"] != report["capture"]["frames_read"]:
+        raise ValueError("hud_observer_session_frames_mismatch")
+    for name in SESSION_TOKENS:
+        value = declared[name]
+        if not (token_valid(value) if name != "recenter_epoch" else type(value) is int and 0 <= value < 2**63):
+            raise SessionTokenRejection("hud_observer_session_token_invalid", name)
+    return {name: declared[name] for name in SESSION_TOKENS}
+
+
+def _context(declared, tokens, capture_format):
+    """The declared fields with the observed tokens; they must describe the observed native format and HUD."""
+    if type(declared) is not dict:
+        raise ValueError("hud_context_fields_invalid")
+    if any(name in declared for name in SESSION_TOKENS):
+        raise ValueError("hud_observer_context_declares_session_tokens")  # Each token has one source.
+    context = dict(deepcopy(declared), **tokens)
     validate_context(context)
     if context["native_format"] != capture_format:
         raise ValueError("hud_observer_format_context_mismatch")
     if context["hud_config_sha256"] != config_digest(HUD_CONFIG):
         raise ValueError("hud_config_changed")
-    return deepcopy(context)
+    return context
 
 
 def _evidence_kind(report):

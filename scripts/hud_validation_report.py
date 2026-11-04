@@ -3,8 +3,10 @@
 A valid record exits 2 (unqualified). JSON fields and artifact references do
 not establish hardware evidence. ``--from-observer`` turns a saved
 ``hud_marker_observer.py`` report into a candidate whose unknown terms stay
-explicit (``framejacker.hud.candidate``). No capture, inference or OpenVR is
-started.
+explicit (``framejacker.hud.candidate``). Its session tokens come only from
+the tokens the observer recorded (``--record-session-tokens``); a report
+without them, or with a token that was not observed, is rejected. No capture,
+inference or OpenVR is started.
 """
 import argparse
 import json
@@ -58,8 +60,10 @@ def parse_args(argv=None):
     parser.add_argument("--now-ns", type=int,
                         help="With --check-candidate: current monotonic time in the record's declared timebase")
     parser.add_argument("--declared-context", type=Path,
-                        help="With --from-observer: local context JSON the observation was declared in; "
-                             "its native format must match the observer's capture")
+                        help="With --from-observer: local JSON of the non-token context fields "
+                             "(source_id, native_format, crop_xyxy, orientation_degrees, capture_layout, "
+                             "hud_config_sha256); its native format must equal the observer's capture format. "
+                             "It must not carry a session token: those come only from the observer report")
     parser.add_argument("--lifetime-seconds", type=int, metavar="1-300",
                         help="With --from-observer: candidate lifetime, counted from the first marker sample")
     parser.add_argument("--candidate-output", type=Path,

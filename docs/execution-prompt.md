@@ -53,6 +53,12 @@ These are recorded in [POC scope](poc-scope.md):
 - Later on 2026-11-03 (open decision 1 below): the tracking tokens stay bound
   when `MirrorSource` is declared, so the observer must see a tracking state
   first. Late binding was not adopted.
+- Later on 2026-11-03 (offline item 2 below): a session token the marker
+  observer did not observe rejects the `--from-observer` conversion, with no
+  declared fallback. The observer reads session tokens from /proc only behind
+  the off-by-default `--record-session-tokens`, so the approved G3 run is
+  unchanged. See
+  [POC scope](poc-scope.md#owner-decisions-2026-11-03).
 
 ### Open decisions for the owner
 
@@ -71,16 +77,19 @@ and keeps its number.
 
 ### Offline work that is ready to pick up
 
-These need no device. Each one gets its own PR. Item 1 is done and keeps its
-number.
+These need no device. Each one gets its own PR. Items 1 and 2 are done and
+keep their numbers.
 
 1. **Evidence record for I, J and #16.** Done: [E77](evidence/e077.md) for
    #16 and [E78](evidence/e078.md) for #18, by merge order.
-2. **Tokens from the observer path.** Make `hud_marker_observer.py` and
-   `hud_validation_report.py --from-observer` record the
-   `framejacker/sources/session.py` provider tokens instead of
-   `--declared-context`, so a candidate's context is observed rather than
-   declared.
+2. **Tokens from the observer path.** Done: with `--record-session-tokens`
+   (off by default), `hud_marker_observer.py` records the
+   `framejacker/sources/session.py` provider tokens. `hud_validation_report.py
+   --from-observer` takes a candidate's tokens only from them, and
+   `--declared-context` keeps the non-token context fields. See [observed session
+   tokens](hud-qualification.md#observed-session-tokens-for-the-candidate-2026-11-03)
+   and the two owner decisions in [POC scope](poc-scope.md#owner-decisions-2026-11-03).
+   These are cloud checks; the flag has not run on Frame.
 3. **Native tracking reporter.**
    - Report the tracking universe and the recenter and chaperone events from
      the bridge's real mode into `TrackingObserver`.
@@ -114,6 +123,7 @@ number.
 | Realtime replay measurement | H |
 | Session-token providers read-only against the real `/proc` while SteamVR runs | I |
 | Recenter event delivery to an overlay client | I |
+| Marker observer with `--record-session-tokens` (a candidate converts only once a tracking reporter runs before the declaration) | item 2 |
 | Mask fill on real mirror content once the footprint is qualified | J |
 
 ### How the work was run

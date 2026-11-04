@@ -1567,7 +1567,11 @@ Frame evidence.
 offline modes. `--check-candidate` checks a mapping candidate record against a
 declared current context and time. `--from-observer` builds a candidate from a
 saved `hud_marker_observer.py` report and a declared context, using
-`framejacker/hud/candidate.py`. The result is at best
+`framejacker/hud/candidate.py`. The candidate's session tokens come only from
+the tokens the observer recorded (`--record-session-tokens`, off by default).
+The declared context holds the other fields and must not carry a token. A
+report without recorded tokens, or with a token that was not observed or that
+changed, is rejected. The result is at best
 `candidate_valid_unqualified` with exit 2; any rejection is a structured report
 with exit 1 and writes nothing. Unknown terms are null with a reason, never 0,
 and the observer's margin, already inside its union, is counted once. The

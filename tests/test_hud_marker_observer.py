@@ -1,13 +1,22 @@
-"""Synthetic native-resolution marker copies; no device or output action."""
+"""Synthetic native-resolution marker copies; no device or output action.
+
+Session-token tests use a fake /proc root (``tests.test_mirror_session.FakeProc``)
+and hand-written tracking events; no test reads the real /proc of any process.
+"""
 import contextlib
+from contextlib import ExitStack
 from dataclasses import replace
 import io
 import json
+import os
 from pathlib import Path
 import queue
+import re
+import shlex
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import unittest
 from unittest.mock import Mock, patch
@@ -21,10 +30,25 @@ import numpy as np
 from framejacker.hud import observation as hud_observation
 from scripts import hud_marker_observer as observer
 from framejacker.hud import CaptureFormat, HUD_CONFIG
+from framejacker.hud.contract import SESSION_TOKENS, token_valid
 from framejacker.sources import mirror as mirror_check
+from framejacker.sources import session as session_tokens
 from framejacker.overlay import DEFAULT_BRIDGE, bridge_closed_cleanly
+from tests.test_mirror_session import PID, STATE, FakeProc
 
 ROOT = Path(__file__).resolve().parents[1]
+FULL_OPT_IN = ["--observe-calibration", "--allow-mirror-observation", "--allow-calibration-output",
+               "--device", "verified-fixture"]
+PROVIDERS = ("HostClock", "RuntimeProcess", "TrackingObserver", "MirrorSession")
+
+
+def fake_session(proc, *events, tracking=None):
+    """Every session provider on the fake /proc root ``proc``; ``events`` reach the tracking observer first."""
+    tracking = session_tokens.TrackingObserver() if tracking is None else tracking
+    for event in events:
+        tracking.observe(event)
+    return session_tokens.MirrorSession(session_tokens.HostClock(proc.root), session_tokens.RuntimeProcess(proc.root),
+                                        tracking)
 
 
 def clean_bridge_fixture(seconds=1):
@@ -410,15 +434,25 @@ class BaselineGateTests(unittest.TestCase):
             hud_observation.BaselineGate(2).accept(self.clear_image(), 1, 1, 0)
 
 
-class ObserverLifecycleTests(unittest.TestCase):
+class ObserverFixture:
     def run_fixture(self, *, seconds=1, cancel_at=None, bad_format=False, slow=False, close_failure=False,
-                    bridge_change=None, baseline_slow=False, incomplete_marker=False, baseline_mode=None):
-        clock = FakeClock()
+                    bridge_change=None, baseline_slow=False, incomplete_marker=False, baseline_mode=None,
+                    session=None, clock=None, log=None, on_read=None, on_marker=None):
+        """One ``observe`` run on generated frames; ``session`` is passed only when given.
+
+        ``log`` records "backend" when the fixture backend is constructed and "frame"
+        for each read; ``on_read(number)`` runs before a read's frame is generated
+        and ``on_marker()`` when the marker starts.
+        """
+        clock = FakeClock() if clock is None else clock
         stop = FakeStop(clock)
-        state = {"marker": False, "source_closed": False, "reads": [], "opened": False}
+        state = {"marker": False, "source_closed": False, "reads": [], "opened": False, "constructed": False}
         class Source:
             kind = "synthetic"
             def __init__(self, candidate):
+                state["constructed"] = True
+                if log is not None:
+                    log.append("backend")
                 self.capabilities = {"driver": "synthetic"}
                 self.format = dict(width=1000, height=600, fourcc="BGR3", stride_bytes=3000,
                                    minimum_buffer_bytes=1800000, buffer_bytes=1800000)
@@ -426,6 +460,10 @@ class ObserverLifecycleTests(unittest.TestCase):
                 state["opened"] = True
             def read_frame(self, timeout):
                 state["reads"].append(clock.now)
+                if log is not None:
+                    log.append("frame")
+                if on_read is not None:
+                    on_read(len(state["reads"]))
                 if cancel_at is not None and clock.now >= cancel_at:
                     stop.set()
                 if bad_format and state["marker"]:
@@ -451,10 +489,13 @@ class ObserverLifecycleTests(unittest.TestCase):
             process = None
             def start_marker(self, seconds, stop, **kwargs):
                 state["marker"] = True
+                if on_marker is not None:
+                    on_marker()
                 self.end = clock.now + seconds
                 self.process = Mock()
                 self.process.poll.side_effect = lambda: 0 if clock.now >= self.end else None
             def close(self):
+                state["marker_closed"] = True
                 report = clean_bridge_fixture(seconds)
                 if bridge_change:
                     bridge_change(report)
@@ -465,12 +506,16 @@ class ObserverLifecycleTests(unittest.TestCase):
             if (slow and state["marker"]) or (baseline_slow and not state["marker"]):
                 clock.tick(2)
             return result
+        options = {} if session is None else {"session": session}
         with patch.object(observer.time, "monotonic", clock.monotonic), \
                 patch.object(observer.time, "monotonic_ns", clock.monotonic_ns), \
                 patch.object(hud_observation, "locate_copies", side_effect=locate):
-            report = observer.observe({"node": "synthetic:fixture"}, seconds, stop, backend_factory=Source, marker_client=Marker())
+            report = observer.observe({"node": "synthetic:fixture"}, seconds, stop, backend_factory=Source,
+                                      marker_client=Marker(), **options)
         return report, state, clock
 
+
+class ObserverLifecycleTests(ObserverFixture, unittest.TestCase):
     def test_combined_baseline_marker_observation_cleanup_and_five_fps(self):
         report, state, clock = self.run_fixture()
         self.assertEqual(report["status"], "observed_unqualified", report)
@@ -618,6 +663,417 @@ class ObserverLifecycleTests(unittest.TestCase):
         self.assertEqual(Path(options["bridge"]), DEFAULT_BRIDGE.resolve())
         self.assertEqual(options["approved_scope"], "marker_observation_only")
 
+
+def documented_observer_commands():
+    """``(document, logical line, arguments)`` of each observer command in the docs' bash blocks."""
+    commands = []
+    for name in ("docs/hud-qualification.md", "docs/on-device.md", "docs/development.md"):
+        for block in re.findall(r"```bash\n(.*?)```", (ROOT / name).read_text(encoding="utf-8"), re.S):
+            for line in block.replace("\\\n", " ").splitlines():
+                if "scripts/hud_marker_observer.py" not in line:
+                    continue
+                words = shlex.split(line)
+                arguments = words[words.index("scripts/hud_marker_observer.py") + 1:]
+                for index, word in enumerate(arguments):
+                    if word[:1] in (">", "|", "&", ";"):
+                        arguments = arguments[:index]
+                        break
+                commands.append((name, line.strip(), arguments))
+    return commands
+
+
+class ObserverSessionTokenTests(ObserverFixture, unittest.TestCase):
+    """``observe(..., session=...)`` on a fake /proc root, and the ``--record-session-tokens`` opt-in."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.proc = FakeProc(directory.name)
+
+    def test_an_injected_session_is_declared_before_capture_and_read_first_for_each_frame(self):
+        session = fake_session(self.proc, STATE)
+        clock, log = FakeClock(), []
+        declare, read, convert = session.declare, session.read, observer.native_bgr
+
+        def slow_declare():
+            log.append("declare")
+            # At the budget, which is accepted, and longer than the whole observation: the capture
+            # deadline starts after it.
+            clock.tick(observer.SESSION_DECLARATION_BUDGET_SECONDS)
+            return declare()
+
+        def logged_read():
+            log.append("read")
+            return read()
+
+        def logged_convert(data, fmt):
+            log.append("convert")
+            return convert(data, fmt)
+
+        with patch.object(session, "declare", side_effect=slow_declare), \
+                patch.object(session, "read", side_effect=logged_read), \
+                patch.object(observer, "native_bgr", side_effect=logged_convert):
+            report, state, _ = self.run_fixture(session=session, clock=clock, log=log)
+        self.assertEqual((report["status"], report["exit_code"]), ("observed_unqualified", 2), report)
+        self.assertEqual(log[:2], ["declare", "backend"])
+        self.assertEqual(log.count("declare"), 1)
+        # Each complete read is read for its tokens before anything else processes it.
+        frames = [index for index, entry in enumerate(log) if entry == "frame"]
+        self.assertEqual(len(frames), report["capture"]["frames_read"])
+        for index in frames:
+            self.assertEqual(log[index + 1], "read", log)
+        for index, entry in enumerate(log):
+            if entry == "convert":
+                self.assertEqual(log[index - 1], "read", log)
+        tokens = report["session_tokens"]
+        self.assertIs(tokens["recorded"], True)
+        self.assertEqual(set(tokens["declared"]), set(SESSION_TOKENS))
+        for name in SESSION_TOKENS[:-1]:
+            self.assertTrue(token_valid(tokens["declared"][name]), name)
+        self.assertEqual(tokens["declared"]["recenter_epoch"], 0)
+        self.assertEqual(tokens["undeclared"], {})
+        self.assertIsNone(tokens["first_change"])
+        self.assertEqual(tokens["frames_read"], report["capture"]["frames_read"])
+        self.assertEqual(tokens["frames_read"], log.count("read"))
+        self.assertEqual(tokens["runtime_process"]["pid"], PID)
+        self.assertEqual(tokens["declaration_elapsed_ms"], 4000)
+        observer.validate_worker_report(report, 2)
+        self.assertLess(len(json.dumps(report, allow_nan=False)), 128 * 1024)
+        self.assertFalse(report["mapping_qualified"])
+
+    def test_a_declaration_over_its_budget_rejects_before_capture_or_marker(self):
+        # Otherwise the supervisor's bound could expire while the marker is shown and force its termination.
+        self.assertEqual(observer.SESSION_DECLARATION_BUDGET_SECONDS, 4)  # As docs/hud-qualification.md states.
+        self.assertEqual(observer.SUPERVISOR_MARGIN_SECONDS, 12)
+        session = fake_session(self.proc, STATE)
+        clock, log, declare = FakeClock(), [], session.declare
+
+        def slow_declare():
+            clock.tick(observer.SESSION_DECLARATION_BUDGET_SECONDS + .001)
+            return declare()
+
+        with patch.object(session, "declare", side_effect=slow_declare):
+            report, state, _ = self.run_fixture(seconds=20, session=session, clock=clock, log=log)
+        self.assertEqual((report["status"], report["exit_code"], report["reason"]),
+                         ("rejected", 1, "observer_session_tokens_declaration_too_slow"))
+        self.assertEqual(log, [])  # No backend was constructed and no frame read.
+        self.assertFalse(state["constructed"])
+        self.assertFalse(state["marker"])
+        self.assertTrue(state["marker_closed"])
+        self.assertNotIn("capture", report)
+        self.assertTrue(report["cleanup_ok"], report)
+        # The declaration did complete, so its report and measured duration stay in the worker report.
+        tokens = report["session_tokens"]
+        self.assertIs(tokens["recorded"], True)
+        self.assertEqual((tokens["frames_read"], tokens["declaration_elapsed_ms"]), (0, 4001))
+        self.assertEqual(tokens["undeclared"], {})
+        observer.validate_worker_report(report, 1)
+
+    def test_a_frame_delivered_after_the_deadline_is_still_read_for_its_tokens(self):
+        # capture() checks its deadline before each read; the read, its format query and its digest can end
+        # after it, and that frame is still counted and passed on. The observation ignores it, but the
+        # session must read it so that both frame counts agree.
+        for late in (6, 8, 10):
+            session = fake_session(self.proc, STATE)
+            clock, log, read, convert = FakeClock(), [], session.read, observer.native_bgr
+
+            def logged_read():
+                log.append("read")
+                return read()
+
+            def logged_convert(data, fmt):
+                log.append("convert")
+                return convert(data, fmt)
+
+            def on_read(number, late=late, clock=clock):
+                if number == late:
+                    clock.tick(1.5)  # This read ends past the two-second deadline.
+
+            with self.subTest(late=late), patch.object(session, "read", side_effect=logged_read), \
+                    patch.object(observer, "native_bgr", side_effect=logged_convert):
+                report, _, _ = self.run_fixture(seconds=2, session=session, clock=clock, log=log, on_read=on_read)
+                self.assertEqual((report["status"], report["exit_code"]), ("observed_unqualified", 2), report)
+                self.assertEqual(report["capture"]["frames_read"], late)
+                self.assertEqual(report["session_tokens"]["frames_read"], late)
+                self.assertEqual(log.count("read"), late)
+                self.assertEqual(log[-2:], ["frame", "read"])  # Read for its tokens, never converted.
+                observer.validate_worker_report(report, 2)
+
+    def test_without_a_session_nothing_is_read_under_proc(self):
+        touched = []
+
+        def guarded(real):
+            def call(path=".", *args, **kwargs):
+                if not isinstance(path, int) and os.fsdecode(path).startswith(("/proc", str(self.proc.root))):
+                    touched.append((real.__name__, os.fsdecode(path)))
+                return real(path, *args, **kwargs)
+            return call
+
+        with ExitStack() as stack:
+            for name in PROVIDERS:
+                for owner in (session_tokens, observer):
+                    stack.enter_context(patch.object(owner, name, side_effect=AssertionError("provider built"),
+                                                     create=True))
+            # pathlib opens through io.open, a binding separate from builtins.open, and Path.iterdir lists
+            # through os.listdir.
+            for owner, name in ((os, "scandir"), (os, "listdir"), (os, "readlink"), (os, "stat"), (os, "lstat"),
+                                (os, "open"), (io, "open")):
+                stack.enter_context(patch.object(owner, name, guarded(getattr(owner, name))))
+            stack.enter_context(patch("builtins.open", guarded(open)))
+            report, state, _ = self.run_fixture()
+        self.assertEqual((report["status"], report["exit_code"]), ("observed_unqualified", 2), report)
+        self.assertEqual(touched, [])
+        self.assertEqual(report["session_tokens"], {"recorded": False, "reason": "session_tokens_not_requested"})
+        self.assertEqual(observer.new_report()["session_tokens"], report["session_tokens"])
+        observer.validate_worker_report(report, 2)
+
+    def test_a_failing_session_rejects_the_run_with_a_named_reason_and_cleans_up(self):
+        # A declaration that raises: nothing opens and nothing needs closing. MirrorSession's own errors are
+        # ValueErrors (a second declaration raises session_already_declared), so any exception is named.
+        def provider_failure(error):
+            session = fake_session(self.proc, STATE)
+            return session, patch.object(session.providers[1], "declare", side_effect=error)
+
+        def declared_twice():
+            session = fake_session(self.proc, STATE)
+            session.declare()
+            return session, contextlib.nullcontext()
+
+        def slow_then_failing():
+            # A declaration that runs past its budget and then raises is named as a failed declaration.
+            session = fake_session(self.proc, STATE)
+
+            def declare():
+                clock.tick(observer.SESSION_DECLARATION_BUDGET_SECONDS + 1)
+                raise OSError("synthetic slow /proc failure")
+            return session, patch.object(session, "declare", side_effect=declare)
+
+        for name, prepare in (("OSError", lambda: provider_failure(OSError("synthetic /proc failure"))),
+                              ("ValueError", declared_twice),
+                              ("RuntimeError", lambda: provider_failure(RuntimeError("synthetic provider bug"))),
+                              ("slow_then_failing", slow_then_failing)):
+            clock = FakeClock()
+            session, failure = prepare()
+            with self.subTest(failure=name), failure:
+                report, state, _ = self.run_fixture(session=session, clock=clock)
+                self.assertEqual((report["status"], report["exit_code"], report["reason"]),
+                                 ("rejected", 1, "observer_session_tokens_declaration_failed"))
+                self.assertFalse(state["constructed"])
+                self.assertFalse(state["marker"])
+                self.assertTrue(state["marker_closed"])
+                self.assertTrue(report["cleanup_ok"], report)
+                self.assertEqual(report["session_tokens"],
+                                 {"recorded": False, "reason": "session_tokens_declaration_failed"})
+                observer.validate_worker_report(report, 1)
+        # A read that raises after the marker started (an OSError, the session's own error or another
+        # exception): capture and marker still close cleanly.
+        for failure in (OSError("synthetic read failure"), ValueError("session_not_declared"),
+                        RuntimeError("synthetic provider bug")):
+            session = fake_session(self.proc, STATE)
+            read, calls = session.read, []
+
+            def failing_read(read=read, calls=calls, failure=failure):
+                calls.append(1)
+                if len(calls) == 4:
+                    raise failure
+                return read()
+
+            with self.subTest(failure=type(failure).__name__), patch.object(session, "read", side_effect=failing_read):
+                report, state, _ = self.run_fixture(session=session)
+                self.assertEqual((report["status"], report["exit_code"], report["reason"]),
+                                 ("rejected", 1, "observer_session_tokens_read_failed"))
+                self.assertTrue(state["marker"])
+                self.assertTrue(state["source_closed"])
+                self.assertTrue(bridge_closed_cleanly(report["bridge"]))
+                self.assertTrue(report["cleanup_ok"], report)
+                self.assertEqual(report["session_tokens"]["frames_read"], 3)
+                self.assertEqual(report["capture"]["frames_read"], 4)
+                observer.validate_worker_report(report, 1)
+        # A session report the contract would refuse is never put into the worker report.
+        session = fake_session(self.proc, STATE)
+        with patch.object(session, "report", return_value={"declared": {}, "undeclared": {}}):
+            report, state, _ = self.run_fixture(session=session)
+        self.assertEqual((report["status"], report["exit_code"], report["reason"]),
+                         ("rejected", 1, "observer_session_tokens_report_invalid"))
+        self.assertEqual(report["session_tokens"], {"recorded": False, "reason": "session_tokens_report_invalid"})
+        self.assertTrue(report["cleanup_ok"], report)
+        observer.validate_worker_report(report, 1)
+
+    def test_a_session_report_that_raises_rejects_an_observed_run_and_still_closes_the_marker(self):
+        # session_tokens_record catches any exception from report(), which runs in observe()'s finally before
+        # the marker closes: none may escape, skip the close or leave an observed status.
+        unrecorded = {"recorded": False, "reason": "session_tokens_report_invalid"}
+        for failure in (RuntimeError("synthetic report bug"), KeyError("declared"), TypeError("synthetic type")):
+            session = fake_session(self.proc, STATE)
+            with self.subTest(failure=type(failure).__name__), patch.object(session, "report", side_effect=failure):
+                report, state, _ = self.run_fixture(session=session)
+                self.assertEqual((report["status"], report["exit_code"], report["reason"]),
+                                 ("rejected", 1, "observer_session_tokens_report_invalid"), report)
+                self.assertEqual(report["session_tokens"], unrecorded)
+                self.assertTrue(state["marker"])
+                self.assertTrue(state["marker_closed"])
+                self.assertTrue(state["source_closed"])
+                self.assertTrue(bridge_closed_cleanly(report["bridge"]))
+                self.assertIs(report["cleanup_ok"], True, report)
+                observer.validate_worker_report(report, 1)
+        # A run that is not otherwise observed keeps its own status and reason; only session_tokens records
+        # the failure.
+        for options, status, code in ((dict(cancel_at=.4), "cancelled", 130), (dict(bad_format=True), "rejected", 1)):
+            expected, _, _ = self.run_fixture(session=fake_session(self.proc, STATE), **options)
+            self.assertEqual((expected["status"], expected["exit_code"]), (status, code), expected)
+            self.assertNotEqual(expected.get("reason"), "observer_session_tokens_report_invalid")
+            for failure in (RuntimeError("synthetic report bug"), {"declared": {}, "undeclared": {}}):
+                session = fake_session(self.proc, STATE)
+                invalid = {"side_effect": failure} if isinstance(failure, Exception) else {"return_value": failure}
+                with self.subTest(options=options, failure=failure), patch.object(session, "report", **invalid):
+                    report, state, _ = self.run_fixture(session=session, **options)
+                    self.assertEqual((report["status"], report["exit_code"], report.get("reason")),
+                                     (status, code, expected.get("reason")), report)
+                    self.assertEqual(report["session_tokens"], unrecorded)
+                    self.assertTrue(state["source_closed"])
+                    self.assertTrue(state["marker_closed"])
+                    observer.validate_worker_report(report, code)
+
+    def test_unrecorded_session_tokens_shape_is_part_of_the_worker_contract(self):
+        # Required in every worker report: observed, rejected and cancelled runs alike.
+        for options, status, code in ((dict(), "observed_unqualified", 2), (dict(bad_format=True), "rejected", 1),
+                                      (dict(cancel_at=.4), "cancelled", 130)):
+            report, _, _ = self.run_fixture(**options)
+            self.assertEqual((report["status"], report["exit_code"]), (status, code), report)
+            observer.validate_worker_report(report, code)
+            unrecorded = report["session_tokens"]
+            cases = [{key: value for key, value in report.items() if key != "session_tokens"}]
+            for substitute in ("x", [1], 7, 1.5, True, None, {}):
+                cases.append(dict(report, session_tokens=substitute))
+                for key in unrecorded:
+                    if type(substitute) is not type(unrecorded[key]):
+                        cases.append(dict(report, session_tokens=dict(unrecorded, **{key: substitute})))
+            cases += [dict(report, session_tokens=dict(unrecorded, reason="session_tokens_maybe")),
+                      dict(report, session_tokens=dict(unrecorded, extra=1)),
+                      dict(report, session_tokens={"recorded": False}),
+                      dict(report, session_tokens={"recorded": True, "reason": unrecorded["reason"]})]
+            for index, case in enumerate(cases):
+                with self.subTest(exit_code=code, case=index, session_tokens=case.get("session_tokens", "absent")), \
+                        self.assertRaisesRegex(ValueError, "invalid_observer_session_tokens"):
+                    observer.validate_worker_report(case, code)
+        # A recorded entry in a rejected report is checked as well.
+        report, _, _ = self.run_fixture(session=fake_session(self.proc, STATE), bad_format=True)
+        self.assertEqual((report["exit_code"], report["session_tokens"]["recorded"]), (1, True), report)
+        observer.validate_worker_report(report, 1)
+        recorded = report["session_tokens"]
+        for case in (dict(recorded, frames_read=-1), dict(recorded, declared={}), dict(recorded, scope=None)):
+            with self.subTest(recorded=case), self.assertRaisesRegex(ValueError, "invalid_observer_session_tokens"):
+                observer.validate_worker_report(dict(report, session_tokens=case), 1)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "the guardian supervisor runs on Linux")
+    def test_the_supervisor_keeps_its_base_tokens_when_no_valid_worker_report_arrives(self):
+        # session_tokens_not_reported: no worker report, or one this contract refused, whose tokens are
+        # discarded with it. The supervisor report's status and reason say which.
+        report, _, _ = self.run_fixture(session=fake_session(self.proc, STATE), bad_format=True)
+        self.assertEqual((report["exit_code"], report["session_tokens"]["recorded"]), (1, True), report)
+        printer = "import sys; sys.stdout.write(sys.argv[1]); sys.exit(1)"  # The exit code the report states.
+        cases = (("tokens_refused", dict(report, session_tokens=dict(report["session_tokens"], frames_read=-1)),
+                  "invalid_observer_session_tokens"),
+                 ("report_refused", dict(report, maximum_processing_fps=6), "invalid_observer_worker_report"),
+                 ("silent", None, None))
+        for name, printed, reason in cases:
+            command = [sys.executable, "-c", printer if printed else "pass", json.dumps(printed)]
+            with self.subTest(case=name):
+                supervised = observer.supervise(command, observer.new_report(record_session_tokens=True), 10,
+                                                observer.validate_worker_report)
+                self.assertEqual(supervised["status"], "invalid_worker_report", supervised)
+                if reason is not None:
+                    self.assertEqual(supervised["reason"], reason)
+                self.assertEqual(supervised["session_tokens"], {"recorded": False,
+                                                                "reason": "session_tokens_not_reported"})
+
+    def test_record_session_tokens_requires_the_complete_opt_in(self):
+        flag_error = "--record-session-tokens requires the complete calibration opt-in"
+        partial_error = "calibration observation requires all three explicit flags and a verified --device"
+        for args, error in ((["--record-session-tokens"], flag_error),
+                            (["--record-session-tokens", "--seconds", "3"], flag_error),
+                            (["--record-session-tokens", *FULL_OPT_IN[:3]], partial_error),
+                            (["--record-session-tokens", *FULL_OPT_IN[3:]], partial_error)):
+            stderr = io.StringIO()
+            with self.subTest(args=args), patch.object(observer, "discover") as discover, \
+                    patch.object(observer, "supervise") as supervised, contextlib.redirect_stderr(stderr), \
+                    contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as raised:
+                observer.main(args)
+            self.assertEqual(raised.exception.code, 2)
+            discover.assert_not_called()
+            supervised.assert_not_called()
+            self.assertIn(error, stderr.getvalue())
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout), self.assertRaises(SystemExit):
+            observer.main(["--help"])
+        self.assertIn("--record-session-tokens", stdout.getvalue())
+
+    def test_record_session_tokens_is_forwarded_to_the_worker_without_execution(self):
+        for extra, expected, base_reason in (([], False, "session_tokens_not_requested"),
+                                             (["--record-session-tokens"], True, "session_tokens_not_reported")):
+            with self.subTest(extra=extra), patch.object(observer, "discover", return_value={}), \
+                    patch.object(observer, "select_candidate", return_value={"node": "verified-fixture"}), \
+                    patch.object(observer, "supervise", return_value=observer.new_report()) as supervised, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                observer.main([*FULL_OPT_IN, *extra])
+            call = supervised.call_args
+            options = json.loads(call.args[0][-1])
+            self.assertIs(options["record_session_tokens"], expected)
+            self.assertEqual(call.args[2], 32)  # The supervisor's bound is unchanged: --seconds 20 plus 12.
+            # A worker that never reports leaves the supervisor's base report, which records no tokens.
+            self.assertEqual(call.args[1]["session_tokens"], {"recorded": False, "reason": base_reason})
+
+    def test_the_worker_builds_session_providers_only_when_asked(self):
+        base = {"approved_scope": "marker_observation_only", "candidate": {"node": "verified-fixture"},
+                "seconds": 20, "bridge": None}
+        for record in (False, True):
+            with self.subTest(record=record), ExitStack() as stack:
+                observe = stack.enter_context(patch.object(observer, "observe", return_value=observer.new_report()))
+                stack.enter_context(patch.object(observer, "stop_on_signals", return_value=threading.Event()))
+                stack.enter_context(patch.object(observer, "MarkerClient"))
+                stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+                # No provider reads anything here; without the option none is even constructed.
+                for name in PROVIDERS:
+                    for method in ("declare", "read", "report", "observe", "_find", "_observe"):
+                        if hasattr(getattr(session_tokens, name), method):
+                            stack.enter_context(patch.object(getattr(session_tokens, name), method,
+                                                             side_effect=AssertionError("provider work")))
+                    if not record:
+                        stack.enter_context(patch.object(observer, name, side_effect=AssertionError("provider built"),
+                                                         create=True))
+                observer.main(["--worker", json.dumps(dict(base, record_session_tokens=record))])
+            session = observe.call_args.kwargs.get("session")
+            if not record:
+                self.assertIsNone(session)
+                continue
+            self.assertIsInstance(session, session_tokens.MirrorSession)
+            self.assertEqual([type(provider) for provider in session.providers],
+                             [session_tokens.HostClock, session_tokens.RuntimeProcess, session_tokens.TrackingObserver])
+            self.assertEqual([provider.proc_root for provider in session.providers[:2]], ["/proc", "/proc"])
+            self.assertEqual(session.providers[1].name, session_tokens.RUNTIME_PROCESS)  # The SteamVR server.
+            self.assertEqual(session.providers[2].events, 0)  # No reporter feeds it yet.
+        for options in ({key: value for key, value in base.items()}, dict(base, record_session_tokens="yes"),
+                        dict(base, record_session_tokens=1), dict(base, record_session_tokens=None)):
+            with self.subTest(options=options), patch.object(observer, "observe") as observe, \
+                    patch.object(observer, "stop_on_signals") as signals, patch.object(observer, "MarkerClient"), \
+                    contextlib.redirect_stdout(io.StringIO()), \
+                    self.assertRaisesRegex(ValueError, "observer_session_tokens_option_invalid"):
+                observer.main(["--worker", json.dumps(options)])
+            observe.assert_not_called()
+            signals.assert_not_called()
+
+    def test_documented_observer_commands_parse_and_record_no_session_tokens(self):
+        commands = documented_observer_commands()
+        self.assertGreaterEqual(len(commands), 2)
+        for document, line, arguments in commands:
+            with self.subTest(document=document, line=line), patch.object(observer, "discover", return_value={}), \
+                    patch.object(observer, "select_candidate", return_value={"node": "verified-fixture"}), \
+                    patch.object(observer, "supervise", return_value=observer.new_report()) as supervised, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                observer.main(arguments)
+                # The approved G3 run is unchanged: it does not pass the new flag, so it reads nothing under /proc for session tokens.
+                self.assertNotIn("--record-session-tokens", arguments)
+                self.assertIs(json.loads(supervised.call_args.args[0][-1])["record_session_tokens"], False)
 
 def native_synthetic_worker(seconds, tag_mismatch=False):
     """Test entry point: generated source plus actual no-VR marker process.
