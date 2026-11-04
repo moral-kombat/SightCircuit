@@ -457,6 +457,18 @@ class ProcedureDriftTests(unittest.TestCase):
                               "scripts/build_overlay_bridge.sh", "scripts/checkpoint_manifest.py"}, named)
         self.assertLessEqual(named, set(manifest.CHECKPOINT_SCRIPTS))
 
+    def test_every_local_source_the_bridge_includes_is_pinned(self):
+        pending, included = ["tools/overlay_bridge.cpp"], set()
+        while pending:
+            path = pending.pop()
+            included.add(path)
+            for name in re.findall(r'^#include "([^"]+)"', (ROOT / path).read_text(), re.MULTILINE):
+                local = f"tools/{name}"
+                if (ROOT / local).is_file() and local not in included:
+                    pending.append(local)
+        self.assertIn("tools/tracking_report.hpp", included)
+        self.assertLessEqual(included, set(manifest.NATIVE_SOURCES))
+
     def test_pinned_files_exist_and_are_listed_once(self):
         listed = manifest.CHECKPOINT_SCRIPTS + manifest.NATIVE_SOURCES + (manifest.ASSET_MANIFEST,)
         self.assertEqual(len(listed), len(set(listed)))

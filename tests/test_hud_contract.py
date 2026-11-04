@@ -30,6 +30,11 @@ from framejacker.hud.contract import HUD_CONFIG, MARKER
 from framejacker.overlay import DEFAULT_BRIDGE, PANEL_LIMITS, OverlayClient, PanelSettings, packet
 
 ROOT = Path(__file__).resolve().parents[1]
+# The tracking reporter's event schema and lifetime limits, shared with tools/tracking_report.hpp.
+TRACKING_NAMES = ("TRACKING_STATE_EVENT", "TRACKING_CHANGED_EVENT", "TRACKING_UNAVAILABLE_EVENT",
+                  "TRACKING_UNIVERSE_FIELD", "TRACKING_ZERO_POSE_FIELD", "TRACKING_CHANGE_FIELD",
+                  "TRACKING_REASON_FIELD", "TRACKING_PROPERTY_ERROR_FIELD", "TRACKING_REPORT_MIN_SECONDS",
+                  "TRACKING_REPORT_MAX_SECONDS")
 HAVE_NUMPY = importlib.util.find_spec("numpy") is not None
 HAVE_CV2 = importlib.util.find_spec("cv2") is not None
 LINUX_BRIDGE = os.name == "posix" and DEFAULT_BRIDGE.is_file()
@@ -62,8 +67,18 @@ class GeneratedHeaderTests(unittest.TestCase):
                  for name, record in (("HUD_CONFIG", HUD_CONFIG), ("MARKER", MARKER))
                  for field in dataclasses.fields(record)]
         for name in ("MARKER_MIN_SECONDS", "MARKER_MAX_SECONDS", "MAX_DISPLAY_AGE_NS", "MAX_SIDE", "RGBA_BYTES",
-                     "OPCODE_FRAME", "OPCODE_SETTINGS", "OPCODE_STOP", "OPCODE_EXPIRING_FRAME", "PACKET_MAGIC"):
+                     "OPCODE_FRAME", "OPCODE_SETTINGS", "OPCODE_STOP", "OPCODE_EXPIRING_FRAME", "PACKET_MAGIC",
+                     *TRACKING_NAMES):
             cases.append((contract, name, changed(getattr(contract, name)), name))
+        changes = contract.TRACKING_CHANGE_EVENTS
+        for index, change in enumerate(changes):
+            for position, part in enumerate(("name", "openvr event", "id")):
+                edited = list(change)
+                # An unused id: one more could be another change's id, which the generator refuses.
+                edited[position] = edited[position] + 1000 if part == "id" else changed(edited[position])
+                cases.append((contract, "TRACKING_CHANGE_EVENTS", changes[:index] + (tuple(edited),) + changes[index + 1:],
+                              f"TRACKING_CHANGE_EVENTS {index} {part}"))
+        cases.append((contract, "TRACKING_CHANGE_EVENTS", changes[::-1], "TRACKING_CHANGE_EVENTS order"))
         for name in ("PACKET_HEADER_FIELDS", "SETTINGS_FIELDS", "FRAME_PREFIX_FIELDS",
                      "EXPIRING_FRAME_PREFIX_FIELDS"):
             layout = getattr(contract, name)
@@ -98,6 +113,35 @@ class GeneratedHeaderTests(unittest.TestCase):
             self.assertEqual(sorted(path.name for path in Path(temporary).iterdir()), ["hud_contract.hpp"])
             with self.assertRaises(SystemExit):
                 command.main([])
+
+    def test_tracking_reporter_schema_is_generated_once(self):
+        from framejacker.sources import session
+
+        header = native.header_text()
+        changes = contract.TRACKING_CHANGE_EVENTS
+        self.assertIs(session.TRACKING_CHANGES, contract.TRACKING_CHANGES)
+        self.assertEqual(contract.TRACKING_CHANGES, {name: event for name, event, _ in changes})
+        self.assertEqual(len({name for name, _, _ in changes}), len(changes))
+        self.assertEqual(len({value for _, _, value in changes}), len(changes))
+        self.assertIn("constexpr const char* kTrackingChangeNames[] = {" +
+                      ", ".join(f'"{name}"' for name, _, _ in changes) + "};", header)
+        self.assertIn("constexpr const char* kTrackingChangeOpenvrEvents[] = {" +
+                      ", ".join(f'"{event}"' for _, event, _ in changes) + "};", header)
+        self.assertIn("constexpr std::uint32_t kTrackingChangeEventIds[] = {" +
+                      ", ".join(str(value) for _, _, value in changes) + "};", header)
+        self.assertIn(f'constexpr char kTrackingStateEvent[] = "{contract.TRACKING_STATE_EVENT}";', header)
+        self.assertIn(f"constexpr int kTrackingReportMaxSeconds = {contract.TRACKING_REPORT_MAX_SECONDS};", header)
+        # The observer reads the same names it is generated from.
+        observer = session.TrackingObserver()
+        with patch.object(session, "TRACKING_STATE_EVENT", "tracking_snapshot"):
+            observer.observe({"event": "tracking_snapshot", contract.TRACKING_UNIVERSE_FIELD: 3,
+                              contract.TRACKING_ZERO_POSE_FIELD: "ab" * 32})
+        self.assertEqual(observer.read().values["recenter_epoch"], 0)
+        for bad in (changes + (changes[0],), changes + (("other", "VREvent_Other", changes[0][2]),),
+                    changes[:-1] + ((changes[0][0], changes[-1][1], changes[-1][2]),), ()):
+            with self.subTest(bad=bad), patch.object(contract, "TRACKING_CHANGE_EVENTS", bad), \
+                    self.assertRaisesRegex(ValueError, "hud_contract_tracking_changes_invalid"):
+                native.header_text()
 
     def test_contract_digest_is_in_the_header_and_follows_the_contract(self):
         digest = native.contract_digest()

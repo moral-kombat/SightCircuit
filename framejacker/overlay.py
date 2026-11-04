@@ -13,12 +13,15 @@ import time
 from .gates import LIVE_HUD_OUTPUT
 from .hud.contract import (EXPIRING_FRAME_PREFIX_FORMAT, FRAME_PREFIX_FORMAT, HUD_CONFIG, MAX_DISPLAY_AGE_NS, MAX_SIDE,
                            OPCODE_EXPIRING_FRAME, OPCODE_FRAME, OPCODE_SETTINGS, OPCODE_STOP, PACKET_HEADER_FORMAT,
-                           PACKET_MAGIC, RGBA_BYTES, SETTINGS_FORMAT)
+                           PACKET_MAGIC, RGBA_BYTES, SETTINGS_FORMAT, TRACKING_REPORT_MAX_SECONDS,
+                           TRACKING_REPORT_MIN_SECONDS)
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BRIDGE = ROOT / "artifacts/overlay-bridge/framejacker-overlay-bridge"
 # (name, low, high); the native bridge takes these from the generated tools/hud_contract.hpp.
 PANEL_LIMITS = (("width", .25, 1.5), ("distance", .5, 3), ("x", -1, 1), ("y", -1, 1), ("opacity", .2, 1))
+# TrackingReporter.start waits this long for the bridge's ready line and its first tracking line.
+TRACKING_READY_TIMEOUT_SECONDS = 8
 
 
 def packet(kind, payload=b""):
@@ -79,8 +82,35 @@ def rgba_from_bgr(image):
 
 
 class OverlayClient:
-    def __init__(self, binary=DEFAULT_BRIDGE, *, validation_only=False, env=None):
+    """The bridge's ``--stdin`` (or ``--validate-stdin``) client.
+
+    With ``tracking`` (a ``sources.session.TrackingObserver``, or anything with
+    its ``observe`` and ``end``), the real bridge also runs its tracking
+    reporter (``--stdin --report-tracking``): the reader thread forwards each
+    ``tracking_*`` line, in order, to ``tracking.observe``, and
+    ``tracking.end(reason)`` is called exactly once, at the first of: the
+    client starts closing (``tracking_client_closed``), or the bridge's stream
+    ends after a clean final report (``tracking_bridge_exited``), after a
+    failed one (``tracking_bridge_failed``), without one
+    (``tracking_bridge_disconnected``) or with an unreadable line
+    (``tracking_bridge_stream_invalid``). Nothing is forwarded after that.
+    A validation client cannot report tracking. Without ``tracking`` the
+    command line and behaviour are unchanged.
+    """
+
+    def __init__(self, binary=DEFAULT_BRIDGE, *, validation_only=False, env=None, tracking=None):
+        if tracking is not None:
+            if validation_only:
+                raise ValueError("tracking_report_requires_real_bridge")
+            if not callable(getattr(tracking, "observe", None)) or not callable(getattr(tracking, "end", None)):
+                raise ValueError("tracking_observer_invalid")
         self.binary, self.validation_only, self.env = Path(binary), validation_only, env
+        self.tracking = tracking
+        self._tracking_lock = threading.Lock()
+        self.tracking_forwarded = 0
+        self.first_tracking_event = None
+        self.tracking_ended = None
+        self.first_tracking = threading.Event()
         self.condition = threading.Condition()
         self.settings = PanelSettings()
         self._fixed_settings = None
@@ -108,7 +138,8 @@ class OverlayClient:
         if not self.binary.is_file() or not os.access(self.binary, os.X_OK):
             raise RuntimeError("Overlay bridge missing; run bash scripts/build_overlay_bridge.sh")
         mode = "--validate-stdin" if self.validation_only else "--stdin"
-        self.process = subprocess.Popen([str(self.binary), mode], stdin=subprocess.PIPE,
+        arguments = [str(self.binary), mode] + (["--report-tracking"] if self.tracking is not None else [])
+        self.process = subprocess.Popen(arguments, stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, env=self.env, bufsize=0)
         if os.name == "posix":
             os.set_blocking(self.process.stdin.fileno(), False)
@@ -123,6 +154,7 @@ class OverlayClient:
         return self
 
     def _read(self):
+        stream_invalid = False
         try:
             while True:
                 line = self.process.stdout.readline(8192)
@@ -132,10 +164,14 @@ class OverlayClient:
                     raise RuntimeError("Oversized overlay bridge diagnostic")
                 message = json.loads(line)
                 event = message.get("event")
+                if self.tracking is not None and isinstance(event, str) and event.startswith("tracking_"):
+                    self._forward_tracking(message)
                 if event == "ready":
                     if (message.get("validation_only") != self.validation_only or
                             message.get("runtime_initialized") != (not self.validation_only)):
                         raise RuntimeError("Overlay bridge initialization mode mismatch")
+                    if self.tracking is not None and message.get("tracking_report") is not True:
+                        raise RuntimeError("Overlay bridge did not start its tracking reporter")
                     self.acknowledged = True
                     self.frame_expiry_supported = message.get("frame_expiry_supported") is True
                     self.ready.set()
@@ -149,12 +185,47 @@ class OverlayClient:
                     if message["exit_code"] or not message.get("cleanup_ok", False):
                         self._fail(message.get("error", "Overlay cleanup failed"))
         except Exception as error:
+            stream_invalid = True
             self._fail(error)
         finally:
             if not self.final_report:
                 self._fail("Overlay bridge disconnected without a final cleanup report")
+            if self.tracking is not None:
+                self._end_tracking(self._stream_end_reason(stream_invalid))
             self.done.set()
             self.ready.set()
+
+    def _forward_tracking(self, message):
+        with self._tracking_lock:
+            if self.tracking_ended is not None:
+                return
+            self.tracking.observe(message)
+            self.tracking_forwarded += 1
+            if self.first_tracking_event is None:
+                self.first_tracking_event = str(message.get("event"))[:64]
+                self.first_tracking.set()
+
+    def _end_tracking(self, reason):
+        """``tracking.end(reason)``, once; later lines are no longer forwarded."""
+        with self._tracking_lock:
+            if self.tracking is None or self.tracking_ended is not None:
+                return
+            self.tracking_ended = reason
+            self.first_tracking.set()
+        try:
+            self.tracking.end(reason)
+        except Exception as error:  # The reader and close() must still finish.
+            self._fail(f"Tracking observer end failed: {error}")
+
+    def _stream_end_reason(self, stream_invalid):
+        report = self.final_report
+        if stream_invalid:
+            return "tracking_bridge_stream_invalid"
+        if report is None:
+            return "tracking_bridge_disconnected"
+        if report.get("exit_code") != 0 or report.get("cleanup_ok") is not True:
+            return "tracking_bridge_failed"
+        return "tracking_bridge_exited"
 
     def _send(self, data):
         """Bound each POSIX pipe write, including a bridge that stops reading."""
@@ -243,6 +314,7 @@ class OverlayClient:
 
     def close(self):
         self.stopping.set()
+        self._end_tracking("tracking_client_closed")
         with self.condition:
             self.condition.notify_all()
         if self.process:
@@ -275,6 +347,9 @@ class OverlayClient:
                   "worker_reaped": self.process is None or self.process.poll() is not None,
                   "worker_exit_code": self.process.returncode if self.process else None,
                   "transport_threads_stopped": not any(t and t.is_alive() for t in (self.writer, self.reader))}
+        if self.tracking is not None:
+            report["tracking"] = {"events_forwarded": self.tracking_forwarded,
+                                  "first_event": self.first_tracking_event, "ended": self.tracking_ended}
         report["cleanup_confirmed"] = bridge_closed_cleanly(report)
         return report
 
@@ -308,6 +383,60 @@ class OverlayClient:
         except subprocess.TimeoutExpired:
             self._fail("Overlay bridge did not exit after kill; cleanup is unconfirmed")
 
+
+
+class TrackingReporter(OverlayClient):
+    """The bridge's reporter-only mode: tracking lines for ``tracking``, and no overlay.
+
+    ``start()`` runs ``--report-tracking-only --seconds <seconds>`` (real mode:
+    the bridge initializes OpenVR as an overlay application but creates no
+    overlay) and waits up to ``TRACKING_READY_TIMEOUT_SECONDS`` for its ready
+    line and its first tracking line, a ``tracking_state`` or
+    ``tracking_unavailable``, which has then reached ``tracking``. A caller
+    declares its session only after ``start()`` returns. Later lines are
+    forwarded as in ``OverlayClient``, and ``tracking.end(reason)`` is called
+    exactly once. ``close()`` closes stdin, which stops the bridge, then
+    escalates to SIGTERM and SIGKILL, reported as forced; its report is
+    ``OverlayClient.close()``'s (``bridge_closed_cleanly`` applies). The bridge
+    also stops by itself after ``seconds``, at ``VREvent_Quit`` or on a signal.
+    No command uses it yet.
+    """
+    mode = "--report-tracking-only"
+
+    def __init__(self, tracking, *, seconds, binary=DEFAULT_BRIDGE, env=None):
+        if (type(seconds) is not int or
+                not TRACKING_REPORT_MIN_SECONDS <= seconds <= TRACKING_REPORT_MAX_SECONDS):
+            raise ValueError("tracking_report_duration_out_of_bounds")
+        if tracking is None:
+            raise ValueError("tracking_observer_invalid")
+        super().__init__(binary, env=env, tracking=tracking)
+        self.seconds = seconds
+
+    def start(self):
+        if not self.binary.is_file() or not os.access(self.binary, os.X_OK):
+            raise RuntimeError("Overlay bridge missing; run bash scripts/build_overlay_bridge.sh")
+        self.process = subprocess.Popen([str(self.binary), self.mode, "--seconds", str(self.seconds)],
+                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=self.env, bufsize=0)
+        self.reader = threading.Thread(target=self._read, daemon=True)
+        self.reader.start()
+        deadline = time.monotonic() + TRACKING_READY_TIMEOUT_SECONDS
+        self.ready.wait(max(0, deadline - time.monotonic()))
+        if self.acknowledged and not self.error:
+            self.first_tracking.wait(max(0, deadline - time.monotonic()))
+        if not self.acknowledged or self.error or self.first_tracking_event is None:
+            error = self.error or ("tracking_reporter_ready_timeout" if not self.acknowledged else
+                                   "tracking_reporter_first_event_timeout")
+            self.close()
+            raise RuntimeError(error)
+        return self
+
+    def _request_stop(self):
+        """Close stdin: the reporter-only bridge stops at EOF."""
+        try:
+            self.process.stdin.close()
+        except OSError:
+            pass
+        return True
 
 
 class OverlaySink:

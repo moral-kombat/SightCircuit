@@ -69,6 +69,8 @@ constexpr int kMarkerMaxSeconds = 20;
 constexpr std::uint64_t kMaxDisplayAgeNs = 1000000000ULL;
 constexpr std::uint32_t kMaxSide = 512;
 constexpr std::uint32_t kRgbaBytes = 4;
+constexpr int kTrackingReportMinSeconds = 1;
+constexpr int kTrackingReportMaxSeconds = 600;
 
 // Panel limits and defaults: framejacker.overlay.PANEL_LIMITS and PanelSettings
 constexpr float kPanelWidthMin = 0.25f;
@@ -88,6 +90,19 @@ constexpr float kPanelDefaultY = -0.2f;
 constexpr float kPanelDefaultOpacity = 0.95f;
 constexpr bool kPanelDefaultVisible = true;
 
+// Tracking reporter lines and changes: framejacker.hud.contract TRACKING_*
+constexpr char kTrackingStateEvent[] = "tracking_state";
+constexpr char kTrackingChangedEvent[] = "tracking_changed";
+constexpr char kTrackingUnavailableEvent[] = "tracking_unavailable";
+constexpr char kTrackingUniverseField[] = "universe_id";
+constexpr char kTrackingZeroPoseField[] = "zero_pose_sha256";
+constexpr char kTrackingChangeField[] = "change";
+constexpr char kTrackingReasonField[] = "reason";
+constexpr char kTrackingPropertyErrorField[] = "property_error";
+constexpr const char* kTrackingChangeNames[] = {"chaperone_universe_changed", "seated_zero_pose_reset", "standing_zero_pose_reset", "chaperone_room_setup_committed"};
+constexpr const char* kTrackingChangeOpenvrEvents[] = {"VREvent_ChaperoneUniverseHasChanged", "VREvent_SeatedZeroPoseReset", "VREvent_StandingZeroPoseReset", "VREvent_ChaperoneRoomSetupCommitted"};
+constexpr std::uint32_t kTrackingChangeEventIds[] = {801, 804, 808, 807};
+
 // SHA-256 of every value above; --render-calibration-marker reports it.
-constexpr char kContractDigest[] = "65b020bd77d26f4164f71171006a2b82a1a3046f299ac6b5600bd1aeb5167e33";
+constexpr char kContractDigest[] = "a3d118dd0e36da28e97719de78d42b645a98658af920254c04c92e920423a0c4";
 } // namespace framejacker_contract

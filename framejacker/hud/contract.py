@@ -8,8 +8,9 @@ schema-checked mapping candidate issue one. ``margin_valid`` is the one margin
 rule for the runtime mask, the marker observer and candidate records.
 
 This module also owns the values the native bridge shares: ``HUD_CONFIG``, the
-calibration ``MARKER``, the pipe packet layout and opcodes, and the duration,
-age and frame-size limits. ``tools/hud_contract.hpp`` is generated from them
+calibration ``MARKER``, the pipe packet layout and opcodes, the duration, age
+and frame-size limits, and the tracking reporter's event schema and lifetime
+limits. ``tools/hud_contract.hpp`` is generated from them
 (``framejacker.hud.native``); neither side keeps its own copy.
 """
 from dataclasses import asdict, dataclass, fields, is_dataclass
@@ -90,6 +91,36 @@ MAX_DISPLAY_AGE_NS = 1_000_000_000  # Longest a result or presented frame may st
 MAX_DISPLAY_AGE_MS = MAX_DISPLAY_AGE_NS // 1_000_000
 MAX_SIDE = 512  # Largest RGBA frame side sent to the bridge.
 RGBA_BYTES = 4
+# Bounded lifetime of the bridge's reporter-only mode (--report-tracking-only --seconds N). A bound
+# mask needs a calibration at most MAX_MAPPING_LIFETIME_NS (300 s) old, so a reporter that outlives
+# twice that serves no HUD run.
+TRACKING_REPORT_MIN_SECONDS = 1
+TRACKING_REPORT_MAX_SECONDS = 600
+
+# Tracking reporter lines. The bridge's tracking reporter (tools/tracking_report.hpp, behind
+# --report-tracking or --report-tracking-only) emits them and sources.session.TrackingObserver reads
+# them: {"event": TRACKING_STATE_EVENT, TRACKING_UNIVERSE_FIELD: <1 .. 2**64-1>,
+# TRACKING_ZERO_POSE_FIELD: <64 lowercase hex>}, {"event": TRACKING_CHANGED_EVENT,
+# TRACKING_CHANGE_FIELD: <a change name below>}, and {"event": TRACKING_UNAVAILABLE_EVENT,
+# TRACKING_REASON_FIELD: <reason>[, TRACKING_PROPERTY_ERROR_FIELD: <OpenVR property error>]} when no
+# state could be read, which the observer treats as invalid (both tokens lost).
+TRACKING_STATE_EVENT = "tracking_state"
+TRACKING_CHANGED_EVENT = "tracking_changed"
+TRACKING_UNAVAILABLE_EVENT = "tracking_unavailable"
+TRACKING_UNIVERSE_FIELD = "universe_id"
+TRACKING_ZERO_POSE_FIELD = "zero_pose_sha256"
+TRACKING_CHANGE_FIELD = "change"
+TRACKING_REASON_FIELD = "reason"
+TRACKING_PROPERTY_ERROR_FIELD = "property_error"
+# Each tracking change: its name, the OpenVR event that reports it and that event's value in the pinned
+# openvr.h. tools/overlay_bridge.cpp static_asserts each value against the vr:: enumerator of that name.
+TRACKING_CHANGE_EVENTS = (
+    ("chaperone_universe_changed", "VREvent_ChaperoneUniverseHasChanged", 801),
+    ("seated_zero_pose_reset", "VREvent_SeatedZeroPoseReset", 804),
+    ("standing_zero_pose_reset", "VREvent_StandingZeroPoseReset", 808),
+    ("chaperone_room_setup_committed", "VREvent_ChaperoneRoomSetupCommitted", 807),
+)
+TRACKING_CHANGES = {name: event for name, event, _ in TRACKING_CHANGE_EVENTS}
 
 # The one footprint margin rule, from the G4 method's error budget
 # (docs/hud-qualification.md#runtime-calibration-and-one-margin-rule-2026-11-01):

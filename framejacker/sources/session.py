@@ -20,7 +20,8 @@ default.
   through ``/proc/<pid>/exe``, never through an install path or manifest.
 * ``TrackingObserver``: ``tracking_origin`` and ``recenter_epoch`` from
   runtime events fed to ``observe`` (bridge-shaped dictionaries, see
-  ``TrackingObserver``). Nothing here talks to a VR runtime.
+  ``TrackingObserver``). Nothing here talks to a VR runtime; the bridge's
+  tracking reporter (``overlay.TrackingReporter``) produces those events.
 
 ``MirrorSession`` combines providers for ``sources.mirror.MirrorSource``: it
 declares their tokens once, before the source opens, re-reads them for every
@@ -38,7 +39,8 @@ from pathlib import Path
 import re
 import threading
 
-from ..hud.contract import SESSION_TOKENS, token_valid
+from ..hud.contract import (SESSION_TOKENS, TRACKING_CHANGE_FIELD, TRACKING_CHANGED_EVENT, TRACKING_CHANGES,
+                            TRACKING_STATE_EVENT, TRACKING_UNIVERSE_FIELD, TRACKING_ZERO_POSE_FIELD, token_valid)
 
 __all__ = ("HostClock", "MirrorSession", "Reading", "RuntimeProcess", "TrackingObserver", "TRACKING_CHANGES",
            "process_start_ticks", "process_stat")
@@ -52,13 +54,8 @@ TASK_COMM_BYTES = 15  # The kernel keeps this many bytes of a command name (comm
 EXITED_STATES = frozenset("ZXx")  # stat field 3: zombie or dead; the process no longer runs.
 PROVIDER_MISSING = "session_token_provider_missing"
 TOKEN_CHANGED = "token_changed"
-# Bridge-reported tracking changes, each with the OpenVR event a reporter would map to it.
-TRACKING_CHANGES = {
-    "chaperone_universe_changed": "VREvent_ChaperoneUniverseHasChanged",
-    "seated_zero_pose_reset": "VREvent_SeatedZeroPoseReset",
-    "standing_zero_pose_reset": "VREvent_StandingZeroPoseReset",
-    "chaperone_room_setup_committed": "VREvent_ChaperoneRoomSetupCommitted",
-}
+# TRACKING_CHANGES (hud.contract, generated into the bridge): each bridge-reported tracking change and
+# the OpenVR event the bridge's reporter maps to it.
 BOOT_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\n?")
 TIME_NAMESPACE = re.compile(r"time:\[([0-9]{1,20})\]")
 TIME_OFFSET = re.compile(r"(monotonic|boottime) +(-?[0-9]{1,19}) +([0-9]{1,9})")
@@ -350,8 +347,10 @@ class RuntimeProcess:
 class TrackingObserver:
     """``tracking_origin`` and ``recenter_epoch`` from injected runtime events.
 
-    ``observe(event)`` takes the dictionaries a runtime reporter (for example
-    a future overlay-bridge event line) would emit:
+    ``observe(event)`` takes the dictionaries the bridge's tracking reporter
+    emits (``overlay.OverlayClient(tracking=...)`` and
+    ``overlay.TrackingReporter`` forward its lines; the schema is in
+    ``hud.contract``):
 
     * ``{"event": "tracking_state", "universe_id": <1 .. 2**64-1>,
       "zero_pose_sha256": <64 lowercase hex>}``: the HMD's
@@ -365,7 +364,8 @@ class TrackingObserver:
       ``tracking_state`` replaces it; the epoch never resets.
 
     Other events (no ``tracking_`` prefix) are ignored. A malformed tracking
-    event (``tracking_event_invalid``) or ``end(reason)``
+    event, including the reporter's ``tracking_unavailable``
+    (``tracking_event_invalid``), or ``end(reason)``
     (``tracking_observer_ended``) loses both tokens for good, because a change
     could then go unseen. ``recenter_epoch`` counts this observer's events only;
     a recenter before it started is visible only through ``tracking_origin``.
@@ -390,9 +390,9 @@ class TrackingObserver:
             kind = event.get("event") if isinstance(event, dict) else None
             if isinstance(kind, str) and not kind.startswith("tracking_"):
                 return
-            if kind == "tracking_state" and self._state(event):
+            if kind == TRACKING_STATE_EVENT and self._state(event):
                 return
-            if kind == "tracking_changed" and event.get("change") in TRACKING_CHANGES:
+            if kind == TRACKING_CHANGED_EVENT and event.get(TRACKING_CHANGE_FIELD) in TRACKING_CHANGES:
                 if self._epoch is not None:
                     if self._epoch >= 2**63 - 1:
                         self._lost = "tracking_event_invalid"
@@ -402,7 +402,7 @@ class TrackingObserver:
             self._lost = "tracking_event_invalid"
 
     def _state(self, event):
-        universe, pose = event.get("universe_id"), event.get("zero_pose_sha256")
+        universe, pose = event.get(TRACKING_UNIVERSE_FIELD), event.get(TRACKING_ZERO_POSE_FIELD)
         if (type(universe) is not int or not 1 <= universe < 2**64 or type(pose) is not str or
                 not SHA256_HEX.fullmatch(pose)):
             return False
