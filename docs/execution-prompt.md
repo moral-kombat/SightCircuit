@@ -77,7 +77,7 @@ and keeps its number.
 
 ### Offline work that is ready to pick up
 
-These need no device. Each one gets its own PR. Items 1 and 2 are done and
+These need no device. Each one gets its own PR. Items 1 to 3 are done and
 keep their numbers.
 
 1. **Evidence record for I, J and #16.** Done: [E77](evidence/e077.md) for
@@ -90,12 +90,19 @@ keep their numbers.
    tokens](hud-qualification.md#observed-session-tokens-for-the-candidate-2026-11-03)
    and the two owner decisions in [POC scope](poc-scope.md#owner-decisions-2026-11-03).
    These are cloud checks; the flag has not run on Frame.
-3. **Native tracking reporter.**
-   - Report the tracking universe and the recenter and chaperone events from
-     the bridge's real mode into `TrackingObserver`.
-   - Test it only through fake dispatch (`tests/fixtures/overlay_dispatch_fixture.cpp`).
-     Validation mode must stay runtime-free.
-   - It needs its own review. Its device check is a separate approval.
+3. **Native tracking reporter.** Done: the bridge reports the HMD universe id,
+   a zero-pose digest and the recenter and chaperone events into
+   `TrackingObserver`, behind an opt-in flag that is off by default:
+   `--stdin --report-tracking`, and a reporter-only mode with no overlay,
+   `--report-tracking-only --seconds 1..600`. On the Python side,
+   `OverlayClient(tracking=...)` and `overlay.TrackingReporter` forward the
+   lines; no command uses them yet. It is tested only through fake dispatch
+   (`tests/fixtures/tracking_report_fixture.cpp`) and a fake bridge, and
+   validation modes stay runtime-free. See [native tracking
+   reporter](hud-qualification.md#session-tokens-for-the-mirror-source-2026-11-03)
+   and the two owner decisions in [POC scope](poc-scope.md#owner-decisions-2026-11-03).
+   These are cloud checks; no OpenVR call of the reporter has run. It still
+   needs its own review, and its device check still needs the owner's approval.
 4. **#16 cycle-3 follow-ups.** None blocks the code, but fix them before the
    guard is installed on Frame.
    - `check_glob` picks a different search directory for a pattern that ends

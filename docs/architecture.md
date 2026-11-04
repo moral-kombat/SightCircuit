@@ -77,9 +77,10 @@ has the details and the follow-up device check:
   drivers, libraries).
 - `tracking_origin`: the HMD's universe id and a digest of the zero-pose
   transforms, from a `tracking_state` event fed to `TrackingObserver` before
-  the source is created. Unknown: no reporter emits these events yet, and
-  whether Frame exposes those values to an overlay client and keeps them
-  stable between recenters.
+  the source is created. The bridge's tracking reporter emits these events
+  behind an opt-in flag; it has run only against a fake system, and no command
+  starts it yet. Unknown: whether Frame exposes those values to an overlay
+  client and keeps them stable between recenters.
 - `recenter_epoch`: recenter and chaperone events counted since that
   observer's first state. Unknown: whether Frame's recenter emits them, and
   how long an event takes to arrive (frames admitted before it carry the old

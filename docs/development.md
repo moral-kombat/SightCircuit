@@ -1820,6 +1820,22 @@ RGBA forwarding and Qt control creation. This mode reports no OpenVR
 initialization and zero submitted frames. For the real hardware procedure,
 read [VR replay panel](vr-overlay.md).
 
+The bridge's modes are `--test-panel`, `--stdin`, `--validate-stdin`, the
+three calibration-marker modes, and two opt-in tracking reporter modes:
+`--stdin --report-tracking` and `--report-tracking-only --seconds 1..600`
+(no overlay). The reporter's logic is in the OpenVR-free
+`tools/tracking_report.hpp`. `tests/test_overlay_bridge.py` compiles two
+fake-dispatch fixtures with strict warnings and no OpenVR include path.
+`tests/fixtures/overlay_dispatch_fixture.cpp` covers packet decoding,
+deadlines and teardown order. `tests/fixtures/tracking_report_fixture.cpp`
+covers SHA-256 vectors, the zero-pose digest, the change mapping and the
+unavailable reasons from a fake system, and prints its lines for the test to
+feed to a real `TrackingObserver`. The same module checks that the built bridge
+refuses the tracking options outside their modes before any OpenVR call, and it
+drives `OverlayClient(tracking=...)` and `TrackingReporter` with a fake bridge
+executable. No test runs a tracking mode against a runtime. See [native
+tracking reporter](hud-qualification.md#session-tokens-for-the-mirror-source-2026-11-03).
+
 ### Generated HUD contract header
 
 [`tools/hud_contract.hpp`](../tools/hud_contract.hpp) is committed and
@@ -1827,10 +1843,15 @@ generated from the Python contract by
 [`framejacker/hud/native.py`](../framejacker/hud/native.py). It holds
 `HudConfig` and its digest, the calibration `MARKER` (sizes, positions, gray
 levels and corner ids), the pipe packet layouts and opcodes, the marker
-duration (1–20 s), display age (1 s) and frame side (512) limits, and
-`PANEL_LIMITS` with the `PanelSettings` defaults. `tools/overlay_bridge.cpp`
-and `tools/overlay_frame.hpp` include it and keep no copies of those values;
-they share one little-endian `read_u32`. Python call sites import the same
+duration (1–20 s), display age (1 s), frame side (512) and tracking-reporter
+lifetime (1–600 s) limits, `PANEL_LIMITS` with the `PanelSettings` defaults,
+and the tracking reporter's event and field names and change table
+(`TRACKING_CHANGE_EVENTS`: change name, OpenVR event name and id).
+`tools/overlay_bridge.cpp`, `tools/overlay_frame.hpp` and
+`tools/tracking_report.hpp` include it and keep no copies of those values;
+the first two share one little-endian `read_u32`. The bridge, which includes
+`openvr.h`, `static_assert`s each generated change id against the `vr::`
+enumerator of the name Python gives it. Python call sites import the same
 constants from `framejacker/hud/contract.py` (`PANEL_LIMITS` and
 `PanelSettings` stay in `framejacker/overlay.py`). Change a value only on the
 Python side, then:

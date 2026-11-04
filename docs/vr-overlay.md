@@ -168,6 +168,20 @@ explicitly mark `validation_only: true`, `runtime_initialized: false` and zero
 submitted frames. The offscreen integration test uses that mode to exercise the
 Qt controls and real anonymous-pipe transport. It cannot validate rendering.
 
+Two real modes add a tracking reporter for the mirror session tokens. Both are
+opt-in and off by default. `--stdin --report-tracking` is the panel mode plus
+`tracking_state`, `tracking_changed` and `tracking_unavailable` lines.
+`--report-tracking-only --seconds 1..600` reports the same lines without
+creating an overlay and stops on stdin EOF, the quit packet, a runtime quit
+event, SIGINT/SIGTERM or the lifetime. Without the flag, `--stdin` makes no new
+OpenVR call and prints the same lines as before. The flag with
+`--validate-stdin`, `--test-panel` or a marker mode is a usage error before any
+OpenVR call, and `--help` lists both modes. The reporter has run only against a
+fake system in a cloud fixture; neither mode has run on a runtime. See [native
+tracking reporter](hud-qualification.md#session-tokens-for-the-mirror-source-2026-11-03)
+for the events, the digest layout, the Python clients and what is unverified.
+Using either mode on Frame is a separate device check that needs approval.
+
 The synthetic pipeline uses opcode 4 and requires the bridge's
 `frame_expiry_supported` handshake. Expiry is derived from source observation
 time, capped at one second; already-expired arrivals are dropped. The native
@@ -192,3 +206,6 @@ bash scripts/build_overlay_bridge.sh
 With window dependencies and model fixtures installed, this covers valid and
 malformed packets, named missing-runtime failure, signal/EOF cleanup, read
 timeouts, channel order, resizing, Qt forwarding and the existing replay tests.
+It also covers the tracking reporter through fake dispatch only
+(`tests/fixtures/tracking_report_fixture.cpp`), the refusal of its options
+outside their modes, and its Python clients against a fake bridge.

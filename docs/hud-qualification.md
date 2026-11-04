@@ -491,7 +491,7 @@ a named reason in the run report's `session_tokens.undeclared`.
 | `timebase_id` | `HostClock`: `/proc/sys/kernel/random/boot_id`, `/proc/self/ns/time` and that namespace's `CLOCK_MONOTONIC` offset (`/proc/self/timens_offsets`) of the process that stamps `Frame.observed_ns` with `time.monotonic_ns()` (`CLOCK_MONOTONIC`) | `clock_monotonic:boot:<boot id>:timens:<inode>:offset:<s>:<ns>` | The process that writes the calibration (the marker observer) must run in the same time namespace with the same offset, or every frame is rejected; that is unverified on Frame. The offset is part of the token because the kernel reuses a freed namespace's inode number, so two namespaces created one after the other can share an inode with clocks far apart. The offsets file describes the namespace of the process's children, so the token stays undeclared after the process unshares its time namespace (`/proc/self/ns/time_for_children` differs: `host_time_namespace_for_children_differs`). `CLOCK_MONOTONIC` stops during suspend, so a suspend changes neither the token nor a calibration's remaining lifetime. The time-namespace files need Linux 5.6 or later |
 | `session_id` | `RuntimeProcess`: the one process whose `/proc/<pid>/comm` is `vrserver`, its start time (`/proc/<pid>/stat` field 22) and the boot id. The kernel keeps the first 15 bytes of a command name, so a longer name is matched by those bytes and confirmed by the executable's full file name | `steamvr:boot:<boot id>:pid:<pid>:start:<ticks>` | `vrserver` is the desktop Linux name; the runtime's process name on Frame is unverified. It is also unverified whether that process is visible from the recognizer's pid namespace (for example inside Steam's container runtime). A session change that does not restart `vrserver` is not seen. When `/proc/<pid>/exe` cannot be inspected, the per-frame check rests on the stat line alone (command name, state, start time): an exec of another program that is also named `vrserver` would not be seen, but `runtime_id` is then undeclared, so a bound mask rejects every frame anyway |
 | `runtime_id` | `RuntimeProcess`: SHA-256 of the binary the process runs, opened through `/proc/<pid>/exe`, whose target's file name must be `vrserver`. After an update by rename the link reads `<install path> (deleted)` and the token is still the running build's digest. Never the install path or an installed manifest: the Frame PM reported an installed-manifest version that differed from the running runtime | `steamvr:vrserver:sha256:<digest>` | It covers `vrserver` only, not `vrcompositor`, drivers or shared libraries. Reading the link needs ptrace read access to the process: the same user and a dumpable process (not setuid, no file capabilities), or `CAP_SYS_PTRACE`. Yama's `ptrace_scope` restricts attaching, not this read. Under an emulator such as FEX, or an explicit loader, the link names that program, so the token stays undeclared (`runtime_executable_unexpected`). The binary is hashed once, before the source opens, up to 256 MiB |
-| `tracking_origin` | `TrackingObserver`: a `tracking_state` event carrying the HMD's `Prop_CurrentUniverseId_Uint64` and a SHA-256 of the runtime's zero-pose transforms (`GetRawZeroPoseToStandingAbsoluteTrackingPose`, `GetSeatedZeroPoseToStandingAbsoluteTrackingPose`) | `openvr:universe:<id>:zero-pose:<32 hex>` | No reporter emits these events yet (see below). Unverified on Frame: whether an overlay client gets a universe id there, and whether the zero-pose transforms stay bit-identical between recenters (if they drift, every comparison fails closed). A scene application's own tracking space cannot be observed from an overlay process and is not part of the token. Universe id 0, which OpenVR returns on a property error, is rejected. The first `tracking_state` must reach the observer before the `MirrorSource` is created; a state first seen later leaves both tracking tokens undeclared for the run |
+| `tracking_origin` | `TrackingObserver`: a `tracking_state` event carrying the HMD's `Prop_CurrentUniverseId_Uint64` and a SHA-256 of the runtime's zero-pose transforms (`GetRawZeroPoseToStandingAbsoluteTrackingPose`, `GetSeatedZeroPoseToStandingAbsoluteTrackingPose`) | `openvr:universe:<id>:zero-pose:<32 hex>` | The bridge's reporter emits these events only behind an opt-in flag, and it has run only against a fake system; no command starts it (see below). Unverified on Frame: whether an overlay client gets a universe id there, and whether the zero-pose transforms stay bit-identical between recenters (if they drift, every comparison fails closed). A scene application's own tracking space cannot be observed from an overlay process and is not part of the token. Universe id 0, which OpenVR returns on a property error, is rejected. The first `tracking_state` must reach the observer before the `MirrorSource` is created; a state first seen later leaves both tracking tokens undeclared for the run |
 | `recenter_epoch` | `TrackingObserver`: the number of `tracking_changed` events (`TRACKING_CHANGES`: universe changed, seated or standing zero pose reset, room setup committed) since its first `tracking_state` | `0`, `1`, ... | The count covers this observer only. A recenter between the calibration run and this run shows only through `tracking_origin`. Unverified: whether Frame's recenter emits one of these events to an overlay client. Events lost while the reporter is down end the observer (`tracking_observer_ended`). A change is seen only once its event reaches `observe()`: a frame captured after a physical recenter but admitted before the event arrives carries the old `tracking_origin` and `recenter_epoch` and passes. That delivery delay is unmeasured |
 
 - **Declared before the source opens.** `MirrorSession.declare()` runs when
@@ -554,20 +554,100 @@ a named reason in the run report's `session_tokens.undeclared`.
   The default is still `SYNTHETIC_SESSION`. The provenance, the `synthetic:`
   source and the mask's synthetic-only rule are unchanged.
 
-**No native reporter yet.** This change adds the Python observer and its event
-schema. It does not change `tools/overlay_bridge.cpp`. The bridge's real
-`--stdin` mode is the confirmed replay-panel path ([E47](evidence/e047.md)),
-and it is the pinned bridge of the next G3 checkpoint. A reporter would add
-OpenVR property, pose and event reads to both, unchecked on a device. The
-fake-dispatch fixture covers helpers that need no OpenVR: packet decoding,
-deadlines and teardown order. What a reporter must get right is runtime
-behaviour: which events an overlay client receives on Frame, and what the
-universe id and zero poses are. A fake cannot establish that; it would only
-test a four-case mapping. A later reporter should emit `tracking_state` at
-start and after every change, and `tracking_changed` for each
-`TRACKING_CHANGES` event, in real mode only; validation modes stay
-runtime-free. `OverlayClient` would forward those lines to a
-`TrackingObserver` and call `end()` when the bridge exits.
+**Native tracking reporter (cloud fake-dispatch checks only).** The overlay
+bridge can now report the tracking state and its changes, behind an explicit
+opt-in that is off by default. Nothing passes these events to a session yet,
+and no OpenVR call of the reporter has run anywhere: there was no runtime in
+the cloud, and neither mode below has run on Frame.
+
+- **Logic.** [`tools/tracking_report.hpp`](../tools/tracking_report.hpp)
+  holds the reporter without any OpenVR header. It is templated on a "system"
+  type that provides three reads: the HMD's `Prop_CurrentUniverseId_Uint64`
+  (with the property error) and the two zero-pose transforms. The bridge passes
+  `vr::IVRSystem` through a thin adapter; the fixture passes a fake.
+- **Events.** It emits exactly the `TrackingObserver` schema. The first line
+  is `{"event": "tracking_state", "universe_id": <1 .. 2**64-1>,
+  "zero_pose_sha256": <64 hex>}`. Each `TRACKING_CHANGES` event
+  (`VREvent_ChaperoneUniverseHasChanged` 801, `VREvent_SeatedZeroPoseReset` 804,
+  `VREvent_StandingZeroPoseReset` 808, `VREvent_ChaperoneRoomSetupCommitted`
+  807) emits `{"event": "tracking_changed", "change": <name>}`, then a fresh
+  state read after it. Other runtime events emit and read nothing. A property
+  error emits `{"event": "tracking_unavailable", "reason":
+  "universe_id_property_error", "property_error": <code>}`, and universe id 0
+  emits `{"event": "tracking_unavailable", "reason": "universe_id_zero"}`.
+  Universe id 0 is never a state, and no pose is read without a valid id. The
+  observer treats `tracking_unavailable` as invalid: both tokens are lost for
+  the run (`tracking_event_invalid`), so it fails closed.
+- **Digest layout.** `zero_pose_sha256` is SHA-256 (FIPS 180-4) of 96 bytes:
+  `GetRawZeroPoseToStandingAbsoluteTrackingPose` first, then
+  `GetSeatedZeroPoseToStandingAbsoluteTrackingPose`. Each 3×4 matrix is
+  row-major (`m[0][0]`, `m[0][1]`, …, `m[2][3]`), and each float is its exact
+  IEEE-754 binary32 bit pattern, little-endian. In Python that is
+  `hashlib.sha256(struct.pack("<24f", *raw_rows, *seated_rows))`. Values are
+  not normalized or judged: NaN payloads, infinities, signed zeros and
+  subnormals are digested by their bits, so `-0.0` and `0.0` give different
+  digests. The header implements SHA-256 itself.
+- **One contract.** The event and field names, the change names with their
+  OpenVR event names and ids, and the reporter's lifetime bound live in
+  `framejacker/hud/contract.py`. They are generated into
+  `tools/hud_contract.hpp`, and `sources.session` imports them, including
+  `TRACKING_CHANGES`. `tools/overlay_bridge.cpp` includes `openvr.h` and
+  `static_assert`s that each generated id equals the `vr::` enumerator that
+  Python names for it. The checkpoint manifest pins the new header with the
+  bridge sources.
+- **`--stdin --report-tracking`.** This is real mode only. After `VR_Init` and
+  the `ready` line, and before any packet is read, the bridge emits the first
+  state or `tracking_unavailable`. It emits changes from the event polling it
+  already does. Without the flag, `--stdin` makes no new OpenVR call and its
+  output is unchanged, so the approved E47 replay and VR-panel regression and
+  the G3 marker run behave as before. The flag with a validation mode,
+  `--test-panel`, a marker mode or any other combination is a usage error
+  (exit 64) before any OpenVR call.
+- **`--report-tracking-only --seconds 1..600`.** This real mode initializes
+  OpenVR the way the bridge already does (`VRApplication_Overlay`, headset
+  connected) and creates no overlay. It emits `ready`, then the first state,
+  then changes. It stops on stdin EOF or the stop packet (`closed`),
+  `VREvent_Quit`, SIGTERM or SIGINT (`stopped`), or the required lifetime
+  (`lifetime_elapsed`). The lifetime is at most 600 s (`TRACKING_REPORT_MAX_SECONDS`):
+  a bound mask needs a calibration at most 300 s old, so a longer reporter
+  serves no HUD run. Any other input is an error. It then calls `VR_Shutdown`
+  and emits a closing report with the tracking counts. A caller can start it,
+  receive the first state, and only then declare its session (owner decision
+  3, [POC scope](poc-scope.md#owner-decisions-2026-11-03)).
+- **Python.** `OverlayClient(..., tracking=observer)` starts
+  `--stdin --report-tracking` and refuses `validation_only=True`. Its reader
+  thread forwards each `tracking_*` line in order and calls
+  `observer.end(reason)` exactly once. The reason is `tracking_client_closed`,
+  `tracking_bridge_exited`, `tracking_bridge_failed`,
+  `tracking_bridge_disconnected` or `tracking_bridge_stream_invalid`, whichever
+  comes first. `overlay.TrackingReporter(observer, seconds=...)` runs the
+  reporter-only mode. Its `start()` returns only after the first `tracking_state`
+  or `tracking_unavailable` reached the observer, within 8 s. Its `close()`
+  closes stdin, escalates to SIGTERM and SIGKILL, reports forced termination
+  as unconfirmed cleanup, and its report passes `bridge_closed_cleanly` only
+  for a clean exit. Without `tracking`, `OverlayClient`'s command line and
+  behaviour are unchanged. No command, the marker observer, the mirror
+  recognizer or `run_recognition` uses either client; wiring the reporter-only
+  mode into a command is a later step.
+- **Checks (cloud only).** `tests/fixtures/tracking_report_fixture.cpp` is
+  compiled like the dispatch fixture (strict warnings, no OpenVR include path).
+  It checks the FIPS 180-4 vectors and split updates. It checks the state from
+  a fake system with known matrices, both unavailable reasons, and each change
+  id followed by a fresh state. Other ids are ignored, and the largest universe
+  id and non-finite floats are handled deterministically.
+  `tests/test_overlay_bridge.py` compares the fixture's digests with
+  `hashlib` (every length to 200 bytes, the known matrices, and the non-finite
+  bit patterns). It feeds the fixture's lines to a real `TrackingObserver`:
+  the state sets the origin and epoch 0, each change adds one, and
+  `tracking_unavailable` loses both tokens. The built bridge refuses every
+  misuse of the options with exit 64 and no `ready` line, while the VR path
+  registry is a FIFO that would block an attempted `VR_Init`. A fake bridge
+  executable drives both clients.
+- **Unverified.** Whether an overlay client receives these events on Frame,
+  and what the universe id is there. Whether the zero poses stay bit-identical
+  between recenters. The delay from a recenter to `observe()`. Using either
+  mode on Frame is a separate device check that needs the owner's approval
+  (decision 2).
 
 Follow-ups. Follow-up 3 is done in the cloud (below); none of the others has
 run, and each needs its own review; the device step needs the user's approval. They are separate from the [next device
@@ -580,9 +660,15 @@ checkpoint](#next-device-checkpoint) and do not replace it.
    namespace, permission to read `/proc/<pid>/exe` and its target (the same
    user and a dumpable `vrserver`, or `CAP_SYS_PTRACE`), and the time
    namespace and its offset. No command for this exists yet.
-2. **Native tracking reporter.** As described above, with its own fixture,
-   review and device check. The device check also measures the delay from a
-   recenter to its event reaching `observe()`, relative to mirror frames.
+2. **Native tracking reporter.** Code and cloud checks exist (see above),
+   behind an opt-in flag that is off by default. What remains is its own
+   review and the device check, which needs the owner's approval. The check
+   runs `--report-tracking-only` once on Frame, with no overlay, capture or
+   inference. It records whether the first state arrives, the universe id,
+   whether the zero-pose digest stays the same without a recenter and changes
+   after one, and which change events arrive. It also measures the delay from
+   a recenter to its event reaching `observe()`, relative to mirror frames.
+   Wiring the reporter-only mode into a command is a later step.
 3. **Observed candidate context.** Done (2026-11-03, cloud checks only): the
    marker observer records the providers' tokens with
    `--record-session-tokens`, and `hud_validation_report.py --from-observer`
@@ -591,18 +677,20 @@ checkpoint](#next-device-checkpoint) and do not replace it.
    What remains: the tracking tokens need a reporter that delivers a first
    `tracking_state` before the session is declared. The marker bridge cannot
    be that reporter, because it starts after the baseline, after the
-   declaration. Until one exists, `--from-observer` rejects every real report,
-   at `tracking_origin` at the latest (an earlier token is named first if its
-   provider also fails on Frame).
+   declaration. The bridge's reporter-only mode (follow-up 2) can deliver it,
+   but the observer does not start it yet. Until it does, `--from-observer`
+   rejects every real report, at `tracking_origin` at the latest (an earlier
+   token is named first if its provider also fails on Frame).
 4. **Command path.** No command passes a session to the mirror recognizer.
    HUD input from the mirror stays refused by `LIVE_IMAGE_INPUT` until G4–G6
    pass.
 
-From the checkout:
+From the checkout (the reporter tests also need `g++` and the built bridge):
 
 ```bash
+bash scripts/build_overlay_bridge.sh
 .venv-replay/bin/python -m unittest tests.test_mirror_session tests.test_capture_context \
-  tests.test_hud_calibration tests.test_hud_mask
+  tests.test_hud_calibration tests.test_hud_mask tests.test_overlay_bridge
 ```
 
 ## Observed session tokens for the candidate (2026-11-03)
@@ -670,7 +758,8 @@ device approval. No evidence ID is allocated in this change.
 - **Report.** With the flag, `session_tokens` is `{"recorded": true, ...}`
   plus the fields of `MirrorSession.report()` (`declared`, `undeclared`,
   `frames_read`, `first_change`, `runtime_process`, `scope`) and
-  `declaration_elapsed_ms`. No reporter feeds the tracking observer yet
+  `declaration_elapsed_ms`. No reporter feeds the observer's tracking
+  observer yet: the bridge's reporter-only mode exists but is not wired into it
   ([follow-up 2](#session-tokens-for-the-mirror-source-2026-11-03)). On a real
   run both tracking tokens therefore stay undeclared with
   `tracking_state_not_observed`. That is the expected result, and
