@@ -12,10 +12,199 @@ device-dependent acceptance left explicit. The dated
 [execution checkpoint](poc-scope.md#execution-checkpoint-2026-10-31) summarizes
 the state when this prompt was prepared. Refresh that state before execution.
 
-The [2026-11-03 coder handoff](#coder-handoff-2026-11-03) is the newest and
-the place to start. The [2026-11-01 offline handoff](#offline-handoff-2026-11-01)
-below it is delivered. Where they differ from the 2026-10-31 prompt, follow the
-newer one; that prompt stays for reference.
+The [2026-11-04 coder handoff](#coder-handoff-2026-11-04) is the newest and
+the place to start. It continues the [2026-11-03 coder handoff](#coder-handoff-2026-11-03),
+whose item list it updates; where the two differ, follow 2026-11-04. The
+[2026-11-01 offline handoff](#offline-handoff-2026-11-01)
+is delivered. Where they differ from the 2026-10-31 prompt, follow the newer
+one; that prompt stays for reference.
+
+## Coder handoff, 2026-11-04
+
+For the next coding session, from the coder session that took the
+[2026-11-03 handoff](#coder-handoff-2026-11-03)'s offline items. State at
+`main` `9c72779`. Nothing here authorizes a device operation; every gate in
+`framejacker/gates.py` stays closed. All results below are cloud checks
+(Linux x86_64, Python 3.12.3) or GitHub CI, never Frame results.
+
+### Merged in this session
+
+| PR | Merged as | Content | Evidence |
+| --- | --- | --- | --- |
+| [#20](https://github.com/moral-kombat/framejacker/pull/20) | `dc5d9a3` | Item 1: records for #16 and #18; the binding decision recorded | [E77](evidence/e077.md), [E78](evidence/e078.md) |
+| [#21](https://github.com/moral-kombat/framejacker/pull/21) | `9c72779` | Item 2: the marker observer records session tokens behind `--record-session-tokens` (off by default); `--from-observer` takes tokens only from that record | None yet; see [observed session tokens](hud-qualification.md#observed-session-tokens-for-the-candidate-2026-11-03) |
+
+E79–E83 are allocated in the planner's open PR #23; E84 is the next free ID.
+Ask the planner session for IDs (it acts as coordinator and opened #23); a
+coder session allocates none. #21, #24 and items 3 and 4 have no record yet.
+#23 (unmerged; relayed Frame reports, not cloud results) also changes the POC
+object to chair and records G2 closed, the catch-up session and the G3
+attempt. Once it merges, the 2026-11-03 owner-decision and device-step lists
+below are stale on those points.
+
+### Start here
+
+1. Refresh the state of #22, #23, #24 and #25, and check whether
+   `ccr-16d7cdfd-8klzgs-item4` is on origin.
+2. Item 4: if its branch is on origin, run the full checks and ask before its
+   PR. If it is not, item 4 was not pushed; check with the owner before
+   redoing it from the 2026-11-03 list.
+3. Item 5: fix the `e008.md` link, and ask the owner the optional-items
+   question.
+4. Item 3: only after #22 merges (below).
+
+No device step, and no evidence ID allocated by a coder session.
+
+### Open work
+
+| Work | Where | State | Next step |
+| --- | --- | --- | --- |
+| Item 3: native tracking reporter | Branch `ccr-16d7cdfd-8klzgs-item3` at `67997f4`, on `9c72779`; no PR | Implemented and reviewed: 11 findings fixed in round 1 and the first recheck's findings in round 2; the final recheck left three minor findings open (below), one of them the rest of finding 3 | Wait for #22, then merge `origin/main` into the branch and resolve; see below |
+| Capture supervisor races (owner-approved, outside the item list) | [PR #24](https://github.com/moral-kombat/framejacker/pull/24), branch `ccr-16d7cdfd-8klzgs-capsup` | Open at `31e1193`; CI green on x86_64 and ARM64 (21 jobs succeeded; `x86_64 / replay-pacing` and `arm64 / smoke` skipped by design); not watched (the owner is waiting for architecture input) | Owner review and merge |
+| Item 4: #16 cycle-3 follow-ups | Branch `ccr-16d7cdfd-8klzgs-item4` from `9c72779`; not on origin when this was written | Package workflow running when this was written | Full checks, push, ask before the PR. Frame already runs #16's guard (version 3, installed from `881fea7` per E82 in #23), so the 2026-11-03 premise "before the guard is installed on Frame" has passed. Updating Frame to item 4's guard (version 4) after it merges is a device step that needs the owner's approval |
+| Item 5: small items | Not started | — | Fix the `docs/evidence/e008.md` link; ask the owner how far to take the optional lock file and console entry points (both change how Frame installs or starts tools) |
+
+**Item 3 and #22.** The owner decided that item 3 follows another coder's
+[PR #22](https://github.com/moral-kombat/framejacker/pull/22) (bridge
+lifecycle). The planner's proposed order is #22, then that coder's package O
+([PR #25](https://github.com/moral-kombat/framejacker/pull/25), O1 and O2; O3
+waits for Frame numbers), then item 3. The owner's condition is #22 only. A
+test merge with #25's head `c4a5273` has no conflict. Open item 3's PR only
+after #22 has merged and `origin/main` has been merged into the branch.
+Force pushes are refused, so do not push a rebased history: merge
+`origin/main` into the branch (as #24 did), or rebase locally and then run
+`git merge -s ours origin/ccr-16d7cdfd-8klzgs-item3` so the push is a
+fast-forward.
+- **Conflicts:** a test merge of #22's head `a90f644` (not yet rebased onto
+  `main`) into item 3 conflicted in two files:
+  - `framejacker/runtime/manifest.py`: both add a header to the pinned bridge
+    sources, so keep both;
+  - `tools/overlay_bridge.cpp`: six blocks, at the includes, the `Overlay`
+    runtime initialization (#22's Background connect against item 3's
+    `runtime()`), the help text, `main()`'s argument parsing, the mode dispatch
+    and the closing report.
+  `tests/test_overlay_bridge.py` merged textually but needs a run.
+- **Semantic merge:** item 3's `runtime()` connects as Overlay directly. Route
+  `init_reporter()` through #22's probe-then-connect and watchdog, decide
+  whether `--report-tracking-only` takes `--connect-as`, write item 3's help
+  lines through #22's `usage` stream (fd 1 is stderr after #22), and extend
+  #22's no-runtime JSON-error checks (`RUNTIME_MODES`) to the reporter-only
+  mode.
+- **Other conflicts,** if #24 or item 4 merges first:
+  - `docs/poc-scope.md` (#24): keep item 3's two rows and #24's paragraph
+    after the table;
+  - `docs/execution-prompt.md` (item 4): keep item 3's item 3 text and item
+    4's item 4 text, and change item 3's "still needs its own review" to
+    "needs PR review".
+- **Also fold in** the three minor findings from the final recheck. All three
+  are source pins for real-mode code that cannot run in the cloud:
+  - `main()`'s branch sequence for the two tracking modes;
+  - the reporter-only lifetime and status lines;
+  - the no-overlay guard in `Overlay::events()` (line 212 at `67997f4`): pin
+    it, or change it to `if (!api || handle == vr::k_ulOverlayHandleInvalid)`
+    and pin that.
+- **Real-mode tests:** the item 3 agents did not run the two existing tests
+  that start the bridge in a real mode (`test_missing_runtime_is_named`,
+  `test_client_startup_failure_is_actionable`). They pass at `67997f4`; run
+  them again after the merge.
+- **Load failure:** one full-suite run of `67997f4`, made while another
+  workflow loaded the machine, had a single failure that was not captured. Two
+  later runs passed (994 tests). The likely candidate is
+  `test_bounded_worker.test_pipeline_cli_parent_cancellation`, which also fails
+  under load on base. It is unconfirmed.
+
+### Owner decisions taken in this session (2026-11-03 and 2026-11-04)
+
+The decisions that change behaviour are recorded in
+[POC scope](poc-scope.md#owner-decisions-2026-11-03); item 3's two rows land
+with item 3, and the capture-supervisor approval lands with #24.
+- E77 records #16 and E78 records #18, by merge order.
+- Tracking tokens stay bound when `MirrorSource` is declared; there is no late
+  binding.
+- An unobserved session token rejects the observer-to-candidate conversion,
+  with no declared fallback.
+- The marker observer reads `/proc` only behind `--record-session-tokens`,
+  which is off by default, so the approved G3 run is unchanged.
+- Item 3's reporter is behind an explicit flag, off by default. It runs in
+  `--stdin` plus a separate reporter-only mode, and is not wired into any
+  command.
+- The capture supervisor's two cancellation races are fixed in one separate PR
+  (#24), as a change to the paused provider track.
+- Each item gets its own branch and PR (this session pushed
+  `ccr-16d7cdfd-8klzgs`, `-item2` and `-item3`; item 4 goes to `-item4`). Ask
+  before opening a PR, and merge only on the owner's word or a `/ship`.
+- Run the full suite locally before every push, docs included.
+
+### Open questions for the owner
+
+- **Agent on Frame (#16):** the five decisions in the
+  [2026-11-03 handoff](#open-decisions-for-the-owner) are unchanged.
+- **Phase 0 approval scope:** the approval reads "install the guarded setup
+  following `docs/agent-on-frame.md` Phase 0". Does it cover installing the
+  guard settings? That is the Phase 2 step, which #16 kept as a separate
+  approval. Asked, not answered. Per the planner's open PR #23 (E82, a
+  relayed device report, not a cloud result), the guard settings were already
+  copied on Frame on 2026-11-03 from `881fea7`, so the question is whether
+  that install was covered.
+- **Item 5:** whether to do the optional lock file and console entry points,
+  and how far.
+
+### Follow-ups found (not started)
+
+- **From PR #21's last review:**
+  - the token declaration still runs after a stop request;
+  - the 4 s declaration budget is measured from the declaration, not from the
+    worker's start;
+  - session failure reports drop the exception type;
+  - the supervisor contract does not tie `session_tokens` to the requested
+    flag;
+  - `rejection_report` spreads `details` from any exception;
+  - no test covers `runtime_id` as the only unobserved token;
+  - the documented slow-declaration runs used a harness that is not in the
+    repository.
+- **Capture supervisor:** a SIGINT and a SIGTERM pending together during
+  cleanup still make `supervise()` raise without reaping (`cleanup_signals()`,
+  shared with `capture_provider_check.py`). This is documented in #24 and left
+  open.
+- **`docs/evidence/e008.md`:** still links the removed
+  `scripts/mirror_capture.py` (item 5).
+
+### How this session ran the work
+
+Items 2 and 3 went through the package workflow of the
+[2026-11-03 handoff](#how-the-work-was-run), as a `Workflow` run, and item 4
+is in the same workflow:
+- one implementer, test-first;
+- three reviewers with distinct lenses;
+- two refute-first verifiers per finding;
+- a fixer and a recheck, with up to two fix rounds.
+
+Item 1 (#20, docs only) had two reviewers and a verify-and-fix pass. #24 had
+two reviewers per round.
+
+PRs the owner ran through `/ship` had up to three review cycles. Each cycle
+had three lens reviewers and two verifiers per blocking finding, and the full
+checks ran before every push.
+
+The checks before every push: the `CLAUDE.md` list; the CI no-skip list run
+locally, and after the seed fetch
+`run_tests_no_skips.py tests/test_seed_pin.py`; the bare `python3.12` run in
+a clean clone; `generate_status.py --check`; `hud_contract_header.py --check`;
+`bash -n`; and a local link check.
+
+Lessons:
+- **Load:** the container has 4 CPUs. Stagger workflows; process and timing
+  tests flake when several suites run at once.
+- **Usage limits:** agent work can stop at an account usage limit. Resume
+  workflows from their run cache, and review any edits an interrupted agent
+  left behind.
+- **Restarts:** the worker container can restart. Keep worktrees under the
+  scratchpad, push backup branches, and re-check `artifacts/` and `.cache`
+  afterwards.
+- **Rebuilding branches:** remote branch deletion and force pushes are
+  refused. After a squash merge or a local rebase, keep the push a
+  fast-forward with `git merge -s ours <old head>`, as the 2026-11-03 handoff
+  describes.
 
 ## Coder handoff, 2026-11-03
 
