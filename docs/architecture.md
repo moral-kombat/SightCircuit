@@ -166,7 +166,12 @@ misplace labels.
 | Presentation | Prototype: annotated Qt replay window and optional native OpenVR panel; both confirmed working on Frame by the user |
 
 Choose the model, input size, execution provider, and update rate using measured
-accuracy and latency. CPU execution in the cloud does not establish the same
+accuracy and latency. Third-party apps cannot use the Frame's Hexagon NPU (the
+CDSP), per user reports in
+[ValveSoftware/SteamOS issue #2890](https://github.com/ValveSoftware/SteamOS/issues/2890)
+(SteamOS 0.3 to 0.4.x: `dsp_service` holds `/dev/cdsp` and no FastRPC node is
+exposed); this is unconfirmed on SteamOS 0.5.6, so plan for CPU or GPU
+execution. CPU execution in the cloud does not establish the same
 runtime or performance on the headset. Model weights, labels, preprocessing,
 and license must be recorded together for reproducible results.
 

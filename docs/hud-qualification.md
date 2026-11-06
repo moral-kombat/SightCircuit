@@ -995,6 +995,74 @@ inference took about 26–31 ms per frame in the runs below.
 .venv-replay/bin/python scripts/evaluate_mask_fill.py --fetch --expect-clean-gray-sweep --report /tmp/mask-fill.json
 ```
 
+## Geometric prediction cross-check (2026-11-04)
+
+Package M adds a geometry-only prediction of where the HUD quad should land in
+the mirror's native pixels, to cross-check a G3 observation and the G4
+composition contract. **A prediction cannot qualify a mapping.** It is
+labelled `kind: geometric_prediction`, `prediction_only: true` and
+`qualifies_mapping: false`; `framejacker.hud.qualification` and `candidate`
+never read it, and a candidate whose evidence names `geometric_prediction` as
+its kind is rejected (`hud_evidence_provenance_invalid`).
+
+- `framejacker/hud/geometry.py` `project()` clips an eye-space polygon against
+  a near plane (z = −0.02 m) and side planes widened by a quarter of the frame,
+  then applies the pinhole given by the four `GetProjectionRaw` tangents.
+  `hull()` is a monotone-chain convex hull. Both are ported from
+  DeeJanuz/vr-recorder `vr-mask.cpp` L917-L977 (MIT; see
+  [THIRD_PARTY](../THIRD_PARTY.md#hud-geometric-prediction)). Upstream's comment
+  says "no clamping", but its code clamps at four times the larger frame
+  dimension (L949-L952). Here no point is clamped: after the side planes every
+  point lies inside the widened window, so `project()` checks that and raises
+  `hud_projection_outside_window` instead of bending the polygon.
+- `predict_hud_footprint(view_record, config)` places the head-relative quad
+  from `HudConfig` (identity rotation at `(x_m, y_m, -distance_m)`, height from
+  the texture aspect), moves it into the selected eye with the inverse of
+  `GetEyeToHeadTransform`, projects it and clips it to the view size. Its
+  `status` is `inside`, `partly_off_frame`, `off_frame`, `behind_eye` (every
+  corner at or behind the near plane) or `degenerate` (the projected hull has no
+  area: an edge-on quad). A
+  `both` view mode or a cropped view is reported as unsupported rather than
+  guessed.
+- Its assumptions are listed in the prediction: the mirror's native pixels are
+  the IVRHeadsetView image of that eye at the view size, uncropped, with no lens
+  or orientation change. Whether `/dev/video99` carries the IVRHeadsetView
+  output is **unknown**, and the prediction records it under `unknowns`.
+
+The view record comes from a read-only bridge mode:
+
+```bash
+artifacts/overlay-bridge/framejacker-overlay-bridge --headset-view-record --allow-runtime-query
+```
+
+It joins a running SteamVR as `VRApplication_Background` only (never an
+Overlay connect, never a vrserver start) and prints `GetHeadsetViewMode`,
+`GetHeadsetViewSize`, `GetHeadsetViewCropped`, `GetHeadsetViewAspectRatio`,
+`GetHeadsetViewBlendRange`, and `GetEyeToHeadTransform` and
+`GetProjectionRaw` for both eyes, in one JSON report under `view_record`. It
+never calls `SetHeadsetViewMode` or any other `Set*` call; a test checks the
+bridge source for that. The calls follow the read side of vr-recorder
+`vr-mask.cpp` L1381-L1393. Without SteamVR it exits with one
+`vrserver_not_running` error.
+
+A saved record becomes a prediction with (owner decision, 2026-11-04):
+
+```bash
+python3.12 scripts/hud_view_prediction.py VIEW_RECORD.json
+```
+
+It accepts the whole bridge report or just its `view_record` object, reads
+one regular file of at most 64 KiB, makes no OpenVR call, and prints a
+`hud_view_prediction` report whose `prediction` is the labelled object above
+with `mapping_qualified` false. Exit 0 for a prediction (whatever its
+`status`), 1 for an unusable record.
+
+Cloud checks: synthetic quads inside the frame, partly off it, behind the eye
+and crossing the eye plane match hand-computed polygons, and the command is
+driven on saved records (`tests/test_hud_prediction.py`); the view-record
+mode's refusals are covered in `tests/test_overlay_bridge.py`. Reading the view record on Frame is
+VR contact: it is person-run or Tier B, and it needs the owner's approval.
+
 ## Separately scoped device validation
 
 G5 needs real output to test exclusion and physical expiry, while production

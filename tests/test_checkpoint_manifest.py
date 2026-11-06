@@ -464,6 +464,13 @@ class ProcedureDriftTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue((ROOT / path).is_file())
 
+    def test_every_local_header_the_bridge_includes_is_pinned(self):
+        source = (ROOT / "tools/overlay_bridge.cpp").read_text()
+        included = {f"tools/{name}" for name in re.findall(r'^#include "([\w.]+)"', source, re.MULTILINE)
+                    if (ROOT / "tools" / name).is_file()}
+        self.assertIn("tools/overlay_lifecycle.hpp", included)
+        self.assertLessEqual(included, set(manifest.NATIVE_SOURCES))
+
     def test_each_procedure_verifies_before_it_first_runs_the_bridge(self):
         for path, heading in PROCEDURES:
             with self.subTest(path=path):

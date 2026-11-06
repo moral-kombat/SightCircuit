@@ -145,17 +145,71 @@ No Vulkan loader/driver binary is downloaded. The existing system loader is
 linked for the compile-only capture compatibility check; the query binary links
 `libdl` and resolves Vulkan functions only when requested.
 
+## Adapted MIT, BSD and Apache sources
+
+Each row names the pinned commit, the licence and what was taken. Notices are
+kept in the files that carry the adapted code. AGPL and GPL sources are cited
+in the docs as facts only; nothing from them is copied.
+
+### Overlay bridge lifecycle
+
+| Source | Licence | Taken | Changed |
+| --- | --- | --- | --- |
+| [JakeGreen2145/frame-testbench `native/observe.cpp`](https://github.com/JakeGreen2145/frame-testbench/blob/ea7f5109c05e56974f3ccc2e0b4af8fbf232579b/native/observe.cpp#L522-L586) at `ea7f5109c05e56974f3ccc2e0b4af8fbf232579b`, L22-L28 and L522-L586 | [MIT](https://github.com/JakeGreen2145/frame-testbench/blob/ea7f5109c05e56974f3ccc2e0b4af8fbf232579b/LICENSE), Copyright (c) 2026 Donn Green | The pattern of a saved stdout duplicate with fd 1 pointed at stderr, and a SIGALRM handler that only calls `write` and `_exit` | Rewritten in [tools/overlay_lifecycle.hpp](tools/overlay_lifecycle.hpp), which carries the notice: a caller-built JSON message swapped in with SIGALRM blocked, a torn line terminated first, per-phase and per-step re-arming, exit code 124 |
+
+The connect order (Background probe, then Overlay) is an idea taken from
+[coah80/framecorder `src/openvr.rs` L11-L21](https://github.com/coah80/framecorder/blob/130840c871d3fa740fcf494f96ba046b29d76cf4/src/openvr.rs#L11-L21)
+([MIT](https://github.com/coah80/framecorder/blob/130840c871d3fa740fcf494f96ba046b29d76cf4/LICENSE))
+and [Sippbox/frame-passthrough-pip `src/app/main.cpp` L94-L110](https://github.com/Sippbox/frame-passthrough-pip/blob/babae0b9d8f1a0955207bcca3d91c4db6e2474b2/src/app/main.cpp#L94-L110)
+([MIT](https://github.com/Sippbox/frame-passthrough-pip/blob/babae0b9d8f1a0955207bcca3d91c4db6e2474b2/LICENSE)).
+No code was copied from either.
+
+### Run-context sensor sampler
+
+| Source | Licence | Taken | Changed |
+| --- | --- | --- | --- |
+| [JonahSimon/steam-frame-harness `frame/frame-sensors.py`](https://github.com/JonahSimon/steam-frame-harness/blob/6c16bf39780acbda28dfac41269b8fd82d97b27d/frame/frame-sensors.py) at `6c16bf39780acbda28dfac41269b8fd82d97b27d` | [MIT](https://github.com/JonahSimon/steam-frame-harness/blob/6c16bf39780acbda28dfac41269b8fd82d97b27d/LICENSE), Copyright (c) 2026 Jonah Paul Simon | Sensor discovery and sampling: thermal zones, cooling states, `max34417` power rails, cpufreq policies, GPU devfreq, battery, charger, PMIC VADC skin temperatures, `/proc/stat` load and `MemAvailable` | Ported to [framejacker/runtime/sensors.py](framejacker/runtime/sensors.py), which carries the notice: blank cells instead of -999 (and instead of 0 for a missing throttle state), Wi-Fi columns and `iw` dropped, one clock reading per row as UTC with offset and monotonic, a `root` for fake trees, bounded rows |
+| [sasaken1102r/frame-perf-overlay `headset/sensors.cpp`](https://github.com/sasaken1102r/frame-perf-overlay/blob/066a5c87b4cc57a54ce60fbaea69e9fa39ae3a94/headset/sensors.cpp) at `066a5c87b4cc57a54ce60fbaea69e9fa39ae3a94` | [MIT](https://github.com/sasaken1102r/frame-perf-overlay/blob/066a5c87b4cc57a54ce60fbaea69e9fa39ae3a94/LICENSE), Copyright (c) 2026 sasaken1102r and contributors | The Frame sysfs paths, through steam-frame-harness, which names it as their source | No code from this file was copied directly; credited because the paths originate there |
+
+### HUD geometric prediction
+
+| Source | Licence | Taken | Changed |
+| --- | --- | --- | --- |
+| [DeeJanuz/vr-recorder `vr-mask.cpp`](https://github.com/DeeJanuz/vr-recorder/blob/78ab97e0700b6668978722111770b4657ec2ec92/vr-mask.cpp#L917-L977) at `78ab97e0700b6668978722111770b4657ec2ec92`, L917-L977 | [MIT](https://github.com/DeeJanuz/vr-recorder/blob/78ab97e0700b6668978722111770b4657ec2ec92/LICENSE), Copyright (c) 2026 DeeJanuz (the file has no header, so the LICENSE text is carried) | `Project()` (Sutherland-Hodgman clip against a near plane and widened side planes, then pinhole projection) and `Hull()` (monotone-chain convex hull) | Ported to Python in [framejacker/hud/geometry.py](framejacker/hud/geometry.py), which carries the LICENSE text: the pinhole uses the four `GetProjectionRaw` tangents, points arrive in eye space, and the upstream clamp at four times the larger frame dimension (L949-L952) is replaced by a check that raises |
+
+The bridge's read-only `--headset-view-record` mode follows the list of
+`IVRHeadsetView` and `IVRSystem` getters read in the same file at L1381-L1393;
+that code was not copied.
+
 ## Research references
 
 The offline [lifecycle review](docs/lifecycle-review.md) examines
 [frame-perf-overlay](https://github.com/sasaken1102r/frame-perf-overlay/tree/066a5c87b4cc57a54ce60fbaea69e9fa39ae3a94)
 at `066a5c87b4cc57a54ce60fbaea69e9fa39ae3a94` (MIT):
-`headset/vr_overlay.cpp` and `headset/vk_texture.cpp`. This is attributed source
-review of cleanup ordering and measurement patterns; no source or dependency
-was incorporated, and no upload-performance or device-compatibility claim is made.
+`headset/vr_overlay.cpp` and `headset/vk_texture.cpp`. That is attributed source
+review of cleanup ordering and measurement patterns; nothing from those two
+files was incorporated. Its `headset/sensors.cpp` sysfs paths are used, by way
+of steam-frame-harness, in the [run-context sensor sampler](#run-context-sensor-sampler)
+above. No upload-performance or device-compatibility claim is made.
 
 The [camera guide](docs/steam-frame-camera.md) links Valve's OpenVR SDK, Arcturus's
 Spirula fork and community capture/reconstruction projects. Those links provide
 research context. Apart from the protocol header and patches above, their code
 and binaries have not been vendored. Consult their licenses and preserve attribution when
 integrating any implementation.
+
+The 2026-11-04 documentation pass cites further sources as third-party claims,
+kept apart from Framejacker evidence; no code or text was copied from them:
+danthedaniel/roommate-radar `docs/arcturus-av1.md` at
+`d6e8a8cbdb6c1197514e382662951231fd641941` (AGPL-3.0; facts restated in our own
+words in the [camera guide](docs/steam-frame-camera.md#third-party-camera-claims-2026-11-04)),
+coah80/framecorder `AGENTS.md` on `dev` at
+`0c624afb008e0f2e1e467eacae9a9206480943ba` (MIT; advice paraphrased in
+[on-device](docs/on-device.md#preflight-advice-from-another-frame-project-upstream-not-our-evidence)),
+Frametop/frametop `hands/README.md` and `screens/keyboard.cpp` at
+`adebd7d6cfc938477bf8e42a8bcb1c41a32a6f9c` (MIT; a format claim and a fallback
+reference), Brobert-in-aus/cuff `docs/INTERNALS.md` at
+`4b7f54a8cd240f6118dd3c35e41ea0ac22afc787` and nicolas-riera/Quest1-SteamOS
+`docs/passthrough.md` at `4e2a7decc8434acb6cec4e6ba2d089c336faedad` (cited
+reports only), and the public issues named in
+[live capture](docs/live-capture.md) and [architecture](docs/architecture.md).

@@ -135,6 +135,67 @@ bridge stops responding; forced termination is reported and cleanup is marked
 unconfirmed. SteamVR normally destroys an application's overlays when that
 application disconnects, but verify actual disappearance in the first test.
 
+### Connect order, output and watchdog (package K, 2026-11-04)
+
+Every runtime mode (`--test-panel`, `--stdin`, `--calibration-marker`) joins an
+already running SteamVR only. (The read-only `--headset-view-record` mode
+stops after the Background probe; see
+[the prediction cross-check](hud-qualification.md#geometric-prediction-cross-check-2026-11-04).)
+
+1. `VR_Init` as `VRApplication_Background`. A Background client never starts a
+   vrserver. If it fails, the bridge exits with one JSON report whose `error` is
+   `vrserver_not_running:<VRInitError symbol>` and never attempts the Overlay
+   connect.
+2. Otherwise the probe is shut down and the bridge connects as
+   `VRApplication_Overlay`, up to three attempts 250 ms and 500 ms apart. Each
+   retry re-probes first; a server that went away ends the run as
+   `vrserver_lost_before_overlay_connect:<symbol>`. A server that exits in the
+   short window between a probe and the Overlay `VR_Init` can still be started
+   by that call: the window is narrowed, not closed.
+
+The final report's `connect` object records the probes, the probe result, the
+Overlay attempts and their errors.
+
+**Background-only opt-in (owner decision, 2026-11-04).** frame-passthrough-pip's
+source says a Background client gets the full `IVROverlay`. If that holds on
+Frame, step 2 is unnecessary. To test it, a runtime mode may end with
+`--connect-as background`: the bridge then keeps the Background client as its
+connection and never connects as Overlay (`connect.sequence` is
+`background_only_opt_in`, `application_type` `VRApplication_Background`).
+`--connect-as overlay` is the default and is refused, like `background`, by
+the validation-only and view-record modes. The device check is a person-run
+`--test-panel --seconds 10 --connect-as background` with the owner wearing the
+headset, then the HUD, `SetOverlayRaw` and overlay-event checks listed below;
+it needs the owner's approval and has not run. Until a Frame result exists the
+Python clients keep the default. The validation-only modes make no OpenVR
+call and carry no `connect` object.
+
+The bridge keeps a duplicate of the real stdout for the JSON protocol and points
+fd 1 at stderr before anything can load the SDK, so SDK output cannot corrupt a
+report. A SIGALRM watchdog (6 s for the connect, 5 s for any one loop step,
+re-armed per step, and 5 s for cleanup) writes one prepared JSON error
+(`watchdog_expired:<phase>`, exit code 124, `cleanup_ok: false`) and calls
+`_exit` without running cleanup. It sits beside `framejacker/runtime/guard.py`
+and the Python client's bounded termination; it does not replace them. A torn
+protocol line is terminated before the watchdog line, so the last line always
+parses. The handler pattern is adapted from frame-testbench (MIT; see
+[THIRD_PARTY](../THIRD_PARTY.md#overlay-bridge-lifecycle)).
+
+The connect order follows the idea in coah80/framecorder
+[`src/openvr.rs` L11-L21](https://github.com/coah80/framecorder/blob/130840c871d3fa740fcf494f96ba046b29d76cf4/src/openvr.rs#L11-L21)
+and Sippbox/frame-passthrough-pip
+[`src/app/main.cpp` L94-L110](https://github.com/Sippbox/frame-passthrough-pip/blob/babae0b9d8f1a0955207bcca3d91c4db6e2474b2/src/app/main.cpp#L94-L110);
+no code was copied. Upstream reports that a SteamVR server started outside its
+launcher leaves the Frame black or stuck on passthrough. That is a third-party
+claim, not Framejacker evidence.
+
+Cloud checks cover the no-server refusal in every mode (with and without
+`--connect-as background`), the validation modes and scripted fakes of the
+connect order, isolation and watchdog (`tests/test_overlay_bridge.py`). Not yet checked on Frame (each needs the
+owner's approval): that the HUD, `SetOverlayRaw` and overlay events behave as
+before under the new connect order, and a `SetOverlayRaw` soak past 300 calls at
+HUD size (see [G6 risks](live-capture.md#risks)).
+
 The Qt exit summary includes an `overlay` section with native cleanup results
 and frame counts. Frames are not saved or sent over a network. The existing
 explicit preview/report flags still control optional file outputs.

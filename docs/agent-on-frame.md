@@ -174,6 +174,10 @@ enough.
   signal the runner was started with ignored (`nohup` ignores SIGHUP) stays
   ignored. A task that starts its own session (`setsid`) is outside that group
   and is not contained.
+- No task touches `dsp_service`, `/dev/cdsp`, `/dev/adsp` or SteamVR's
+  `drivers/cv/bin`, and none starts a unit bound to `steamvr.service`. Reach
+  checks use port 22, not ping. See the
+  [preflight advice](on-device.md#preflight-advice-from-another-frame-project-upstream-not-our-evidence).
 - Authentication is done interactively by the owner on Frame (`claude` login);
   no key in the repository, environment files or chat.
 - Previews and stills stay on Frame: room images are private and are not pushed

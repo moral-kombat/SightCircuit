@@ -295,6 +295,13 @@ versus 5.15 fps unpaced
 `--realtime` every frame is processed in order, which plays this recording in
 slow motion.
 
+A latency run can optionally carry the read-only
+[run-context sensor sidecar](development.md#run-context-sensor-sidecar)
+(`scripts/sample_run_context.py`) in a second shell, to record load, heat and
+throttling beside the `pipeline` statistics. It is not yet approved on Frame:
+its sysfs paths are unconfirmed on SteamOS 0.5.6, and a read-only sysfs
+listing comes first as its own approved step. It is never a runner task.
+
 By default the prototype displays an ordinary Qt window without opening camera
 nodes, calling OpenVR, changing SteamVR or saving images. Optional `--overlay`
 initializes OpenVR in a separate native process; see the
@@ -781,6 +788,29 @@ On today's runtime `run-tier tier-a` does not report `all_passed`: by design
 `tier-a/service-report` exits nonzero because no successful rehearsal exists,
 and `tier-a/evaluate-local` is skipped when `evaluation/local/frame.json` is
 absent. Read each task's status and reason rather than the overall exit code.
+
+#### Preflight advice from another Frame project (upstream, not our evidence)
+
+coah80/framecorder's development guide ([`AGENTS.md` on `dev`](https://github.com/coah80/framecorder/blob/0c624afb008e0f2e1e467eacae9a9206480943ba/AGENTS.md) at
+`0c624afb008e0f2e1e467eacae9a9206480943ba`, MIT) gives this advice from its own
+Frame work. It is upstream advice, not a Framejacker result:
+
+- The headset does not answer ping. Check that port 22 answers instead
+  (for example `nc -z -w 3 <frame-host> 22`); if it does not, the headset may
+  be asleep ([L231](https://github.com/coah80/framecorder/blob/0c624afb008e0f2e1e467eacae9a9206480943ba/AGENTS.md#L231)).
+- Desktop Mode runs a nested Plasma session with its own `XDG_RUNTIME_DIR` and
+  session bus. From a Desktop Mode terminal, point user-service and runtime
+  paths at `/run/user/<uid>` rather than trusting `$XDG_RUNTIME_DIR`
+  ([L225](https://github.com/coah80/framecorder/blob/0c624afb008e0f2e1e467eacae9a9206480943ba/AGENTS.md#L225)).
+- Starting a game can restart PipeWire; anything holding a stream must notice
+  and reconnect ([L229](https://github.com/coah80/framecorder/blob/0c624afb008e0f2e1e467eacae9a9206480943ba/AGENTS.md#L229)).
+- Never start a unit bound to SteamVR (`BindsTo=steamvr.service`) while
+  SteamVR is off: starting it pulls SteamVR up, and a SteamVR started outside
+  its own launcher can leave the headset stuck in passthrough ([L62](https://github.com/coah80/framecorder/blob/0c624afb008e0f2e1e467eacae9a9206480943ba/AGENTS.md#L62)).
+
+Framejacker's own rule, beside that advice: no runner task touches
+`dsp_service`, `/dev/cdsp`, `/dev/adsp` or SteamVR's `drivers/cv/bin`.
+`tests/test_frame_agent.py` checks the task table for those names.
 
 `update <full commit>` detaches a clean checkout at a commit already on
 `origin/main` whose agent guard is at least as strict as the current one; it

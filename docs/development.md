@@ -30,9 +30,13 @@ development; exact tested pins remain in the `requirements-*.txt` files.
 | `framejacker/mask_fill_evaluation.py` | Offline comparison of HUD mask fills (the runtime's `hud.mask.fill_regions` and the candidates it was chosen over) on the gray sweep and the seed stills, used by `evaluate_mask_fill.py`; the runtime never imports it ([HUD mask fill evaluation](#hud-mask-fill-evaluation)) |
 | `framejacker/sources/` | `ReplaySource` (PyAV); `standin` (the synthetic realtime-replay [stand-in clip](#continuous-integration)); `mirror_device` (read-only V4L2 SteamVR mirror discovery and reads); `mirror` (bounded acquisition loop `capture`, `MirrorSource` (its optional `session` declares the HUD session tokens and stamps each frame), and `launch`, the one launcher of both mirror commands: candidate selection, output reservation, the bounded worker and all-or-nothing publication); `recording` (one MP4 box-header decoder for finished-file inspection and the growing-file scan used by `recording_growth_check`; newest recording); `PolledSource` (adapter for `open`/`read`/`close` sources); `session` (read-only [session-token providers](hud-qualification.md#session-tokens-for-the-mirror-source-2026-11-03) for a mirror run: `HostClock`, `RuntimeProcess`, `TrackingObserver` and `MirrorSession`). Adapters forward the wrapped source's declared identity |
 | `framejacker/overlay.py` | Overlay bridge client and `OverlaySink`, the one panel sink: with a caller-owned client (replay's interactive panel) it only submits images; otherwise it owns a validation-only client through `open`/`clear`/`close`, optionally with the frozen HUD placement and payload contract |
-| `framejacker/hud/` | Fixed edge HUD contract, shared eye/rectangle geometry, the one margin rule, synthetic-only native mask (calibrations from two factories only, with expiry, session tokens and view fields; zeroed regions refilled from their surround by `fill_regions`), tile rendering, the `HudStage` engine stage (and `HudPipelineAdapter`, the stage bound to its sink's fixed output contract, used by `live_pipeline.py`), offline mapping qualification, the calibration marker client, `observation` (empirical marker-copy location in native pixels and the observer report contract, used by `hud_marker_observer.py`), `candidate` (an observer report to an unqualified mapping candidate, used by `hud_validation_report.py --from-observer`) and `validation` (the synthetic HUD run's ledger feed and G5 software counts) |
-| `framejacker/runtime/` | `process` (bounded spawned workers, parent-death signalling), `guard` (owned process-group supervision with the Linux parent-loss guardian, and the one stop-on-signal convention: `sigterm_cancels` and `cancelled` for launchers, `stop_on_signals` for workers), `output` (reserve, write, publish all or none, withdraw and discard explicit image outputs; `publish_new` for finished bytes), `live` (`run_report`, the one report runner on `Pipeline`, used by `run_pipeline`, the gated synthetic run, whose HUD run also feeds the validation ledger, and by `run_recognition`, the mirror recognizer), `synthetic` (the generated source and its declared `SyntheticSession`, the fixture calibration factory and its candidate record, `FixtureDetector` and `HeadlessSink`) and `manifest` (the [checkpoint artifact manifest](#checkpoint-artifact-manifest): software identity written and verified on Frame) |
+| `framejacker/hud/` | Fixed edge HUD contract, shared eye/rectangle geometry (and the [geometric prediction cross-check](hud-qualification.md#geometric-prediction-cross-check-2026-11-04), which never feeds qualification), the one margin rule, synthetic-only native mask (calibrations from two factories only, with expiry, session tokens and view fields; zeroed regions refilled from their surround by `fill_regions`), tile rendering, the `HudStage` engine stage (and `HudPipelineAdapter`, the stage bound to its sink's fixed output contract, used by `live_pipeline.py`), offline mapping qualification, the calibration marker client, `observation` (empirical marker-copy location in native pixels and the observer report contract, used by `hud_marker_observer.py`), `candidate` (an observer report to an unqualified mapping candidate, used by `hud_validation_report.py --from-observer`) and `validation` (the synthetic HUD run's ledger feed and G5 software counts) |
+| `framejacker/runtime/` | `process` (bounded spawned workers, parent-death signalling), `guard` (owned process-group supervision with the Linux parent-loss guardian, and the one stop-on-signal convention: `sigterm_cancels` and `cancelled` for launchers, `stop_on_signals` for workers), `output` (reserve, write, publish all or none, withdraw and discard explicit image outputs; `publish_new` for finished bytes), `live` (`run_report`, the one report runner on `Pipeline`, used by `run_pipeline`, the gated synthetic run, whose HUD run also feeds the validation ledger, and by `run_recognition`, the mirror recognizer), `synthetic` (the generated source and its declared `SyntheticSession`, the fixture calibration factory and its candidate record, `FixtureDetector` and `HeadlessSink`) `manifest` (the [checkpoint artifact manifest](#checkpoint-artifact-manifest): software identity written and verified on Frame) and `sensors` (the read-only [run-context sensor sidecar](#run-context-sensor-sidecar)) |
 | `framejacker/agent/` | On-device agent support: the fixed task table, the `frame_agent_run.py` runner (timeouts, lock, run budget, `result.json`), the PreToolUse guard and the Frame-only Claude Code settings template; standard library only ([plan](agent-on-frame.md)) |
+
+`scripts/hud_view_prediction.py` turns a saved headset view record into the
+[geometric prediction](hud-qualification.md#geometric-prediction-cross-check-2026-11-04);
+it is a cross-check that never qualifies a mapping.
 
 File replay uses every-frame scheduling, so each decoded frame is processed in
 order. Mirror recognition uses latest-only scheduling with a one-second input
@@ -82,6 +86,35 @@ while `count` and `max` cover every frame. Stage durations are read from
 stepping clock driven by a fake detector with known delays, so tests check exact
 percentiles in the replay, mirror and synthetic reports. Ages are measured
 against the source's monotonic observation clock.
+
+### Run-context sensor sidecar
+
+`scripts/sample_run_context.py` (library `framejacker/runtime/sensors.py`) is an
+optional sidecar for latency runs. It writes one CSV row per interval of CPU
+load, thermal zones, throttle state, clock caps, GPU frequency, power rails,
+battery and available memory, so a run's latency numbers can be read against
+load and heat. It reads only `/proc` and `/sys`; it touches no OpenVR, camera,
+SteamVR process or service, and it is not a Tier A runner task.
+
+```bash
+python3.12 scripts/sample_run_context.py --interval 5 --samples 720 --output NEW_CSV
+```
+
+Each row takes one clock reading, written as `utc` (ISO 8601 with `+00:00`)
+and `monotonic_ns`, so rows line up with the `pipeline` block's monotonic
+timings. A missing reading is a blank cell, never a sentinel, and a missing
+sensor family has no column. `--interval` is 0.5 to 60 s and `--samples` 1 to
+7,200; `--output` creates a new file (mode 0600) and never overwrites one.
+SIGINT or SIGTERM ends the run after the current row; a JSON summary goes to
+stderr so stdout stays pure CSV.
+
+The paths are ported from steam-frame-harness, which took them from
+frame-perf-overlay (both MIT; see [THIRD_PARTY](../THIRD_PARTY.md#run-context-sensor-sampler)).
+They are **unconfirmed on SteamOS 0.5.6**: upstream tested SteamOS 0.4.5. A
+read-only sysfs listing on Frame is a later device step that needs the
+owner's approval. `tests/test_run_context_sensors.py` checks hand-computed rows
+from fake trees, including missing and malformed sensors. The rows are run
+context, not latency or device evidence.
 
 ## Detector evaluation
 

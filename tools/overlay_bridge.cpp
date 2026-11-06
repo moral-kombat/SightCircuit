@@ -3,6 +3,7 @@
 #include "json/json.h"
 #include "hud_contract.hpp"
 #include "overlay_frame.hpp"
+#include "overlay_lifecycle.hpp"
 #include <array>
 #include <cerrno>
 #include <chrono>
@@ -12,10 +13,10 @@
 #include <cstring>
 #include <fcntl.h>
 #include <functional>
-#include <iostream>
 #include <iterator>
 #include <limits>
 #include <poll.h>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <sys/prctl.h>
@@ -26,6 +27,7 @@
 
 namespace {
 namespace contract = framejacker_contract;
+namespace lifecycle = framejacker_lifecycle;
 using framejacker_overlay::read_u32;
 using Clock = std::chrono::steady_clock;
 constexpr std::uint32_t kMaxPayload =
@@ -36,10 +38,30 @@ constexpr bool kCalibrationVisibleInDashboard = true;
 volatile std::sig_atomic_t stopping = 0;
 void stop_signal(int) { stopping = 1; }
 struct Stopped {};
+// Watchdog budgets beside framejacker/runtime/guard.py, which still owns
+// escalation. The connect budget is below OverlayClient's 8 s ready wait.
+constexpr unsigned kWatchdogConnectSeconds = 6;
+constexpr unsigned kWatchdogStallSeconds = 5;  // any one loop step, re-armed per step
+constexpr unsigned kWatchdogCleanupSeconds = 5;
 void emit(Json::Value value) {
     value["report_kind"] = "framejacker_overlay_bridge";
     value["schema_version"] = 1;
-    std::cout << Json::FastWriter().write(value) << std::flush;
+    // Only the saved real stdout carries the protocol; fd 1 points at stderr.
+    lifecycle::write_protocol(Json::FastWriter().write(value));
+}
+void watchdog(const std::string& mode, const char* phase, unsigned seconds) {
+    Json::Value value;
+    value["event"] = "error"; value["status"] = "error";
+    value["error"] = std::string("watchdog_expired:") + phase;
+    value["mode"] = mode; value["watchdog_phase"] = phase; value["watchdog_seconds"] = seconds;
+    value["exit_code"] = lifecycle::kWatchdogExitCode;
+    value["cleanup_ok"] = false; value["cleanup_skipped_by_watchdog"] = true;
+    value["runtime_initialized"] = Json::Value();
+    value["physical_display_recovery_verified"] = false;
+    value["report_kind"] = "framejacker_overlay_bridge";
+    value["schema_version"] = 1;
+    if (!lifecycle::set_watchdog(Json::FastWriter().write(value), seconds))
+        throw std::runtime_error("watchdog_arm_failed");
 }
 std::uint64_t monotonic_ns() {
     timespec value{};
@@ -86,7 +108,7 @@ public:
     vr::IVRSystem* system = nullptr;
     vr::IVROverlay* api = nullptr;
     vr::VROverlayHandle_t handle = vr::k_ulOverlayHandleInvalid;
-    bool active = false, has_image = false;
+    bool active = false, probe_active = false, has_image = false;
     bool retirement_attempted = false, shutdown_returned = false;
     framejacker_overlay::Retirement retirement;
     bool overlay_shown_event_seen = false, overlay_hidden_event_seen = false;
@@ -97,11 +119,49 @@ public:
         if (e != vr::VROverlayError_None)
             throw std::runtime_error(std::string(op)+":"+api->GetOverlayErrorNameFromEnum(e));
     }
-    void init(bool calibration = false) {
-        vr::EVRInitError error = vr::VRInitError_None;
-        system = vr::VR_Init(&error, vr::VRApplication_Overlay);
-        active = error == vr::VRInitError_None && system;
-        if (!active) throw std::runtime_error(std::string("VR_Init:")+vr::VR_GetVRInitErrorAsSymbol(error));
+    static std::string init_error(vr::EVRInitError error, const void* interface) {
+        if (error != vr::VRInitError_None) return vr::VR_GetVRInitErrorAsSymbol(error);
+        return interface ? std::string() : std::string("VRInitError_None_without_IVRSystem");
+    }
+    void init(bool calibration, bool background_only, Json::Value& report) {
+        // Background never starts a vrserver; only a running one is joined as Overlay.
+        // With background_only (an opt-in device check) the probe itself owns the overlay.
+        vr::IVRSystem* probe_system = nullptr;
+        const auto result = lifecycle::connect_overlay(
+            [&] {
+                vr::EVRInitError error = vr::VRInitError_None;
+                probe_system = vr::VR_Init(&error, vr::VRApplication_Background);
+                probe_active = error == vr::VRInitError_None && probe_system;
+                if (!probe_active) probe_system = nullptr;
+                return init_error(error, probe_system);
+            },
+            [&] { if (probe_active) { vr::VR_Shutdown(); probe_active = false; } },
+            [&] {
+                vr::EVRInitError error = vr::VRInitError_None;
+                system = vr::VR_Init(&error, vr::VRApplication_Overlay);
+                active = error == vr::VRInitError_None && system;
+                if (!active) system = nullptr;
+                return init_error(error, system);
+            },
+            [&](unsigned ms) {
+                const auto until = Clock::now()+std::chrono::milliseconds(ms);
+                while (!stopping && Clock::now() < until) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            },
+            [&] { return stopping != 0; }, background_only);
+        report["sequence"] = background_only ? "background_only_opt_in" : "background_probe_then_overlay";
+        report["application_type"] = background_only ? "VRApplication_Background" : "VRApplication_Overlay";
+        report["background_probes"] = result.background_probes;
+        report["background_probe_result"] = result.background_probe_error;
+        report["vrserver_running"] = result.server_running;
+        report["overlay_connect_attempted"] = result.overlay_connect_attempted;
+        report["overlay_connect_attempts"] = result.overlay_attempts;
+        report["overlay_connect_attempt_limit"] = lifecycle::kOverlayConnectAttempts;
+        report["overlay_connect_errors"] = Json::arrayValue;
+        for (const auto& error : result.overlay_errors) report["overlay_connect_errors"].append(error);
+        report["connected"] = result.connected;
+        if (result.stopped) throw Stopped{};
+        if (!result.connected) throw std::runtime_error(result.error);
+        if (background_only) { system = probe_system; active = true; probe_active = false; }
         api = vr::VROverlay();
         if (!api) throw std::runtime_error("IVROverlay_028_unavailable");
         if (!system->IsTrackedDeviceConnected(vr::k_unTrackedDeviceIndex_Hmd))
@@ -114,6 +174,56 @@ public:
             check(api->SetOverlayFlag(handle, vr::VROverlayFlags_VisibleInDashboard, kCalibrationVisibleInDashboard),
                   "SetOverlayFlag:VisibleInDashboard");
         configure(config);
+    }
+    // Read-only headset view record (package M): Background only, never an
+    // Overlay connect and never a Set* call on IVRHeadsetView.
+    void view_record(Json::Value& connect, Json::Value& record) {
+        connect["sequence"] = "background_only";
+        connect["overlay_connect_attempted"] = false;
+        connect["background_probes"] = 1U;
+        vr::EVRInitError error = vr::VRInitError_None;
+        system = vr::VR_Init(&error, vr::VRApplication_Background);
+        probe_active = error == vr::VRInitError_None && system;
+        const auto symbol = init_error(error, system);
+        connect["background_probe_result"] = symbol.empty() ? "VRInitError_None" : symbol;
+        connect["vrserver_running"] = symbol.empty();
+        if (!symbol.empty()) { system = nullptr; throw std::runtime_error("vrserver_not_running:"+symbol); }
+        auto* view = vr::VRHeadsetView();
+        if (!view) throw std::runtime_error("IVRHeadsetView_001_unavailable");
+        const auto number = [](float value) { return std::isfinite(value) ? Json::Value(value) : Json::Value(); };
+        record["report_kind"] = "framejacker_headset_view_record";
+        record["schema_version"] = 1;
+        record["scope"] = "read_only_runtime_query_not_mapping_evidence";
+        record["interface"] = vr::IVRHeadsetView_Version;
+        auto& headset = record["headset_view"];
+        std::uint32_t width = 0, height = 0;
+        view->GetHeadsetViewSize(&width, &height);
+        headset["width"] = width; headset["height"] = height;
+        const auto mode = view->GetHeadsetViewMode();
+        headset["mode_value"] = static_cast<int>(mode);
+        headset["mode"] = mode == vr::HeadsetViewMode_Left ? "left" : mode == vr::HeadsetViewMode_Right ? "right" :
+                          mode == vr::HeadsetViewMode_Both ? "both" : "unknown";
+        headset["cropped"] = view->GetHeadsetViewCropped();
+        headset["aspect_ratio"] = number(view->GetHeadsetViewAspectRatio());
+        float blend_start = 0, blend_end = 0;
+        view->GetHeadsetViewBlendRange(&blend_start, &blend_end);
+        headset["blend_range"].append(number(blend_start));
+        headset["blend_range"].append(number(blend_end));
+        for (const auto eye : {vr::Eye_Left, vr::Eye_Right}) {
+            auto& entry = record["eyes"][eye == vr::Eye_Left ? "left" : "right"];
+            const auto transform = system->GetEyeToHeadTransform(eye);
+            for (unsigned row = 0; row < 3; ++row) {
+                Json::Value values(Json::arrayValue);
+                for (unsigned column = 0; column < 4; ++column) values.append(number(transform.m[row][column]));
+                entry["eye_to_head"].append(values);
+            }
+            float left = 0, right = 0, top = 0, bottom = 0;
+            system->GetProjectionRaw(eye, &left, &right, &top, &bottom);
+            entry["projection_raw"]["left"] = number(left); entry["projection_raw"]["right"] = number(right);
+            entry["projection_raw"]["top"] = number(top); entry["projection_raw"]["bottom"] = number(bottom);
+        }
+        record["set_calls_made"] = false;
+        record["unknowns"]["mirror_carries_headset_view"] = "unknown: not established for /dev/video99";
     }
     void configure(const Settings& s) {
         config = s;
@@ -185,7 +295,7 @@ public:
             ok = retirement.ok();
             handle = vr::k_ulOverlayHandleInvalid;
         }
-        if (active) { vr::VR_Shutdown(); active = false; shutdown_returned = true; }
+        if (active || probe_active) { vr::VR_Shutdown(); active = probe_active = false; shutdown_returned = true; }
         system = nullptr; api = nullptr;
         return ok;
     }
@@ -195,6 +305,7 @@ bool read_exact(std::uint8_t* data, std::size_t size, bool eof_allowed, Overlay&
     const auto deadline = Clock::now()+std::chrono::seconds(eof_allowed ? 10 : 3);
     std::size_t received = 0;
     while (received < size) {
+        lifecycle::rearm_watchdog(kWatchdogStallSeconds);
         if (stopping) throw Stopped{};
         expire();
         overlay.events();
@@ -403,18 +514,30 @@ int render_marker(int argc, char* argv[]) {
 } // namespace
 
 int main(int argc, char* argv[]) {
+    // Before anything can load the SDK: keep the real stdout for the protocol.
+    if (!lifecycle::isolate_stdout()) {
+        Json::Value failure;
+        failure["event"]="error"; failure["status"]="error"; failure["error"]="stdout_isolation_failed";
+        failure["runtime_initialized"]=false; failure["exit_code"]=1; emit(failure); return 1;
+    }
     const std::string mode=argc>1 ? argv[1] : "";
     if (mode=="--help" && argc==2) {
         const auto marker_seconds=std::to_string(contract::kMarkerMinSeconds)+".."+
                                   std::to_string(contract::kMarkerMaxSeconds);
-        std::cout << "Usage: framejacker-overlay-bridge --test-panel [--seconds 1..30]\n"
+        std::ostringstream usage;
+        usage << "Usage: framejacker-overlay-bridge --test-panel [--seconds 1..30]\n"
                      "       framejacker-overlay-bridge --stdin\n"
                      "       framejacker-overlay-bridge --validate-stdin (no OpenVR calls)\n"
                      "       framejacker-overlay-bridge --validate-calibration-marker --seconds " << marker_seconds << "\n"
                      "       framejacker-overlay-bridge --calibration-marker --seconds " << marker_seconds <<
                      " --allow-calibration-output\n"
-                     "       framejacker-overlay-bridge --render-calibration-marker NEW_RGBA_FILE (no OpenVR calls)\n";
-        return 0;
+                     "       framejacker-overlay-bridge --render-calibration-marker NEW_RGBA_FILE (no OpenVR calls)\n"
+                     "       framejacker-overlay-bridge --headset-view-record --allow-runtime-query (read-only, Background only)\n"
+                     "Runtime modes join an already running SteamVR only: a Background probe comes first and\n"
+                     "never starts a vrserver. A SIGALRM watchdog ends a stalled step with one JSON error.\n"
+                     "A runtime mode may end with --connect-as overlay (default) or --connect-as background,\n"
+                     "which keeps the Background client and never connects as Overlay (device check, opt-in).\n";
+        return lifecycle::write_protocol(usage.str()) ? 0 : 1;
     }
     if (mode=="--render-calibration-marker") return render_marker(argc,argv);
     Json::Value report;
@@ -426,9 +549,23 @@ int main(int argc, char* argv[]) {
     report["mode"]=mode;
     const bool marker=mode=="--calibration-marker" || mode=="--validate-calibration-marker";
     const bool validate=mode=="--validate-stdin" || mode=="--validate-calibration-marker";
+    const bool view_record=mode=="--headset-view-record";
+    const bool runtime_mode=mode=="--test-panel" || mode=="--stdin" || mode=="--calibration-marker";
+    bool background_only=false;
     int seconds=10;
     try {
-        if (marker) {
+        // A trailing "--connect-as overlay|background" is read only for the runtime modes.
+        if (argc>=4 && std::string(argv[argc-2])=="--connect-as") {
+            const std::string how=argv[argc-1];
+            if (!runtime_mode || (how!="overlay" && how!="background"))
+                throw std::runtime_error("connect_as_requires_runtime_mode_and_overlay_or_background");
+            background_only=how=="background";
+            argc-=2;
+        }
+        if (view_record) {
+            if (argc!=3 || std::string(argv[2])!="--allow-runtime-query")
+                throw std::runtime_error("view_record_requires_explicit_opt_in");
+        } else if (marker) {
             if (argc!=(validate ? 4 : 5) || std::string(argv[2])!="--seconds" ||
                     (!validate && std::string(argv[4])!="--allow-calibration-output"))
                 throw std::runtime_error("calibration_requires_separate_explicit_opt_in");
@@ -449,6 +586,10 @@ int main(int argc, char* argv[]) {
         emit(report); return argc==1 ? 3 : 64;
     }
     std::signal(SIGINT,stop_signal); std::signal(SIGTERM,stop_signal); std::signal(SIGPIPE,SIG_IGN);
+    if (!lifecycle::install_watchdog()) {
+        report["event"]="error"; report["error"]="watchdog_unavailable";
+        report["exit_code"]=1; emit(report); return 1;
+    }
     const auto parent=getppid();
     if (prctl(PR_SET_PDEATHSIG,SIGTERM)!=0) {
         report["event"]="error"; report["error"]="parent_death_signal_unavailable";
@@ -476,9 +617,26 @@ int main(int argc, char* argv[]) {
         visibility["dashboard_visible"]=Json::Value();
         visibility["visible_in_dashboard"]=Json::Value();
     }
+    if (view_record) {
+        report["view_record"]=Json::Value();
+        report["set_calls_made"]=false;
+    } else if (!validate) {
+        auto& connect=report["connect"];
+        connect["sequence"]="background_probe_then_overlay";
+        connect["background_probes"]=0U; connect["overlay_connect_attempted"]=false;
+        connect["overlay_connect_attempts"]=0U; connect["connected"]=false;
+        connect["background_only_requested"]=background_only;
+    }
     try {
+        watchdog(mode,"connect",kWatchdogConnectSeconds);
         if (stopping) throw Stopped{};
-        if (!validate) overlay.init(marker);
+        if (view_record) {
+            overlay.view_record(report["connect"],report["view_record"]);
+            report["status"]="view_recorded";
+            throw Stopped{};  // Nothing to stream: go straight to cleanup.
+        }
+        if (!validate) overlay.init(marker,background_only,report["connect"]);
+        watchdog(mode,"run",kWatchdogStallSeconds);
         if (marker && monotonic_ns()>=marker_deadline)
             throw std::runtime_error("calibration_deadline_before_marker");
         if (stopping) throw Stopped{};
@@ -502,6 +660,7 @@ int main(int argc, char* argv[]) {
             if (monotonic_ns()>=marker_deadline) throw std::runtime_error("calibration_submit_overran_deadline");
             if (!validate) overlay.calibration_visibility(report["visibility_after_submit"]);
             while (monotonic_ns()<marker_deadline) {
+                lifecycle::rearm_watchdog(kWatchdogStallSeconds);
                 if (stopping) throw Stopped{};
                 overlay.events();
                 if (monotonic_ns()>=marker_deadline) break;
@@ -517,18 +676,19 @@ int main(int argc, char* argv[]) {
             emit(shown);
             const auto deadline=Clock::now()+std::chrono::seconds(seconds);
             while (Clock::now()<deadline) {
+                lifecycle::rearm_watchdog(kWatchdogStallSeconds);
                 if (stopping) throw Stopped{};
                 overlay.events(); std::this_thread::sleep_for(std::chrono::milliseconds(16));
             }
         } else stream(overlay,validate,report);
         report["status"]=marker ? (validate ? "validated_marker" : "marker_complete") : (validate ? "validated" : "closed");
     } catch (const Stopped&) {
-        report["status"]="stopped";
+        if (!view_record || report["status"]!="view_recorded") report["status"]="stopped";
     } catch (const std::exception& error) {
         report["event"]="error"; report["status"]="error";
         report["error"]=error.what(); exit_code=1;
     }
-    report["runtime_initialized"]=overlay.active;
+    report["runtime_initialized"]=overlay.active || overlay.probe_active;
     if (marker) {
         report["overlay_shown_event_seen"]=overlay.overlay_shown_event_seen;
         report["overlay_hidden_event_seen"]=overlay.overlay_hidden_event_seen;
@@ -536,7 +696,12 @@ int main(int argc, char* argv[]) {
         report["cutoff_requested_ns"]=Json::UInt64(cutoff);
         report["software_deadline_overshoot_ms"]=cutoff>marker_deadline ? double(cutoff-marker_deadline)/1e6 : 0.;
     }
+    bool watchdog_armed=true;
+    try { watchdog(mode,"cleanup",kWatchdogCleanupSeconds); }
+    catch (const std::exception&) { watchdog_armed=false; }
     const bool ok=overlay.close();
+    lifecycle::disarm_watchdog();
+    report["watchdog_armed_for_cleanup"]=watchdog_armed;
     if (marker) report["cleanup_returned_ns"]=Json::UInt64(monotonic_ns());
     report["overlay_retirement_attempted"]=overlay.retirement_attempted;
     report["hide_returned_ok"]=overlay.retirement_attempted ? Json::Value(overlay.retirement.hidden) : Json::Value();
@@ -547,6 +712,10 @@ int main(int argc, char* argv[]) {
     report["cleanup_ok"]=ok;
     if (!ok) { report["status"]="cleanup_failure"; exit_code=1; }
     report["exit_code"]=exit_code;
+    // The final write is bounded too: a parent that stopped draining the pipe
+    // would otherwise hold the bridge here after cleanup, with the alarm cleared.
+    try { watchdog(mode,"report",kWatchdogCleanupSeconds); } catch (const std::exception&) {}
     emit(report);
+    lifecycle::disarm_watchdog();
     return exit_code;
 }

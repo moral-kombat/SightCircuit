@@ -100,6 +100,15 @@ class TaskTableTests(unittest.TestCase):
                 for path in task.requires:
                     self.assertFalse(Path(path).is_absolute())
 
+    def test_no_task_touches_the_dsp_steamvr_cv_drivers_or_the_sensor_sidecar(self):
+        # docs/on-device.md "Preflight advice from another Frame project": never a runner task.
+        forbidden = ("dsp_service", "/dev/cdsp", "/dev/adsp", "drivers/cv/bin", "steamvr.service",
+                     "sample_run_context")
+        for task in TASKS:
+            text = " ".join((*task.argv, *task.requires, *task.env.values(), task.description))
+            with self.subTest(task=task.id):
+                self.assertFalse([word for word in forbidden if word in text])
+
     def test_frozen_track_scripts_appear_only_in_read_only_modes(self):
         allowed = {"scripts/capture_layer_trial.py": {"--runtime-status"},
                    "scripts/service_rehearsal.py": {"--preflight", "--report-latest"}}

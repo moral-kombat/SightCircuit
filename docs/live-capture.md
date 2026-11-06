@@ -202,6 +202,23 @@ must carry, as one numbered evidence entry separate from cloud results:
   (handoff item 5). Software deadlines are not guarantees.
 - About 5 processed frames per second with roughly 40 ms inference (E48)
   limits how quickly names update.
+- G6 output path, third-party reports (unverified, not Framejacker evidence):
+  two projects report that `SetOverlayRaw` stops updating after about 200
+  calls per process. Brobert-in-aus/cuff
+  [`docs/INTERNALS.md` L337](https://github.com/Brobert-in-aus/cuff/blob/4b7f54a8cd240f6118dd3c35e41ea0ac22afc787/docs/INTERNALS.md#L337) reports it on the Frame with SteamVR
+  2.18.4; nicolas-riera/Quest1-SteamOS
+  [`docs/passthrough.md` L17-L18](https://github.com/nicolas-riera/Quest1-SteamOS/blob/4e2a7decc8434acb6cec4e6ba2d089c336faedad/docs/passthrough.md#L17-L18) reports vrclient memory blocks never
+  released and the image frozen after about 200 frames, on a Quest 1 running
+  SteamOS. The HUD submits one `SetOverlayRaw` per update, so a 60-second run
+  at about 5 updates a second (about 300 calls) would cross that count. A
+  `SetOverlayRaw` soak past 300 calls at HUD size is a device follow-up that
+  needs the owner's approval, and a 400-frame replay-panel observation is
+  planned on Frame. If `SetOverlayRaw` does fail, the fallback reference is
+  Frametop [`screens/keyboard.cpp` L265-L330](https://github.com/Frametop/frametop/blob/adebd7d6cfc938477bf8e42a8bcb1c41a32a6f9c/screens/keyboard.cpp#L265-L330) (MIT, `adebd7d`): linear
+  GBM buffers imported once with `IVRIPCResourceManager::ImportDmabuf`, then
+  `SetOverlayTexture` per frame, with `SetOverlayRaw` only as its own
+  fallback. Nothing from it is copied yet, and any texture-upload change still
+  needs profiling evidence first.
 
 ### Offline work order
 
@@ -249,6 +266,18 @@ and offline report checks do not authorize or implement a live device run.
 | G4. Mapping qualified | Versioned evidence for eye composition, all HUD copies, conservative margins and bounded operating limits; see the [proposed method](hud-qualification.md#proposed-g4-method). Candidate schema validation is not qualification | Proposed method; device qualification pending |
 | G5. Feedback exclusion and physical expiry (WP11) | With the HUD visible, no detections from its footprint during head motion; stale names disappear on the headset within the expiry | Not run |
 | G6. Live HUD loop (WP12) | The [POC acceptance run](poc-scope.md#acceptance) with the evidence listed under [Acceptance evidence](#acceptance-evidence) | Not run |
+
+**G2 note: green images on other Qualcomm devices (third-party reports).**
+Other projects report solid green images from two buffer faults: all-zero
+buffers (zero-valued YUV renders green), as in
+[ValveSoftware/steam-for-linux #13428](https://github.com/ValveSoftware/steam-for-linux/issues/13428)
+(zero-byte H.264 input to the Qualcomm Iris decoder on an SM8550 device), and
+UBWC-compressed frames read as linear, as in
+[crdroidandroid/issue_tracker #1158](https://github.com/crdroidandroid/issue_tracker/issues/1158).
+[ValveSoftware/SteamVR-for-Linux #979](https://github.com/ValveSoftware/SteamVR-for-Linux/issues/979)
+reports a solid green Frame image when streaming from a PC on SteamVR 2.18.2
+beta, without a stated cause. Either fault is consistent with our green
+symptom, but neither is shown on our device; G2's status above is unchanged.
 
 G1 can be rerun at any time without a device:
 

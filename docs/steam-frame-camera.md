@@ -163,6 +163,51 @@ This layer changes compositor startup. Keep it as a separately evaluated,
 optional backend, with the upstream rollback process available. It has not been
 installed in the cloud environment or on a headset as part of this project.
 
+## Third-party camera claims (2026-11-04)
+
+These are claims from other projects, recorded separately from Framejacker
+evidence. None has been checked on our Frame.
+
+From danthedaniel/roommate-radar
+[`docs/arcturus-av1.md` L62-L127](https://github.com/danthedaniel/roommate-radar/blob/d6e8a8cbdb6c1197514e382662951231fd641941/docs/arcturus-av1.md#L62-L127) at
+`d6e8a8cbdb6c1197514e382662951231fd641941`. That project is AGPL-3.0, so these
+are facts restated in our own words; nothing is copied from it.
+
+- When the Arcturus app's camera provider takes the colour cameras, XRService
+  logs that external camera ownership was requested and later released (lines
+  tagged `[ExternalCameraOwnership]`). In between, XRService closes its own
+  passthrough interfaces and its ICP sessions, and runs the tracking cameras
+  raw.
+- The provider sends frames to the app over the Unix socket
+  `/tmp/av1_external_camera_provider.sock`, and a lock file,
+  `/tmp/passthrough_camera.lock`, stops a second provider from owning the
+  cameras.
+- The colour cameras pause and resume with user presence (standby),
+  independently of the tracking cameras ([L75-L76](https://github.com/danthedaniel/roommate-radar/blob/d6e8a8cbdb6c1197514e382662951231fd641941/docs/arcturus-av1.md#L75-L76)). The same
+  document reports that XRService pauses them as a game starts
+  ([L219-L220](https://github.com/danthedaniel/roommate-radar/blob/d6e8a8cbdb6c1197514e382662951231fd641941/docs/arcturus-av1.md#L219-L220)).
+- Attaching the colour module moves the video nodes: with it attached,
+  `/dev/video0` and `/dev/video3` carry the passthrough cameras, the SLAM
+  cameras move to `/dev/video9` and `/dev/video13`, and the upper cameras to
+  `/dev/video6` and `/dev/video7` ([L64-L71](https://github.com/danthedaniel/roommate-radar/blob/d6e8a8cbdb6c1197514e382662951231fd641941/docs/arcturus-av1.md#L64-L71)). Device paths must
+  therefore be resolved by identity, not hardcoded.
+
+**Unresolved: the Arcturus buffer format.** Three accounts disagree:
+
+| Source | Claim |
+| --- | --- |
+| This guide, from spyjacob's report ([above](#experimental-live-capture)) | 2464 × 2464 NV12 with Qualcomm UBWC compression, i.e. 8-bit UBWC NV12 |
+| Frametop [`hands/README.md` L81](https://github.com/Frametop/frametop/blob/adebd7d6cfc938477bf8e42a8bcb1c41a32a6f9c/hands/README.md#L81) at `adebd7d` | Reads the colour frame on the CPU as a 10-bit frame and keeps the top 8 bits of luma, i.e. 10-bit packed linear data |
+| roommate-radar [L80-L95](https://github.com/danthedaniel/roommate-radar/blob/d6e8a8cbdb6c1197514e382662951231fd641941/docs/arcturus-av1.md#L80-L95) | TP10 UBWC (Qualcomm compressed 10-bit) as XRService's default; 8-bit linear NV12 only for about a second while SteamVR starts |
+
+They may describe different consumers, settings or SteamOS and SteamVR builds;
+Framejacker has no device evidence that chooses between them. Any importer must
+read the format, modifier and plane layout from the buffer it is handed.
+
+**No producer fence.** None of these sources, nor the spyjacob capture path
+above, describes a producer fence for these buffers. Consumer-side fences do
+not order reads against the camera producer.
+
 ## Community references selected for follow-up (2026-10-16)
 
 These are references 1 and 3 from the community scan, rechecked against upstream

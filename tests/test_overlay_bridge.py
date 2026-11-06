@@ -26,6 +26,17 @@ class OverlayBridgeTests(unittest.TestCase):
                                 env=self.env, capture_output=True, timeout=5)
         return result, [json.loads(line) for line in result.stdout.splitlines()]
 
+    def test_validation_runs_without_a_stderr(self):
+        # Launched with fd 2 closed (2>&-), the bridge sends SDK chatter nowhere instead of refusing.
+        data = PanelSettings(visible=False).encode() + packet(1, struct.pack("<II", 2, 1) + bytes(8)) + packet(3)
+        result = subprocess.run([str(DEFAULT_BRIDGE), "--validate-stdin"], input=data, env=self.env,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                preexec_fn=lambda: os.close(2), timeout=5)
+        messages = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(result.returncode, 0, messages)
+        self.assertEqual((messages[-1]["status"], messages[-1]["frames_received"]), ("validated", 1))
+        self.assertTrue(messages[-1]["cleanup_ok"])
+
     def test_valid_frames_settings_and_quit_without_openvr(self):
         data = PanelSettings(visible=False).encode() + packet(1, struct.pack("<II", 2, 1) + bytes(8)) + packet(3)
         result, messages = self.run_bridge("--validate-stdin", data=data)
@@ -66,8 +77,125 @@ class OverlayBridgeTests(unittest.TestCase):
     def test_missing_runtime_is_named(self):
         result, messages = self.run_bridge("--test-panel", "--seconds", "1")
         self.assertEqual(result.returncode, 1)
-        self.assertIn("VRInitError_Init_PathRegistryNotFound", messages[-1]["error"])
+        self.assertEqual(messages[-1]["error"], "vrserver_not_running:VRInitError_Init_PathRegistryNotFound")
         self.assertEqual(messages[-1]["frames_submitted"], 0)
+
+    RUNTIME_MODES = (("--test-panel",), ("--test-panel", "--seconds", "1"), ("--stdin",),
+                     ("--calibration-marker", "--seconds", "3", "--allow-calibration-output"))
+
+    def fake_installed_runtime(self):
+        """A path registry naming a runtime directory without SteamVR in it."""
+        root = Path(self.temporary.name)
+        for name in ("runtime", "config", "log"):
+            (root / name).mkdir()
+        registry = root / "openvrpaths.vrpath"
+        registry.write_text(json.dumps({"runtime": [str(root / "runtime")], "config": [str(root / "config")],
+                                        "log": [str(root / "log")], "external_drivers": None,
+                                        "jsonid": "vrpathreg", "version": 1}))
+        return registry
+
+    def test_every_runtime_mode_refuses_without_a_vrserver(self):
+        # stdin stays open, so a mode that waited for input or a server would hang here.
+        for registry, symbol in ((None, "VRInitError_Init_PathRegistryNotFound"),
+                                 (self.fake_installed_runtime(), None)):
+            env = self.env if registry is None else dict(self.env, VR_PATHREG_OVERRIDE=str(registry))
+            for arguments in self.RUNTIME_MODES:
+                with self.subTest(arguments=arguments, registry=registry):
+                    started = time.monotonic()
+                    process = subprocess.Popen([str(DEFAULT_BRIDGE), *arguments], stdin=subprocess.PIPE,
+                                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+                    try:
+                        output, _ = process.communicate(timeout=3)
+                    finally:
+                        if process.poll() is None:
+                            process.kill()
+                            process.wait(timeout=3)
+                    self.assertLess(time.monotonic() - started, 3)
+                    lines = output.splitlines()
+                    self.assertEqual(len(lines), 1, output)  # exactly one parseable report
+                    report = json.loads(lines[0])
+                    self.assertEqual(process.returncode, 1)
+                    self.assertEqual((report["event"], report["status"], report["exit_code"]), ("error", "error", 1))
+                    connect = report["connect"]
+                    if symbol is None:  # The loader's exact symbol for a missing vrclient varies by layout.
+                        symbol = connect["background_probe_result"]
+                        self.assertRegex(symbol, r"^VRInitError_Init_")
+                        self.assertNotIn(symbol, ("VRInitError_Init_PathRegistryNotFound", "VRInitError_None"))
+                    self.assertEqual(report["error"], "vrserver_not_running:" + symbol)
+                    self.assertEqual(connect["sequence"], "background_probe_then_overlay")
+                    self.assertEqual((connect["background_probes"], connect["background_probe_result"]), (1, symbol))
+                    self.assertIs(connect["vrserver_running"], False)
+                    self.assertIs(connect["overlay_connect_attempted"], False)
+                    self.assertEqual((connect["overlay_connect_attempts"], connect["overlay_connect_errors"]), (0, []))
+                    self.assertFalse(report["runtime_initialized"])
+                    self.assertFalse(report["overlay_retirement_attempted"])
+                    self.assertFalse(report["runtime_shutdown_returned"])
+                    self.assertTrue(report["cleanup_ok"])
+                    self.assertTrue(report["watchdog_armed_for_cleanup"])
+                    self.assertEqual(report["frames_submitted"], 0)
+
+    def test_connect_as_background_is_an_opt_in_for_runtime_modes_only(self):
+        for arguments in self.RUNTIME_MODES:
+            with self.subTest(arguments=arguments):
+                result, messages = self.run_bridge(*arguments, "--connect-as", "background")
+                self.assertEqual((result.returncode, len(messages)), (1, 1), messages)
+                connect = messages[0]["connect"]
+                self.assertEqual(connect["sequence"], "background_only_opt_in")
+                self.assertEqual(connect["application_type"], "VRApplication_Background")
+                self.assertIs(connect["background_only_requested"], True)
+                self.assertIs(connect["overlay_connect_attempted"], False)
+                self.assertTrue(messages[0]["error"].startswith("vrserver_not_running:"))
+        result, messages = self.run_bridge("--stdin", "--connect-as", "overlay")
+        self.assertEqual(messages[-1]["connect"]["sequence"], "background_probe_then_overlay")
+        self.assertIs(messages[-1]["connect"]["background_only_requested"], False)
+        for arguments in (("--validate-stdin", "--connect-as", "background"),
+                          ("--validate-calibration-marker", "--seconds", "1", "--connect-as", "background"),
+                          ("--headset-view-record", "--allow-runtime-query", "--connect-as", "background"),
+                          ("--stdin", "--connect-as", "sideways"), ("--stdin", "--connect-as"),
+                          ("--connect-as", "background")):
+            with self.subTest(arguments=arguments):
+                result, messages = self.run_bridge(*arguments)
+                self.assertEqual(result.returncode, 64, messages)
+                self.assertFalse(messages[-1]["runtime_initialized"])
+
+    def test_headset_view_record_is_opt_in_background_only_and_never_sets(self):
+        result, messages = self.run_bridge("--headset-view-record")
+        self.assertEqual((result.returncode, len(messages)), (64, 1))
+        self.assertEqual(messages[0]["error"], "view_record_requires_explicit_opt_in")
+        self.assertFalse(messages[0]["runtime_initialized"])
+        for registry in (None, self.fake_installed_runtime()):
+            env = self.env if registry is None else dict(self.env, VR_PATHREG_OVERRIDE=str(registry))
+            with self.subTest(registry=registry):
+                result = subprocess.run([str(DEFAULT_BRIDGE), "--headset-view-record", "--allow-runtime-query"],
+                                        env=env, capture_output=True, timeout=3)
+                lines = result.stdout.splitlines()
+                self.assertEqual((result.returncode, len(lines)), (1, 1), result.stdout)
+                report = json.loads(lines[0])
+                self.assertTrue(report["error"].startswith("vrserver_not_running:VRInitError_Init_"))
+                self.assertEqual(report["connect"]["sequence"], "background_only")
+                self.assertIs(report["connect"]["overlay_connect_attempted"], False)
+                self.assertIsNone(report["view_record"])
+                self.assertIs(report["set_calls_made"], False)
+                self.assertFalse(report["runtime_initialized"])
+        source = (Path(__file__).resolve().parents[1] / "tools/overlay_bridge.cpp").read_text()
+        self.assertNotIn("SetHeadsetView", source)  # GetHeadsetView* only; the mirror's mode is never changed
+
+    def test_validation_modes_stay_runtime_free_with_protocol_on_stdout(self):
+        data = packet(1, struct.pack("<II", 1, 1) + bytes(4)) + packet(3)
+        for arguments, payload in ((("--validate-stdin",), data),
+                                   (("--validate-calibration-marker", "--seconds", "1"), b"")):
+            with self.subTest(arguments=arguments):
+                result = subprocess.run([str(DEFAULT_BRIDGE), *arguments], input=payload, env=self.env,
+                                        capture_output=True, timeout=5)
+                messages = [json.loads(line) for line in result.stdout.splitlines()]
+                self.assertEqual(result.returncode, 0, messages)
+                self.assertEqual(messages[0]["event"], "ready")
+                self.assertNotIn("connect", messages[-1])
+                self.assertFalse(messages[-1]["runtime_initialized"])
+                self.assertFalse(messages[-1]["runtime_shutdown_returned"])
+        result = subprocess.run([str(DEFAULT_BRIDGE), "--help"], env=self.env, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn(b"never starts a vrserver", result.stdout)
 
     def test_sigterm_interrupts_wait_for_input(self):
         process = subprocess.Popen([str(DEFAULT_BRIDGE), "--validate-stdin"],
@@ -298,6 +426,63 @@ class SharedOverlayContractTests(unittest.TestCase):
             subprocess.run(["g++", "-std=c++17", "-Wall", "-Wextra", "-Wpedantic", "-Werror",
                             str(fixture), "-o", str(binary)], check=True, capture_output=True, timeout=20)
             subprocess.run([str(binary)], check=True, capture_output=True, timeout=3)
+
+
+@unittest.skipUnless(shutil.which("g++"), "C++ compiler required for the lifecycle fixture")
+class OverlayLifecycleFixtureTests(unittest.TestCase):
+    """The bridge's isolation, watchdog and connect helpers, driven by scripted fakes."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.temporary = tempfile.TemporaryDirectory()
+        fixture = Path(__file__).resolve().parent / "fixtures/overlay_lifecycle_fixture.cpp"
+        cls.binary = Path(cls.temporary.name) / "overlay-lifecycle"
+        subprocess.run(["g++", "-std=c++17", "-Wall", "-Wextra", "-Wpedantic", "-Werror",
+                        str(fixture), "-o", str(cls.binary)], check=True, capture_output=True, timeout=30)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temporary.cleanup()
+
+    def run_fixture(self, mode, timeout=5):
+        started = time.monotonic()
+        result = subprocess.run([str(self.binary), mode], capture_output=True, timeout=timeout)
+        return result, time.monotonic() - started
+
+    def test_connect_order_retry_bound_and_refusal(self):
+        result, _ = self.run_fixture("connect")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(b"connect checks passed", result.stdout)
+
+    def test_sdk_chatter_goes_to_stderr_and_protocol_to_real_stdout(self):
+        result, _ = self.run_fixture("isolate")
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, b'{"event":"protocol"}\n')
+        self.assertIn(b"sdk chatter on fd 1", result.stderr)
+        self.assertIn(b"raw chatter", result.stderr)
+
+    def test_watchdog_writes_one_json_error_and_exits(self):
+        for mode, torn in (("watchdog", False), ("watchdog-torn", True)):
+            with self.subTest(mode=mode):
+                result, elapsed = self.run_fixture(mode)
+                self.assertEqual(result.returncode, 124)
+                self.assertLess(elapsed, 3)
+                lines = result.stdout.splitlines()
+                self.assertEqual(json.loads(lines[-1]), {"event": "error", "error": "watchdog_expired:run"})
+                self.assertEqual(len(lines), 2 if torn else 1)
+                if torn:
+                    with self.assertRaises(json.JSONDecodeError):
+                        json.loads(lines[0])
+
+    def test_rearmed_watchdog_lets_a_healthy_loop_finish(self):
+        result, elapsed = self.run_fixture("watchdog-rearm")
+        self.assertEqual(result.returncode, 0)
+        self.assertGreater(elapsed, 1.2)
+        self.assertEqual(result.stdout, b'{"event":"closed"}\n')
+
+    def test_watchdog_rejects_oversized_or_zero_budgets(self):
+        result, _ = self.run_fixture("watchdog-oversize")
+        self.assertEqual(result.returncode, 0)
 
 
 if __name__ == "__main__":

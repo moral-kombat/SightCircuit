@@ -210,7 +210,8 @@ jobs:
             tests/test_hud_candidate.py tests/test_hud_calibration.py tests/test_hud_validation.py \
             tests/test_report_characterization.py tests/test_mirror_launcher.py tests/test_latency_statistics.py \
             tests/test_frame_agent.py tests/test_frame_agent_commands.py tests/test_frame_claude_install.py \
-            tests/test_mirror_session.py tests/test_hud_fill.py tests/test_mask_fill_evaluation.py
+            tests/test_mirror_session.py tests/test_hud_fill.py tests/test_mask_fill_evaluation.py \
+            tests/test_run_context_sensors.py tests/test_hud_prediction.py
       - name: Verify generated evidence and capability summaries are current
         run: python scripts/generate_status.py --check
       - name: Fail if detectors regress from the pinned seed counts (runner CPU wiring check, not Frame)
