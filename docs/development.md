@@ -1711,6 +1711,26 @@ python3 scripts/hud_validation_report.py --from-observer /tmp/observer-report.js
 The tests convert reports from the real observer on generated frames. They are
 cloud results, not Frame evidence, and they open no device or gate.
 
+## Observer scene precondition statistics
+
+`framejacker/hud/scene.py` holds the observer's scene precondition (the grey
+threshold, the bright-contour budget and the candidate-quad filter and
+budget) and `scene_statistics`, which describes one frame against it in counts
+only. `locate_copies` uses the same functions, so the statistics cannot drift
+from what the observer applies. `hud_marker_observer.py --analyze-still STILL`
+prints them for one saved still and refuses device, `/proc` and `/sys` paths,
+links and non-regular files before opening them; an observer run stopped by
+either budget carries them as `scene_statistics`. The
+[qualification design](hud-qualification.md#observer-scene-precondition-2026-11-04)
+has the background and the seed-still reference.
+
+```bash
+.venv-replay/bin/python scripts/hud_marker_observer.py --analyze-still evaluation/local/still.png
+.venv-replay/bin/python -m unittest tests.test_observer_scene tests.test_hud_marker_observer
+.venv-replay/bin/python scripts/evaluate_detectors.py --fetch > /dev/null  # the seed stills, once
+.venv-replay/bin/python -m unittest tests.test_observer_scene_seed
+```
+
 ## Synthetic HUD validation counts
 
 A synthetic HUD run, `framejacker/runtime/live.run_pipeline` with a HUD stage,

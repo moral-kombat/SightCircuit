@@ -203,6 +203,7 @@ jobs:
             tests/test_pipeline.py tests/test_playback_clock.py tests/test_replay_source.py tests/test_mirror_recognize.py \
             tests/test_replay_window.py tests/test_overlay_bridge.py tests/test_live_pipeline.py \
             tests/test_hud_mask.py tests/test_hud_marker_check.py tests/test_hud_marker_observer.py \
+            tests/test_observer_scene.py \
             tests/test_display_expiry.py tests/test_bounded_worker.py tests/test_overlay_cleanup.py \
             tests/test_frame_session.py tests/test_generate_status.py tests/test_hud_qualification.py \
             tests/test_capture_context.py tests/test_scripts_boundary.py tests/test_gates.py tests/test_hud_contract.py \
@@ -218,7 +219,7 @@ jobs:
         run: |
           .venv-replay/bin/python scripts/evaluate_detectors.py --fetch --expect evaluation/seed-expected.json \
             --report evaluation-report.json > /dev/null
-          .venv-replay/bin/python scripts/run_tests_no_skips.py tests/test_seed_pin.py
+          .venv-replay/bin/python scripts/run_tests_no_skips.py tests/test_seed_pin.py tests/test_observer_scene_seed.py
 
   replay-pacing:
     # Realtime replay of the synthetic E62 stand-in on the runner's CPU. The uploaded

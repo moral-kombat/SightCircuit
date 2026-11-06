@@ -1158,6 +1158,63 @@ the supervisor now ends and reaps the worker group itself, and still reports
 physical recovery. The [lifecycle review](lifecycle-review.md#marker-stop-and-guardian-loss-2026-11-01)
 has the details.
 
+## Observer scene precondition (2026-11-04)
+
+**What stopped the 2026-11-03 attempt.** The planner relays, from the Frame,
+that two observer runs (`--seconds 20`, checkout `dc5d9a3`) stopped in under
+0.5 s with `observer_contour_budget`, before the bridge initialized and before
+any marker was shown. Their bright-contour counts were 229, then 2,680 with a
+TV in view, then 2,720 facing a plain wall that looked dim to the wearer.
+Cleanup was clean and passthrough normal; the observer saves no images, so the
+scene content is unknown. The coordinator records this as E83 (in the
+planner's PR #23, not yet merged); this section is not that record.
+
+**Why.** Before it looks for a marker, `locate_copies` thresholds the grey
+frame at 180, finds every bright contour (`cv2.RETR_LIST`) and rejects the
+frame above `MAX_CONTOURS` = 2048. That count includes single-pixel specks:
+the 25-pixel area filter for candidate quads comes after it. The budget was
+tuned on synthetic frames and never checked against a real mirror frame.
+
+**What this adds (packages O1 and O2; the precondition itself is unchanged).**
+The precondition now lives in `framejacker/hud/scene.py` (`bright_contours`,
+`candidate_quad`), which `locate_copies` calls, so its statistics describe
+exactly what the observer applies:
+
+- `scene_statistics(image)`: the contour count and its split into
+  `cv2.contourArea` bands (below 25, 25 to below 400, 400 to below 10,000,
+  10,000 and over; the area is the polygon through pixel centres, so a 5 × 5
+  blob has area 16), the fraction of pixels at or above 180, grey p50, p90 and
+  p99 (nearest rank), the complete candidate-quad count, the budgets, and which
+  budget, if any, rejects the frame. It holds counts only, never pixels.
+- O1, file only: `hud_marker_observer.py --analyze-still STILL` prints those
+  statistics for one saved PNG or JPEG still. It never discovers or opens the
+  mirror, a camera or the bridge. It refuses `/dev`, `/proc` and `/sys` paths,
+  symbolic links, FIFOs, directories and other non-regular files before
+  opening them; the file it then opens must be the same regular file, or it is
+  closed unread (only a parent directory swapped by another process in between
+  could redirect that open). It reads at most 64 MiB and checks the image size
+  in the file header before decoding. A PNG written by `mirror_recognize.py --still` is the native mirror
+  frame without loss, so its statistics equal the observer's on that frame; a
+  JPEG only approximates one, and the report says which (`fidelity`).
+- O2: a run stopped by `observer_contour_budget` or `observer_quad_budget`
+  now reports that frame's `scene_statistics`, with
+  `scene_statistics_source` (`baseline` or `marker` phase and the read's
+  sequence); the same statistics also sit in that phase's match diagnostics.
+  The worker report contract accepts them only in a rejected report whose
+  reason is the rejection they name, with exactly the documented fields.
+
+**First non-Frame reference.** On the six public seed stills (outdoor JPEG
+photos, not mirror reads), three exceed the contour budget (3,468, 3,606 and
+9,375 contours), while 89 to 99 % of every still's contours are below 25 px
+area and no still has more than one candidate quad
+(`tests/test_observer_scene_seed.py`). This suggests the raw count rejects
+ordinary scenes on speck-sized contours that the marker search would discard
+anyway. It is not Frame evidence, and it does not change the budget: O3 will
+replace the raw count with a measure of marker-detection risk, derived from
+these numbers, synthetic noise and the Frame statistics that O1 makes
+possible. Until then `MAX_CONTOURS` stays 2048 and a speckled scene still
+rejects.
+
 ## Next device checkpoint
 
 G4 remains unqualified: the exact eye/compositor capture contract, evidence

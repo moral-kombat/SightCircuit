@@ -29,8 +29,9 @@ from framejacker.hud.contract import MARKER_MAX_SECONDS, MARKER_MIN_SECONDS  # n
 from framejacker.hud.observation import (  # noqa: E402
     SESSION_TOKENS_DECLARATION_FAILED, SESSION_TOKENS_NOT_REPORTED, SESSION_TOKENS_NOT_REQUESTED,
     SESSION_TOKENS_REPORT_INVALID, BaselineGate, EmpiricalObservation, ObserverConfig, native_bgr,
-    session_tokens_record, unrecorded_session_tokens, validate_marker_evidence,
+    rejection_scene_statistics, session_tokens_record, unrecorded_session_tokens, validate_marker_evidence,
     validate_observer_report as validate_worker_report)
+from framejacker.hud.scene import analyze_still  # noqa: E402
 from framejacker.hud.marker import STOP_GRACE_SECONDS, MarkerClient  # noqa: E402
 from framejacker.overlay import bridge_closed_cleanly  # noqa: E402
 from framejacker.runtime.guard import stop_on_signals, supervise  # noqa: E402
@@ -180,6 +181,12 @@ def observe(candidate, seconds, stop, *, backend_factory, marker_client, config=
         report.update(baseline=dict(baseline.report), baseline_initial_match_diagnostics=baseline.initial_diagnostics,
                       baseline_match_diagnostics=baseline.last_diagnostics,
                       baseline_window_seconds=min(seconds, BASELINE_WINDOW_SECONDS))
+        # A run stopped by the scene precondition carries that frame's statistics: counts, never pixels.
+        diagnostics, phase = ((observation.last_match_diagnostics, "marker") if marker_started
+                              else (baseline.last_diagnostics, "baseline"))
+        if (report["exit_code"] == 1 and type(diagnostics) is dict and
+                report.get("reason") == diagnostics.get("reason")):
+            report.update(rejection_scene_statistics(diagnostics, phase))
         if session is not None:
             if declaration_failed:
                 report["session_tokens"] = unrecorded_session_tokens(SESSION_TOKENS_DECLARATION_FAILED)
@@ -206,8 +213,16 @@ def observe(candidate, seconds, stop, *, backend_factory, marker_client, config=
             report.update(status="cleanup_failed", exit_code=1)
         report["seconds_requested"] = seconds
         report["maximum_processing_fps"] = 5
+    return bounded_report(report)
+
+
+def bounded_report(report):
+    """Cap a worker report at 128 KiB: samples go, and so do the scene statistics, whose
+    contract ties them to a ``rejected`` status the capped report no longer carries."""
     if len(json.dumps(report)) > 128 * 1024:
         report.update(samples=[], status="report_budget_exceeded", exit_code=1)
+        report.pop("scene_statistics", None)
+        report.pop("scene_statistics_source", None)
     return report
 
 
@@ -225,8 +240,20 @@ def main(argv=None):
                              "hud_validation_report.py --from-observer; requires the complete calibration opt-in; "
                              "off by default. Tracking tokens are not observed yet, so --from-observer rejects the "
                              "report until a tracking reporter runs before the declaration")
+    parser.add_argument("--analyze-still", type=Path, metavar="STILL",
+                        help="File only: print the scene-precondition statistics of one saved PNG or JPEG still "
+                             "(contour counts by area band, bright-pixel fraction, grey percentiles, candidate "
+                             "quads, which budget rejects it). Opens no device, mirror or bridge, and refuses "
+                             "/dev, /proc and /sys paths, links and non-regular files. Exit 0 analyzed, 1 refused")
     parser.add_argument("--worker", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+    if args.analyze_still is not None:
+        if any((args.observe_calibration, args.allow_mirror_observation, args.allow_calibration_output,
+                args.device, args.bridge, args.record_session_tokens, args.worker)):
+            parser.error("--analyze-still takes no observation, device, bridge or session option")
+        report = analyze_still(args.analyze_still)
+        print(json.dumps(report, indent=2))
+        return report["exit_code"]
     if args.worker:
         options = json.loads(args.worker)
         if options.get("approved_scope") != "marker_observation_only":

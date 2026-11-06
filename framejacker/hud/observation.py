@@ -12,7 +12,11 @@ report becomes a mapping candidate (``framejacker.hud.candidate``). Every
 worker report carries ``session_tokens`` (``validate_session_tokens``): the
 report of the run's ``sources.session.MirrorSession`` when the observer was
 given one, otherwise why none was recorded. The tokens identify the run; they
-qualify nothing.
+qualify nothing. The scene precondition (``bright_contours``,
+``candidate_quad`` and their budgets) lives in ``framejacker.hud.scene``; a
+frame rejected by either budget carries its ``scene_statistics`` in the match
+diagnostics, and a report rejected there carries them with their source
+(``validate_rejection_scene_statistics``).
 """
 from dataclasses import dataclass
 import hashlib
@@ -25,10 +29,10 @@ from ..gates import HARDWARE_MAPPING, claims
 from .contract import (HUD_CONFIG, MARKER, MARKER_MAX_SECONDS, MARKER_MIN_SECONDS, SESSION_TOKENS, CaptureFormat,
                        margin_valid)
 from .marker import new_report as marker_report, validate_worker_report as validate_marker_report
+# The scene precondition and its budgets live in ``scene``; re-exported here for the observer's callers.
+from .scene import (MAX_CONTOURS, MAX_PIXELS, MAX_QUADS, bright_contours, candidate_quad, scene_statistics,  # noqa: F401
+                    validate_scene_statistics)
 
-MAX_PIXELS = 8 * 1024 * 1024
-MAX_CONTOURS = 2048
-MAX_QUADS = 256
 MAX_COPIES = 4
 MAX_DIAGNOSTIC_CANDIDATES = 4
 MAX_DIAGNOSTIC_FRAGMENTS = 16
@@ -130,25 +134,33 @@ def locate_copies(bgr, *, diagnostics=None):
         details.update(status="rejected", reason=reason)
         raise ValueError(reason)
 
+    def reject_scene(reason):
+        # The frame's precondition statistics (counts only, never pixels) explain a budget rejection.
+        # They can never replace or hide it: the reason is recorded first and stays the one raised.
+        details.update(status="rejected", reason=reason)
+        try:
+            details["scene_statistics"] = scene_statistics(bgr, gray=gray, contours=contours)
+        except Exception as error:
+            details["scene_statistics_error"] = type(error).__name__
+        reject(reason)
+
     if (bgr.dtype != np.uint8 or bgr.ndim != 3 or bgr.shape[2] != 3 or
             bgr.shape[0] * bgr.shape[1] > MAX_PIXELS):
         reject("observer_image_invalid")
     details.update(width=bgr.shape[1], height=bgr.shape[0])
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    contours, _ = cv2.findContours((gray >= 180).astype(np.uint8), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    contours = bright_contours(gray)
     details["contour_count"] = len(contours)
     if len(contours) > MAX_CONTOURS:
-        reject("observer_contour_budget")
+        reject_scene("observer_contour_budget")
     quads = []
     for contour in contours:
-        if cv2.contourArea(contour) < 25:
-            continue
-        poly = cv2.approxPolyDP(contour, .015 * cv2.arcLength(contour, True), True)
-        if len(poly) == 4 and cv2.isContourConvex(poly):
-            quads.append(poly[:, 0].astype(np.float32))
+        quad = candidate_quad(contour)
+        if quad is not None:
+            quads.append(quad)
             details["quad_count"] = len(quads)
             if len(quads) > MAX_QUADS:
-                reject("observer_quad_budget")
+                reject_scene("observer_quad_budget")
     template = marker_template().astype(np.float32)
     width, height = HUD_CONFIG.width_px, HUD_CONFIG.height_px
     size, outline_px = MARKER.tag_size_px, MARKER.tag_outline_px
@@ -486,6 +498,31 @@ def validate_session_tokens(value):
         raise ValueError("invalid_observer_session_tokens")
 
 
+SCENE_STATISTICS_PHASES = ("baseline", "marker")
+
+
+def rejection_scene_statistics(diagnostics, phase):
+    """``scene_statistics`` and its source for a report rejected at the scene precondition, else ``{}``."""
+    if type(diagnostics) is not dict or "scene_statistics" not in diagnostics:
+        return {}
+    return {"scene_statistics": diagnostics["scene_statistics"],
+            "scene_statistics_source": {"phase": phase, "sequence": diagnostics.get("sequence")}}
+
+
+def validate_rejection_scene_statistics(report):
+    """``scene_statistics`` appears only in a rejected report, with its source, and names that rejection."""
+    if "scene_statistics" not in report and "scene_statistics_source" not in report:
+        return
+    statistics, source = report.get("scene_statistics"), report.get("scene_statistics_source")
+    validate_scene_statistics(statistics)
+    if (report["exit_code"] != 1 or report.get("status") != "rejected" or
+            report.get("reason") != statistics["precondition"]["rejection"] or
+            type(source) is not dict or set(source) != {"phase", "sequence"} or
+            source["phase"] not in SCENE_STATISTICS_PHASES or
+            type(source["sequence"]) is not int or source["sequence"] < 0):
+        raise ValueError("invalid_observer_scene_statistics")
+
+
 def validate_observer_report(report, returncode):
     """The ``hud_marker_observer`` worker report contract; never evidence of qualification."""
     if (not isinstance(report, dict) or report.get("report_kind") != "hud_marker_observation" or
@@ -503,6 +540,7 @@ def validate_observer_report(report, returncode):
         raise ValueError("invalid_observer_worker_report")
     # Required in every report, so a worker that drops it is invalid rather than silently unrecorded.
     validate_session_tokens(report.get("session_tokens"))
+    validate_rejection_scene_statistics(report)
     if report["exit_code"] == 2:
         baseline = report.get("baseline")
         if (type(baseline) is not dict or baseline.get("established") is not True or

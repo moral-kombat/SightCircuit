@@ -843,6 +843,34 @@ do not establish what the headset showed. Room images stay on Frame: the
 settings and hook refuse the agent's reads of them. Hand `result.json` and the
 agent's draft summary to the evidence coordinator.
 
+### Measure the observer's scene precondition on saved stills
+
+**File only; needs the owner's approval before it runs on Frame.** The
+2026-11-03 observer runs stopped at `observer_contour_budget` before showing a
+marker ([why](hud-qualification.md#observer-scene-precondition-2026-11-04)).
+To see what real Frame scenes look like to that precondition, run the
+statistics on the private PNG stills already in `evaluation/local/` (written by
+`mirror_recognize.py --still`). This reads those files only: it opens no
+device, mirror or bridge and makes no VR call.
+
+```bash
+cd "$HOME/framejacker"
+mkdir -p artifacts/scene-analysis
+shopt -s nullglob
+stills=(evaluation/local/*.png)
+[ ${#stills[@]} -gt 0 ] || echo "No PNG stills in evaluation/local/: nothing to analyze"
+for still in "${stills[@]}"; do
+  .venv-replay/bin/python scripts/hud_marker_observer.py --analyze-still "$still" \
+    > "artifacts/scene-analysis/$(basename "$still" .png).json"
+  echo "$still: exit $?"
+done
+```
+
+Each report holds counts, the still's SHA-256 and its size, never pixels or its
+path. Exit 0 means analyzed (even when the scene would be rejected), 1 means the
+file was refused. Keep the reports with the run notes; they feed the
+replacement precondition (package O3), not any gate.
+
 ### Bounded edge HUD calibration checkpoint
 
 This is the proposed device step for WP9 in the

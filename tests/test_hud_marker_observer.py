@@ -378,7 +378,11 @@ class MarkerDiagnosticTests(unittest.TestCase):
         self.assertFalse(details["scan_complete"])
         self.assertGreater(details["contour_count"], hud_observation.MAX_CONTOURS)
         self.assertEqual(details["best_candidates"], [])
+        # The scan metadata stays small; the frame's statistics are a fixed set of counts beside it.
+        statistics = details.pop("scene_statistics")
         self.assertLess(len(json.dumps(details)), 1024)
+        self.assertLess(len(json.dumps(statistics)), 1024)
+        self.assertEqual(statistics["contour_count"], details["contour_count"])
 
 
 class FakeStop:
@@ -437,12 +441,13 @@ class BaselineGateTests(unittest.TestCase):
 class ObserverFixture:
     def run_fixture(self, *, seconds=1, cancel_at=None, bad_format=False, slow=False, close_failure=False,
                     bridge_change=None, baseline_slow=False, incomplete_marker=False, baseline_mode=None,
-                    session=None, clock=None, log=None, on_read=None, on_marker=None):
+                    session=None, clock=None, log=None, on_read=None, on_marker=None, frame=None):
         """One ``observe`` run on generated frames; ``session`` is passed only when given.
 
         ``log`` records "backend" when the fixture backend is constructed and "frame"
         for each read; ``on_read(number)`` runs before a read's frame is generated
-        and ``on_marker()`` when the marker starts.
+        and ``on_marker()`` when the marker starts. ``frame(number, marker_shown)``
+        may return a BGR image that replaces the generated frame of that read.
         """
         clock = FakeClock() if clock is None else clock
         stop = FakeStop(clock)
@@ -479,6 +484,10 @@ class ObserverFixture:
                     image[0, 0] = len(state["reads"]) % 100
                 if incomplete_marker and state["marker"]:
                     image[95:140, 95:140] = 90
+                if frame is not None:
+                    replacement = frame(len(state["reads"]), state["marker"])
+                    if replacement is not None:
+                        image = replacement
                 return image.tobytes()
             def close(self):
                 state["source_closed"] = True
@@ -513,6 +522,96 @@ class ObserverFixture:
             report = observer.observe({"node": "synthetic:fixture"}, seconds, stop, backend_factory=Source,
                                       marker_client=Marker(), **options)
         return report, state, clock
+
+
+def speckled(height=600, width=1000, step=10, size=2, value=255):
+    """A clear grey frame with a regular grid of small bright specks, like sensor noise."""
+    image = np.full((height, width, 3), 90, np.uint8)
+    for y in range(5, height - 5, step):
+        for x in range(5, width - 5, step):
+            image[y:y+size, x:x+size] = value
+    return image
+
+
+class SceneRejectionReportTests(ObserverFixture, unittest.TestCase):
+    """A run stopped by the scene precondition reports that frame's statistics, never its pixels."""
+
+    def test_baseline_contour_budget_rejection_carries_the_frame_statistics(self):
+        noisy = speckled()
+        noisy[0, 0] = 7  # Distinct from the fixture's own clear frames.
+        report, state, _ = self.run_fixture(seconds=5, frame=lambda number, shown: noisy)
+        self.assertEqual((report["status"], report["exit_code"], report["reason"]),
+                         ("rejected", 1, "observer_contour_budget"))
+        self.assertFalse(state["marker"])  # Rejected before any marker was shown.
+        statistics = report["scene_statistics"]
+        self.assertEqual(statistics, hud_observation.scene_statistics(noisy))
+        self.assertEqual(statistics["contour_count"], 59 * 99)
+        self.assertEqual(statistics["contour_area_bands"]["below_25"], 59 * 99)
+        self.assertEqual(statistics["precondition"]["rejection"], "observer_contour_budget")
+        self.assertEqual(report["scene_statistics_source"], {"phase": "baseline", "sequence": 1})
+        self.assertEqual(report["baseline_match_diagnostics"]["scene_statistics"], statistics)
+        self.assertFalse(report["images_saved"])
+        self.assertLess(len(json.dumps(statistics)), 1024)
+        observer.validate_worker_report(report, 1)
+
+    def test_marker_phase_quad_budget_rejection_names_its_phase_and_read(self):
+        squares = speckled(step=20, size=10)  # 30 x 50 = 1500 bright 10 x 10 quads.
+        report, state, _ = self.run_fixture(seconds=5, frame=lambda number, shown: squares if shown else None)
+        self.assertTrue(state["marker"])
+        self.assertEqual((report["status"], report["reason"]), ("rejected", "observer_quad_budget"))
+        statistics = report["scene_statistics"]
+        self.assertEqual(statistics["quad_count"], 1500)  # Complete, though the observer stopped at 257.
+        self.assertEqual(report["last_match_diagnostics"]["quad_count"], hud_observation.MAX_QUADS + 1)
+        self.assertEqual(report["scene_statistics_source"]["phase"], "marker")
+        self.assertEqual(report["scene_statistics_source"]["sequence"], report["last_match_diagnostics"]["sequence"])
+        observer.validate_worker_report(report, 1)
+
+    def test_other_outcomes_carry_no_scene_statistics(self):
+        for options, status in (({}, "observed_unqualified"), (dict(incomplete_marker=True), "rejected"),
+                                (dict(seconds=5, baseline_mode="static_clear"), "rejected"),
+                                (dict(cancel_at=.4), "cancelled")):
+            with self.subTest(options=options):
+                report, _, _ = self.run_fixture(**options)
+                self.assertEqual(report["status"], status)
+                self.assertNotIn("scene_statistics", report)
+                self.assertNotIn("scene_statistics_source", report)
+                observer.validate_worker_report(report, report["exit_code"])
+
+    def test_contract_accepts_only_a_consistent_rejection_with_statistics(self):
+        noisy = speckled()
+        report, _, _ = self.run_fixture(seconds=5, frame=lambda number, shown: noisy)
+        observer.validate_worker_report(report, 1)
+        def changed(edit):
+            altered = json.loads(json.dumps(report))
+            edit(altered)
+            return altered
+        bad = (
+            lambda r: r.update(reason="orphan_marker_tag_or_incomplete_copy"),  # Statistics name another rejection.
+            lambda r: r.pop("scene_statistics_source"),
+            lambda r: r.pop("scene_statistics"),
+            lambda r: r["scene_statistics_source"].update(phase="detector"),
+            lambda r: r["scene_statistics_source"].update(sequence=-1),
+            lambda r: r["scene_statistics_source"].update(extra=1),
+            lambda r: r["scene_statistics"].update(pixels_bgr=[1, 2, 3]),  # No pixel data, ever.
+            lambda r: r["scene_statistics"].update(contour_count=10),  # Bands no longer sum to the count.
+            lambda r: r["scene_statistics"]["contour_area_bands"].update(below_25=-1),
+            lambda r: r["scene_statistics"]["precondition"].update(rejection=None),
+            lambda r: r["scene_statistics"]["budgets"].update(max_contours=99999),
+            lambda r: r["scene_statistics"]["gray_percentiles"].update(p50=256),
+            lambda r: r["scene_statistics"]["gray_percentiles"].update(p50=200, p90=100),
+            lambda r: r["scene_statistics"].update(bright_pixel_fraction=True),
+            lambda r: r["scene_statistics"].update(bright_pixel_fraction=1.5),
+            lambda r: r["scene_statistics"].update(width=1),
+        )
+        for index, edit in enumerate(bad):
+            with self.subTest(change=index), self.assertRaises(ValueError):
+                observer.validate_worker_report(changed(edit), 1)
+        # Statistics in a report that was not rejected at the precondition are refused too.
+        clean, _, _ = self.run_fixture()
+        clean.update(scene_statistics=report["scene_statistics"],
+                     scene_statistics_source=report["scene_statistics_source"])
+        with self.assertRaises(ValueError):
+            observer.validate_worker_report(clean, 2)
 
 
 class ObserverLifecycleTests(ObserverFixture, unittest.TestCase):
@@ -1064,13 +1163,17 @@ class ObserverSessionTokenTests(ObserverFixture, unittest.TestCase):
 
     def test_documented_observer_commands_parse_and_record_no_session_tokens(self):
         commands = documented_observer_commands()
-        self.assertGreaterEqual(len(commands), 2)
+        self.assertGreaterEqual(len([command for command in commands if "--analyze-still" not in command[2]]), 2)
         for document, line, arguments in commands:
             with self.subTest(document=document, line=line), patch.object(observer, "discover", return_value={}), \
                     patch.object(observer, "select_candidate", return_value={"node": "verified-fixture"}), \
                     patch.object(observer, "supervise", return_value=observer.new_report()) as supervised, \
                     contextlib.redirect_stdout(io.StringIO()):
                 observer.main(arguments)
+                if "--analyze-still" in arguments:
+                    # File-only analysis: never the supervised device run, so no device and no session tokens.
+                    supervised.assert_not_called()
+                    continue
                 # The approved G3 run is unchanged: it does not pass the new flag, so it reads nothing under /proc for session tokens.
                 self.assertNotIn("--record-session-tokens", arguments)
                 self.assertIs(json.loads(supervised.call_args.args[0][-1])["record_session_tokens"], False)
