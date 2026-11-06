@@ -110,7 +110,7 @@
     {
       "capability": "Capture watchdog, provider/layer lifecycle and exact recovery",
       "state": "Earlier v2 milestone passed all 28 generated-data tests on Frame ARM64",
-      "evidence": "Bounded worker, metadata/GPU provenance, registry changes, owned endpoint and conditional restoration; no real driver/layer execution or device restoration; [E35](#e35-watchdog-provider-and-recovery-tests-on-frame)"
+      "evidence": "Bounded worker, metadata/GPU provenance, registry changes, owned endpoint and conditional restoration; no real driver/layer execution or device restoration; [E35](#e35-watchdog-provider-and-recovery-tests-on-frame). Two supervisor cancellation races fixed on 2026-11-04 with cloud checks (the publication race was also reproduced on a CI runner) and no Frame result ([details](development.md#worker-containment-and-publication-recovery))"
     },
     {
       "capability": "Metadata-only provider and producer synchronization review",

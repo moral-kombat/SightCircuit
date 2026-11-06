@@ -43,6 +43,65 @@ def cleanup_signals():
             signal.signal(number, handler)
 
 
+@contextlib.contextmanager
+def deferred_signals():
+    """Hold SIGINT/SIGTERM for the block; a held one is delivered as it ends.
+
+    The caller's previous mask is restored, also on error, including a cancellation raised by
+    the call that holds the signals: CPython changes the mask and then runs pending handlers,
+    so that call sits inside the try. pthread_sigmask covers only the calling thread, so this
+    holds only while no other thread in the process leaves either signal unblocked. The
+    supervisor starts no thread; a caller process with other threads, such as a test process
+    with BLAS threads, must block both signals in them. Python runs handlers on the main thread
+    only, so a signal another thread took would still interrupt the block.
+    """
+    previous = signal.pthread_sigmask(signal.SIG_BLOCK, ())  # Read only: nothing to undo yet.
+    try:
+        signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
+        yield
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+
+
+@contextlib.contextmanager
+def recorded_signals():
+    """Record SIGINT/SIGTERM for the block; deliver each one to its handler afterwards.
+
+    Used while the worker starts. A handler that raises inside subprocess.Popen after the
+    child exists leaves no handle on it, so cleanup could neither stop nor reap it. While the
+    block runs only the Python handlers change, never the signal mask: a child inherits the
+    mask, while exec resets caught signals. An ignored signal is not swapped, so the kernel
+    keeps discarding it and the worker still inherits SIG_IGN. Afterwards each distinct
+    recorded signal is delivered once, in arrival order, until a handler raises or SIG_DFL
+    ends the process. Off the main thread, or while a handler was not installed from Python,
+    this changes nothing.
+    """
+    previous = {number: signal.getsignal(number) for number in (signal.SIGINT, signal.SIGTERM)}
+    if threading.current_thread() is not threading.main_thread() or None in previous.values():
+        yield
+        return
+    numbers = [number for number, handler in previous.items() if handler != signal.SIG_IGN]
+    pending = []
+    try:
+        for number in numbers:
+            signal.signal(number, lambda received, frame: pending.append(received))
+        yield
+    finally:
+        # The block has ended, so no child inherits the mask now. It holds both signals while
+        # the handlers go back, so, under the thread condition of deferred_signals(), one landing
+        # between the two restores cannot leave the other recording; a held signal reaches its
+        # restored handler as the mask is lifted.
+        with deferred_signals():
+            for number in numbers:
+                signal.signal(number, previous[number])
+        for number in dict.fromkeys(pending):
+            handler = previous[number]
+            if handler == signal.SIG_DFL:
+                signal.raise_signal(number)
+            elif callable(handler):
+                handler(number, None)
+
+
 def new_report():
     return {"report_kind": "capture_supervisor", "schema_version": 1, "status": "not_run",
             "exit_code": 3, "worker_started": False, "worker_reaped": False,
@@ -63,6 +122,7 @@ def supervise(*, worker=WORKER, launcher=LAUNCHER, runtime=None, seconds=10, max
     output, diagnostics = bytearray(), bytearray()
     events = []
     forced = killed = invalid_output = False
+    replaced = None
     total = 0
     started = time.monotonic()
     # Includes startup, import, copies, and destruction, not just the stream loop.
@@ -88,6 +148,18 @@ def supervise(*, worker=WORKER, launcher=LAUNCHER, runtime=None, seconds=10, max
             if len(output) > MAX_LINE:
                 raise ValueError("capture_event_limit")
 
+    @contextlib.contextmanager
+    def noted_error():
+        # A cancellation held or recorded during the block replaces an error the block raises;
+        # name that error here rather than infer it from __context__, which would also pick up
+        # an exception that supervise()'s caller is handling.
+        nonlocal replaced
+        try:
+            yield
+        except (OSError, ValueError, TypeError) as error:
+            replaced = str(error)
+            raise
+
     try:
         owned_fd = os.open(worker, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
         info = os.fstat(owned_fd)
@@ -100,11 +172,15 @@ def supervise(*, worker=WORKER, launcher=LAUNCHER, runtime=None, seconds=10, max
                            FRAMEJACKER_CAPTURE_SUPERVISOR_PID=str(os.getpid()))
         arguments = worker_arguments if worker_arguments is not None else [
             "--allow-experimental-capture", "--seconds", str(seconds), "--max-fps", str(max_fps)]
-        process = subprocess.Popen([str(launcher), str(os.getpid()), str(owned_fd), str(worker), *arguments],
-                                   pass_fds=(owned_fd,), env=environment, stdin=subprocess.DEVNULL,
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
-        report.update(worker_started=True, worker_pid=process.pid, publication_recovery_confirmed=False)
-        session.worker(process.pid)
+        # A cancellation while the worker starts is recorded (not masked: the worker would
+        # inherit the mask) and delivered once its pid is in the report and lease, so cleanup
+        # can stop and reap it.
+        with recorded_signals(), noted_error():
+            process = subprocess.Popen([str(launcher), str(os.getpid()), str(owned_fd), str(worker), *arguments],
+                                       pass_fds=(owned_fd,), env=environment, stdin=subprocess.DEVNULL,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+            report.update(worker_started=True, worker_pid=process.pid, publication_recovery_confirmed=False)
+            session.worker(process.pid)
         with selectors.DefaultSelector() as selector:
             for stream, target in ((process.stdout, output), (process.stderr, diagnostics)):
                 os.set_blocking(stream.fileno(), False)
@@ -116,18 +192,27 @@ def supervise(*, worker=WORKER, launcher=LAUNCHER, runtime=None, seconds=10, max
                     forced = True
                     break
                 for key, _ in selector.select(min(remaining, 0.05)):
-                    try:
-                        data = os.read(key.fd, 16384)
-                    except BlockingIOError:
-                        continue
-                    if not data:
-                        selector.unregister(key.fileobj)
-                        continue
-                    consume(data, key.data)
+                    # Bytes taken from the pipe are recorded before a cancellation lands, so an
+                    # announced publication identity is never lost; unread bytes stay for the drain.
+                    with deferred_signals(), noted_error():
+                        try:
+                            data = os.read(key.fd, 16384)
+                        except BlockingIOError:
+                            continue
+                        if not data:
+                            selector.unregister(key.fileobj)
+                            continue
+                        consume(data, key.data)
     except (KeyboardInterrupt, StopRequested) as error:
         number = error.number if isinstance(error, StopRequested) else signal.SIGINT
         report.update(status="cancelled", reason="signal", signal=number, exit_code=128 + number)
         forced = process is not None
+        if replaced is not None:
+            # A held or recorded cancellation delivered while a spawn or recording error was
+            # raised replaces it; keep the error, and do not validate output already known to be
+            # invalid.
+            report["superseded_error"] = replaced
+            invalid_output = True
     except (OSError, ValueError, TypeError) as error:
         report.update(reason=str(error))
         invalid_output = True

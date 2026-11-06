@@ -595,9 +595,13 @@ records cloud-only validation and the model-quality limitation.
 
 The dedicated-capture provider track is paused and frozen (see the
 [design review](design-review.md#next-steps)); its procedures below and in the
-[on-device guide](on-device.md) are kept for when it resumes. Do not activate
-layers or restart SteamVR from a cloud session. Its Python commands stay in
-`scripts/` under their documented paths and are quarantined in place:
+[on-device guide](on-device.md) are kept for when it resumes. On 2026-11-04 the
+owner approved one small PR fixing two cancellation races in
+`capture_supervisor.py` ([decision](poc-scope.md#capture-supervisor-fix-2026-11-04),
+[details](#worker-containment-and-publication-recovery)); the track otherwise
+stays frozen. Do not activate layers or restart SteamVR from a cloud session.
+Its Python commands stay in `scripts/` under their documented paths and are
+quarantined in place:
 
 | Script | Role |
 | --- | --- |
@@ -977,8 +981,8 @@ python3 -m unittest discover -s tests -p test_capture_service_lifecycle.py -v &&
 python3 -m unittest discover -s tests -p test_capture_layer_trial.py -v
 ```
 
-The current cloud suites contain **10 watchdog, 14 provider/layer, 12 metadata
-diagnostic, 8 configuration/recovery, 9 service-observation and 48 trial tests**. These use generated files,
+The current cloud suites contain **35 watchdog, 14 provider/layer, 12 metadata
+diagnostic, 8 configuration/recovery, 10 service-observation and 48 trial tests**. These use generated files,
 local sockets and fake driver dispatch. Neither the actual layer nor the
 camera producer is loaded/run. The real binaries remain mode 0644 in
 `artifacts/capture-provider-reference/`; the report records helper, patch and
@@ -1033,6 +1037,91 @@ It refuses a living run or unconfirmed identity. No automatic directory sweep
 or unconditional stale-file deletion occurs. The tests cover hangs at each
 GPU phase, crashes/output limits, signals, parent death, graceful deadline
 retirement, exact recovery and preservation of foreign files.
+
+**Cancellation while a publication is recorded (2026-11-04).** A SIGINT or
+SIGTERM that arrived after the supervisor had taken the worker's
+`publication_ready` line from the pipe, but before `Session.publication` stored
+its identity, left the identity unrecorded. Cleanup then refused the owned
+`frames.shm` with `publication_recovery_unconfirmed`: fail-closed, but wrong,
+because the identity had been announced. The supervisor now holds SIGINT and
+SIGTERM (`pthread_sigmask`) while it reads and records each chunk of worker
+output. A single held signal, or a repeat of the same one, is delivered as soon
+as the chunk is recorded, so the run still ends `cancelled` with exit 128 +
+signal; bytes not yet read stay in the pipe for the post-cancellation drain. The
+signals are held inside the deferral's `try`, so a cancellation raised by the
+holding call itself still restores the caller's mask. The mask covers only the
+calling thread, so it holds only while no other thread in the process leaves
+SIGINT or SIGTERM unblocked: the kernel would hand a signal to that thread, and
+Python would then run the handler on the main thread inside the deferral. The
+supervisor starts no thread; a caller process with other threads, such as a
+test process with numpy's BLAS threads, must block both signals in them. If a
+recording error is being raised when a held cancellation is delivered, the
+cancellation replaces it: the run still ends `cancelled`, the report keeps the
+error as `superseded_error`, and the rest of the output is not read or
+validated. The supervisor names that error where it is raised rather than take
+it from the cancellation's `__context__`, which would also pick up an exception
+that the caller of `supervise()` is handling. The recovery rules are
+unchanged. A SIGINT and a SIGTERM pending together are not covered, before or
+after this change: the second handler
+raises inside `cleanup_signals()` before the signals are ignored, so
+`supervise()` raises `StopRequested` without reaping the worker or removing the
+session. Holding the signals can make the two arrive together, since both are
+delivered as the mask is lifted, so this change makes that pre-existing gap
+somewhat more likely; it is left for a separate follow-up. This evidence is
+cloud and CI-runner only, not Frame: the existing
+`test_sigint_and_sigterm_reap_the_worker` failed on PR #21's ARM64 runner
+(`arm64 / capture-supervisor`, run 41759960012 attempt 1, job 126345052861; the
+re-run in attempt 2 passed) and in about 1 of 40 local runs. The new
+deterministic test fails on every run of the previous supervisor and passes with
+the change. The owner approved this one change to the paused track
+([decision](poc-scope.md#capture-supervisor-fix-2026-11-04)).
+
+**Cancellation while the worker starts (2026-11-04).** A SIGINT or SIGTERM whose
+handler raised inside `subprocess.Popen`, after the worker had been created but
+before `Popen` returned, left `supervise()` without a handle on it: the report
+said `worker_started` and `worker_reaped` false, and cleanup could neither stop
+nor reap the worker, which kept running until the supervisor process exited.
+This was reproduced on the previous supervisor under CPU load, once in 36 runs.
+The supervisor now records SIGINT and SIGTERM with temporary Python handlers
+while the worker starts and its pid is saved (`recorded_signals()`). Once the
+pid is in the report and lease it delivers each distinct recorded signal once,
+in arrival order, to the caller's handler, until a handler raises or `SIG_DFL`
+ends the process, so the run ends `cancelled` and cleanup can stop and reap the
+worker. A recorded signal is delivered also when the spawn or the pid save
+fails; the run then still ends `cancelled` and keeps that error as
+`superseded_error`. A signal the caller set to `SIG_IGN` is not swapped, so it
+stays ignored and the worker still inherits `SIG_IGN`, as before. The signal
+mask is not held while the worker starts, because the worker would inherit it;
+it holds both signals only while the two handlers are put back, so, under the
+same thread condition as the deferral above, a signal landing between the two
+restores cannot leave the other one recording. The deterministic test
+`test_cancellation_while_starting_the_worker_still_reaps_it`
+holds the spawn window open until the signal is sent; it fails on every run of
+the previous supervisor, and it reads the lease as the cancellation is
+delivered, so it also checks that the lease names the worker by then: a caller
+whose `SIG_DFL` ends the process still leaves the pid for `--recover-session`.
+Other tests deliver a cancellation recorded while a failing spawn or pid save
+raises (a failed pid save must still leave the worker stopped and reaped), and
+send a signal right after the first of the two handler restores, whichever
+signal that is. Counterparts without a cancellation check that a spawn or
+recording error then fails the run and is named as its `reason`, and the
+malformed and flooding workers must fail with their JSON error rather than reach
+the deadline. Another cancels a worker that retires gracefully, also while the
+caller handles an error, and checks that its final event is still drained and
+validated and that no error is reported as superseded. In-process tests send
+signals with `signal.raise_signal`, which targets the calling thread, and run
+beside a thread that leaves both signals unblocked, as numpy's BLAS threads do
+in the full suite. With `os.kill` such a thread could take a signal the main
+thread held, so the restore test failed now and then in the full suite, or
+aborted the whole unittest run. The harness of the existing
+`test_sigint_and_sigterm_reap_the_worker` (its assertions are unchanged, apart
+from a new check that no error is reported as superseded) now also holds both
+signals once `supervise()` has returned, because its repeated signal could
+otherwise kill the harness process during interpreter shutdown
+(exit -2 or -15) after the supervisor had finished. Same approval as above. The
+start-up race was reproduced in local cloud runs only, never on a CI runner or
+Frame; the PR #21 ARM64 failure cited above was the publication race (its report
+had `worker_reaped` true). Neither fix has a Frame result.
 
 ### Provider protocol and layer ownership
 

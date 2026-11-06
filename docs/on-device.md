@@ -1215,7 +1215,8 @@ prerequisites and can be tested in one batch.
 
 ### Test the watchdog and provider without capture
 
-The earlier v2 milestone passed all 28 tests on Frame ARM64; see
+The earlier v2 milestone passed all 28 tests (10 watchdog, 11 provider and 7
+recovery) on Frame ARM64; see
 [E35](status.md#e35-watchdog-provider-and-recovery-tests-on-frame). The current
 full regression includes v3 metadata-only changes. It uses generated files,
 private local sockets and fake Vulkan dispatch, without opening a camera or
@@ -1232,7 +1233,7 @@ python3 -m unittest discover -s tests -p test_capture_provider_check.py -v &&
 python3 -m unittest discover -s tests -p test_capture_layer_config.py -v
 ```
 
-Expect **10, 12, 12 and 7 tests**, respectively, with no skips. Share the provider
+Expect **35, 14, 12 and 8 tests**, respectively, with no skips. Share the provider
 build report and test summaries when convenient. Existing ARM64 v2 success does not
 establish ARM64 execution or live capture. This check changes no camera-source
 setting, layer installation or compositor service.
@@ -1295,8 +1296,8 @@ python3 -m unittest discover -s tests -p test_capture_provider.py -v &&
 python3 -m unittest discover -s tests -p test_capture_provider_check.py -v
 ```
 
-Expect **12 provider/layer tests and 12 metadata diagnostic tests**, with no
-skips. The build report should say `provider_protocol_version: 3`,
+Expect **14 provider/layer tests and 12 metadata diagnostic tests** (E37 ran
+12 and 12), with no skips. The build report should say `provider_protocol_version: 3`,
 `image_fd_export_enabled: false`, `layer_retains_image_fds: false` and
 `deployment_ready: false`. Share the revision, build report and test summaries.
 These checks do not establish actual driver execution or complete camera frames.
@@ -1356,7 +1357,7 @@ python3 scripts/capture_layer_config.py --prepare artifacts/capture-layer-plan-v
 python3 scripts/capture_layer_trial.py --preflight artifacts/capture-layer-plan-v3-trial
 ```
 
-Current suites contain **14, 12, 9 and 48 tests**, with no skips; the original
+Current suites contain **14, 12, 10 and 48 tests**, with no skips; the original
 preparation expected `prepared_inactive_bundle`
 and `preflight_passed`. If the new directory already exists, preserve it and
 use a different new name throughout. Preflight requires matching current

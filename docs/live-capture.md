@@ -605,8 +605,9 @@ Use the [updated native procedure](on-device.md#test-metadata-only-inspection-wi
 
 The offline lifecycle model and recovery changes are implemented, based on
 the [shipped unit and selector](status.md#e44-platform-launcher-source-and-repeated-hook-diagnostic-fix).
-All 65 targeted cloud tests pass: 48 trial, nine service-observation and eight
-configuration tests. Generated hook/job events distinguish required and ignored
+On 2026-10-17 all 65 targeted cloud tests passed: 48 trial, nine
+service-observation and eight configuration tests (the service-observation
+suite now has 10). Generated hook/job events distinguish required and ignored
 failures, a separate waiter/compositor, delayed transitions and competing startup.
 This is a bounded model, not an emulator or proof of actual vendor hook behavior;
 see [E45](status.md#e45-offline-platform-lifecycle-and-guarded-recovery).

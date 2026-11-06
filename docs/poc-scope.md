@@ -325,3 +325,16 @@ none opens a gate in `framejacker/gates.py`.
 | Tracking-token binding (package I) | Answered later on 2026-11-03, in the coder session that recorded E77 and E78. The tokens stay bound when `MirrorSource` is declared: a first `tracking_state` must reach the `TrackingObserver` before the source is created. A state first seen later leaves `tracking_origin` and `recenter_epoch` undeclared for the run, so a bound mask rejects every frame. Late binding was not adopted. |
 | Unobserved session token (handoff item 2) | Answered on 2026-11-03, in the coder session that recorded E77 and E78. A session token that the marker observer did not observe rejects the observer-to-candidate conversion (`hud_validation_report.py --from-observer`). There is no declared fallback, behind a flag or otherwise; `--declared-context` keeps only the non-token context fields, and its `native_format` must equal the observer's capture format. |
 | Observer /proc reads (handoff item 2) | Answered on 2026-11-03, in the coder session that recorded E77 and E78. The marker observer reads session tokens from the real /proc only behind an explicit flag, `--record-session-tokens`, which is off by default, so the approved G3 run is unchanged. Using the flag on Frame is a separate approval. |
+
+## Capture supervisor fix (2026-11-04)
+
+On 2026-11-04 the owner approved two changes to the paused capture-provider
+track, in one small PR. First, the capture supervisor holds SIGINT and SIGTERM
+while it records worker output, so a cancellation can no longer leave an
+announced publication identity unrecorded. Second, it records a cancellation
+that arrives while the worker starts until it holds the worker, so cleanup can
+stop and reap it ([details](development.md#worker-containment-and-publication-recovery)).
+The track otherwise stays paused. This approves no device run, provider
+activation, layer installation or SteamVR restart. The publication race was
+reproduced in local cloud runs and on a CI runner; the start-up race was
+reproduced in local cloud runs only. Neither fix has a Frame result.
