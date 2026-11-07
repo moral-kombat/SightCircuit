@@ -161,9 +161,30 @@ manifest. Change `--present` and `--absent` to match the scene:
 
 `--still` saves the final processed frame at native mirror size, without labels.
 The helper requires a successful capture report and verifies its SHA-256. It
-records the digest, detector, source, and sequence. Keep these fields when
-adding optional object boxes. `evaluation/local/` is Git-ignored; keep room
-images on the device.
+records the digest, detector, source, and sequence. `evaluation/local/` is
+Git-ignored (`tests/test_evaluation.py` checks the rule); keep room images on
+the device.
+
+To score localization, box each object in the saved still. Open the still,
+read each object's top-left and bottom-right corners in its native pixels (the
+report's `still_width` by `still_height`), and add the entry with one
+`--object label:x1,y1,x2,y2` per object. Add `--boxes-complete` only when every
+object a detector could name is boxed; unmatched detections then count as
+false positives. The helper refuses a box that does not fit the still's
+recorded size or whose corners are not ordered. Labels and the presence and
+absence lists are unchanged:
+
+```bash
+.venv-replay/bin/python scripts/frame_session_manifest.py --manifest evaluation/local/frame.json \
+  --id "${sightcircuit_still##*/}" --image "$sightcircuit_still.png" \
+  --still-report "$sightcircuit_still.json" --present chair --absent couch \
+  --object chair:412,300,790,690 --boxes-complete
+```
+
+Without `--object` the entry stays presence-only, as the session script
+writes it. The representative set for the default-detector decision needs at
+least twenty boxed chair stills ([D6](../poc-scope.md#architecture-decisions-2026-11-07));
+the evaluator's `box_recall_by_label.chair` is the number that rule reads.
 
 Compare both detectors on those same inputs, requiring every entry to have a digest:
 

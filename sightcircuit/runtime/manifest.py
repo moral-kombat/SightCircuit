@@ -28,8 +28,8 @@ ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_VERSION = 1
 REPORT_KIND = "checkpoint_artifact_manifest"
 VERIFICATION_KIND = "checkpoint_manifest_verification"
-SCOPE = ("Pins software identity only (checkout, interpreter, packages and the bridge built on this machine); "
-         "not device, Frame, physical-display or qualification evidence")
+SCOPE = ("Pins software identity only (checkout, interpreter, packages, the SteamVR package and the bridge built "
+         "on this machine); not device, Frame, physical-display or qualification evidence")
 BRIDGE = "artifacts/overlay-bridge/sightcircuit-overlay-bridge"
 # Everything the checkpoint procedure runs: docs/hud-qualification.md#next-device-checkpoint and
 # docs/on-device.md#bounded-edge-hud-calibration-checkpoint. tests/test_checkpoint_manifest.py
@@ -49,6 +49,14 @@ GIT_TIMEOUT_SECONDS = 30
 MAX_MANIFEST_BYTES = 1 << 20
 MAX_MANIFEST_DEPTH = 8  # A manifest nests three levels; anything far deeper is foreign.
 MAX_REPORTED_PATHS = 20
+# The SteamVR runtime on Frame is the pacman package ``deckard-steamvr-rel`` (E85 read it with ``pacman -Q``:
+# r25765468+0ab5c24d-1 on SteamOS 0.5.6, r26496310+24cb4748-1 on 0.5.8). The manifest reads it from the
+# local package database by file reads only, best-effort: the version is unknown (None, with a reason) where
+# the database or the package is absent. The desktop SteamVR package name is unverified and not looked for.
+STEAMVR_PACKAGE = "deckard-steamvr-rel"
+PACMAN_LOCAL_DATABASE = Path("/var/lib/pacman/local")
+MAX_PACKAGE_DESCRIPTION_BYTES = 64 * 1024
+MAX_PACKAGE_VERSION_CHARS = 128
 SHA256 = re.compile(r"[0-9a-f]{64}")
 COMMIT = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 
@@ -124,6 +132,53 @@ def os_release():
     return {key.lower(): info.get(key) for key in ("ID", "VERSION_ID", "BUILD_ID")}
 
 
+def _package_description(text):
+    """{FIELD: first value} of a pacman ``desc`` file: ``%FIELD%`` lines, each followed by its values."""
+    fields, current = {}, None
+    for line in text.splitlines():
+        if len(line) > 2 and line[0] == line[-1] == "%":
+            current = line[1:-1]
+        elif current is not None and line and current not in fields:
+            fields[current] = line
+    return fields
+
+
+def steamvr_package(name=STEAMVR_PACKAGE, database=None):
+    """The SteamVR package's installed version from the pacman local database, read-only and best-effort.
+
+    Returns ``{"name", "source", "version", "reason"}``. ``version`` is None, with the
+    reason, where the database is unreadable (not a SteamOS or Arch host), the
+    package is not installed, its description is unreadable or invalid, or more
+    than one entry claims the name. Only directories named ``<name>-...`` are
+    opened, and each ``desc`` is read up to a bound. No command is run.
+    """
+    record = {"name": name, "source": "pacman_local_database", "version": None, "reason": None}
+    database = PACMAN_LOCAL_DATABASE if database is None else Path(database)
+    try:
+        entries = sorted(entry for entry in database.iterdir() if entry.name.startswith(name + "-"))
+    except OSError:
+        return dict(record, reason="package_database_unavailable")
+    versions, unreadable = [], False
+    for entry in entries:
+        try:
+            text = (entry / "desc").read_bytes()[:MAX_PACKAGE_DESCRIPTION_BYTES].decode("utf-8", "replace")
+        except OSError:
+            unreadable = True
+            continue
+        fields = _package_description(text)
+        if fields.get("NAME") == name:
+            versions.append(fields.get("VERSION"))
+    if not versions:
+        return dict(record, reason="package_description_unreadable" if unreadable else "package_not_installed")
+    if len(versions) > 1:
+        return dict(record, reason="package_ambiguous")
+    version = versions[0]
+    if (type(version) is not str or not 1 <= len(version) <= MAX_PACKAGE_VERSION_CHARS or
+            not version.isprintable() or " " in version):
+        return dict(record, reason="package_version_invalid")
+    return dict(record, version=version)
+
+
 def package_versions(packages=CHECKPOINT_PACKAGES):
     """{distribution: installed version or None}."""
     versions = {}
@@ -146,7 +201,8 @@ def observe(root=ROOT, packages=CHECKPOINT_PACKAGES):
                "git": {"commit": commit, "dirty": bool(changes)},
                "python": {"implementation": platform.python_implementation(), "version": platform.python_version()},
                "platform": {"machine": platform.machine(), "system": platform.system(),
-                            "kernel_release": platform.release(), "os_release": os_release()},
+                            "kernel_release": platform.release(), "os_release": os_release(),
+                            "steamvr_package": steamvr_package()},
                "packages": package_versions(packages)}
     current.update({group: {path: _digest(root / path) for path in paths} for group, paths in groups.items()})
     return current, changes

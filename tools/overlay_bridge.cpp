@@ -39,8 +39,10 @@ volatile std::sig_atomic_t stopping = 0;
 void stop_signal(int) { stopping = 1; }
 struct Stopped {};
 // Watchdog budgets beside sightcircuit/runtime/guard.py, which still owns
-// escalation. The connect budget is below OverlayClient's 8 s ready wait.
-constexpr unsigned kWatchdogConnectSeconds = 6;
+// escalation. The connect budget comes from the generated contract header, and
+// the Python clients derive their ready wait from the same value, so the two
+// move together (BRIDGE_READY_WAIT_SECONDS in sightcircuit/hud/contract.py).
+constexpr unsigned kWatchdogConnectSeconds = contract::kBridgeConnectBudgetSeconds;
 constexpr unsigned kWatchdogStallSeconds = 5;  // any one loop step, re-armed per step
 constexpr unsigned kWatchdogCleanupSeconds = 5;
 void emit(Json::Value value) {

@@ -67,7 +67,7 @@ operating restrictions; the public camera probe previously interrupted passthrou
 
 ### In the cloud or on Linux x86_64: development smoke check
 
-Install Python 3.12, [uv](https://docs.astral.sh/uv/getting-started/installation/),
+Install Python 3.12 or 3.14, [uv](https://docs.astral.sh/uv/getting-started/installation/),
 and the Linux libraries listed in [development setup](docs/development.md).
 From the repository root:
 

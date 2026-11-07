@@ -134,8 +134,8 @@
     },
     {
       "capability": "Guarded on-device agent runner",
-      "state": "Phase 0 installed; runner and guard enforcement untested on Frame",
-      "evidence": "Phase 0 passed and guard settings were installed ([E82](#e82-guarded-claude-code-setup-installed-on-frame-phase-0)). Installation does not validate automated checks or blocking. The review's cycle-3 follow-ups (glob guard, update signal handling and outcome, lock-file and checkout-state reporting, installer cleanup) are fixed, cloud-checked and merged ([E84](#e84-ship-pass-of-2026-11-06-cloud-checks-for-prs-22-24-25-26-and-27)); none has run on Frame. [Coverage and follow-ups](evidence/capability-notes.md#guarded-on-device-agent-runner)."
+      "state": "Phase 0 installed and re-verified on SteamOS 0.5.8; guard version 4 active; runner and guard enforcement untested on Frame",
+      "evidence": "Phase 0 passed and guard settings were installed ([E82](#e82-guarded-claude-code-setup-installed-on-frame-phase-0)). Installation does not validate automated checks or blocking. The review's cycle-3 follow-ups (glob guard, update signal handling and outcome, lock-file and checkout-state reporting, installer cleanup) are fixed, cloud-checked and merged ([E84](#e84-ship-pass-of-2026-11-06-cloud-checks-for-prs-22-24-25-26-and-27)); none has run as a task on Frame. The installer re-run at 6e648c7 on SteamOS 0.5.8 passed all five stages with the first recorded signature pass of Claude Code 2.1.319, and the pull to 45771fe made guard version 4 the active guard with the settings file unchanged ([E86](#e86-installer-run-at-6e648c7-on-frame-first-signature-pass-of-claude-code-21319-and-the-guard-version-4-disclosure)). [Coverage and follow-ups](evidence/capability-notes.md#guarded-on-device-agent-runner)."
     },
     {
       "capability": "Dedicated Arcturus Vulkan capture",

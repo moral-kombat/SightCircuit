@@ -62,7 +62,7 @@ class GeneratedHeaderTests(unittest.TestCase):
                  for name, record in (("HUD_CONFIG", HUD_CONFIG), ("MARKER", MARKER))
                  for field in dataclasses.fields(record)]
         for name in ("MARKER_MIN_SECONDS", "MARKER_MAX_SECONDS", "MAX_DISPLAY_AGE_NS", "MAX_SIDE", "RGBA_BYTES",
-                     "OPCODE_FRAME", "OPCODE_SETTINGS", "OPCODE_STOP", "OPCODE_EXPIRING_FRAME", "PACKET_MAGIC"):
+                     "BRIDGE_CONNECT_BUDGET_SECONDS", "OPCODE_FRAME", "OPCODE_SETTINGS", "OPCODE_STOP", "OPCODE_EXPIRING_FRAME", "PACKET_MAGIC"):
             cases.append((contract, name, changed(getattr(contract, name)), name))
         for name in ("PACKET_HEADER_FIELDS", "SETTINGS_FIELDS", "FRAME_PREFIX_FIELDS",
                      "EXPIRING_FRAME_PREFIX_FIELDS"):
@@ -164,6 +164,43 @@ class PythonLimitSitesTests(unittest.TestCase):
         except SystemExit as error:
             return "SystemExit", error.code, "argument --seconds: invalid choice" in stderr.getvalue()
         return None
+
+    def test_bridge_connect_budget_and_ready_wait_move_together(self):
+        """A3 (2026-11-07): the bridge's connect watchdog and its clients' ready wait share one source.
+
+        The bridge gives up on its connect after ``BRIDGE_CONNECT_BUDGET_SECONDS``
+        and names the stop; the clients wait that long plus the margin, so the
+        named report arrives before any escalation. The default observer run
+        must still leave at least three reads after the baseline window, the
+        ready wait and the marker warmup. The numbers are cloud choices; the
+        headset check of the budget is a separately approved device step.
+        """
+        from sightcircuit.hud import marker
+        from scripts import hud_marker_observer
+
+        self.assertGreaterEqual(contract.BRIDGE_CONNECT_BUDGET_SECONDS, 1)
+        self.assertGreaterEqual(contract.BRIDGE_READY_MARGIN_SECONDS, 1)
+        self.assertEqual(contract.BRIDGE_READY_WAIT_SECONDS,
+                         contract.BRIDGE_CONNECT_BUDGET_SECONDS + contract.BRIDGE_READY_MARGIN_SECONDS)
+        self.assertEqual(marker.READY_TIMEOUT_SECONDS, contract.BRIDGE_READY_WAIT_SECONDS)
+        header = (ROOT / "tools/hud_contract.hpp").read_text()
+        self.assertIn(f"constexpr std::uint32_t kBridgeConnectBudgetSeconds = {contract.BRIDGE_CONNECT_BUDGET_SECONDS};",
+                      header)
+        bridge = (ROOT / "tools/overlay_bridge.cpp").read_text()
+        self.assertIn("constexpr unsigned kWatchdogConnectSeconds = contract::kBridgeConnectBudgetSeconds;", bridge)
+        self.assertNotRegex(bridge, r"kWatchdogConnectSeconds\s*=\s*\d")
+        client = (ROOT / "sightcircuit/overlay.py").read_text()
+        self.assertIn("self.ready.wait(BRIDGE_READY_WAIT_SECONDS)", client)
+        self.assertNotRegex(client, r"ready\.wait\(\d")
+        self.assertNotRegex((ROOT / "sightcircuit/hud/marker.py").read_text(), r"READY_TIMEOUT_SECONDS\s*=\s*\d")
+        # The documented run (docs/guides/hud-checkpoint.md) is --seconds 20: three samples at five reads per
+        # second must fit after the worst-case baseline, ready wait and warmup.
+        self.assertEqual(hud_marker_observer.MARKER_WARMUP_SECONDS, 2.0)
+        remaining = (20 - hud_marker_observer.BASELINE_WINDOW_SECONDS - contract.BRIDGE_READY_WAIT_SECONDS -
+                     hud_marker_observer.MARKER_WARMUP_SECONDS)
+        self.assertGreaterEqual(remaining, 3 / 5)
+        # A healthy connect inside the budget leaves the marker displayed for most of the run.
+        self.assertLess(contract.BRIDGE_CONNECT_BUDGET_SECONDS, 20 / 2)
 
     def test_marker_duration_sites(self):
         from sightcircuit.hud import marker, observation

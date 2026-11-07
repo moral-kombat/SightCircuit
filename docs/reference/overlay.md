@@ -51,7 +51,11 @@ call and carry no `connect` object.
 The bridge keeps a duplicate of the real stdout for the JSON protocol and points
 fd 1 at stderr before anything can load the SDK, so SDK output cannot corrupt a
 report. A SIGALRM watchdog (6 s for the connect, 5 s for any one loop step,
-re-armed per step, and 5 s for cleanup) writes one prepared JSON error
+re-armed per step, and 5 s for cleanup) writes one prepared JSON error. The
+connect budget is `kBridgeConnectBudgetSeconds` from the generated contract
+header, and the Python clients' 8 s ready wait is derived from the same value
+(`BRIDGE_READY_WAIT_SECONDS`), so the two move together
+([pre-attempt review](hud-observation.md#pre-attempt-review-of-the-stops-before-a-marker-2026-11-07)). The watchdog
 (`watchdog_expired:<phase>`, exit code 124, `cleanup_ok: false`) and calls
 `_exit` without running cleanup. It sits beside `sightcircuit/runtime/guard.py`
 and the Python client's bounded termination; it does not replace them. A torn

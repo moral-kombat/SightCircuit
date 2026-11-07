@@ -588,6 +588,20 @@
       "file": "e084.md",
       "kind": "offline",
       "reconstructed": false
+    },
+    {
+      "id": "E85",
+      "title": "SteamOS 0.5.8 update on Frame: post-reboot baseline, Python 3.12 removal and G2 log watch",
+      "file": "e085.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E86",
+      "title": "Installer run at 6e648c7 on Frame, first signature pass of Claude Code 2.1.319, and the guard version 4 disclosure",
+      "file": "e086.md",
+      "kind": "device_report",
+      "reconstructed": false
     }
   ]
 }

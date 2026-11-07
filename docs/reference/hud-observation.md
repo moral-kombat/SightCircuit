@@ -1,6 +1,6 @@
 # HUD observation and prediction tools
 
-Use this reference for the marker observer, file-only scene analysis and geometric prediction. Observation and prediction support qualification; neither qualifies a mapping by itself.
+Use this reference for the marker observer, file-only scene analysis, geometric prediction and the pre-attempt review of the stops before a marker. Observation and prediction support qualification; neither qualifies a mapping by itself.
 
 [Architecture](../architecture.md) · [Qualification method](../hud-qualification.md) · [Current gates](../live-capture.md#edge-hud-acceptance-gates)
 
@@ -59,7 +59,7 @@ bridge source for that. The calls follow the read side of vr-recorder
 A saved record becomes a prediction with (owner decision, 2026-11-04):
 
 ```bash
-python3.12 scripts/hud_view_prediction.py VIEW_RECORD.json
+python3 scripts/hud_view_prediction.py VIEW_RECORD.json
 ```
 
 It accepts the whole bridge report or just its `view_record` object, reads
@@ -91,6 +91,253 @@ the supervisor now ends and reaps the worker group itself, and still reports
 `cleanup_ok: false`. This does not explain the green input, the tag mismatch or
 physical recovery. The [lifecycle review](../lifecycle-review.md#marker-stop-and-guardian-loss-2026-11-01)
 has the details.
+
+<a id="pre-attempt-review-of-the-stops-before-a-marker-2026-11-07"></a>
+
+## Pre-attempt review of the stops before a marker (2026-11-07)
+
+Item A3 of the [architecture plan work order](../live-capture.md#architecture-plan-work-order-2026-11-07):
+an offline review of everything that can stop the next marker-observer attempt
+(A4) before a marker appears, plus the planner's addendum of the same day on
+the environment differences the device record must carry. File and line references are at revision
+`45771fe` unless they say "now". The review ran no device operation and makes
+no claim about device behaviour; every result below is a cloud check. **The
+headset check of the bridge's connect budget remains a separately approved
+device step**, which this review neither runs nor schedules.
+
+### 1. The bridge's connect budget and the client's ready wait
+
+Marker mode works like this. The bridge starts its display timer at process
+start, arms its connect watchdog (`tools/overlay_bridge.cpp:631`, 6 s at
+`:43`), then connects: up to three `VRApplication_Background` probes and three
+`VRApplication_Overlay` `VR_Init` attempts with 250 and 500 ms of backoff
+(`tools/overlay_lifecycle.hpp:144-145,160-179`). Only after a connection,
+`IVROverlay`, the headset check and `CreateOverlay` (`overlay_bridge.cpp:166-170`)
+does it print its ready line (`:648`), and only after that line does it
+generate and submit the marker (`:650-660`). If the watchdog expires, the
+bridge writes one prepared error line, `watchdog_expired:connect` with
+`exit_code` 124, `cleanup_ok: false` and `cleanup_skipped_by_watchdog: true`,
+and `_exit`s without `VR_Shutdown` (`overlay_lifecycle.hpp:44-52`). The
+Python client (`sightcircuit/hud/marker.py:58-64`) waits 8 s
+(`READY_TIMEOUT_SECONDS`, `:16`) for the ready line. Its reader thread
+delivers the bridge's error line as the client's error, so the client raises
+the bridge's own reason, and `close()` finds the process already gone: no
+escalation, `forced_termination: false`. If instead the bridge is silent for
+the whole wait, the client raises `marker_ready_timeout` and escalates to
+SIGTERM, then SIGKILL, at once, because a bridge without an accepted ready line
+could still show the marker after the run had failed
+([marker stop path](#marker-stop-path)).
+
+The 6 s budget arrived with the November 6 bridge lifecycle change (E84), after
+E83's bridge, and the review of that change asked that the budget and the
+client's wait move together: the wait must stay above the budget, or the client
+would force a termination with `cleanup_ok: false` and lose the bridge's named
+report; and a slow but healthy SteamVR that the old single `VR_Init` would have
+finished inside the 8 s wait can now be cut off at 6 s.
+
+**Decision and change (now).** The two numbers have one source.
+`sightcircuit/hud/contract.py` defines `BRIDGE_CONNECT_BUDGET_SECONDS = 6`,
+`BRIDGE_READY_MARGIN_SECONDS = 2` and
+`BRIDGE_READY_WAIT_SECONDS = 8` as their sum. The generated header
+(`tools/hud_contract.hpp`, written by `scripts/hud_contract_header.py --write`)
+carries `kBridgeConnectBudgetSeconds`, and the bridge's `kWatchdogConnectSeconds`
+takes it. `MarkerClient.READY_TIMEOUT_SECONDS` and the `OverlayClient` ready wait
+are both `BRIDGE_READY_WAIT_SECONDS`. The margin is the time the client allows for
+process start, SDK loading and the delivery of the watchdog's own line.
+`tests/test_hud_contract.py` pins the sum, the header value, the bridge
+source and both client sites, refuses a literal at any of them, and checks
+that the documented 20 s run still leaves at least three reads after the
+baseline window, the ready wait and the marker warmup.
+`tests/test_hud_marker_check.py` drives a fake bridge that writes the watchdog
+line and exits 124: the client raises `watchdog_expired:connect` inside its
+wait and escalates nothing. A rebuild of the bridge after the header change is
+part of the normal check sequence.
+
+**Why the budget stays at 6 s.** No Frame measurement of the probe-then-connect
+order exists. The only Frame timings on this path are older: in V4
+([E75](../evidence/e075.md)) the marker was requested and submitted within
+213 ms of native start through a single Overlay `VR_Init`, and
+[E81](../evidence/e081.md) streamed 400 panel frames with the old order. E83's
+runs never reached the bridge. So the budget cannot be justified or refuted
+offline, and the budget's cost is bounded: the display timer starts at process
+start, so a connect that uses the whole budget leaves 14 s of marker display in
+a 20 s run, and a budget expiry stops the run before any marker is generated.
+The pairing makes a later change one Python edit, a header regeneration and a
+rebuild. Whether 6 s is enough for the Frame's SteamVR is the headset check
+listed in the [overlay reference](overlay.md#connect-order-output-and-watchdog-package-k-2026-11-04),
+a separately approved device step.
+
+**What an expiry looks like at the next attempt.** The observer report is
+`rejected`, exit 1, `reason: watchdog_expired:connect`, `cleanup_ok: false`,
+and `bridge.native_report.cleanup_skipped_by_watchdog: true`. No marker was
+generated or submitted, because both come after the ready line. The
+`cleanup_ok` value is the software statement that the bridge skipped
+`VR_Shutdown`; it says nothing about the headset.
+
+### 2. The marker warmup window
+
+After the ready line the observer tolerated reads without any marker candidate
+(`no_complete_marker`) for 2 s while no sample existed, counted them as
+`warmup_frames_without_marker`, and rejected the first such read after that
+(`scripts/hud_marker_observer.py:145,152`). The literal was not named or
+documented.
+
+**What the window covers.** The bridge's marker generation and submit after
+its ready line, the compositor's pickup, the mirror's frame path and one read
+period: the observer reads at most five times a second (`:143` runs inside a
+read callback, so the first read after the ready line is the next scheduled
+one). The mirror read returns the loopback device's latest frame
+(`sightcircuit/sources/mirror_device.py:236-257`, `os.read` on the node), so
+no queue of stale frames has to drain after the ready wait blocked the loop.
+Recorded evidence is thin: in V4 the first read after the marker request, at
+most 185 ms after native start, already carried marker-shaped content whose
+tags then failed ([E75](../evidence/e075.md)). That is one timing on an older
+code path, and whether the fragment was the marker was never confirmed.
+
+**Change (now).** The window is the explicit constant
+`MARKER_WARMUP_SECONDS = 2.0` beside `BASELINE_WINDOW_SECONDS`, with its
+derivation in the source, and every report records it as
+`marker_warmup_seconds`. The default is unchanged: a longer window never admits
+a sample the observer would otherwise refuse, it only delays a no-marker
+rejection, so 2 s is the safe side as long as the run still has room for three
+samples, which the contract test checks (at 20 s: 20 − 2 − 8 − 2 = 8 s remain,
+0.6 s are needed). It is a reviewed constant pinned by the checkpoint manifest,
+not a command option, because decision D2 rules out tuning on the device.
+
+**What the window does not tolerate, deliberately.** A read whose matcher
+finds an orphan tag or a partial copy (`orphan_marker_tag_or_incomplete_copy`,
+V4's shape) rejects at once, with no sample and no warmup count. That check is
+the fail-closed guard against a copy hidden beside a complete one, and it is
+unchanged. Tolerating it during the window would delay a V4-shaped rejection
+by at most the window and replace the first rejected read's diagnostics with
+the last one's; that trade is noted for the planner, not made here.
+`tests/test_hud_marker_observer.py` shows the count following the constant at
+three window lengths and a partial copy rejecting without a count.
+
+### 3. `--record-session-tokens`
+
+**The next attempt should not pass it (the default).** Three reasons:
+
+- Its report cannot become a mapping candidate anyway. The tracking tokens stay
+  undeclared until the native tracking reporter exists (item A9), and
+  `--from-observer` rejects any report with an undeclared tracking token
+  (`sightcircuit/hud/candidate.py:217-219`). A4's purpose is to see a marker
+  and close G3, not to produce a candidate; the candidate for the diagnostic
+  run comes from a later observation after A9, inside the candidate's 300 s
+  lifetime.
+- It adds a stop before the marker that has never run on Frame. The
+  declaration scans /proc and hashes the running `vrserver` binary (up to
+  256 MiB) under a 4 s budget
+  ([session tokens](hud-session.md#observed-session-tokens-for-the-candidate-2026-11-03)).
+  A slow declaration rejects the run `observer_session_tokens_declaration_too_slow`
+  before capture opens. That is a preparation stop and does not count against
+  the attempt budget, but it does spend the approved session.
+- What it would buy is provenance, not qualification: `runtime_id` (the SHA-256
+  of the running `vrserver`) and `session_id` in the record, which E75 lacked.
+  A later run that is meant to become a candidate records them anyway.
+
+Without the flag the report says `session_tokens: {recorded: false, reason:
+session_tokens_not_requested}`. If the planner wants the runtime digest from
+A4 regardless, the flag is the only path today; pass it knowing the budget, and
+that the declaration runs before any frame is read.
+
+### 4. Every stop before a marker, and what counts
+
+The [attempt budget counting rule](../poc-scope.md#architecture-decisions-2026-11-07),
+as the planner refined it on 2026-11-07 after this review's finding F1: an
+attempt counts against the D2 budget when the observer judged the scene. A
+rejection at the scene precondition counts, and anything after the marker tile
+appears counts. A stop caused by connectivity or preparation does not count,
+whatever its position in the code order: a missing bridge build, a failed
+manifest verification, a headset not connected, a connect watchdog expiry, a
+marker ready timeout, and the vrserver session stops. The precondition runs
+inside the matcher on every baseline read (`sightcircuit/hud/observation.py:308`,
+through `locate_copies` `:121` and `sightcircuit/hud/scene.py`), so E83's
+stops count. In run order:
+
+| Stop (`reason`) | Where (45771fe) | Counts? |
+| --- | --- | --- |
+| Manifest `--verify` differs: changed module, rebuilt bridge, dirty tree, other interpreter or package | `scripts/checkpoint_manifest.py:27-40`, `sightcircuit/runtime/manifest.py:292-317`; the run script stops before the observer ([procedure](../guides/hud-checkpoint.md#approved-run)) | no (named by the rule) |
+| Partial opt-in, `--bridge` or `--record-session-tokens` without the full opt-in | `scripts/hud_marker_observer.py:283-287` (`parser.error`) | no: nothing opens |
+| `unverified_device`, `mirror_unavailable`, `ambiguous_device` | `sightcircuit/sources/mirror_device.py:93-104`, called at `hud_marker_observer.py:290` | no: the supervisor never starts |
+| Supervisor `timed_out` or `guardian_failed` before a worker report | `sightcircuit/runtime/guard.py:270,451` | no, unless the worker report shows a later phase |
+| Worker options: `observer_explicit_scope_required`, `observer_session_tokens_option_invalid` | `hud_marker_observer.py:269,271` | no |
+| `observer_duration_out_of_bounds`, `observer_mirror_opt_in_required`, `observer_fixture_backend_required`, `observer_output_opt_in_required` | `hud_marker_observer.py:92-99` | no |
+| `native_marker_bridge_not_built` | was `sightcircuit/hud/marker.py:46`, reached at `hud_marker_observer.py:143` only after the baseline; now `MarkerClient.check_built()` runs first in `observe()`, before the declaration and before capture | no (named by the rule); now also before any frame |
+| `observer_session_tokens_declaration_failed`, `observer_session_tokens_declaration_too_slow` (flag only) | `hud_marker_observer.py:106-113` | no: before capture |
+| Capture open or read error (`device_changed`, `unsupported_driver`, `unsupported_capabilities`, `format_changed`, `stream_ended`, `no_frames`, …) | `sightcircuit/sources/mirror_device.py:183-257`, surfaced at `sightcircuit/sources/mirror.py:107` and `hud_marker_observer.py:166` | no if no read reached the matcher; otherwise yes |
+| `observer_format_changed` in the baseline | `hud_marker_observer.py:136` | yes: a read reached the precondition |
+| `observer_bright_saturation`, `observer_speck_density`, `observer_contour_budget`, `observer_quad_budget`, `observer_outline_budget`, `observer_contour_census_mismatch` | `scene.py:74-78`, from `observation.py:308` (E83's stop) | yes |
+| `baseline_processing_exceeded_observation_deadline`, `baseline_distinct_clear_frames_not_established` (an unchanging view for the 2 s window) | `hud_marker_observer.py:140,170`, `observation.py:300` | yes: the precondition passed on those reads |
+| Bridge usage or start-up errors: exit 64, `watchdog_unavailable`, `parent_death_signal_unavailable` | `overlay_bridge.cpp:571-595` | no: a bridge build or launcher fault |
+| `vrserver_not_running:<symbol>`, `vrserver_lost_before_overlay_connect:<symbol>`, `overlay_connect_failed:<symbol>` | `overlay_lifecycle.hpp:164-179`, from `overlay_bridge.cpp:638` | no: the runtime, not the scene, stopped the run (see F1) |
+| `watchdog_expired:connect` (6 s) | `overlay_bridge.cpp:43,631` | no: as above |
+| `marker_ready_timeout` (8 s, forced termination) | `marker.py:58-64` | no: as above |
+| `IVROverlay_028_unavailable`, `headset_not_connected`, `CreateOverlay:*`, `SetOverlay*:*` | `overlay_bridge.cpp:166-176` | no (the headset case is named by the rule) |
+| `calibration_deadline_before_marker` | `overlay_bridge.cpp:641,653` | no: the connect outlasted `--seconds` (see F2) |
+| `overlay_image_failed`, `SetOverlayRaw:*`, `ShowOverlay:*`, `calibration_deadline_before_show`, `calibration_submit_overran_deadline`, `calibration_visibility_query_overran_deadline` | `overlay_bridge.cpp:244,258,284,655-660` | yes: the marker was requested; whether it appeared is the wearer's report |
+| `no_complete_marker` after the warmup window | `hud_marker_observer.py:152` (now `MARKER_WARMUP_SECONDS`) | yes: the marker never reached the mirror, or not whole |
+| `orphan_marker_tag_or_incomplete_copy` (V4, E75), the other matcher rejections, `insufficient_complete_marker_samples` | `observation.py:280,368`, `hud_marker_observer.py:172` | yes: after a marker appears |
+
+### 5. Environment differences against the E83 attempts
+
+Planner addendum of 2026-11-07, from the Frame report in
+[E85](../evidence/e085.md). The E83 attempts ran on SteamOS 0.5.6 (build
+20261022.6153909), kernel 6.18.0, SteamVR package `deckard-steamvr-rel`
+r25765468+0ab5c24d-1 and a Python 3.12 environment. The Frame moved on
+2026-11-07 to SteamOS 0.5.8 (build 20261106.6144341), kernel 7.2.0, SteamVR
+package r26496310+24cb4748-1, and the system Python changed from 3.12 to 3.14,
+which left `.venv-replay` unusable until a reviewed rebuild (another coder owns
+that pin review). None of these is a stop the observer can detect, and this
+review makes no claim about how any of them behaves. **The next attempt's
+device record must carry the environment differences against E83 as a
+recorded item**: the OS build, the kernel release, the SteamVR package version
+and the interpreter and its environment, beside the checkout and bridge
+digests. The checkpoint manifest now records the SteamVR package identity
+(`platform.steamvr_package`, read from the pacman local database by file reads
+only, unknown with a reason where absent; `sightcircuit/runtime/manifest.py`,
+`tests/test_checkpoint_manifest.py`) next to the kernel and OS release it
+already recorded, so a manifest written on Frame for the attempt carries them,
+and a SteamVR update between `--write` and `--verify` is a difference. A
+manifest written before the rebuild does not verify afterwards (interpreter
+and package versions differ), which is the intended stop.
+
+Findings for the planner, outside this item's scope:
+
+- **F1, the rule's examples against the code order, resolved.** Two of the
+  rule's originally named preparation failures, the bridge build and the
+  headset, were reached only after the baseline had passed the precondition
+  on two reads. The bridge build is now checked before anything opens;
+  `headset_not_connected` and the other connect stops still come after the
+  baseline, because only the bridge's `VR_Init` can detect them. The planner's
+  call (2026-11-07, recorded in the scope document): an attempt counts when
+  the observer judged the scene, that is a rejection at the scene precondition
+  or anything after the marker tile appears; a stop caused by connectivity or
+  preparation does not count whatever its position in the code order: missing
+  bridge build, failed manifest verification, headset not connected, connect
+  watchdog expiry, marker ready timeout, and the vrserver session stops. The
+  table above and the [checkpoint guide](../guides/hud-checkpoint.md#reading-the-result)
+  follow that wording.
+- **F2, short runs.** A `--seconds` at or below the connect budget plus the
+  bridge's start can end `calibration_deadline_before_marker` after a healthy
+  but slow connect. The documented run is 20 s; `hud_marker_check.py --validate
+  --seconds 3` makes no connect and is unaffected.
+- **F3.** The V4 tag mismatch is untouched by O3 and by this item, and remains
+  the likeliest stop after a marker appears.
+- **F4.** A connect watchdog expiry skips `VR_Shutdown` by design
+  (`overlay_lifecycle.hpp:44-52`); the process exit releases the client. No
+  evidence says how the Frame's runtime treats that.
+
+Cloud checks for this item: `tests/test_hud_contract.py`
+(`test_bridge_connect_budget_and_ready_wait_move_together`, the header reach
+test with the new value), `tests/test_hud_marker_check.py`
+(`test_connect_watchdog_report_names_the_stop_before_the_ready_wait_and_is_not_forced`,
+`test_check_built_is_the_preparation_check_start_marker_applies`) and
+`tests/test_hud_marker_observer.py`
+(`test_missing_bridge_build_rejects_before_the_declaration_capture_or_any_read`,
+`test_marker_warmup_window_is_the_documented_constant_and_tolerates_only_absent_markers`).
+A worker report that stopped at the pre-flight with a session given records
+`session_tokens_not_declared`, a new unrecorded reason in the worker contract.
 
 <a id="observer-scene-precondition-2026-11-04"></a>
 

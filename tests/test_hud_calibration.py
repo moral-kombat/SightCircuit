@@ -19,6 +19,7 @@ from sightcircuit.hud import contract, observation
 from sightcircuit.hud import mask as hud_mask
 from sightcircuit.hud.geometry import expand
 from sightcircuit.hud.qualification import MappingCandidate, validate_context
+from sightcircuit.hud.validation import observed_context
 from sightcircuit.runtime import synthetic
 from tests.test_hud_qualification import candidate_record
 
@@ -27,6 +28,21 @@ WIDE = CaptureFormat(1280, 720, "BGR3", 3840, 2764800, 2764800)
 CHANGED_TOKENS = {"session_id": "synthetic:other-session", "runtime_id": "synthetic:restarted",
                   "timebase_id": "synthetic:other-clock", "tracking_origin": "synthetic:standing",
                   "recenter_epoch": 1}
+
+
+# The V4L2 format metadata a SteamVR mirror reports beside the six native-format fields
+# (sightcircuit/sources/mirror_device.py get_format); the values are generated, not a Frame reading.
+MIRROR_METADATA = {"field": 1, "colorspace_code": 8, "format_flags": 0, "ycbcr_encoding_code": 0,
+                   "quantization_code": 0, "transfer_function_code": 0}
+
+
+def mirror_record(metadata=None):
+    """A version 2 candidate record whose native format carries mirror-style metadata."""
+    record = candidate_record()
+    record["schema_version"] = 2
+    record["context"]["hud_config_sha256"] = config_digest(HUD_CONFIG)
+    record["context"]["native_format"]["metadata"] = dict(MIRROR_METADATA if metadata is None else metadata)
+    return record
 
 
 def candidate_calibration(record=None):
@@ -60,6 +76,112 @@ def accepted(call):
 
 class Declared(synthetic.SyntheticSession):
     kind, source_id, capture_layout = "synthetic", "synthetic:generated", "mono"
+
+
+class NativeFormatMetadataTests(unittest.TestCase):
+    """A6 (2026-11-07): the record carries the mirror's native-format metadata and compares it exactly."""
+    FLAT = {"width": 1920, "height": 1080, "fourcc": "BGR3", "stride_bytes": 5776, "buffer_bytes": 6238080,
+            "minimum_buffer_bytes": 6238080, **MIRROR_METADATA}
+
+    def test_capture_format_reads_the_flat_source_form_and_the_record_form_alike(self):
+        flat = CaptureFormat.from_mapping(self.FLAT)
+        record = CaptureFormat.from_mapping(mirror_record()["context"]["native_format"])
+        self.assertEqual(flat, record)
+        self.assertEqual(flat.metadata, tuple(sorted(MIRROR_METADATA.items())))
+        self.assertEqual(flat.record(), mirror_record()["context"]["native_format"])
+        self.assertEqual(CaptureFormat.from_mapping(flat.record()), flat)
+        flat.validate()
+        # No metadata: the six fields alone, the version 1 form, or an empty metadata object.
+        six = {key: value for key, value in self.FLAT.items() if key not in MIRROR_METADATA}
+        self.assertEqual(CaptureFormat.from_mapping(six), CaptureFormat.from_mapping(dict(six, metadata={})))
+        self.assertEqual(CaptureFormat.from_mapping(six).record(), dict(six, metadata={}))
+        # A differing or missing metadata value is a different format.
+        self.assertNotEqual(flat, CaptureFormat.from_mapping(dict(self.FLAT, colorspace_code=1)))
+        self.assertNotEqual(flat, CaptureFormat.from_mapping(six))
+        # The record form carries every extra key inside the metadata object, none beside it.
+        for mixed in (dict(six, metadata={"field": 1}, colorspace_code=8), dict(six, metadata=[("field", 1)]),
+                      dict(six, metadata={1: 1})):
+            with self.subTest(mixed=mixed), self.assertRaisesRegex(ValueError, "hud_capture_metadata_invalid"):
+                CaptureFormat.from_mapping(mixed)
+        with self.assertRaisesRegex(ValueError, "hud_capture_metadata_invalid"):
+            CaptureFormat.from_mapping(dict(six, metadata={"note": "x" * 97})).validate()
+
+    def test_version_2_record_with_mirror_metadata_is_accepted_and_version_1_stays_six_fields(self):
+        record = mirror_record()
+        candidate = MappingCandidate.from_mapping(record)
+        self.assertEqual(candidate.as_dict(), record)
+        self.assertEqual(candidate.report()["record_schema_version"], 2)
+        self.assertIs(candidate.report()["mapping_qualified"], False)
+        v1 = candidate_record()
+        self.assertEqual(MappingCandidate.from_mapping(v1).report()["record_schema_version"], 1)
+        cases = (("v1 with metadata", dict(v1, context=dict(v1["context"], native_format=dict(
+                      v1["context"]["native_format"], metadata={}))), "native_format_fields_invalid"),
+                 ("v2 without metadata", dict(record, context=dict(record["context"], native_format={
+                      key: value for key, value in record["context"]["native_format"].items() if key != "metadata"})),
+                  "native_format_fields_invalid"),
+                 ("v2 metadata list", dict(record, context=dict(record["context"], native_format=dict(
+                      record["context"]["native_format"], metadata=[]))), "native_format_fields_invalid"),
+                 ("v2 flat metadata", dict(record, context=dict(record["context"], native_format=dict(
+                      record["context"]["native_format"], colorspace_code=8))), "native_format_fields_invalid"),
+                 ("schema 3", dict(record, schema_version=3), "cannot_claim_qualification"),
+                 ("schema 0", dict(record, schema_version=0), "cannot_claim_qualification"))
+        for label, changed, reason in cases:
+            with self.subTest(label=label), self.assertRaisesRegex(ValueError, reason):
+                MappingCandidate.from_mapping(changed)
+
+    def test_check_context_compares_the_mirror_metadata_exactly_in_either_form(self):
+        record = mirror_record()
+        candidate = MappingCandidate.from_mapping(record)
+        now = record["observed_ns"] + 1
+        candidate.check_context(record["context"], now)
+        # The flat form a frame reports (observed_context) equals the record form.
+        flat = observed_context(SimpleNamespace(**{"source_id": "synthetic:mirror", "capture_layout": "stereo_sbs",
+                                                   **{name: record["context"][name] for name in contract.SESSION_TOKENS}}),
+                                self.FLAT, HUD_CONFIG)
+        self.assertEqual(flat["native_format"], record["context"]["native_format"])
+        candidate.check_context(flat, now)
+        for change in ({"colorspace_code": 1}, {"field": 0}, {}):
+            with self.subTest(change=change), self.assertRaisesRegex(ValueError, "context_changed"):
+                current = dict(flat, native_format={key: value for key, value in self.FLAT.items()
+                                                    if key not in MIRROR_METADATA})
+                current["native_format"].update(change and dict(MIRROR_METADATA, **change))
+                candidate.check_context(current, now)
+        # A version 1 record matches a frame without metadata only: a real mirror frame still fails, precisely.
+        v1 = candidate_calibration()  # Builds from candidate_record(), a version 1 record.
+        v1_candidate = MappingCandidate.from_mapping(dict(candidate_record(), context=v1.context() | {
+            "native_format": {key: value for key, value in v1.context()["native_format"].items() if key != "metadata"}}))
+        v1_candidate.check_context(v1.context(), now)
+        with self.assertRaisesRegex(ValueError, "context_changed"):
+            v1_candidate.check_context(dict(v1.context(), native_format=dict(v1.context()["native_format"],
+                                                                               metadata=MIRROR_METADATA)), now)
+
+    def test_runtime_mask_compares_a_fixture_format_with_metadata_exactly_and_refuses_hardware(self):
+        fmt = CaptureFormat.from_mapping(self.FLAT)
+        calibration = synthetic.fixture_calibration("synthetic:mirror-shaped", fmt, "stereo_sbs",
+                                                    (Footprint(0, (700, 800, 900, 900), 16),
+                                                     Footprint(1, (1660, 800, 1860, 900), 16)))
+        self.assertEqual(calibration.context()["native_format"], fmt.record())
+        mask = HudMask(calibration, source_kind="synthetic")
+        mask.check_context("synthetic:mirror-shaped", CaptureFormat.from_mapping(dict(self.FLAT)), "stereo_sbs", HUD_CONFIG)
+        mask.check_context("synthetic:mirror-shaped", CaptureFormat.from_mapping(fmt.record()), "stereo_sbs", HUD_CONFIG)
+        for changed in (dict(self.FLAT, colorspace_code=1), {k: v for k, v in self.FLAT.items() if k not in MIRROR_METADATA}):
+            with self.subTest(changed=changed), self.assertRaisesRegex(ValueError, "hud_capture_format_changed"):
+                mask.check_context("synthetic:mirror-shaped", CaptureFormat.from_mapping(changed), "stereo_sbs", HUD_CONFIG)
+        # HARDWARE_MAPPING still refuses every non-synthetic calibration, metadata or not.
+        for record in (mirror_record(), candidate_record() | {"context": candidate_record()["context"] | {
+                "hud_config_sha256": config_digest(HUD_CONFIG)}}):
+            with self.subTest(schema=record["schema_version"]):
+                hardware = MappingCandidate.from_mapping(record).calibration()
+                with self.assertRaisesRegex(ValueError, "hud_calibration_unvalidated"):
+                    HudMask(hardware, source_kind="synthetic")
+                with patch.object(Calibration, "validated", property(lambda self: True)), \
+                        self.assertRaisesRegex(ValueError, "hardware_mapping_not_approved"):
+                    HudMask(hardware, source_kind="synthetic")
+        # The synthetic fixture candidate is a version 2 record whose context is the calibration's.
+        fixture = synthetic.fixture_candidate(calibration).as_dict()
+        self.assertEqual(fixture["schema_version"], 2)
+        self.assertEqual(fixture["context"], calibration.context())
+        self.assertEqual(fixture["context"]["native_format"]["metadata"], MIRROR_METADATA)
 
 
 class CalibrationFactoryTests(unittest.TestCase):
@@ -114,9 +236,10 @@ class CalibrationFactoryTests(unittest.TestCase):
         self.assertTrue(before <= calibration.observed_ns <= after)
         self.assertEqual(calibration.expires_ns - calibration.observed_ns, contract.MAX_MAPPING_LIFETIME_NS)
         context = calibration.context()
-        validate_context(context)
+        validate_context(context)  # The version 2 form, with the (empty) metadata object.
         self.assertEqual(context["native_format"], {"width": 96, "height": 64, "fourcc": "BGR3", "stride_bytes": 288,
-                                                    "buffer_bytes": 18432, "minimum_buffer_bytes": 18432})
+                                                    "buffer_bytes": 18432, "minimum_buffer_bytes": 18432,
+                                                    "metadata": {}})
         short = synthetic.synthetic_hud_calibration(lifetime_ns=5)
         self.assertEqual(short.expires_ns - short.observed_ns, 5)
 
@@ -144,12 +267,22 @@ class CalibrationFactoryTests(unittest.TestCase):
         record = candidate_record()
         record["context"]["hud_config_sha256"] = config_digest(HUD_CONFIG)
         calibration = MappingCandidate.from_mapping(record).calibration()
-        self.assertEqual(calibration.context(), record["context"])
+        # A version 1 record pins six native-format fields and no V4L2 metadata; the calibration's context is
+        # the version 2 form of the same record, with an empty metadata object.
+        self.assertEqual(calibration.capture_format.metadata, ())
+        self.assertEqual(calibration.context(),
+                         dict(record["context"], native_format=dict(record["context"]["native_format"], metadata={})))
         self.assertEqual((calibration.observed_ns, calibration.expires_ns), (record["observed_ns"], record["expires_ns"]))
         self.assertEqual(calibration.provenance, "observed_unqualified")
         self.assertIs(calibration.validated, False)
-        # The version 1 record pins six native-format fields and no V4L2 metadata.
-        self.assertEqual(calibration.capture_format.metadata, ())
+        # A version 2 record carries the mirror's format metadata into the calibration and back out exactly.
+        record = mirror_record()
+        calibration = MappingCandidate.from_mapping(record).calibration()
+        self.assertEqual(calibration.capture_format.metadata, tuple(sorted(MIRROR_METADATA.items())))
+        self.assertEqual(calibration.context(), record["context"])
+        self.assertIs(calibration.validated, False)
+        with self.assertRaisesRegex(ValueError, "hud_calibration_unvalidated"):
+            HudMask(calibration, source_kind="synthetic")
         self.assertFalse(any(claims().values()))
         with self.assertRaisesRegex(ValueError, "hud_calibration_unvalidated"):
             HudMask(calibration, source_kind="synthetic")

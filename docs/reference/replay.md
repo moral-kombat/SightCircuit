@@ -25,9 +25,10 @@ Decoder integration tests are skipped when PyAV is unavailable.
 
 ## File-decoding environment
 
-`bash scripts/setup_replay.sh` creates a separate Python 3.12 `.venv-replay` and
-installs the pinned binary wheel in `requirements-replay.txt`. Set
-`SIGHTCIRCUIT_PYTHON=/path/to/python3.12` if the default `python3` differs.
+`bash scripts/setup_replay.sh` creates a separate Python 3.12 or 3.14
+`.venv-replay` and installs the pinned binary wheel in `requirements-replay.txt`.
+Set `SIGHTCIRCUIT_PYTHON=/path/to/python3.14` (or `python3.12`) if the default
+`python3` is another version; the script refuses untested versions.
 This check does not need the full desktop requirements or `uv`.
 
 ```bash

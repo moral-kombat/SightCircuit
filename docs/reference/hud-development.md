@@ -274,7 +274,8 @@ generated from the Python contract by
 [`sightcircuit/hud/native.py`](../../sightcircuit/hud/native.py). It holds
 `HudConfig` and its digest, the calibration `MARKER` (sizes, positions, gray
 levels and corner ids), the pipe packet layouts and opcodes, the marker
-duration (1–20 s), display age (1 s) and frame side (512) limits, and
+duration (1–20 s), display age (1 s) and frame side (512) limits, the bridge's
+connect budget (6 s, paired with the clients' 8 s ready wait), and
 `PANEL_LIMITS` with the `PanelSettings` defaults. `tools/overlay_bridge.cpp`
 and `tools/overlay_frame.hpp` include it and keep no copies of those values;
 they share one little-endian `read_u32`. Python call sites import the same
@@ -322,7 +323,10 @@ manifest written in the cloud or for another build does not verify on Frame.
 The manifest records the full git commit, whether the tree is clean (tracked
 changes and untracked, non-ignored files count as dirty), the Python version
 and implementation, `platform.machine()`, the OS (with its os-release ID,
-version and build) and kernel release, and SHA-256 values of the built
+version and build), the kernel release, the SteamVR package identity (since
+2026-11-07: the Frame's `deckard-steamvr-rel` pacman entry, read from the local
+package database by file reads only, with `version` null and a reason where
+the database or the package is absent, as in the cloud), and SHA-256 values of the built
 `artifacts/overlay-bridge/sightcircuit-overlay-bridge`, every
 `sightcircuit/**/*.py`, the scripts this procedure runs, the bridge sources
 including `tools/hud_contract.hpp`, and the models and fixture listed in

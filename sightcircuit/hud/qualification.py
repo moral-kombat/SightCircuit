@@ -12,7 +12,8 @@ import json
 import math
 
 from ..gates import HARDWARE_MAPPING, LIVE_HUD_OUTPUT, claims
-from .contract import (CANDIDATE_PROVENANCE, HUD_CONFIG, MAX_DISPLAY_AGE_NS, MAX_MAPPING_LIFETIME_NS,
+from .contract import (CANDIDATE_PROVENANCE, CANDIDATE_SCHEMA_VERSION, CANDIDATE_SCHEMA_VERSIONS, HUD_CONFIG,
+                       MAX_DISPLAY_AGE_NS, MAX_MAPPING_LIFETIME_NS, NATIVE_FORMAT_FIELDS, NATIVE_FORMAT_METADATA_FIELD,
                        SESSION_TOKENS, Calibration, CaptureFormat, Footprint, HudConfig, config_digest, margin_valid,
                        token_valid)
 from .geometry import LAYOUTS, exclusion, expand, eye_viewports, within_blind_budget
@@ -97,19 +98,28 @@ def _unknown_null(value):
         raise ValueError("hud_unknown_term_has_value")
 
 
-def validate_context(context):
-    """Validate declared acquisition metadata, never infer it from owned strides."""
+def validate_context(context, schema_version=CANDIDATE_SCHEMA_VERSION):
+    """Validate declared acquisition metadata, never infer it from owned strides.
+
+    ``native_format`` carries the six native-format fields in a version 1
+    context, and those six plus the ``metadata`` object (the source's other
+    format metadata, possibly empty) in a version 2 context.
+    """
     _object(context, ("source_id", "session_id", "runtime_id", "timebase_id", "tracking_origin",
                       "recenter_epoch", "native_format", "crop_xyxy", "orientation_degrees",
                       "capture_layout", "hud_config_sha256"), "context")
+    if schema_version not in CANDIDATE_SCHEMA_VERSIONS:
+        raise ValueError("hud_mapping_schema_version_invalid")
     for key in ("source_id", "session_id", "runtime_id", "timebase_id", "tracking_origin"):
         _token(context[key], key)
     _integer(context["recenter_epoch"], 0, 2**63-1, "recenter_epoch")
     _sha256(context["hud_config_sha256"], "config_digest")
     fmt = context["native_format"]
-    _object(fmt, ("width", "height", "fourcc", "stride_bytes", "buffer_bytes", "minimum_buffer_bytes"),
+    _object(fmt, NATIVE_FORMAT_FIELDS + ((NATIVE_FORMAT_METADATA_FIELD,) if schema_version >= 2 else ()),
             "native_format")
-    # The runtime mask's own format rule; a record cannot describe a layout it would reject.
+    if schema_version >= 2 and type(fmt[NATIVE_FORMAT_METADATA_FIELD]) is not dict:
+        raise ValueError("hud_native_format_fields_invalid")
+    # The runtime mask's own format and metadata rules; a record cannot describe a layout it would reject.
     CaptureFormat.from_mapping(fmt).validate()
     _rect(context["crop_xyxy"], (0, 0, fmt["width"], fmt["height"]), "crop")
     if type(context["orientation_degrees"]) is not int or context["orientation_degrees"] not in (0, 90, 180, 270):
@@ -120,6 +130,27 @@ def validate_context(context):
     if ((context["capture_layout"] == "stereo_sbs" and (x1-x0) % 2) or
             (context["capture_layout"] == "stereo_tb" and (y1-y0) % 2)):
         raise ValueError("hud_eye_partition_invalid")
+
+
+def native_format_record(fmt):
+    """The record form of a native format written as a source reports it (its metadata beside the six
+    fields), as a version 1 record (the six fields) or as a version 2 record (the six plus ``metadata``)."""
+    if type(fmt) is not dict:
+        raise ValueError("hud_native_format_fields_invalid")
+    try:
+        return CaptureFormat.from_mapping(fmt).record()
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("hud_native_format_fields_invalid") from None
+
+
+def canonical_context(context):
+    """A validated context in the version 2 form, whatever form its native format was written in, so a
+    record's context and a run's observed context compare exactly, metadata included."""
+    if type(context) is not dict or "native_format" not in context:
+        validate_context(context)  # Names the missing fields.
+    context = dict(context, native_format=native_format_record(context["native_format"]))
+    validate_context(context, CANDIDATE_SCHEMA_VERSION)
+    return context
 
 
 def _viewports(context):
@@ -143,11 +174,11 @@ class MappingCandidate:
         unknowns = record["unknowns"] if declared else {}
         if declared:
             _unknowns(unknowns)
-        if (type(record["schema_version"]) is not int or record["schema_version"] != 1 or
+        if (type(record["schema_version"]) is not int or record["schema_version"] not in CANDIDATE_SCHEMA_VERSIONS or
                 record["status"] != "observed_unqualified" or record["mapping_qualified"] is not False):
             raise ValueError("hud_mapping_cannot_claim_qualification")
         _token(record["mapping_id"], "mapping_id")
-        validate_context(record["context"])
+        validate_context(record["context"], record["schema_version"])
         _integer(record["observed_ns"], 0, 2**63-1, "observation_time")
         _integer(record["expires_ns"], record["observed_ns"]+1,
                  min(2**63-1, record["observed_ns"]+MAX_MAPPING_LIFETIME_NS), "mapping_expiry")
@@ -224,10 +255,11 @@ class MappingCandidate:
         return json.loads(self._json)
 
     def check_context(self, current, now_ns):
-        validate_context(current)
+        """``current`` (a version 1 or 2 context) must equal the record's context exactly, metadata included."""
+        current = canonical_context(current)
         record = self.as_dict()
         _integer(now_ns, 0, 2**63-1, "current_time")
-        if current != record["context"]:
+        if current != canonical_context(record["context"]):
             raise ValueError("hud_mapping_context_changed")
         if not record["observed_ns"] <= now_ns < record["expires_ns"]:
             raise ValueError("hud_mapping_expired_or_clock_changed")
@@ -237,7 +269,7 @@ class MappingCandidate:
         roles = {item["role"] for item in record["evidence"]}
         return {"report_kind": "hud_mapping_schema_check", "schema_version": 1,
                 "status": "candidate_valid_unqualified", "exit_code": 2,
-                "mapping_id": record["mapping_id"], **claims(),
+                "mapping_id": record["mapping_id"], "record_schema_version": record["schema_version"], **claims(),
                 "evidence_contents_verified": False, "physical_expiry_verified": False,
                 "missing_evidence_roles": [role for role in EVIDENCE_ROLES if role not in roles],
                 "unknown_error_terms": record.get("unknowns", {}),

@@ -18,6 +18,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
+from sightcircuit import detection
 from sightcircuit.pipeline import Pipeline
 from tests.latency_fixture import DELAYS_MS, EXPECTED, KnownDelays
 
@@ -157,6 +158,10 @@ class MirrorReportTests(KnownDelayAssertions, unittest.TestCase):
         self.assertTrue(Mirror.closed)
         self.assertEqual(report["frames_processed"], len(DELAYS_MS))
         self.assert_known_delay_percentiles(report["pipeline"])
+        # The run's inference p95 against the live budget constant; a cloud verdict is a fixture result, not Frame evidence.
+        self.assertEqual(report["inference_p95_budget_ms"], detection.LIVE_INFERENCE_P95_BUDGET_MS)
+        self.assertEqual(report["inference_p95_within_budget"],
+                         report["pipeline"]["inference_ms"]["p95"] <= detection.LIVE_INFERENCE_P95_BUDGET_MS)
 
 
 @unittest.skipUnless(WINDOW, "Run scripts/setup_window.sh for replay window checks")

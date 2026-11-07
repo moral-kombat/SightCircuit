@@ -29,8 +29,8 @@ resize, scale `0.007843` and mean `127.5`; this resize stretches the image, as
 in SSD training,
 rather than adding letterbox padding. SSD's normalized boxes are mapped back
 to the dimensions of that specific input image, clamped and drawn on an owned
-copy. The default score threshold is 0.5. Scores are not calibrated
-probabilities or a measured accuracy percentage.
+copy. The default score threshold is the [POC threshold](#poc-threshold-and-live-budget),
+0.5. Scores are not calibrated probabilities or a measured accuracy percentage.
 
 The detector boundary is the `Detector` protocol; drawing is separate:
 
@@ -58,6 +58,27 @@ mapped back through the inverse transform (`sightcircuit/preprocess.py`). Its
 scores are objectness × class probability after class-aware NMS at IoU 0.45.
 Detectors keep native label names in reports (`sofa` for MobileNet-SSD,
 `couch` for YOLOX); evaluation compares them through canonical COCO names.
+
+## POC threshold and live budget
+
+Two constants in `sightcircuit/detection.py` carry the proof of concept's
+detection contract, so no command or module repeats their numbers:
+
+| Constant | Value | Meaning |
+| --- | --- | --- |
+| `POC_THRESHOLD` | 0.5 | The score threshold detections must reach. It is the `--threshold` default of `evaluate_detectors.py`, `mirror_recognize.py` and `replay_window.py`, the `threshold` default of `Pipeline`, `run_pipeline` and `run_recognition`, the smoke check's threshold and the mask fill evaluation's scoring threshold, and the threshold the seed pin records. |
+| `LIVE_INFERENCE_P95_BUDGET_MS` | 200 | The owner's live budget, accepted on 2026-11-07: the inference p95 of a `mirror_recognize.py` run on the Frame (`pipeline.inference_ms.p95` in its report) may not exceed 200 ms, which is five frames per second. |
+
+Both are read by the [D6 default-detector rule](../poc-scope.md#architecture-decisions-2026-11-07):
+chair recall at the POC threshold, per box at IoU 0.5 on the boxed
+representative set, with Frame inference time inside the live budget. The
+mirror report records `inference_p95_budget_ms` and, once a frame has been
+timed, `inference_p95_within_budget`, the run's own p95 against the budget;
+only a run on the Frame measures the budget, and a cloud or fixture run's
+verdict is not device evidence. Changing either value is a reviewed edit of the
+constant and this table, not a command option. `tests/test_detection.py`
+checks that every command and engine default is the constant and that no
+default repeats the literal.
 
 ## Recorded Frame evaluation
 

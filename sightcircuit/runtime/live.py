@@ -41,7 +41,7 @@ import threading
 import time
 from typing import Callable
 
-from ..detection import DEFAULT_DETECTOR, create_detector, describe
+from ..detection import DEFAULT_DETECTOR, LIVE_INFERENCE_P95_BUDGET_MS, POC_THRESHOLD, create_detector, describe
 from ..frame import native_format
 from ..gates import LIVE_IMAGE_INPUT
 from ..hud import HUD_CONFIG, HudStage
@@ -211,7 +211,7 @@ SYNTHETIC = ReportStyle(LEGACY_FIELDS, "completed", True, synthetic_failure, las
 
 
 def run_pipeline(source, detector, sink, seconds, *, stop=None, max_fps=5, max_age_ms=MAX_DISPLAY_AGE_MS,
-                 threshold=0.5, hud=None):
+                 threshold=POC_THRESHOLD, hud=None):
     require_synthetic(source, "live_image_source_not_approved")
     if not (0.05 <= seconds <= 60 and 1 <= max_fps <= 10 and 0 < max_age_ms <= MAX_DISPLAY_AGE_MS and 0 <= threshold <= 1):
         raise ValueError("pipeline_limits_invalid")
@@ -284,6 +284,7 @@ def new_mirror_report():
             "pending_frames_replaced": 0,
             "display_started": False, "overlay_requested": False,
             "maximum_pending_frames": 1, "maximum_input_observation_age_ms": MAX_DISPLAY_AGE_MS,
+            "inference_p95_budget_ms": LIVE_INFERENCE_P95_BUDGET_MS, "inference_p95_within_budget": None,
             "physical_camera_identity": "unverified", "camera_timestamps_available": False,
             "confidence_is_calibrated_probability": False,
             "scope": "Composited mirror recognition; source identity, camera freshness and display feedback unverified"}
@@ -308,7 +309,7 @@ def mirror_failure(error):
 MIRROR = ReportStyle(MIRROR_LEGACY_FIELDS, "recognized", False, mirror_failure, mirror_last_result)
 
 
-def run_recognition(candidate, seconds, stop, progress=lambda report: None, *, max_fps=5, threshold=0.5,
+def run_recognition(candidate, seconds, stop, progress=lambda report: None, *, max_fps=5, threshold=POC_THRESHOLD,
                     detector=DEFAULT_DETECTOR, backend_factory=None, detector_factory=None,
                     hud_mode=False, calibration=None, hud_config=HUD_CONFIG, session=None):
     """Bounded recognition from a verified SteamVR mirror; return the report and its last result, or None.
@@ -379,6 +380,9 @@ def run_recognition(candidate, seconds, stop, progress=lambda report: None, *, m
                           max_fps=max_fps, max_age_ms=MAX_DISPLAY_AGE_MS, join_timeout=1)
     if report["status"] == "no_frames" and pipeline.stats.stale_inputs_skipped:
         report.update(status="stale_input", reason="all_selected_observations_stale")
+    if pipeline is not None:  # The run's own p95 against the live budget; which machine ran it is the report's business.
+        p95 = report["pipeline"]["inference_ms"]["p95"]
+        report["inference_p95_within_budget"] = None if p95 is None else p95 <= LIVE_INFERENCE_P95_BUDGET_MS
     if report["status"] == "recognized":
         age = (time.monotonic_ns() - report["last_result"]["observation_time_ns"]) / 1e6
         report["last_result_age_after_cleanup_ms"] = round(age, 3)

@@ -31,8 +31,8 @@ from sightcircuit.gates import claims  # noqa: E402
 from sightcircuit.hud.contract import MARKER_MAX_SECONDS, MARKER_MIN_SECONDS  # noqa: E402
 
 from sightcircuit.hud.observation import (  # noqa: E402
-    SESSION_TOKENS_DECLARATION_FAILED, SESSION_TOKENS_NOT_REPORTED, SESSION_TOKENS_NOT_REQUESTED,
-    SESSION_TOKENS_REPORT_INVALID, BaselineGate, EmpiricalObservation, ObserverConfig, native_bgr,
+    SESSION_TOKENS_DECLARATION_FAILED, SESSION_TOKENS_NOT_DECLARED, SESSION_TOKENS_NOT_REPORTED,
+    SESSION_TOKENS_NOT_REQUESTED, SESSION_TOKENS_REPORT_INVALID, BaselineGate, EmpiricalObservation, ObserverConfig, native_bgr,
     rejection_scene_statistics, session_tokens_record, unrecorded_session_tokens, validate_marker_evidence,
     validate_observer_report as validate_worker_report)
 from sightcircuit.hud.scene import analyze_still  # noqa: E402
@@ -44,6 +44,18 @@ from sightcircuit.sources.mirror_device import discover, select_candidate  # noq
 from sightcircuit.sources.session import HostClock, MirrorSession, RuntimeProcess, TrackingObserver  # noqa: E402
 
 BASELINE_WINDOW_SECONDS = 2.0
+# After the bridge's ready line, reads without any marker candidate (``no_complete_marker``) are tolerated for
+# this long while no sample exists, and counted as ``warmup_frames_without_marker``; the first such read after
+# it rejects the run. The window covers the bridge's marker generation and submit after its ready line, the
+# compositor's pickup, the mirror's frame path and one 200 ms read period; the mirror read returns the
+# device's latest frame, so no stale queue has to drain. It tolerates no other rejection: a frame with an
+# orphan tag or a partial copy (the V4 shape, E75) rejects at once, as before. A longer window never admits
+# a sample it would otherwise refuse; it only delays a no-marker rejection, and the default run of 20 s must
+# still leave at least three reads after the baseline window, the ready wait and this window
+# (tests/test_hud_contract.py). The value is a cloud choice: the one Frame timing on this path (E75) saw
+# marker-shaped content in the first read, under 0.2 s after the bridge started. It is a reviewed constant,
+# pinned by the checkpoint manifest, not a command option (decision D2: no tuning on the device).
+MARKER_WARMUP_SECONDS = 2.0
 # The supervisor's bound is --seconds plus this margin, counted from the worker's start.
 SUPERVISOR_MARGIN_SECONDS = 12
 # Longest session declaration accepted, checked before capture or the marker opens. The margin also
@@ -86,7 +98,10 @@ def observe(candidate, seconds, stop, *, backend_factory, marker_client, config=
     declaration that does not return within the supervisor's bound ends the run
     ``timed_out`` with ``cleanup_ok`` false, also before anything opens, and its
     termination is forced if it still has not returned after the stop request.
-    Without a session nothing is read for session tokens.
+    Without a session nothing is read for session tokens. The bridge build is
+    checked first (``MarkerClient.check_built``): a missing build rejects the
+    run ``native_marker_bridge_not_built`` before the declaration and before
+    capture opens, with ``session_tokens_not_declared`` when a session was given.
     """
     if type(seconds) is not int or not MARKER_MIN_SECONDS <= seconds <= MARKER_MAX_SECONDS:
         raise ValueError("observer_duration_out_of_bounds")
@@ -99,15 +114,23 @@ def observe(candidate, seconds, stop, *, backend_factory, marker_client, config=
         raise ValueError("observer_output_opt_in_required")
     report = new_report(marker_client.validation_only)
     observation = EmpiricalObservation(config)
-    session_failure, declaration_failed, declared_at = None, False, time.monotonic()
-    if session is not None:
+    session_failure, declaration_failed, declared = None, False, False
+    try:
+        # A preparation check: a missing bridge build stops the run before the declaration reads /proc and
+        # before any mirror frame is read, so it never reaches the scene precondition.
+        marker_client.check_built()
+    except RuntimeError as error:
+        session_failure = str(error)
+    declared_at = time.monotonic()
+    if session is not None and session_failure is None:
         # Outside the timed observation: a declaration scans /proc and may hash up to 256 MiB.
+        declared = True
         try:
             session.declare()
         except Exception:
             session_failure, declaration_failed = "observer_session_tokens_declaration_failed", True
     declaration_elapsed_ms = round((time.monotonic() - declared_at) * 1000, 3)
-    if (session is not None and session_failure is None and
+    if (declared and session_failure is None and
             declaration_elapsed_ms > SESSION_DECLARATION_BUDGET_SECONDS * 1000):
         # Rejected before capture or the marker opens, not by the supervisor while the marker is shown.
         session_failure = "observer_session_tokens_declaration_too_slow"
@@ -142,7 +165,7 @@ def observe(candidate, seconds, stop, *, backend_factory, marker_client, config=
                     return
                 marker_client.start_marker(seconds, stop, allow_calibration_output=allow_calibration_output)
                 marker_started = True
-                first_marker_deadline = min(deadline, time.monotonic() + 2)
+                first_marker_deadline = min(deadline, time.monotonic() + MARKER_WARMUP_SECONDS)
                 report["baseline_sequence"] = sequence
                 return
             # No inference or downscaled analysis image: these are native corners.
@@ -184,7 +207,8 @@ def observe(candidate, seconds, stop, *, backend_factory, marker_client, config=
         report.update(observation.evidence())
         report.update(baseline=dict(baseline.report), baseline_initial_match_diagnostics=baseline.initial_diagnostics,
                       baseline_match_diagnostics=baseline.last_diagnostics,
-                      baseline_window_seconds=min(seconds, BASELINE_WINDOW_SECONDS))
+                      baseline_window_seconds=min(seconds, BASELINE_WINDOW_SECONDS),
+                      marker_warmup_seconds=MARKER_WARMUP_SECONDS)
         # A run stopped by the scene precondition carries that frame's statistics: counts, never pixels.
         diagnostics, phase = ((observation.last_match_diagnostics, "marker") if marker_started
                               else (baseline.last_diagnostics, "baseline"))
@@ -192,7 +216,9 @@ def observe(candidate, seconds, stop, *, backend_factory, marker_client, config=
                 report.get("reason") == diagnostics.get("reason")):
             report.update(rejection_scene_statistics(diagnostics, phase))
         if session is not None:
-            if declaration_failed:
+            if not declared:  # Stopped by a preparation check before the declaration: nothing was read under /proc.
+                report["session_tokens"] = unrecorded_session_tokens(SESSION_TOKENS_NOT_DECLARED)
+            elif declaration_failed:
                 report["session_tokens"] = unrecorded_session_tokens(SESSION_TOKENS_DECLARATION_FAILED)
             else:  # A declaration that was too slow did complete, so its report and duration are kept.
                 report["session_tokens"] = session_tokens_record(session, declaration_elapsed_ms)

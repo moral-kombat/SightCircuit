@@ -29,7 +29,8 @@ its checksum-pinned assets and `preprocessing(name)` describes its model input
 dtype, mean, scale, padding value and box mapping). The evaluator's provenance,
 the smoke check and the asset tests read these, so adding a detector changes
 `sightcircuit/detection.py` and its `scripts/smoke-assets.json` entries only.
-The default detector and the 0.5 threshold are unchanged.
+The default detector is unchanged; the 0.5 threshold is the
+[`POC_THRESHOLD` constant](detection.md#poc-threshold-and-live-budget).
 
 Manifest entries (`schema_version: 1`) need a unique `id` and either `path`
 (relative to the manifest) or `file` plus `url`/`sha256` for download. A `path`
@@ -44,22 +45,34 @@ reported. Optional `objects` give `label`, source-pixel `box_xyxy` and
 `confusable` labels: supported labels are matched at `--iou` (default 0.5); a
 confusable detection overlapping the object at IoU 0.3 is a confusion. Set
 `boxes_complete: true` only when every supported object is boxed, enabling
-false-positive and precision counts. Labels a detector cannot output are
-reported as unsupported. An entry may not repeat a `present` or `absent` label,
+false-positive and precision counts. The manifest helper's `--object
+label:x1,y1,x2,y2` and `--boxes-complete` write these
+([procedure](../guides/mirror-recognition.md#compare-detectors-on-frame-stills)).
+Labels a detector cannot output are reported as unsupported. An entry may not repeat a `present` or `absent` label,
 including under another name for the same canonical label (`sofa` and `couch`),
 so the per-label table, the totals and a pin count the same checks. The JSON
 report has per-detector totals, per-image detections and timing; a one-line
 summary per detector and a per-label table go to stderr. Report
-schema version 4 records manifest and resolved image SHA-256 values,
+schema version 5 records manifest and resolved image SHA-256 values,
 decoded and processed dimensions, detector model hashes, runtime versions and
 preprocessing parameters, Python/OpenCV/NumPy versions, the Git revision and
 tracked-diff hash, conversion path, participating source-file SHA-256 values
-and native inference runtime artifact hashes. It also states annotation coverage explicitly: a
+and native inference runtime artifact hashes. Each image's `input_path` is the
+file's basename only (schema 4 recorded the resolved path), so a report written
+on the Frame carries no absolute device path; the entry `id` and `input_sha256`
+identify the input. Manifest paths are recorded as given on the command line. It also states annotation coverage explicitly: a
 presence-only manifest does not measure absent-label or localization accuracy.
-Schema 4 adds, per detector, a `labels` table of present (hit, miss,
-unsupported) and absent (clean, violation, unsupported) outcomes, and per image
-`label_outcomes` and `best_below_threshold`: the highest score under the
-threshold for each supported expected label. That diagnostic comes from one
+Per detector, a `labels` table holds present (hit, miss,
+unsupported), absent (clean, violation, unsupported) and boxes (matched, missed,
+unsupported) outcomes per label, and each image carries `label_outcomes`,
+`box_outcomes` and `best_below_threshold`: the highest score under the
+threshold for each supported expected label. Box recall is in the totals over
+all objects (`box_recall`) and per label (`box_recall_by_label`, with
+`true_positives`, `false_negatives` and `box_recall`), so the POC object's
+recall, the [D6 rule](../poc-scope.md#architecture-decisions-2026-11-07)'s
+number, is read from `box_recall_by_label.chair`; the stderr summary line
+prints the per-label values after the overall one. The `best_below_threshold`
+diagnostic comes from one
 extra untimed `detect()` per image at a 0.05 floor and is never scored, so
 counts are still taken at the requested threshold. A model's own output filter
 can hide lower scores: the pinned MobileNet-SSD network keeps nothing below

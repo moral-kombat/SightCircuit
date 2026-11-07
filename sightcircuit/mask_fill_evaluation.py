@@ -24,11 +24,12 @@ from collections import Counter
 import math
 import time
 
+from .detection import POC_THRESHOLD
 from .hud.contract import MARGIN_MAX_PX, MARGIN_MIN_PX, margin_valid, viewports
 from .hud.geometry import contains, exclusion, expand, within_blind_budget
 from .hud.mask import FILL_RING_PX, fill_regions, mask_regions, surround
 
-THRESHOLD = 0.5
+THRESHOLD = POC_THRESHOLD  # Scored at the POC threshold, as the runtime is.
 DIAGNOSTIC_FLOOR = 0.3  # Second, untimed detection for near-threshold diagnostics; never scored.
 SCORE_TOLERANCE = 0.05  # A matched detection whose score moves less than this is unchanged.
 MATCH_IOU = 0.5  # Same object: same label and at least this IoU in detector-input pixels.

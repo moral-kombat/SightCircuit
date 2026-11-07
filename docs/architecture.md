@@ -166,9 +166,11 @@ condition holds or a valid scope permits that gate. The diagnostic tier's mask
 is the union of every observed marker copy plus the margin, so eye identity is
 not required for the acceptance run; the capture layout must still be declared.
 Two record changes come first: the calibration record must carry the mirror's
-native format metadata, which today makes every real mirror frame
-unrepresentable, and the candidate conversion needs the tracking tokens the
-reporter supplies. This is a design; no diagnostic command exists.
+native format metadata, which until record version 2 made every real mirror
+frame unrepresentable (implemented on 2026-11-07, item A6;
+[record versions](reference/hud-candidates.md#record-versions)), and the
+candidate conversion needs the tracking tokens the reporter supplies. The
+rest is a design; no diagnostic command exists.
 
 ### Commands and packaging
 
@@ -189,11 +191,14 @@ budget. Their design is in [agent-on-Frame](agent-on-frame.md).
 ### Detector evaluation
 
 The evaluation harness scores presence and, when boxes are supplied,
-per-object matches; it has no per-label box recall and the device session
-collects presence labels only. The plan adds a box-entry helper, per-label box
-recall, one named POC threshold constant and one named live-budget constant,
-and a test that the private still directory stays ignored. The representative
-set is built and scored on the Frame; only JSON leaves it.
+per-object matches, with box recall per label as well as overall; the manifest
+helper enters boxes (`--object`, `--boxes-complete`) while the device session
+script still collects presence labels only. The POC threshold and the live
+budget are one named constant each in `sightcircuit/detection.py`
+([reference](reference/detection.md#poc-threshold-and-live-budget)), a test
+checks that the private still directory stays ignored, and the evaluation
+report names inputs by basename only (implemented, work items C1 to C4). The
+representative set is built and scored on the Frame; only JSON leaves it.
 
 ### Fallback input design
 

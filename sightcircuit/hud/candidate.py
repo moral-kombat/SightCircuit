@@ -25,11 +25,12 @@ import hashlib
 import math
 
 from ..gates import HARDWARE_MAPPING, claims
-from .contract import (HUD_CONFIG, NATIVE_FORMAT_FIELDS, SESSION_TOKENS, CaptureFormat, config_digest, margin_valid,
-                       token_valid)
+from .contract import (CANDIDATE_SCHEMA_VERSION, HUD_CONFIG, NATIVE_FORMAT_FIELDS, SESSION_TOKENS, CaptureFormat,
+                       config_digest, margin_valid, token_valid)
 from .geometry import contains, expand, eye_viewports
 from .observation import MAX_COPIES, validate_observer_report
-from .qualification import OPERATING_LIMIT_FIELDS, MappingCandidate, parse_record, validate_context
+from .qualification import (OPERATING_LIMIT_FIELDS, MappingCandidate, native_format_record, parse_record,
+                            validate_context)
 
 REPORT_KIND = "hud_mapping_candidate_from_observer"
 # An observer report is printed with indentation and supervisor fields; its
@@ -93,7 +94,7 @@ def candidate_record(report, report_sha256, artifact_id, declared_context, lifet
                "maximum_drift_px": report["maximum_corner_drift_px"], "localization_error_px": None,
                "filter_support_px": None}
               for index, (eye, rect) in enumerate(zip(declared_eyes, rects))]
-    return {"schema_version": 1, "status": "observed_unqualified", **claims(HARDWARE_MAPPING),
+    return {"schema_version": CANDIDATE_SCHEMA_VERSION, "status": "observed_unqualified", **claims(HARDWARE_MAPPING),
             "mapping_id": "observer-" + report_sha256[:16], "context": context,
             "observed_ns": observed_ns, "expires_ns": expires_ns,
             "operating_limits": dict.fromkeys(OPERATING_LIMIT_FIELDS), "copies": copies,
@@ -139,8 +140,10 @@ def _accepted_observation(report):
     fmt = capture.get("format")
     if type(fmt) is not dict or any(key not in fmt for key in NATIVE_FORMAT_FIELDS):
         raise ValueError("hud_observer_capture_format_invalid")
-    CaptureFormat.from_mapping(fmt).validate()
-    return {key: fmt[key] for key in NATIVE_FORMAT_FIELDS}
+    # The mirror's format carries its V4L2 metadata beside the six fields; the record keeps all of it.
+    observed = CaptureFormat.from_mapping(fmt)
+    observed.validate()
+    return observed.record()
 
 
 def _rounded_edge(edge, value, rounding):
@@ -236,7 +239,12 @@ def _context(declared, tokens, capture_format):
     if any(name in declared for name in SESSION_TOKENS):
         raise ValueError("hud_observer_context_declares_session_tokens")  # Each token has one source.
     context = dict(deepcopy(declared), **tokens)
-    validate_context(context)
+    # The declared native format may be written as a source reports it (metadata beside the six fields),
+    # as a version 1 record (six fields) or as a version 2 record; it is kept in the record form and must
+    # equal the observed format exactly, metadata included.
+    if "native_format" in context:
+        context["native_format"] = native_format_record(context["native_format"])
+    validate_context(context, CANDIDATE_SCHEMA_VERSION)
     if context["native_format"] != capture_format:
         raise ValueError("hud_observer_format_context_mismatch")
     if context["hud_config_sha256"] != config_digest(HUD_CONFIG):
