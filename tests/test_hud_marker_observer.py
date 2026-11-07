@@ -451,7 +451,8 @@ class BaselineGateTests(unittest.TestCase):
 class ObserverFixture:
     def run_fixture(self, *, seconds=1, cancel_at=None, bad_format=False, slow=False, close_failure=False,
                     bridge_change=None, baseline_slow=False, incomplete_marker=False, baseline_mode=None,
-                    session=None, clock=None, log=None, on_read=None, on_marker=None, frame=None):
+                    session=None, clock=None, log=None, on_read=None, on_marker=None, frame=None,
+                    bridge_missing=False):
         """One ``observe`` run on generated frames; ``session`` is passed only when given.
 
         ``log`` records "backend" when the fixture backend is constructed and "frame"
@@ -506,6 +507,10 @@ class ObserverFixture:
         class Marker:
             validation_only = True
             process = None
+            def check_built(self):
+                state["built_checked"] = True
+                if bridge_missing:
+                    raise RuntimeError("native_marker_bridge_not_built")
             def start_marker(self, seconds, stop, **kwargs):
                 state["marker"] = True
                 if on_marker is not None:
@@ -722,6 +727,57 @@ class ObserverLifecycleTests(ObserverFixture, unittest.TestCase):
             self.assertFalse(report[key])
         self.assertLess(len(json.dumps(report, allow_nan=False)), 128 * 1024)
         observer.validate_worker_report(report, 1)
+
+    def test_missing_bridge_build_rejects_before_the_declaration_capture_or_any_read(self):
+        """A3 (2026-11-07): a preparation failure that never reaches the scene precondition."""
+        for session in (None, Mock()):
+            with self.subTest(session="given" if session else "none"):
+                report, state, _ = self.run_fixture(seconds=5, bridge_missing=True, session=session)
+                self.assertTrue(state["built_checked"])
+                self.assertEqual((report["status"], report["exit_code"], report["reason"]),
+                                 ("rejected", 1, "native_marker_bridge_not_built"))
+                self.assertFalse(state["constructed"] or state["opened"] or state["marker"])
+                self.assertEqual(state["reads"], [])
+                self.assertNotIn("capture", report)
+                self.assertNotIn("scene_statistics", report)
+                self.assertEqual(report["baseline"]["frames_examined"], 0)
+                self.assertTrue(report["cleanup_ok"])
+                self.assertTrue(state["marker_closed"])
+                expected = (hud_observation.SESSION_TOKENS_NOT_DECLARED if session is not None
+                            else hud_observation.SESSION_TOKENS_NOT_REQUESTED)
+                self.assertEqual(report["session_tokens"], {"recorded": False, "reason": expected})
+                if session is not None:
+                    session.declare.assert_not_called()
+                    session.read.assert_not_called()
+                observer.validate_worker_report(report, 1)
+
+    def test_marker_warmup_window_is_the_documented_constant_and_tolerates_only_absent_markers(self):
+        """A3 (2026-11-07): reads without any marker candidate are tolerated for MARKER_WARMUP_SECONDS
+        after the ready line and counted; a partial copy is never tolerated."""
+        def clear(number, shown):
+            if shown:
+                image = scene(())
+                image[1, 1] = number % 100  # Distinct clear frames, never a marker.
+                return image
+            return None
+        self.assertEqual(observer.MARKER_WARMUP_SECONDS, 2.0)
+        counts = {}
+        for window in (.5, 1.0, observer.MARKER_WARMUP_SECONDS):
+            with self.subTest(window=window), patch.object(observer, "MARKER_WARMUP_SECONDS", window):
+                report, state, _ = self.run_fixture(seconds=10, frame=clear)
+                self.assertEqual((report["status"], report["reason"]), ("rejected", "no_complete_marker"))
+                self.assertEqual(report["marker_warmup_seconds"], window)
+                self.assertEqual(report["sample_count"], 0)
+                counts[window] = report["warmup_frames_without_marker"]
+                # Five reads per second: the tolerated reads fill the window, then the next read rejects.
+                self.assertAlmostEqual(counts[window], window * 5, delta=1)
+                observer.validate_worker_report(report, 1)
+        self.assertLess(counts[.5], counts[1.0])
+        self.assertLess(counts[1.0], counts[observer.MARKER_WARMUP_SECONDS])
+        report, _, _ = self.run_fixture(seconds=10, incomplete_marker=True)
+        self.assertEqual(report["reason"], "orphan_marker_tag_or_incomplete_copy")
+        self.assertNotIn("warmup_frames_without_marker", report)
+        self.assertEqual(report["marker_warmup_seconds"], observer.MARKER_WARMUP_SECONDS)
 
     def test_cancel_format_change_and_processing_overrun_remain_unqualified(self):
         for options, status in ((dict(cancel_at=.4), "cancelled"), (dict(bad_format=True), "rejected"),

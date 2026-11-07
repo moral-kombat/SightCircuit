@@ -98,6 +98,9 @@ def _observe(seconds, template, session, on_marker, on_read, clock):
         validation_only = True
         process = None
 
+        def check_built(self):
+            pass
+
         def start_marker(self, seconds, stop, **kwargs):
             state["marker"] = True
             on_marker()

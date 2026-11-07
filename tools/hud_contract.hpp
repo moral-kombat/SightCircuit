@@ -69,6 +69,7 @@ constexpr int kMarkerMaxSeconds = 20;
 constexpr std::uint64_t kMaxDisplayAgeNs = 1000000000ULL;
 constexpr std::uint32_t kMaxSide = 512;
 constexpr std::uint32_t kRgbaBytes = 4;
+constexpr std::uint32_t kBridgeConnectBudgetSeconds = 6;
 
 // Panel limits and defaults: sightcircuit.overlay.PANEL_LIMITS and PanelSettings
 constexpr float kPanelWidthMin = 0.25f;
@@ -89,5 +90,5 @@ constexpr float kPanelDefaultOpacity = 0.95f;
 constexpr bool kPanelDefaultVisible = true;
 
 // SHA-256 of every value above; --render-calibration-marker reports it.
-constexpr char kContractDigest[] = "65b020bd77d26f4164f71171006a2b82a1a3046f299ac6b5600bd1aeb5167e33";
+constexpr char kContractDigest[] = "9d4bbf7986fab7ff691ef31803adfbd2f46f520ed8efc72e6602805156c724f7";
 } // namespace sightcircuit_contract

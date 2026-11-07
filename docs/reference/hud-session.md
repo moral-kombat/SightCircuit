@@ -240,7 +240,7 @@ record yet; its implementation is distinct from the session-provider evidence in
   exit 1, `cleanup_ok` true and no capture or marker. The budget is a cloud
   choice and is unmeasured on Frame. Without any declaration, the worst cases
   of the baseline window and of a bridge that is slow to start its timer or
-  hangs (the client waits up to 8 s for its ready line, then up to 2 s past
+  hangs (the client waits up to 8 s, `BRIDGE_READY_WAIT_SECONDS`, for its ready line, then up to 2 s past
   the display deadline it derives from that line) can still reach the bound;
   that predates this change. A longer budget or bound needs its own reviewed
   change.
@@ -260,7 +260,7 @@ record yet; its implementation is distinct from the session-provider evidence in
   five names, bounded reason strings, `recorded` as a bool, a `None` token
   exactly where `undeclared` gives its reason, and a `first_change` that names
   a declared token within the frames read. An unrecorded entry has one of
-  four reasons. `session_tokens_not_requested` means no session was asked for.
+  five reasons. `session_tokens_not_requested` means no session was asked for.
   `session_tokens_not_reported` means the supervisor kept its base report:
   no worker report arrived (for example the worker crashed or printed
   nothing), the worker's report failed the contract and was discarded with
@@ -268,7 +268,11 @@ record yet; its implementation is distinct from the session-provider evidence in
   `status` and `reason` say which. A timed-out worker that still printed a
   valid report keeps its own `session_tokens`.
   `session_tokens_declaration_failed` and `session_tokens_report_invalid`
-  record a session failure.
+  record a session failure. `session_tokens_not_declared` (2026-11-07) means
+  the run stopped at a preparation check before the declaration, so nothing
+  was read under /proc: today only a missing bridge build
+  (`native_marker_bridge_not_built`), which the observer checks first
+  ([pre-attempt review](hud-observation.md#pre-attempt-review-of-the-stops-before-a-marker-2026-11-07)).
 - **A failing session.** A session that raises any exception while it is
   declared rejects the run (`observer_session_tokens_declaration_failed`)
   before the capture or marker opens, so nothing needs closing. A declaration

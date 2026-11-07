@@ -11,9 +11,11 @@ import time
 
 from ..gates import claims
 from ..overlay import OverlayClient, bridge_closed_cleanly
-from .contract import MARKER_MAX_SECONDS, MARKER_MIN_SECONDS
+from .contract import BRIDGE_READY_WAIT_SECONDS, MARKER_MAX_SECONDS, MARKER_MIN_SECONDS
 
-READY_TIMEOUT_SECONDS = 8
+# The bridge's connect budget plus its margin (hud.contract); a bridge that
+# gives up on its connect names the stop before this wait ends.
+READY_TIMEOUT_SECONDS = BRIDGE_READY_WAIT_SECONDS
 # After the native display deadline, time allowed for native cleanup and exit.
 STOP_GRACE_SECONDS = 2
 
@@ -37,13 +39,17 @@ class MarkerClient(OverlayClient):
     cancel = None
     marker_deadline = None
 
+    def check_built(self):
+        """The bridge binary exists and is executable: a preparation check, before any frame is read."""
+        if not self.binary.is_file() or not os.access(self.binary, os.X_OK):
+            raise RuntimeError("native_marker_bridge_not_built")
+
     def start_marker(self, seconds, stop, *, allow_calibration_output=False):
         if type(seconds) is not int or not MARKER_MIN_SECONDS <= seconds <= MARKER_MAX_SECONDS:
             raise ValueError("marker_duration_out_of_bounds")
         if not self.validation_only and allow_calibration_output is not True:
             raise ValueError("separate_calibration_output_opt_in_required")
-        if not self.binary.is_file() or not os.access(self.binary, os.X_OK):
-            raise RuntimeError("native_marker_bridge_not_built")
+        self.check_built()
         self.cancel = stop
         if stop.is_set():
             raise InterruptedError("cancelled_before_marker_startup")

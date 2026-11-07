@@ -15,7 +15,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from scripts import hud_marker_check as marker
-from sightcircuit.hud import HUD_CONFIG
+from sightcircuit.hud import HUD_CONFIG, contract
 from sightcircuit.hud import marker as marker_client
 from sightcircuit.overlay import DEFAULT_BRIDGE, OverlayClient, bridge_closed_cleanly
 
@@ -193,6 +193,48 @@ class MarkerStartupAndStopTests(unittest.TestCase):
             report = client.close()
         self.assertLess(time.monotonic() - closing, 1.5)  # No STOP_GRACE_SECONDS wait.
         self.assert_escalated(report)
+
+    def test_connect_watchdog_report_names_the_stop_before_the_ready_wait_and_is_not_forced(self):
+        # The bridge's connect watchdog (BRIDGE_CONNECT_BUDGET_SECONDS) writes one prepared error line
+        # and exits 124 without cleanup; it fires inside the client's ready wait, so the client raises
+        # the bridge's own reason instead of marker_ready_timeout, and escalates nothing.
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        binary = Path(temporary.name) / "fake-marker-bridge"
+        final = {"event": "error", "status": "error", "error": "watchdog_expired:connect", "mode": "--calibration-marker",
+                 "watchdog_phase": "connect", "watchdog_seconds": contract.BRIDGE_CONNECT_BUDGET_SECONDS,
+                 "exit_code": 124, "cleanup_ok": False, "cleanup_skipped_by_watchdog": True,
+                 "runtime_initialized": None, "physical_display_recovery_verified": False,
+                 "report_kind": "sightcircuit_overlay_bridge", "schema_version": 1}
+        binary.write_text(f"#!{sys.executable}\nimport json, os, time\ntime.sleep(.3)\n"
+                          f"print({json.dumps(final)!r}, flush=True)\nos._exit(124)\n")
+        binary.chmod(0o700)
+        self.assertGreater(marker_client.READY_TIMEOUT_SECONDS, contract.BRIDGE_CONNECT_BUDGET_SECONDS)
+        client = marker.MarkerClient(binary, validation_only=False)
+        self.addCleanup(reap, client)
+        started = time.monotonic()
+        with self.assertRaisesRegex(RuntimeError, "^watchdog_expired:connect$"):
+            client.start_marker(20, threading.Event(), allow_calibration_output=True)
+        self.assertLess(time.monotonic() - started, marker_client.READY_TIMEOUT_SECONDS)
+        report = client.close()
+        self.assertFalse(report["forced_termination"], report)
+        self.assertFalse(report["escalated"])
+        self.assertEqual(report["worker_exit_code"], 124)
+        self.assertEqual(report["native_report"]["error"], "watchdog_expired:connect")
+        self.assertFalse(report["cleanup_confirmed"])
+        self.assertFalse(bridge_closed_cleanly(report))
+
+    def test_check_built_is_the_preparation_check_start_marker_applies(self):
+        absent = marker.MarkerClient(Path(tempfile.gettempdir()) / "absent-sightcircuit-bridge", validation_only=True)
+        with self.assertRaisesRegex(RuntimeError, "native_marker_bridge_not_built"):
+            absent.check_built()
+        with patch.object(marker_client.subprocess, "Popen") as popen, \
+                self.assertRaisesRegex(RuntimeError, "native_marker_bridge_not_built"):
+            absent.start_marker(1, threading.Event())
+        popen.assert_not_called()
+        self.assertIsNone(absent.process)
+        if DEFAULT_BRIDGE.is_file():
+            marker.MarkerClient(validation_only=True).check_built()
 
     def test_startup_error_after_the_final_report_gets_the_grace_to_exit(self):
         # Native startup failed and already sent its final report, so it is

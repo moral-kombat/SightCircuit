@@ -65,6 +65,8 @@ On Frame, confirm all of the following:
   the unchanged E83 attempt is not being repeated.
 - The checkout is clean at the approved revision, `.venv-replay` is set up,
   and the bridge is built on Frame with `bash scripts/build_overlay_bridge.sh`.
+  The observer checks the build first and stops `native_marker_bridge_not_built`
+  before it reads /proc or opens the mirror.
 - `/dev/video99` is still the verified SteamVR mirror candidate
   ([mirror check](mirror-recognition.md#check-an-existing-steamvr-mirror)).
 - No replay window, VR panel, mirror capture or other overlay is running.
@@ -133,13 +135,29 @@ attached to the active `:0` display.
 )
 ```
 
+What the command above passes, and why
+([pre-attempt review, 2026-11-07](../reference/hud-observation.md#pre-attempt-review-of-the-stops-before-a-marker-2026-11-07)):
+
+- `--seconds 20`, the maximum. The bridge's display timer starts when its
+  process starts and its connect may use up to 6 s before the marker is
+  generated, so a shorter run shortens the marker's display or ends
+  `calibration_deadline_before_marker`.
+- No `--record-session-tokens` (the default). Its report could not become a
+  mapping candidate before the tracking reporter exists, and its /proc scan and
+  binary hash add a 4 s budget, unmeasured on Frame, that can stop the run
+  before the marker. The report then says `session_tokens_not_requested`.
+- No `--bridge`: the default is the bridge the manifest pins.
+
 The read-only `--verify` step stops the run before the mirror opens if
 anything differs from the manifest: a changed module or script, a rebuilt
 bridge, a dirty tree, or another interpreter, architecture or package. Keep
 the directory, with its `manifest-verify.json`, and do not run the observer.
 
 During the run, the wearer keeps passthrough visible and looks at the scene
-for the first two seconds. A completely unchanging view can end the run with
+for the first two seconds. The bridge then connects, which may take up to 6 s,
+and the observer waits up to 8 s for its ready line; after that line the
+observer allows 2 s (`MARKER_WARMUP_SECONDS`) for the tile to reach the mirror
+before a run without any marker candidate is rejected `no_complete_marker`. A completely unchanging view can end the run with
 `baseline_distinct_clear_frames_not_established`. Once the marker tile appears,
 they turn their head slowly through a small range and keep the tile in view.
 Large movements, or a change in how many copies are visible, end the run
@@ -153,7 +171,8 @@ once; that stop is reported as forced, with `cleanup_ok: false`.
 | Exit code and status | Meaning | Next |
 | --- | --- | --- |
 | `2`, `observed_unqualified` | Clean run: copies observed, marker closed cleanly | Record `observed_copy_count`, `footprint_union_native`, `margin_px`, `maximum_corner_drift_px`, `sample_count` and the bridge cleanup fields |
-| `1`, `rejected`, `native_failed` or `cleanup_failed` | Observation or cleanup failed; `reason` names the cause | Keep the report; do not repeat the unchanged run |
+| `1`, `rejected` with `native_marker_bridge_not_built`, `watchdog_expired:connect`, `marker_ready_timeout`, `vrserver_not_running:*`, `overlay_connect_failed:*` or `headset_not_connected` | A preparation stop: the bridge or the runtime was not ready, and no marker was generated. It does not count against the attempt budget ([counting rule](../poc-scope.md#architecture-decisions-2026-11-07)) | Keep the report; fix the preparation and re-verify the manifest. Any further run is its own device step under the owner's approval |
+| `1`, `rejected`, `native_failed` or `cleanup_failed`, other reasons | Observation or cleanup failed; `reason` names the cause. A stop at or after the scene precondition counts against the attempt budget | Keep the report; do not repeat the unchanged run |
 | `130`, `cancelled` | Stopped by signal | Keep the report; note why it was stopped |
 
 Native cleanup fields in the report are process and API results. They do not

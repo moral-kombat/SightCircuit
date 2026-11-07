@@ -91,6 +91,20 @@ MAX_DISPLAY_AGE_MS = MAX_DISPLAY_AGE_NS // 1_000_000
 MAX_SIDE = 512  # Largest RGBA frame side sent to the bridge.
 RGBA_BYTES = 4
 
+# Bridge start-up budgets, paired so that they move together
+# (docs/reference/hud-observation.md#pre-attempt-review-of-the-stops-before-a-marker-2026-11-07).
+# The bridge arms its connect watchdog for BRIDGE_CONNECT_BUDGET_SECONDS (up to
+# three Background probes, three Overlay VR_Init attempts and their backoff) and
+# ends itself with a named report when it expires. Its Python clients wait
+# BRIDGE_READY_WAIT_SECONDS for the ready line: the connect budget plus a margin
+# for process start, SDK load and the delivery of the watchdog's own line, so a
+# bridge that gives up names its stop before the client escalates. The numbers
+# are cloud choices; the headset check of the budget is a separately approved
+# device step.
+BRIDGE_CONNECT_BUDGET_SECONDS = 6
+BRIDGE_READY_MARGIN_SECONDS = 2
+BRIDGE_READY_WAIT_SECONDS = BRIDGE_CONNECT_BUDGET_SECONDS + BRIDGE_READY_MARGIN_SECONDS
+
 # The one footprint margin rule, from the G4 method's error budget
 # (docs/hud-qualification.md#runtime-calibration-and-one-margin-rule-2026-11-01):
 # at least the measured error terms rounded up plus a guard, never below the
