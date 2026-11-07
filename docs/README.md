@@ -42,6 +42,9 @@ Each device guide describes prerequisites, operating limits, and shutdown.
   builds, tests, and paused provider tools.
 - [HUD qualification](hud-qualification.md) — mapping requirements, evidence,
   and the limits of offline validation.
+- [HUD fallback input](reference/hud-fallback.md) — the time-multiplexed
+  exclusion design, costed and not built, for when the marker-observation
+  budget is exhausted.
 - [Camera interfaces and research](steam-frame-camera.md) — mirror input,
   dedicated capture constraints, and pinned upstream sources.
 - [Agent-on-Frame design](agent-on-frame.md) and
