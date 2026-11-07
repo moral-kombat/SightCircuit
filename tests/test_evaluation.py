@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -46,10 +47,42 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual((score["true_positives"], score["false_negatives"], score["false_positives"]), (1, 1, 2))
         self.assertEqual(score["confusions"], [{"object": "rug", "detected": "couch", "confidence": 0.7}])
         self.assertEqual(score["unsupported"], ["rug"])
+        self.assertEqual(score["box_outcomes"], {"rug": {"matched": 0, "missed": 0, "unsupported": 1},
+                                                 "chair": {"matched": 1, "missed": 0, "unsupported": 0},
+                                                 "dog": {"matched": 0, "missed": 1, "unsupported": 0}})
         summary = evaluation.totals([score, evaluation.score_image({"id": "x", "present": ["dog"]}, [], VOC)])
         self.assertEqual(summary["box_recall"], 0.5)
         self.assertEqual(summary["box_precision"], round(1 / 3, 4))
         self.assertEqual((summary["present_recall"], summary["confusions"]), (0.0, 1))
+        self.assertEqual(summary["box_recall_by_label"], {
+            "chair": {"true_positives": 1, "false_negatives": 0, "box_recall": 1.0},
+            "dog": {"true_positives": 0, "false_negatives": 1, "box_recall": 0.0},
+            "rug": {"true_positives": 0, "false_negatives": 0, "box_recall": None}})
+
+    def test_per_label_box_recall_separates_the_poc_object_from_the_rest(self):
+        chair = {"label": "chair", "box_xyxy": [0, 0, 100, 100]}
+        scores = [evaluation.score_image({"id": "a", "objects": [chair, {"label": "dog", "box_xyxy": [200, 0, 300, 100]}]},
+                                         [found("chair", [0, 0, 100, 100])], VOC),
+                  evaluation.score_image({"id": "b", "objects": [chair, dict(chair, box_xyxy=[300, 0, 400, 100])]},
+                                         [found("chair", [0, 0, 100, 100]), found("chair", [300, 0, 400, 100])], VOC),
+                  evaluation.score_image({"id": "c", "objects": [chair]}, [found("chair", [50, 50, 150, 150])], VOC)]
+        summary = evaluation.totals(scores)
+        self.assertEqual((summary["true_positives"], summary["false_negatives"], summary["box_recall"]), (3, 2, 0.6))
+        self.assertEqual(summary["box_recall_by_label"], {
+            "chair": {"true_positives": 3, "false_negatives": 1, "box_recall": 0.75},
+            "dog": {"true_positives": 0, "false_negatives": 1, "box_recall": 0.0}})
+        table = evaluation.label_table(scores)
+        self.assertEqual(table["boxes"], {"chair": {"matched": 3, "missed": 1, "unsupported": 0, "best_below_threshold": None},
+                                          "dog": {"matched": 0, "missed": 1, "unsupported": 0, "best_below_threshold": None}})
+        self.assertEqual((table["present"], table["absent"]), ({}, {}))
+        lines = evaluation.format_label_table({"ssd": table}, 0.5)
+        self.assertEqual([line.split()[:2] for line in lines[2:]], [["chair", "boxes"], ["dog", "boxes"]])
+        self.assertIn("3/4 matched", lines[2])
+        self.assertIn("0/1 matched", lines[3])
+        presence = evaluation.label_table([evaluation.score_image({"id": "p", "present": ["dog"]}, [], VOC)])
+        self.assertEqual(presence["boxes"], {})
+        self.assertEqual(evaluation.totals([scores[2]])["box_recall_by_label"],
+                         {"chair": {"true_positives": 0, "false_negatives": 1, "box_recall": 0.0}})
 
     def test_incomplete_boxes_do_not_count_false_positives(self):
         entry = {"id": "partial", "objects": [{"label": "dog", "box_xyxy": [0, 0, 10, 10]}]}
@@ -123,6 +156,23 @@ class ScoringTests(unittest.TestCase):
         self.assertTrue(giraffe.endswith(" -"), giraffe)  # Never expected in the second detector's images.
         sheep = next(line for line in lines if line.startswith("sheep"))
         self.assertIn("0/1 clean", sheep)
+
+
+class PrivateStillsTests(unittest.TestCase):
+    """Private Frame stills and their manifests stay out of Git, as the mirror recognition guide promises."""
+
+    def test_local_evaluation_directory_stays_out_of_git(self):
+        self.assertIn("/evaluation/local/", (ROOT / ".gitignore").read_text().splitlines())
+        # The rule as Git applies it, for the manifest, a still and a report under the directory.
+        for path in ("evaluation/local/frame.json", "evaluation/local/room-20261107-120000.png",
+                     "evaluation/local/wp1-e61-rerun-20261103/report.json"):
+            with self.subTest(path=path):
+                result = subprocess.run(["git", "check-ignore", "-q", "--", path], cwd=ROOT, capture_output=True,
+                                        text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, f"{path} is not ignored: {result.stderr}")
+        tracked = subprocess.run(["git", "ls-files", "--", "evaluation/local"], cwd=ROOT, check=True,
+                                 capture_output=True, text=True, timeout=30).stdout
+        self.assertEqual(tracked, "", f"private stills are tracked: {tracked}")
 
 
 class PinTests(unittest.TestCase):
@@ -304,7 +354,7 @@ class CommandTests(unittest.TestCase):
                 code = evaluate_detectors.main(["--manifest", str(manifest), "--report", str(report_path)])
             report = json.loads(output.getvalue())
             self.assertEqual(code, 0, report)
-            self.assertEqual(report["schema_version"], 4)
+            self.assertEqual(report["schema_version"], 5)
             self.assertTrue(report["code"]["revision"])
             self.assertIn("working_tree_dirty", report["code"])
             self.assertIn(str(manifest), report["manifest_sha256"])
@@ -324,6 +374,11 @@ class CommandTests(unittest.TestCase):
                 self.assertIn("preprocessing", result)
                 self.assertTrue(all(len(item["sha256"]) == 64 for item in result["model_files"]))
                 self.assertTrue(all(len(item["input_sha256"]) == 64 for item in result["images"]))
+                # Schema 5: the input path is the basename, so a device report carries no absolute path.
+                self.assertEqual([item["input_path"] for item in result["images"]], ["dog.jpg"])
+                self.assertNotIn(str(ASSETS), json.dumps(result["images"]))
+                self.assertEqual(result["totals"]["box_recall_by_label"]["dog"]["box_recall"], 1.0)
+                self.assertEqual(result["labels"]["boxes"]["dog"]["matched"], 1)
                 self.assertEqual(result["labels"]["present"]["dog"]["hit"], 1)
                 self.assertEqual(result["labels"]["absent"]["cat"]["clean"], 1)
                 self.assertIn("cat", result["images"][0]["best_below_threshold"]["absent"])

@@ -13,7 +13,6 @@ if not __package__:  # Run as a file: import this checkout's packages without in
 ASSETS = ROOT / ".cache" / "sightcircuit" / "assets"
 RESULTS = ROOT / "artifacts" / "smoke"
 FRAME_COUNT = 12
-THRESHOLD = 0.5
 # What the sample image shows, in canonical names; each detector must find every label it can name.
 FIXTURE = {"id": "dog.jpg", "present": ["bicycle", "dog", ["car", "truck"]]}
 
@@ -30,12 +29,12 @@ def require_fixture_labels(detector, result):
 
 def check_detectors(image):
     """Create every registered detector, with no per-name code, and check it on the fixture."""
-    from sightcircuit.detection import DETECTORS, create_detector, describe
+    from sightcircuit.detection import DETECTORS, POC_THRESHOLD, create_detector, describe
 
     detectors, report = {}, {}
     for name in DETECTORS:
         detector = create_detector(name)
-        result = detector.detect(image, THRESHOLD)
+        result = detector.detect(image, POC_THRESHOLD)
         require_fixture_labels(detector, result)
         detectors[name] = detector
         report[name] = {**describe(detector), "labels": result.labels}
@@ -55,7 +54,7 @@ def main() -> None:
     import onnxruntime as ort
     from PySide6 import QtCore, QtGui, QtWidgets
 
-    from sightcircuit.detection import DEFAULT_DETECTOR, annotate, describe
+    from sightcircuit.detection import DEFAULT_DETECTOR, POC_THRESHOLD, annotate, describe
 
     ort.disable_telemetry_events()
 
@@ -124,7 +123,7 @@ def main() -> None:
                 timer.stop()
                 app.quit()
                 return
-            result = detector.detect(frame, THRESHOLD)
+            result = detector.detect(frame, POC_THRESHOLD)
             found = {detection.label: round(detection.confidence, 4) for detection in result.detections}
             frame = annotate(frame, result)
             require_fixture_labels(detector, result)

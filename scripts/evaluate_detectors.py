@@ -18,7 +18,7 @@ if not __package__:  # Run as a file: import this checkout's packages without in
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from sightcircuit import assets, detection, evaluation
 from sightcircuit.convert import MAX_PROCESSING_SIDE, to_bgr
-from sightcircuit.detection import DETECTORS, create_detector, describe
+from sightcircuit.detection import DETECTORS, POC_THRESHOLD, create_detector, describe
 from sightcircuit.errors import SightCircuitError
 from sightcircuit.frame import Frame
 from sightcircuit.sources.mirror_device import grayscale_sample, validate_format
@@ -153,7 +153,9 @@ def evaluate(detector, images, threshold, iou_threshold, audit=False, variant="b
         score = evaluation.score_image(entry, result.detections, detector.classes,
                                        (bgr.shape[1] / width, bgr.shape[0] / height),
                                        iou_threshold)
-        score.update(manifest=manifest, input_path=image_path, input_sha256=image_sha256,
+        # The basename only: a device report must leave the Frame without its absolute paths; the id and
+        # the digest identify the input.
+        score.update(manifest=manifest, input_path=Path(image_path).name, input_sha256=image_sha256,
                      input_digest_provenance="manifest_verified" if entry.get("sha256") else "computed_only",
                      decoded_width=width, decoded_height=height, processing_width=bgr.shape[1],
                      processing_height=bgr.shape[0], inference_ms=round(result.inference_ms, 3),
@@ -231,7 +233,7 @@ def main(argv=None):
     parser.add_argument("--manifest", type=Path, action="append",
                         help="Evaluation manifest; repeatable. Default: evaluation/seed.json")
     parser.add_argument("--detector", choices=DETECTORS, action="append", help="Repeatable; default: all")
-    parser.add_argument("--threshold", type=float, default=0.5)
+    parser.add_argument("--threshold", type=float, default=POC_THRESHOLD)
     parser.add_argument("--iou", type=float, default=0.5, help="Box match threshold for annotated objects")
     parser.add_argument("--fetch", action="store_true", help="Download missing checksum-pinned images")
     parser.add_argument("--report", type=Path, help="Explicitly save the JSON report to a new file")
@@ -249,7 +251,7 @@ def main(argv=None):
             parser.error(f"{name} must be in (0, 1]")
     if args.report and args.report.exists():
         parser.error("--report must name a new file")
-    report = {"report_kind": "detector_evaluation", "schema_version": 4, "status": "error",
+    report = {"report_kind": "detector_evaluation", "schema_version": 5, "status": "error",
               "threshold": args.threshold, "iou_threshold": args.iou,
               "confusion_iou_threshold": evaluation.CONFUSION_IOU, "detectors": {},
               "code": source_revision(),
@@ -302,9 +304,11 @@ def main(argv=None):
                                             "totals": variant_totals,
                                             "labels": evaluation.label_table(variant_scores),
                                             "images": variant_scores}
+            by_label = " ".join(f"{label} {counts['box_recall']}" for label, counts in summary["box_recall_by_label"].items())
             print(f"{name:14s} present {summary['present_hits']}/{summary['present_hits'] + summary['present_misses']}"
                   f"  absent-violations {summary['absent_violations']}  confusions {summary['confusions']}"
-                  f"  box-recall {summary['box_recall']}  mean {summary['mean_inference_ms']:.1f} ms",
+                  f"  box-recall {summary['box_recall']}{' (' + by_label + ')' if by_label else ''}"
+                  f"  mean {summary['mean_inference_ms']:.1f} ms",
                   file=sys.stderr)
         tables = {name: result["labels"] for name, result in report["detectors"].items()}
         for line in evaluation.format_label_table(tables, args.threshold):

@@ -88,7 +88,12 @@ again before publication; a still reported without it is not published),
 (equal to `last_result.read_sequence`) and `still_width`/`still_height`.
 `scripts/frame_session_manifest.py --still-report <report>` checks that the
 image still matches and copies the digest, detector, source and sequence into
-the manifest entry, which then passes `--require-input-digests`.
+the manifest entry, which then passes `--require-input-digests`. The report
+also carries `inference_p95_budget_ms`, the
+[live budget constant](detection.md#poc-threshold-and-live-budget), and
+`inference_p95_within_budget`, the run's `pipeline.inference_ms.p95` against
+it (null until a frame has been timed); only a run on the Frame measures the
+budget.
 
 ```bash
 .venv-replay/bin/python -m unittest discover -s tests -p test_mirror_recognize.py -v

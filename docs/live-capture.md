@@ -163,8 +163,6 @@ bridge build, headset not connected, manifest mismatch) does not count.
 
 ### Decisions still needed from the owner
 
-- The live budget number for C1: the proposal is an inference p95 of at most
-  200 ms, which is five frames per second.
 - Who declares the capture layout for the diagnostic run, and on what evidence,
   since arrows and eye-crossing rejection still depend on it.
 - Whether the observer run, the candidate conversion and the 60-second run must

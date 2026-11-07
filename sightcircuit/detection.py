@@ -267,6 +267,12 @@ class YoloxDetector:
 
 DETECTORS = {"mobilenet-ssd": MobileNetSSD, "yolox-nano": YoloxDetector}
 DEFAULT_DETECTOR = "mobilenet-ssd"
+# The POC score threshold: every command's default, the evaluation's scoring threshold and the
+# pin's recorded threshold (docs/reference/detection.md#poc-threshold-and-live-budget).
+POC_THRESHOLD = 0.5
+# The owner's live budget, accepted 2026-11-07: the inference p95 of a ``mirror_recognize`` run on
+# the Frame (``pipeline.inference_ms.p95`` in its report) may not exceed this many milliseconds.
+LIVE_INFERENCE_P95_BUDGET_MS = 200
 
 
 def registered(name):
