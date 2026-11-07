@@ -69,6 +69,12 @@ On Frame, confirm all of the following:
   before it reads /proc or opens the mirror.
 - `/dev/video99` is still the verified SteamVR mirror candidate
   ([mirror check](mirror-recognition.md#check-an-existing-steamvr-mirror)).
+- The run record states the environment differences against the
+  [E83](../evidence/e083.md) attempts: OS build, kernel release, SteamVR
+  package version and interpreter ([E85](../evidence/e085.md) lists the
+  2026-11-07 changes). The manifest written below records the kernel, the OS
+  release and the SteamVR package identity; the interpreter and packages are
+  pinned by the same manifest.
 - No replay window, VR panel, mirror capture or other overlay is running.
 - Someone is wearing the headset, with normal passthrough and tracking.
   Optionally start the [observation page](frame-sessions.md#record-headset-observations-for-a-run)

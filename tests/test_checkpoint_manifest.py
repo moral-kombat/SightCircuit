@@ -15,6 +15,7 @@ from pathlib import Path
 import platform
 import re
 import shlex
+import shutil
 import stat
 import subprocess
 import sys
@@ -88,7 +89,22 @@ class CheckoutCase(unittest.TestCase):
         versions = patch.object(manifest.metadata, "version", side_effect=fake_version)
         versions.start()
         self.addCleanup(versions.stop)
+        # A fake pacman local database, empty unless a test installs a package; never the host's.
+        self.pacman = base / "pacman-local"
+        self.pacman.mkdir()
+        database = patch.object(manifest, "PACMAN_LOCAL_DATABASE", self.pacman)
+        database.start()
+        self.addCleanup(database.stop)
         self.path = self.out / "checkpoint-manifest.json"
+
+    def install_package(self, name, version, *, entry=None, desc=None):
+        """One pacman local-database entry; ``desc`` replaces the generated description text."""
+        folder = self.pacman / (entry or f"{name}-{version}")
+        folder.mkdir()
+        if desc is None:
+            desc = f"%NAME%\n{name}\n\n%VERSION%\n{version}\n\n%DESC%\nSteamVR for Frame\n\n"
+        (folder / "desc").write_text(desc)
+        return folder
 
     def git(self, *arguments):
         return subprocess.run([*GIT, "-C", str(self.root), *arguments], check=True, capture_output=True,
@@ -140,7 +156,10 @@ class WriteTests(CheckoutCase):
                                           "version": platform.python_version()})
         self.assertEqual(data["platform"], {"machine": platform.machine(), "system": platform.system(),
                                             "kernel_release": platform.release(),
-                                            "os_release": manifest.os_release()})
+                                            "os_release": manifest.os_release(),
+                                            "steamvr_package": {"name": "deckard-steamvr-rel",
+                                                                "source": "pacman_local_database",
+                                                                "version": None, "reason": "package_not_installed"}})
         self.assertEqual(set(data["platform"]["os_release"]), {"id", "version_id", "build_id"})
         self.assertEqual(data["bridge"], {manifest.BRIDGE: hashlib.sha256(self.bridge.read_bytes()).hexdigest()})
         self.assertEqual(sorted(data["modules"]), ["sightcircuit/__init__.py", "sightcircuit/gates.py",
@@ -320,6 +339,45 @@ class VerifyTests(CheckoutCase):
             self.assertDiffers(("platform.os_release.id", "changed"))
         with patch("platform.release", return_value="0.0.0-other"):
             self.assertDiffers(("platform.kernel_release", "changed"))
+
+    def test_steamvr_package_is_read_from_the_local_database_best_effort_and_pinned(self):
+        """A3 addendum (2026-11-07): the manifest records the Frame's SteamVR package identity, unknown when absent."""
+        name = manifest.STEAMVR_PACKAGE
+        self.assertEqual(name, "deckard-steamvr-rel")  # As E85 read it with pacman -Q.
+        unknown = {"name": name, "source": "pacman_local_database", "version": None}
+        # No database (this cloud host), an empty one, a look-alike name, an unreadable or invalid description.
+        self.assertEqual(manifest.steamvr_package(database=self.pacman / "absent"),
+                         dict(unknown, reason="package_database_unavailable"))
+        self.assertEqual(manifest.steamvr_package(), dict(unknown, reason="package_not_installed"))
+        other = self.install_package(f"{name}-tools", "1.0-1")
+        self.assertEqual(manifest.steamvr_package(), dict(unknown, reason="package_not_installed"))
+        broken = self.install_package(name, "r1-1", entry=f"{name}-r1-1", desc="%NAME%\n" + name + "\n\n%VERSION%\nbad version\n")
+        self.assertEqual(manifest.steamvr_package(), dict(unknown, reason="package_version_invalid"))
+        (broken / "desc").unlink()
+        (broken / "desc").mkdir()  # A directory where the description should be: unreadable.
+        self.assertEqual(manifest.steamvr_package(), dict(unknown, reason="package_description_unreadable"))
+        shutil.rmtree(broken)
+        shutil.rmtree(other)
+        # The installed package, as E85 recorded it after the SteamOS 0.5.8 update; no command runs.
+        installed = self.install_package(name, "r26496310+24cb4748-1")
+        with patch("subprocess.run", side_effect=AssertionError("steamvr_package must not run a command")):
+            self.assertEqual(manifest.steamvr_package(), dict(unknown, version="r26496310+24cb4748-1", reason=None))
+        previous = self.install_package(name, "r25765468+0ab5c24d-1")
+        self.assertEqual(manifest.steamvr_package(), dict(unknown, reason="package_ambiguous"))
+        shutil.rmtree(previous)
+        # Pinned by the manifest: an updated or vanished package is a difference, and unknown is not a problem.
+        data = self.write()
+        self.assertEqual(data["problems"], [])
+        self.assertEqual(json.loads(self.path.read_text())["platform"]["steamvr_package"]["version"],
+                         "r26496310+24cb4748-1")
+        self.assertVerifies()
+        (installed / "desc").write_text(f"%NAME%\n{name}\n\n%VERSION%\nr26496311+ffffffff-1\n")
+        report = self.assertDiffers(("platform.steamvr_package.version", "changed"))
+        self.assertEqual([(item["expected"], item["actual"]) for item in report["differences"]
+                          if item["field"] == "platform.steamvr_package.version"],
+                         [("r26496310+24cb4748-1", "r26496311+ffffffff-1")])
+        shutil.rmtree(installed)
+        self.assertDiffers(("platform.steamvr_package.version", "changed"), ("platform.steamvr_package.reason", "changed"))
 
     def test_fails_for_a_different_python(self):
         self.write()

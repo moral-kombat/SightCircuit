@@ -98,7 +98,8 @@ has the details.
 
 Item A3 of the [architecture plan work order](../live-capture.md#architecture-plan-work-order-2026-11-07):
 an offline review of everything that can stop the next marker-observer attempt
-(A4) before a marker appears. File and line references are at revision
+(A4) before a marker appears, plus the planner's addendum of the same day on
+the environment differences the device record must carry. File and line references are at revision
 `45771fe` unless they say "now". The review ran no device operation and makes
 no claim about device behaviour; every result below is a cloud check. **The
 headset check of the bridge's connect budget remains a separately approved
@@ -273,6 +274,29 @@ In run order:
 | `overlay_image_failed`, `SetOverlayRaw:*`, `ShowOverlay:*`, `calibration_deadline_before_show`, `calibration_submit_overran_deadline`, `calibration_visibility_query_overran_deadline` | `overlay_bridge.cpp:244,258,284,655-660` | yes: the marker was requested; whether it appeared is the wearer's report |
 | `no_complete_marker` after the warmup window | `hud_marker_observer.py:152` (now `MARKER_WARMUP_SECONDS`) | yes: the marker never reached the mirror, or not whole |
 | `orphan_marker_tag_or_incomplete_copy` (V4, E75), the other matcher rejections, `insufficient_complete_marker_samples` | `observation.py:280,368`, `hud_marker_observer.py:172` | yes: after a marker appears |
+
+### 5. Environment differences against the E83 attempts
+
+Planner addendum of 2026-11-07, from the Frame report in
+[E85](../evidence/e085.md). The E83 attempts ran on SteamOS 0.5.6 (build
+20261022.6153909), kernel 6.18.0, SteamVR package `deckard-steamvr-rel`
+r25765468+0ab5c24d-1 and a Python 3.12 environment. The Frame moved on
+2026-11-07 to SteamOS 0.5.8 (build 20261106.6144341), kernel 7.2.0, SteamVR
+package r26496310+24cb4748-1, and the system Python changed from 3.12 to 3.14,
+which left `.venv-replay` unusable until a reviewed rebuild (another coder owns
+that pin review). None of these is a stop the observer can detect, and this
+review makes no claim about how any of them behaves. **The next attempt's
+device record must carry the environment differences against E83 as a
+recorded item**: the OS build, the kernel release, the SteamVR package version
+and the interpreter and its environment, beside the checkout and bridge
+digests. The checkpoint manifest now records the SteamVR package identity
+(`platform.steamvr_package`, read from the pacman local database by file reads
+only, unknown with a reason where absent; `sightcircuit/runtime/manifest.py`,
+`tests/test_checkpoint_manifest.py`) next to the kernel and OS release it
+already recorded, so a manifest written on Frame for the attempt carries them,
+and a SteamVR update between `--write` and `--verify` is a difference. A
+manifest written before the rebuild does not verify afterwards (interpreter
+and package versions differ), which is the intended stop.
 
 Findings for the planner, outside this item's scope:
 

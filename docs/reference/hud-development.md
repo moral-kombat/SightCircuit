@@ -323,7 +323,10 @@ manifest written in the cloud or for another build does not verify on Frame.
 The manifest records the full git commit, whether the tree is clean (tracked
 changes and untracked, non-ignored files count as dirty), the Python version
 and implementation, `platform.machine()`, the OS (with its os-release ID,
-version and build) and kernel release, and SHA-256 values of the built
+version and build), the kernel release, the SteamVR package identity (since
+2026-11-07: the Frame's `deckard-steamvr-rel` pacman entry, read from the local
+package database by file reads only, with `version` null and a reason where
+the database or the package is absent, as in the cloud), and SHA-256 values of the built
 `artifacts/overlay-bridge/sightcircuit-overlay-bridge`, every
 `sightcircuit/**/*.py`, the scripts this procedure runs, the bridge sources
 including `tools/hud_contract.hpp`, and the models and fixture listed in
