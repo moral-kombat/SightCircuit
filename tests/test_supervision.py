@@ -202,7 +202,9 @@ class WorkerSideTests(unittest.TestCase):
                          {"module": "sightcircuit.runtime.supervision", "function": "enter_worker"})
         reference = supervision.function_reference(accept)  # A test module, however it was imported.
         self.assertEqual(reference, {"module": "tests.test_supervision", "function": "accept"})
-        self.assertIs(supervision.load_function(reference), accept)
+        loaded = supervision.load_function(reference)  # The same function, by name and file: under discovery the
+        self.assertEqual((loaded.__name__, loaded.__code__.co_filename),  # module may be imported a second time.
+                         (accept.__name__, accept.__code__.co_filename))
         for function in (lambda: None, json.loads, supervision.Signals.hold):
             with self.subTest(function=function), self.assertRaisesRegex(ValueError, "module_level_in_checkout"):
                 supervision.function_reference(function)
