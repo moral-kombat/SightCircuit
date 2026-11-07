@@ -1,6 +1,6 @@
 # Execution prompt: complete the fixed edge HUD work
 
-Prepared 2026-10-31 against `main` `85cf53cd99bb0abfc176b72d279a46dbec52ba4f`,
+Prepared 2026-10-31 against `main` `5237c95e58373931eff7c8a4c307fe79bdd8acac`,
 after [PR #10](https://github.com/moral-kombat/framejacker/pull/10) merged.
 This is a copy-ready implementation handoff, not evidence that its work has
 executed. The [POC scope](poc-scope.md#work-packages) owns work packages;
@@ -23,7 +23,7 @@ one; that prompt stays for reference.
 
 For the next coding session, from the coder session that took the
 [2026-11-03 handoff](#coder-handoff-2026-11-03)'s offline items. State at
-`main` `9c72779`. Nothing here authorizes a device operation; every gate in
+`main` `3e1e8a2`. Nothing here authorizes a device operation; every gate in
 `framejacker/gates.py` stays closed. All results below are cloud checks
 (Linux x86_64, Python 3.12.3) or GitHub CI, never Frame results.
 
@@ -31,8 +31,8 @@ For the next coding session, from the coder session that took the
 
 | PR | Merged as | Content | Evidence |
 | --- | --- | --- | --- |
-| [#20](https://github.com/moral-kombat/framejacker/pull/20) | `dc5d9a3` | Item 1: records for #16 and #18; the binding decision recorded | [E77](evidence/e077.md), [E78](evidence/e078.md) |
-| [#21](https://github.com/moral-kombat/framejacker/pull/21) | `9c72779` | Item 2: the marker observer records session tokens behind `--record-session-tokens` (off by default); `--from-observer` takes tokens only from that record | None yet; see [observed session tokens](hud-qualification.md#observed-session-tokens-for-the-candidate-2026-11-03) |
+| [#20](https://github.com/moral-kombat/framejacker/pull/20) | `7c72a4e` | Item 1: records for #16 and #18; the binding decision recorded | [E77](evidence/e077.md), [E78](evidence/e078.md) |
+| [#21](https://github.com/moral-kombat/framejacker/pull/21) | `3e1e8a2` | Item 2: the marker observer records session tokens behind `--record-session-tokens` (off by default); `--from-observer` takes tokens only from that record | None yet; see [observed session tokens](hud-qualification.md#observed-session-tokens-for-the-candidate-2026-11-03) |
 
 E79–E83 are allocated in the planner's open PR #23; E84 is the next free ID.
 Ask the planner session for IDs (it acts as coordinator and opened #23); a
@@ -59,9 +59,9 @@ No device step, and no evidence ID allocated by a coder session.
 
 | Work | Where | State | Next step |
 | --- | --- | --- | --- |
-| Item 3: native tracking reporter | Branch `ccr-16d7cdfd-8klzgs-item3` at `67997f4`, on `9c72779`; no PR | Implemented and reviewed: 11 findings fixed in round 1 and the first recheck's findings in round 2; the final recheck left three minor findings open (below), one of them the rest of finding 3 | Wait for #22, then merge `origin/main` into the branch and resolve; see below |
+| Item 3: native tracking reporter | Branch `ccr-16d7cdfd-8klzgs-item3` at `4f15c20`, on `3e1e8a2`; no PR | Implemented and reviewed: 11 findings fixed in round 1 and the first recheck's findings in round 2; the final recheck left three minor findings open (below), one of them the rest of finding 3 | Wait for #22, then merge `origin/main` into the branch and resolve; see below |
 | Capture supervisor races (owner-approved, outside the item list) | [PR #24](https://github.com/moral-kombat/framejacker/pull/24), branch `ccr-16d7cdfd-8klzgs-capsup` | Open at `31e1193`; CI green on x86_64 and ARM64 (21 jobs succeeded; `x86_64 / replay-pacing` and `arm64 / smoke` skipped by design); not watched (the owner is waiting for architecture input) | Owner review and merge |
-| Item 4: #16 cycle-3 follow-ups | Branch `ccr-16d7cdfd-8klzgs-item4` from `9c72779`; not on origin when this was written | Package workflow running when this was written | Full checks, push, ask before the PR. Frame already runs #16's guard (version 3, installed from `881fea7` per E82 in #23), so the 2026-11-03 premise "before the guard is installed on Frame" has passed. Updating Frame to item 4's guard (version 4) after it merges is a device step that needs the owner's approval |
+| Item 4: #16 cycle-3 follow-ups | Branch `ccr-16d7cdfd-8klzgs-item4` from `3e1e8a2`; not on origin when this was written | Package workflow running when this was written | Full checks, push, ask before the PR. Frame already runs #16's guard (version 3, installed from `33cd83d` per E82 in #23), so the 2026-11-03 premise "before the guard is installed on Frame" has passed. Updating Frame to item 4's guard (version 4) after it merges is a device step that needs the owner's approval |
 | Item 5: small items | Not started | — | Fix the `docs/evidence/e008.md` link; ask the owner how far to take the optional lock file and console entry points (both change how Frame installs or starts tools) |
 
 **Item 3 and #22.** The owner decided that item 3 follows another coder's
@@ -100,14 +100,14 @@ fast-forward.
   are source pins for real-mode code that cannot run in the cloud:
   - `main()`'s branch sequence for the two tracking modes;
   - the reporter-only lifetime and status lines;
-  - the no-overlay guard in `Overlay::events()` (line 212 at `67997f4`): pin
+  - the no-overlay guard in `Overlay::events()` (line 212 at `4f15c20`): pin
     it, or change it to `if (!api || handle == vr::k_ulOverlayHandleInvalid)`
     and pin that.
 - **Real-mode tests:** the item 3 agents did not run the two existing tests
   that start the bridge in a real mode (`test_missing_runtime_is_named`,
-  `test_client_startup_failure_is_actionable`). They pass at `67997f4`; run
+  `test_client_startup_failure_is_actionable`). They pass at `4f15c20`; run
   them again after the merge.
-- **Load failure:** one full-suite run of `67997f4`, made while another
+- **Load failure:** one full-suite run of `4f15c20`, made while another
   workflow loaded the machine, had a single failure that was not captured. Two
   later runs passed (994 tests). The likely candidate is
   `test_bounded_worker.test_pipeline_cli_parent_cancellation`, which also fails
@@ -144,7 +144,7 @@ with item 3, and the capture-supervisor approval lands with #24.
   guard settings? That is the Phase 2 step, which #16 kept as a separate
   approval. Asked, not answered. Per the planner's open PR #23 (E82, a
   relayed device report, not a cloud result), the guard settings were already
-  copied on Frame on 2026-11-03 from `881fea7`, so the question is whether
+  copied on Frame on 2026-11-03 from `33cd83d`, so the question is whether
   that install was covered.
 - **Item 5:** whether to do the optional lock file and console entry points,
   and how far.
@@ -208,23 +208,23 @@ Lessons:
 
 ## Coder handoff, 2026-11-03
 
-For the next coding session. State at `main` `d4800bc`. Nothing here authorizes
+For the next coding session. State at `main` `9d32550`. Nothing here authorizes
 a device operation; every gate in `framejacker/gates.py` stays closed.
 
 ### What is done
 
 | PR | Merged as | Content | Evidence |
 | --- | --- | --- | --- |
-| [#17](https://github.com/moral-kombat/framejacker/pull/17) | `1a843e3` | Packages A–H of the [offline handoff](#offline-handoff-2026-11-01) | [E76](evidence/e076.md) |
-| [#16](https://github.com/moral-kombat/framejacker/pull/16) | `881fea7` | Claude Code on Frame: plan ([agent-on-frame](agent-on-frame.md)), `framejacker/agent/` runner and guard, `scripts/frame_claude_install.sh` | [E77](evidence/e077.md) |
-| [#18](https://github.com/moral-kombat/framejacker/pull/18) | `d4800bc` | Package I: mirror session tokens (`framejacker/sources/session.py`). Package J: neutral HUD mask fill (`hud.mask.fill_regions`, `scripts/evaluate_mask_fill.py`). The owner's 2026-11-03 decisions ([POC scope](poc-scope.md)) | [E78](evidence/e078.md); E79 is the next free ID |
+| [#17](https://github.com/moral-kombat/framejacker/pull/17) | `d2fa691` | Packages A–H of the [offline handoff](#offline-handoff-2026-11-01) | [E76](evidence/e076.md) |
+| [#16](https://github.com/moral-kombat/framejacker/pull/16) | `33cd83d` | Claude Code on Frame: plan ([agent-on-frame](agent-on-frame.md)), `framejacker/agent/` runner and guard, `scripts/frame_claude_install.sh` | [E77](evidence/e077.md) |
+| [#18](https://github.com/moral-kombat/framejacker/pull/18) | `9d32550` | Package I: mirror session tokens (`framejacker/sources/session.py`). Package J: neutral HUD mask fill (`hud.mask.fill_regions`, `scripts/evaluate_mask_fill.py`). The owner's 2026-11-03 decisions ([POC scope](poc-scope.md)) | [E78](evidence/e078.md); E79 is the next free ID |
 
 Package details and cloud numbers are recorded in [E77](evidence/e077.md) and
 [E78](evidence/e078.md). They are also in each PR description and in
 [hud-qualification](hud-qualification.md): see "Session tokens for the mirror
 source (2026-11-03)" and "Neutral mask fill (2026-11-03)".
 
-Baseline on `d4800bc`, Linux x86_64, Python 3.12.3, with every native and
+Baseline on `9d32550`, Linux x86_64, Python 3.12.3, with every native and
 capture-provider fixture built (cloud, not Frame):
 - `unittest discover`: 946 tests, 0 skipped.
 - CI's no-skip list: 37 modules, 636 tests.
@@ -351,7 +351,7 @@ Open a PR only when the owner asks, and merge only on the owner's word.
   owner in your own session. A cloud session cannot message the Frame
   session, which runs on the owner's computer.
 - **Timing tests:** under full-suite load, timing tests need margins. One
-  existing test was fixed for this (`5482f45`). Stress-run new process or
+  existing test was fixed for this (`0950231`). Stress-run new process or
   timing tests under CPU load before relying on them.
 
 ## Offline handoff, 2026-11-01
@@ -361,14 +361,14 @@ Delivery: packages A–H below are implemented, verified offline and merged in
 Do not redo them. The device steps in the last table still need approval, one
 at a time.
 
-Prepared against `main` `9885f43` (after PR #15) from an architecture review
+Prepared against `main` `ed20218` (after PR #15) from an architecture review
 scoped to work that needs no headset, because the owner is away from it. Line
-references are to `9885f43`. Nothing here authorizes a device operation, and
+references are to `ed20218`. Nothing here authorizes a device operation, and
 every gate in `framejacker/gates.py` stays closed.
 
 ### Baseline
 
-- CI on `main` `9885f43`: x86_64 and ARM64 runs passed.
+- CI on `main` `ed20218`: x86_64 and ARM64 runs passed.
 - Local cloud run (Linux x86_64, Python 3.12): 592 tests ran: 537 passed, 55
   skipped.
   Every skip is a capture-provider fixture this run did not build: 27
@@ -377,7 +377,7 @@ every gate in `framejacker/gates.py` stays closed.
 
 ### Blocker found in the review
 
-`scripts/mirror_recognize.py` lost `--detector` and `--still` in `3bd3d4c`
+`scripts/mirror_recognize.py` lost `--detector` and `--still` in `9b765ee`
 (the 2026-10-30 consolidation). Its parser is now lines 191-198, but
 `scripts/frame_session.sh:156` still passes both flags. The `stills` stage
 therefore exits with argparse code 2, and WP2 still capture cannot run.
@@ -424,7 +424,7 @@ records no SHA-256, so its stills fail `evaluate_detectors.py
    `ArgumentParser.parse_args`.
 5. Correct the three documents named above.
 
-Done when the contract test fails on `9885f43` and passes after the change. A
+Done when the contract test fails on `ed20218` and passes after the change. A
 test must also drive `mirror_recognize --capture --still` with patched
 `discover`/`MirrorSource` and a fake detector, producing a still and a report,
 and the resulting manifest entry must pass `--require-input-digests`.
@@ -457,7 +457,7 @@ disprove it with a test before changing code.
 5. Record the change in `docs/lifecycle-review.md`.
 
 Done when all four tests exist and pass, and each test that targets a defect
-fails on `9885f43`. Do not claim this explains the green input, the tag
+fails on `ed20218`. Do not claim this explains the green input, the tag
 mismatch or physical recovery.
 
 #### C. Device checkpoint artifact manifest (G3 prerequisite, small to medium)
@@ -678,7 +678,7 @@ and document the work. Do not stop after analysis or another plan.
   Preserve unrelated work, including observation_page; use the existing isolated checkout.
 - Read AGENTS.md, CONTRIBUTING.md, docs/README.md, docs/poc-scope.md, docs/live-capture.md,
   docs/status.md, docs/development.md and the relevant on-device procedures.
-- This handoff was prepared against main 85cf53cd99bb0abfc176b72d279a46dbec52ba4f after PR
+- This handoff was prepared against main 5237c95e58373931eff7c8a4c307fe79bdd8acac after PR
   #10 merged on 2026-10-31. Recheck current state; do not redo completed work or attempt to
   merge PR #10 again.
 - Active WPs: 1, 2, 7, 9, 10, 11, 12. Deferred: 3, 4, 5, 6, 8. The target is a fixed

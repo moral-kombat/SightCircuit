@@ -109,7 +109,7 @@ labels are taken up again after the HUD POC is accepted.
 
 [PR #10](https://github.com/moral-kombat/framejacker/pull/10) is merged.
 The implementation baseline reviewed for this checkpoint is
-`85cf53cd99bb0abfc176b72d279a46dbec52ba4f`. At the prepared baseline,
+`5237c95e58373931eff7c8a4c307fe79bdd8acac`. At the prepared baseline,
 **WP1, WP2, WP7, WP9, WP10, WP11 and WP12 remained open**; WP3–WP6 and WP8 were deferred. The implementation rows below include
 subsequent offline support; final evidence and acceptance live in status. Open
 means the package's acceptance is not yet evidenced, not that supporting code

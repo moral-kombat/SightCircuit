@@ -1,6 +1,6 @@
 # README history before the evidence migration
 
-Archived from `main` `41eadf8` on 2026-10-31. This preserves the previous
+Archived from `main` `153b261` on 2026-10-31. This preserves the previous
 README narrative and links; its next-step instructions are historical. Use the
 [current work order](live-capture.md#current-work-order) and
 [acceptance gates](live-capture.md#edge-hud-acceptance-gates) for current work.

@@ -963,7 +963,7 @@ inference took about 26–31 ms per frame in the runs below.
 
 **Strict-rule validation with the real default detector:**
 
-- On 881fea7 (zero fill), `live_pipeline.py --synthetic-check --synthetic-hud
+- On 33cd83d (zero fill), `live_pipeline.py --synthetic-check --synthetic-hud
   --seconds 3` ended `validation_failed`, exit 1, `hud_validation_mask_overlap`
   after 3 frames.
 - With the ring-mean fill, the same command ends `completed`, exit 0, with
@@ -975,7 +975,7 @@ inference took about 26–31 ms per frame in the runs below.
   gray levels and ends `completed` with every count 0.
 - `tests/test_hud_fill.py` runs the 127-level sweep through `HudStage` with
   both detectors, and both supervised commands with the default detector. It
-  failed on 881fea7: MobileNetSSD 93/127, and both commands ended
+  failed on 33cd83d: MobileNetSSD 93/127, and both commands ended
   `validation_failed`.
 - The [G1 rerun](live-capture.md#edge-hud-acceptance-gates) is therefore back
   on the default detector.
@@ -1161,7 +1161,7 @@ has the details.
 ## Observer scene precondition (2026-11-04)
 
 **What stopped the 2026-11-03 attempt.** The planner relays, from the Frame,
-that two observer runs (`--seconds 20`, checkout `dc5d9a3`) stopped in under
+that two observer runs (`--seconds 20`, checkout `7c72a4e`) stopped in under
 0.5 s with `observer_contour_budget`, before the bridge initialized and before
 any marker was shown. Their bright-contour counts were 229, then 2,680 with a
 TV in view, then 2,720 facing a plain wall that looked dim to the wearer.

@@ -15,7 +15,7 @@ recorded report: 10,686 bytes, SHA-256
 `9df0170ac49012f0ab9f43981f77cf90c5cae162bc2abde6d53d4857cf5c4b2c`.
 All ten recovered source files match their recorded SHA-256 pins. The source
 identity is the uncommitted visibility correction on dirty checkout
-`ee87e504f7fb4648c3e472b346a28f1d0b4ba70a`, not that commit alone. The archive
+`833c556abcf4f868849017844f9a8fc857506bd5`, not that commit alone. The archive
 and ARM64 binary have recorded digests but were not independently rehashed in
 this review. The recovered metadata/source artifacts stay local; no private
 images or calibration payloads are committed.

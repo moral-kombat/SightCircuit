@@ -582,7 +582,7 @@ files, and publication is all or nothing: if a later hard link fails, outputs
 this run already linked are withdrawn and the report gives
 `<kind>_publish_failed`; Ctrl+C or SIGTERM during publication also withdraws
 them, and the run is `cancelled`. The still is the native frame, not the
-960-pixel detector input that the flag saved before `3bd3d4c` removed it:
+960-pixel detector input that the flag saved before `9b765ee` removed it:
 `evaluate_detectors.py` applies the same conversion, so its baseline input
 equals what the live detector saw, and its `native-size` audit variant keeps a
 meaning. The report records `still_sha256` (of the PNG bytes written, checked
@@ -1767,7 +1767,7 @@ Both commands use generated input, with no overlay. The first uses the fixture
 detector, which reports no detections and loads no model. The second uses the
 default MobileNetSSD. Both end `completed` with exit 0 and
 `g5_software.status` `checked_unqualified`, and so does the second with
-`--validate-overlay`. With the zero-filled mask (881fea7) the second ended
+`--validate-overlay`. With the zero-filled mask (33cd83d) the second ended
 `validation_failed` with exit 1, because the detector reported the black
 footprint region itself as `tvmonitor`. The mask now refills that region from
 its surround ([HUD mask fill evaluation](#hud-mask-fill-evaluation)), and a
@@ -1999,7 +1999,7 @@ pixel, with every pixel opaque. They also replay V4's shape offline: two clear
 baseline reads, then the native marker on read 3, which must decode all four
 corner tags with zero tag and bit error. The compared marker function is
 unchanged from the V4 native source (SHA-256 `5ffc47f5…`, the
-`tools/overlay_bridge.cpp` committed in `bfc7aa7`). A passing run therefore
+`tools/overlay_bridge.cpp` committed in `8fb6e58`). A passing run therefore
 rules out a disagreement between the native generator and the observer
 template, so this comparison offers no candidate explanation for V4's frame-3
 tag/bit rejection, which remains unexplained. It does not exercise compositor

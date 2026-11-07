@@ -2045,7 +2045,7 @@ provider records metadata without retaining/exporting image FDs and blocks live
 reads. The earlier v3 ARM64 build and both suites (12 provider/layer tests and
 12 metadata-diagnostic tests) passed. The inactive bundle and active SteamVR
 service properties were received. A bounded metadata-only trial with independent
-systemd post-exit recovery was prepared for a trial. The received d5892f4 report
+systemd post-exit recovery was prepared for a trial. The received 391127a report
 shows a passing dummy recovery rehearsal, followed by worker and rollback
 systemctl errors. Configuration restoration is reported; SteamVR was later
 active/no drop-ins, with working UI/passthrough. No inspection report was produced

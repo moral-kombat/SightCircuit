@@ -1,6 +1,6 @@
 # Design review: architecture and implementation
 
-Dated snapshot, 2026-10-25, of revision `ee87e50`. It reviews the documented
+Dated snapshot, 2026-10-25, of revision `833c556`. It reviews the documented
 architecture against the code, the CI and the documentation, and proposes a
 prioritized set of improvements. Like the [capture review](capture-reference-review.md),
 it records reasoning at a point in time; [status](status.md) still owns
@@ -189,7 +189,7 @@ own file and generate the status matrix, and state each caveat once.
   fallback) behind the `Detector` interface with letterbox input; `--detector`
   in replay and mirror recognition; `--still` captures unannotated evaluation
   inputs; `scripts/evaluate_detectors.py` with a seed manifest and a format for
-  private Frame stills. The 2026-10-30 consolidation (`3bd3d4c`) dropped both
+  private Frame stills. The 2026-10-30 consolidation (`9b765ee`) dropped both
   mirror flags; they were restored on 2026-11-01, with the still saved at native
   size and its SHA-256 pinned in the manifest entry
   ([bounded mirror recognition](development.md#bounded-mirror-recognition)).
@@ -212,8 +212,8 @@ own file and generate the status matrix, and state each caveat once.
   ([E62](status.md#e62-keyframe-catch-up-realtime-replay-cloud-checks)).
   Frame measurement of the new version is pending.
 - Branch CI runs through pull requests (`push` is limited to `main`). All
-  checks passed on code commit `b8d2283`; the later documentation-only commit
-  `769eedf` did not trigger checks.
+  checks passed on code commit `7e2b67c`; the later documentation-only commit
+  `93b4d50` did not trigger checks.
 
 ## Next steps
 
