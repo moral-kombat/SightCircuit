@@ -36,6 +36,16 @@ class Skipping(unittest.TestCase):
         self.fail("never runs")
 """
 
+SLOW = """\
+import time
+import unittest
+
+
+class Slow(unittest.TestCase):
+    def test_takes_a_moment(self):
+        time.sleep(0.05)
+"""
+
 FAILING = """\
 import unittest
 
@@ -160,6 +170,71 @@ class NoSkipRunner(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         # The child inherited the ignore before the run (exit 3) and the default handler after it (exit 0).
         self.assertEqual(completed.stdout.split(), ["3", "0", "0", "True"])
+
+    def budget_file(self, **values):
+        path = self.tests_dir / "budget.json"
+        data = {"default_seconds": 30, "total_seconds": 900, "modules": {}}
+        data.update(values)
+        path.write_text(json.dumps(data))
+        return str(path)
+
+    def slow_module(self):
+        """A module whose one test takes 50 ms, so a 10 ms ceiling is over and the clean module's 0 ms is under."""
+        name = f"test_nsk_slow_{uuid.uuid4().hex[:8]}.py"
+        (self.tests_dir / name).write_text(SLOW)
+        self.written.append(name)
+        return name[:-3]
+
+    def test_a_budget_that_holds_passes_and_measures_without_a_durations_file(self):
+        stream = io.StringIO()
+        code = runner.run([f"tests/{self.clean}"], all_tests=True, tests_dir=self.tests_dir, stream=stream,
+                          budget=self.budget_file())
+        self.assertEqual(code, 0, stream.getvalue())
+        self.assertNotIn("time budget violation", stream.getvalue())
+        self.assertNotIn("slowest first", stream.getvalue())  # No durations file was asked for.
+
+    def test_a_module_over_its_ceiling_or_the_default_fails_with_the_module_its_time_and_the_ceiling(self):
+        slow = self.slow_module()
+        for ceilings in ({"modules": {slow: 0.01}}, {"default_seconds": 0.01}):
+            with self.subTest(ceilings=ceilings):
+                stream = io.StringIO()
+                budget = self.budget_file(**ceilings)
+                code = runner.run([f"tests/{self.clean}"], all_tests=True, tests_dir=self.tests_dir, stream=stream,
+                                  budget=budget)
+                output = stream.getvalue()
+                self.assertEqual(code, 1, output)
+                self.assertIn(f"1 time budget violation(s) against {budget}", output)
+                self.assertRegex(output, rf"{slow} took 0\.0\d\d s, over its 0\.01 s ceiling")
+                self.assertIn("never by skipping or shortening a test", output)
+                self.assertNotIn(f"{self.clean[:-3]} took", output)  # Under its ceiling, listed or default.
+                self.assertIn("\nOK", output)  # The tests themselves passed; the budget failed the run.
+
+    def test_the_total_is_enforced_too(self):
+        slow = self.slow_module()
+        stream = io.StringIO()
+        code = runner.run([f"tests/{slow}.py"], tests_dir=self.tests_dir, stream=stream,
+                          budget=self.budget_file(total_seconds=0.01))
+        self.assertEqual(code, 1)
+        self.assertRegex(stream.getvalue(), r"the run took 0\.0\d\d s, over the 0\.01 s total")
+
+    def test_a_malformed_budget_is_refused_before_the_run(self):
+        path = self.tests_dir / "budget.json"
+        for data in ({"default_seconds": "30", "total_seconds": 900}, {"total_seconds": 900},
+                     {"default_seconds": 30, "total_seconds": 900, "modules": {"x": "fast"}}):
+            with self.subTest(data=data):
+                path.write_text(json.dumps(data))
+                with self.assertRaisesRegex(ValueError, "must be numbers"):
+                    runner.load_budget(path)
+
+    def test_the_committed_budget_names_existing_modules_and_ci_enforces_it(self):
+        budget = runner.load_budget(ROOT / "tests/time_budget.json")
+        modules = {path.stem for path in (ROOT / "tests").glob("test_*.py")}
+        self.assertLessEqual(set(budget["modules"]), modules, "a ceiling names a module that does not exist")
+        self.assertTrue(all(value >= budget["default_seconds"] for value in budget["modules"].values()),
+                        "a listed ceiling below the default would be pointless")
+        self.assertGreater(budget["total_seconds"], sum(budget["modules"].values()) / 3)
+        workflow = (ROOT / ".github/workflows/check-jobs.yml").read_text()
+        self.assertEqual(workflow.count("run_tests_no_skips.py --all --budget tests/time_budget.json"), 2)
 
     def test_a_module_is_required(self):
         with self.assertRaises(SystemExit) as stop:

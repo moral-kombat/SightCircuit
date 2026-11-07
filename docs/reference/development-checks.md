@@ -94,6 +94,21 @@ The runner is the suite's entry point and does two more things there:
   tests, so class and module fixtures count with the tests they serve; what
   follows the last test goes to the last module. These are runner-CPU numbers
   for the planned suite time budget, never Frame measurements.
+- `--budget tests/time_budget.json` enforces the suite time budget (work-order
+  item B7): every module's wall time, measured as for `--durations`, against
+  its ceiling in the file (or the file's `default_seconds` for a module it
+  does not list), and the run against `total_seconds`. A violation fails the
+  run after the tests have finished, naming each module, its time and its
+  ceiling; the tests themselves still report their own result. CI passes the
+  option in both no-skip runs. The ceilings come from the cloud runner's
+  durations of 2026-11-07 (`test_frame_agent` 54 s, `test_bounded_worker`
+  48 s, the next nine between 8 and 18 s, everything else under 7 s, 308 s in
+  all) with about three times margin for a loaded runner: 180 s and 150 s for
+  the two largest, 30 to 60 s for the listed middle, a 30 s default and a
+  900 s total. A ceiling bounds runner time and is never a reason to skip or
+  shorten a test: raise it, with the measurement that needs it, when a module
+  legitimately grows. `tests/test_run_tests_no_skips.py` checks that every
+  listed ceiling names an existing module and that CI enforces the file.
 - Before the tests run it normalises SIGINT for the suite's children. A test
   process started with SIGINT ignored (a background job of a shell without job
   control) passes that ignore to every subprocess the tests signal, so the

@@ -163,7 +163,7 @@ jobs:
           PY
       - name: Run the dependency-free suite once; the modules built above may not skip
         run: |
-          python3 scripts/run_tests_no_skips.py --all \
+          python3 scripts/run_tests_no_skips.py --all --budget tests/time_budget.json \
             tests/test_overlay_bridge.py tests/test_capture_supervisor.py tests/test_capture_gpu_check.py \
             tests/test_shm_capture_check.py tests/test_mirror_check.py tests/test_capture_publication.py \
             tests/test_capture_import.py tests/test_capture_gpu_resources.py tests/test_capture_provider.py \
@@ -199,7 +199,8 @@ jobs:
             --report evaluation-report.json > /dev/null
       - name: Run the suite once; detector, pipeline, replay, mirror-recognition and seed tests may not skip
         run: |
-          .venv-replay/bin/python scripts/run_tests_no_skips.py --all tests/test_detection.py tests/test_evaluation.py \
+          .venv-replay/bin/python scripts/run_tests_no_skips.py --all --budget tests/time_budget.json \
+            tests/test_detection.py tests/test_evaluation.py \
             tests/test_pipeline.py tests/test_playback_clock.py tests/test_replay_source.py tests/test_mirror_recognize.py \
             tests/test_replay_window.py tests/test_overlay_bridge.py tests/test_live_pipeline.py \
             tests/test_hud_mask.py tests/test_hud_marker_check.py tests/test_hud_marker_observer.py \
