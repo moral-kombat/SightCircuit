@@ -98,7 +98,7 @@ runner results, not Frame results.
 | `SIGHTCIRCUIT_PYTHON=3.14 bash scripts/setup.sh` (uv) | built; `uv pip check` clean |
 | `.venv/bin/python scripts/smoke_check.py` | `status: passed`; MobileNet-SSD loads through OpenCV 4.13's Caffe importer, YOLOX through ONNX Runtime, Qt renders offscreen |
 | `evaluate_detectors.py --fetch --expect evaluation/seed-expected.json` | passed, 6 images, no failures, improvements or unpinned entries: the seed counts are unchanged under numpy 2.3.2 and OpenCV 4.13.0.90 |
-| `QT_QPA_PLATFORM=offscreen .venv-replay/bin/python -m unittest discover -s tests` | `Ran 1145 tests in 278.491s`, `OK (skipped=55)`; the skips are the capture-fixture and downloaded-asset modules that skip without their builds, as on any host without them (CI builds the fixtures and runs those modules under its no-skip gate on 3.12) |
+| `QT_QPA_PLATFORM=offscreen .venv-replay/bin/python -m unittest discover -s tests` | `Ran 1145 tests in 278.491s`, `OK (skipped=55)`; all 55 skips are capture-reference fixture tests (27 provider, 11 import, 9 resource, 8 publication) whose `build_capture_reference.sh --<mode>-fixes` builds were not run on this host; CI builds them and runs those modules under its no-skip gate on 3.12 |
 | Python 3.12 with the same files | `pip install --only-binary=:all: -r requirements-window.txt` under CPython 3.12 resolves to the unchanged pins (numpy 2.2.6, opencv-python-headless 4.12.0.88), `pip check` clean; `uv pip install --dry-run -r requirements-dev.txt` on that environment would make no changes. CI runs the 3.12 suites on the pull request |
 
 **The device step** (not performed here; the Frame manager runs it on the
