@@ -49,9 +49,13 @@ SESSION_TOKENS_NOT_REQUESTED = "session_tokens_not_requested"  # No session: the
 # reason say which.
 SESSION_TOKENS_NOT_REPORTED = "session_tokens_not_reported"
 SESSION_TOKENS_DECLARATION_FAILED = "session_tokens_declaration_failed"
+# The run stopped at a preparation check before the declaration (the bridge is not built), so nothing was read
+# under /proc; the report's reason names the stop.
+SESSION_TOKENS_NOT_DECLARED = "session_tokens_not_declared"
 SESSION_TOKENS_REPORT_INVALID = "session_tokens_report_invalid"  # The session report raised or failed this contract.
 UNRECORDED_SESSION_REASONS = (SESSION_TOKENS_NOT_REQUESTED, SESSION_TOKENS_NOT_REPORTED,
-                              SESSION_TOKENS_DECLARATION_FAILED, SESSION_TOKENS_REPORT_INVALID)
+                              SESSION_TOKENS_DECLARATION_FAILED, SESSION_TOKENS_NOT_DECLARED,
+                              SESSION_TOKENS_REPORT_INVALID)
 # ``MirrorSession.report()`` fields, plus ``recorded`` and the declaration's duration.
 RECORDED_SESSION_FIELDS = ("recorded", "declared", "undeclared", "frames_read", "first_change", "runtime_process",
                            "scope", "declaration_elapsed_ms")

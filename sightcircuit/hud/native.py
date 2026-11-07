@@ -2,8 +2,8 @@
 
 ``tools/overlay_bridge.cpp`` and ``tools/overlay_frame.hpp`` include the header
 instead of repeating Python values: ``HudConfig``, the calibration marker, the
-packet layout and opcodes, the panel limits and defaults, and the marker
-duration, display age and frame-size limits. ``scripts/hud_contract_header.py``
+packet layout and opcodes, the panel limits and defaults, the marker
+duration, display age and frame-size limits, and the bridge's connect budget. ``scripts/hud_contract_header.py``
 writes or checks it. ``kContractDigest`` pins every generated value, so a built
 bridge can report which contract it was compiled from.
 """
@@ -84,7 +84,8 @@ def _sections():
          [("kMarkerMinSeconds", "int", contract.MARKER_MIN_SECONDS),
           ("kMarkerMaxSeconds", "int", contract.MARKER_MAX_SECONDS),
           ("kMaxDisplayAgeNs", "std::uint64_t", contract.MAX_DISPLAY_AGE_NS),
-          ("kMaxSide", UINT32, contract.MAX_SIDE), ("kRgbaBytes", UINT32, contract.RGBA_BYTES)]),
+          ("kMaxSide", UINT32, contract.MAX_SIDE), ("kRgbaBytes", UINT32, contract.RGBA_BYTES),
+          ("kBridgeConnectBudgetSeconds", UINT32, contract.BRIDGE_CONNECT_BUDGET_SECONDS)]),
         ("Panel limits and defaults: sightcircuit.overlay.PANEL_LIMITS and PanelSettings",
          panel_limits + _record("PanelDefault", overlay.PanelSettings())),
     )

@@ -11,9 +11,9 @@ import threading
 import time
 
 from .gates import LIVE_HUD_OUTPUT
-from .hud.contract import (EXPIRING_FRAME_PREFIX_FORMAT, FRAME_PREFIX_FORMAT, HUD_CONFIG, MAX_DISPLAY_AGE_NS, MAX_SIDE,
-                           OPCODE_EXPIRING_FRAME, OPCODE_FRAME, OPCODE_SETTINGS, OPCODE_STOP, PACKET_HEADER_FORMAT,
-                           PACKET_MAGIC, RGBA_BYTES, SETTINGS_FORMAT)
+from .hud.contract import (BRIDGE_READY_WAIT_SECONDS, EXPIRING_FRAME_PREFIX_FORMAT, FRAME_PREFIX_FORMAT, HUD_CONFIG,
+                           MAX_DISPLAY_AGE_NS, MAX_SIDE, OPCODE_EXPIRING_FRAME, OPCODE_FRAME, OPCODE_SETTINGS, OPCODE_STOP,
+                           PACKET_HEADER_FORMAT, PACKET_MAGIC, RGBA_BYTES, SETTINGS_FORMAT)
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BRIDGE = ROOT / "artifacts/overlay-bridge/sightcircuit-overlay-bridge"
@@ -114,8 +114,9 @@ class OverlayClient:
             os.set_blocking(self.process.stdin.fileno(), False)
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
-        if not self.ready.wait(8) or not self.acknowledged or self.error:
-            error = self.error or "Overlay bridge did not initialize within eight seconds"
+        # The bridge's connect budget plus its margin: a bridge that gives up names the stop first.
+        if not self.ready.wait(BRIDGE_READY_WAIT_SECONDS) or not self.acknowledged or self.error:
+            error = self.error or f"Overlay bridge did not initialize within {BRIDGE_READY_WAIT_SECONDS} seconds"
             self.close()
             raise RuntimeError(error)
         self.writer = threading.Thread(target=self._write, daemon=True)
