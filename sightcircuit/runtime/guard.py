@@ -21,7 +21,12 @@ launcher runs inside ``sigterm_cancels()``, where SIGTERM raises
 ``CANCELLATION``), and ``cancelled(report, error)`` records either as a
 ``cancelled`` report with exit 128 + signal. A worker calls
 ``stop_on_signals()`` once: SIGINT and SIGTERM then set its stop event, so its
-own cleanup runs.
+own cleanup runs, and the supervisor is told the worker has armed.
+
+The supervision itself is ``sightcircuit.runtime.supervision``, the one
+primitive; this module applies the guard's policy to it (record the first
+signal and poll it, override an inherited ignore, the ``GRACE`` budgets) at
+both of its levels, and adds the guardian, the lifeline and the validators.
 """
 import contextlib
 import importlib
@@ -29,17 +34,23 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import select
 import signal
-import subprocess
 import sys
 import threading
-import time
 
-MAX_REPORT_BYTES = 256 * 1024
-COOPERATIVE_GRACE = 5.0
-TERM_GRACE = 1.0
-KILL_GRACE = 1.0
+if __name__ == "__main__":
+    # Run as a file (the guardian): import the checkout's packages, never siblings of this file.
+    sys.path[0] = str(Path(__file__).resolve().parents[2])
+from sightcircuit.runtime import supervision  # noqa: E402
+from sightcircuit.runtime.supervision import (  # noqa: E402,F401 - the primitive's names, kept where callers found them
+    GRACE, MAX_REPORT_BYTES, RAISE_ON_SIGNAL, RECORD_AND_POLL, Cancelled, Grace, SignalPolicy, Signals,
+    child_reaper, report_armed, supervise_owned,
+)
+
+COOPERATIVE_GRACE = GRACE.cooperative
+TERM_GRACE = GRACE.terminate
+KILL_GRACE = GRACE.kill
+GUARDIAN_STARTUP_SECONDS = 8  # The guardian's own start-up and teardown, beyond the worker's deadline.
 
 
 class StopRequested(BaseException):
@@ -80,279 +91,48 @@ def cancelled(report, error):
 
 
 def stop_on_signals(stop=None):
-    """A worker's cooperative stop: SIGINT and SIGTERM set ``stop`` (by default a new event), which is returned."""
+    """A worker's cooperative stop: SIGINT and SIGTERM set ``stop`` (by default a new event), which is returned.
+
+    This is also the worker's arm point: once the handlers are installed the
+    supervisor is told (``supervision.report_armed``), so a cancellation that
+    arrived while the worker was still starting is delivered now, to a
+    handler, and not earlier, to the default disposition.
+    """
     stop = threading.Event() if stop is None else stop
     for number in (signal.SIGINT, signal.SIGTERM):
         signal.signal(number, lambda *_: stop.set())
+    report_armed()
     return stop
+
+
+def cleanup_budget(default):
+    """Seconds a guarded worker may spend on one cleanup join; see ``supervision.cooperative_budget``."""
+    return supervision.cooperative_budget(default)
 
 
 @contextlib.contextmanager
 def cancellation():
-    if threading.current_thread() is not threading.main_thread():
-        raise ValueError("worker_supervisor_requires_main_thread")
-    received = []
-    previous = {}
-    def remember(number, _frame):
-        if not received:
-            received.append(number)
-    try:
-        numbers = [signal.SIGINT, signal.SIGTERM]
-        if hasattr(signal, "SIGHUP"):
-            numbers.append(signal.SIGHUP)
-        for number in numbers:
-            previous[number] = signal.signal(number, remember)
-        yield received
-    finally:
-        for number, handler in previous.items():
-            signal.signal(number, handler)
+    """Record SIGINT, SIGTERM and SIGHUP for the block (``RECORD_AND_POLL``); yields the recorded numbers, first first."""
+    with Signals(RECORD_AND_POLL) as handlers:
+        yield handlers.recorded
 
 
-@contextlib.contextmanager
-def child_reaper():
-    if not sys.platform.startswith("linux"):
-        yield
-        return
-    import ctypes
-    libc = ctypes.CDLL(None, use_errno=True)
-    previous = ctypes.c_int()
-    if libc.prctl(37, ctypes.byref(previous), 0, 0, 0) or libc.prctl(36, 1, 0, 0, 0):
-        raise OSError(ctypes.get_errno(), "cannot_establish_worker_child_reaper")
-    try:
-        yield
-    finally:
-        if libc.prctl(36, previous.value, 0, 0, 0):
-            raise OSError(ctypes.get_errno(), "cannot_restore_worker_child_reaper")
-
-
-def _reap_members(pgid):
-    """Reap exited members of process group ``pgid`` that are this process's children."""
-    while True:
-        try:
-            pid, _ = os.waitpid(-pgid, os.WNOHANG)
-        except ChildProcessError:
-            return
-        if not pid:
-            return
-
-
-def _group_exists(pgid):
-    try:
-        os.killpg(pgid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-
-
-def _reported_group(fd):
-    """The worker group a guardian wrote to ``fd`` and never confirmed gone, else None."""
-    os.set_blocking(fd, False)
-    try:
-        lines = os.read(fd, 32).decode("ascii", "replace").split()
-    except BlockingIOError:
-        return None
-    if len(lines) != 1 or not lines[0].isdigit() or int(lines[0]) <= 1:
-        return None  # Nothing reported, or the guardian confirmed its tree "reaped".
-    return int(lines[0])
+# The names the guard used before the primitive existed, for callers and tests that reached for them.
+_reap_members = supervision.reap_members
+_group_exists = supervision.group_exists
+_reported_group = supervision.reported_group
 
 
 def _contain_orphaned_group(pgid):
-    """SIGTERM, then SIGKILL, a killed guardian's worker group; True once it is gone.
-
-    The guardian never confirmed this group gone. While any member lives, or
-    the worker waits unreaped as this subreaper's child, ``pgid`` names it.
-    """
-    for number, grace in ((signal.SIGTERM, TERM_GRACE), (signal.SIGKILL, KILL_GRACE)):
-        try:
-            os.killpg(pgid, number)
-        except ProcessLookupError:
-            return True
-        deadline = time.monotonic() + grace
-        while True:
-            _reap_members(pgid)
-            if not _group_exists(pgid):
-                return True
-            if time.monotonic() >= deadline:
-                break
-            time.sleep(0.01)
-    return False
+    return supervision.contain_orphaned_group(pgid, GRACE)
 
 
-def _supervise_owned(command, base_report, timeout, validate, *, descendants=False,
-                     parent_fd=None, pass_fds=(), cleanup_grace=COOPERATIVE_GRACE,
-                     group_fd=None, nested_group_fd=None):
-    """Consume bounded bytes off-thread; a partial report can never block the watchdog.
-
-    SIGINT/TERM request cooperative worker shutdown first. Every escalation and
-    surviving process is reflected in cleanup_ok, independently of child claims.
-    Descendants must stay in the owned group; worker code cannot detach helpers.
-    A guardian writes its worker's group to ``group_fd``, then "reaped" once
-    that tree is gone. The supervisor reads ``nested_group_fd`` and contains an
-    unconfirmed group if the guardian is killed.
-    """
-    if descendants and not sys.platform.startswith("linux"):
-        raise ValueError("native_helper_supervision_requires_linux")
-    report = dict(base_report, status="error", exit_code=1, cleanup_ok=False)
-    process = reader = None
-    owned = {}
-    output = bytearray()
-    read_done = threading.Event()
-    read_errors = []
-    forced, termination_requested, tree_gone = False, False, False
-    failure = None
-    started = time.monotonic()
-
-    def read_report():
-        try:
-            while True:
-                data = process.stdout.read(min(8192, MAX_REPORT_BYTES + 1 - len(output)))
-                if not data:
-                    break
-                output.extend(data)
-                if len(output) > MAX_REPORT_BYTES:
-                    raise ValueError("worker_report_byte_limit")
-        except (OSError, ValueError) as error:
-            read_errors.append(str(error))
-        finally:
-            process.stdout.close()
-            read_done.set()
-
-    def group_exists():
-        if os.name != "posix":
-            return process.poll() is None
-        # poll reaps our direct child first; only then reap adopted group members.
-        if process.poll() is not None and sys.platform.startswith("linux"):
-            _reap_members(process.pid)
-        return _group_exists(process.pid)
-
-    def signal_group(number):
-        try:
-            if os.name == "posix":
-                os.killpg(process.pid, number)
-            elif process.poll() is None:
-                process.kill()
-        except ProcessLookupError:
-            pass
-
-    def wait_tree(seconds):
-        deadline = time.monotonic() + seconds
-        while group_exists():
-            if time.monotonic() >= deadline:
-                return False
-            time.sleep(0.01)
-        return True
-
-    with cancellation() as received, child_reaper():
-        try:
-            def parent_lost():
-                return parent_fd is not None and bool(select.select([parent_fd], [], [], 0)[0])
-            if parent_lost():
-                raise ValueError("supervisor_lifeline_closed_before_start")
-            extra = {"pass_fds": pass_fds} if os.name == "posix" else {}
-            process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                       bufsize=0, start_new_session=(os.name == "posix"), **extra)
-            report["worker_pid"] = process.pid
-            if group_fd is not None:
-                # A dead supervisor is detected below through the lifeline.
-                with contextlib.suppress(BrokenPipeError):
-                    os.write(group_fd, b"%d\n" % process.pid)
-            reader = threading.Thread(target=read_report, daemon=True)
-            reader.start()
-            deadline = started + timeout
-            while True:
-                if parent_lost():
-                    failure = "supervisor_lost"
-                    break
-                if received:
-                    failure = "cancelled"
-                    break
-                if time.monotonic() >= deadline:
-                    failure = "timed_out"
-                    break
-                if read_errors:
-                    raise ValueError(read_errors[0])
-                if process.poll() is not None:
-                    # A descendant may keep stdout open after the worker exits.
-                    if read_done.wait(0.05):
-                        break
-                    failure = "worker_exited_with_open_report_pipe"
-                    break
-                read_done.wait(0.02) if not read_done.is_set() else time.sleep(0.02)
-        except (OSError, ValueError) as error:
-            failure = "error"
-            report["reason"] = str(error)[:1024]
-        finally:
-            if process is not None:
-                if process.poll() is None:
-                    termination_requested = True
-                    if os.name == "posix":
-                        try:
-                            process.send_signal(signal.SIGTERM)
-                        except ProcessLookupError:
-                            pass
-                    else:
-                        forced = True  # Windows terminate cannot run Python finally blocks.
-                        process.terminate()
-                    try:
-                        process.wait(timeout=cleanup_grace)
-                    except subprocess.TimeoutExpired:
-                        pass
-                tree_gone = not group_exists()
-                if not tree_gone:
-                    forced = True
-                    signal_group(signal.SIGTERM)
-                    tree_gone = wait_tree(TERM_GRACE)
-                    if not tree_gone:
-                        signal_group(getattr(signal, "SIGKILL", signal.SIGTERM))
-                        tree_gone = wait_tree(KILL_GRACE)
-                if group_fd is not None and tree_gone:
-                    with contextlib.suppress(BrokenPipeError):
-                        os.write(group_fd, b"reaped\n")
-                orphan = (_reported_group(nested_group_fd) if nested_group_fd is not None and
-                          process.returncode is not None and process.returncode < 0 else None)
-                if orphan is not None:
-                    # A killed guardian ran no cleanup; its worker group is ours to end.
-                    _reap_members(orphan)
-                    signalled = _group_exists(orphan)
-                    orphan_gone = not signalled or _contain_orphaned_group(orphan)
-                    forced = forced or signalled
-                    tree_gone = tree_gone and orphan_gone
-                    owned.update(orphaned_worker_group=orphan, orphaned_worker_tree_signalled=signalled,
-                                 orphaned_worker_tree_reaped=orphan_gone)
-                reader.join(timeout=0.2)
-                forced = forced or (process.returncode is not None and process.returncode < 0)
-                owned.update(worker_pid=process.pid, worker_reaped=process.poll() is not None,
-                              worker_exit_code=process.returncode,
-                              worker_tree_reaped=tree_gone, report_reader_stopped=not reader.is_alive())
-            else:
-                owned.update(worker_reaped=False, worker_tree_reaped=False, report_reader_stopped=True)
-
-        if received:
-            failure = "cancelled"
-        try:
-            if read_errors:
-                raise ValueError(read_errors[0])
-            if process is None or not read_done.is_set():
-                raise ValueError("worker_report_incomplete")
-            candidate = json.loads(output)
-            validate(candidate, process.returncode)
-            report.update(candidate)
-        except (ValueError, TypeError) as error:
-            report.setdefault("reason", str(error)[:1024])
-            failure = failure or "invalid_worker_report"
-        report.update(owned)
-        report.update(worker_forced_termination=forced, worker_termination_requested=termination_requested,
-                      supervisor_elapsed_seconds=round(time.monotonic() - started, 3))
-        if failure:
-            report.update(status=failure, exit_code=128 + received[0] if received else 1)
-        # A cooperative cancellation may confirm cleanup, but timeout, invalid
-        # reports, nonzero contradictions or forced kills never establish it.
-        report["cleanup_ok"] = (report.get("cleanup_ok") is True and tree_gone and
-            read_done.is_set() and owned.get("report_reader_stopped") is True and
-            owned.get("worker_reaped") is True and not forced and failure in (None, "cancelled"))
-        if not report["cleanup_ok"] and report["exit_code"] == 0:
-            report.update(status="cleanup_failed", exit_code=1)
-    return report
+def _supervise_owned(command, base_report, timeout, validate, *, descendants=False, parent_fd=None, pass_fds=(),
+                     grace=GRACE, group_fd=None, nested_group_fd=None, progress=None):
+    """The guard's policy on the primitive: record-and-poll, an inherited ignore overridden, the guard's budgets."""
+    return supervise_owned(command, base_report, timeout, validate, descendants=descendants, parent_fd=parent_fd,
+                           pass_fds=pass_fds, grace=grace, group_fd=group_fd, nested_group_fd=nested_group_fd,
+                           progress=progress, signals=RECORD_AND_POLL)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -409,17 +189,22 @@ def _validate_guard_report(report, returncode):
         raise ValueError("invalid_guardian_report")
 
 
-def supervise(command, base_report, timeout, validate, *, descendants=False, validate_options=None):
+def supervise(command, base_report, timeout, validate, *, descendants=False, validate_options=None,
+              grace=GRACE, progress=None):
     """Run ``command`` and accept its JSON report only if ``validate`` does.
 
     ``validate`` must be a module-level function of a script in this directory;
     ``validate_options`` are passed to it as keyword arguments on every platform.
+    ``grace`` holds the worker's cleanup budgets (the guardian's own are derived
+    from them); ``progress`` receives each ``progress`` report the worker
+    streams, forwarded unchanged by the guardian.
     """
     reference = validator_reference(validate, validate_options)
     if not sys.platform.startswith("linux"):
         def bound(report, returncode):
             return validate(report, returncode, **reference["options"])
-        report = _supervise_owned(command, base_report, timeout, bound, descendants=descendants)
+        report = _supervise_owned(command, base_report, timeout, bound, descendants=descendants, grace=grace,
+                                  progress=progress)
         report["parent_death_containment"] = "unavailable_on_this_platform"
         return report
     # Only the calling process holds the write end. Worker/helper execs cannot
@@ -435,12 +220,15 @@ def supervise(command, base_report, timeout, validate, *, descendants=False, val
     guard_base = {"report_kind": "bounded_worker_guard"}
     options = {"command": command, "base_report": base_report, "timeout": timeout,
                "descendants": descendants, "parent_fd": read_fd, "group_fd": group_write,
-               "validator": reference}
+               "validator": reference, "grace": grace.as_dict()}
     try:
+        # The guardian gets GUARDIAN_STARTUP_SECONDS beyond the worker's deadline, and a cooperative
+        # grace that covers the longest cleanup the worker's budgets allow it (``Grace.for_supervisor_of``).
         guarded = _supervise_owned([sys.executable, str(Path(__file__).resolve()),
                                    "--guard", json.dumps(options)], guard_base,
-                                  timeout + 8, _validate_guard_report, pass_fds=(read_fd, group_write),
-                                  cleanup_grace=8, nested_group_fd=group_read)
+                                  timeout + GUARDIAN_STARTUP_SECONDS, _validate_guard_report,
+                                  pass_fds=(read_fd, group_write), grace=grace.for_supervisor_of(),
+                                  nested_group_fd=group_read, progress=progress)
     finally:
         for fd in (write_fd, read_fd, group_write, group_read):
             os.close(fd)
@@ -458,7 +246,7 @@ def supervise(command, base_report, timeout, validate, *, descendants=False, val
                   guardian_pid=guarded.get("worker_pid"), guardian_reaped=guarded.get("worker_reaped", False),
                   guardian_exit_code=guarded.get("worker_exit_code"),
                   guardian_forced_termination=guarded.get("worker_forced_termination", False),
-                  guardian_status=guarded.get("status"),
+                  guardian_status=guarded.get("status"), guardian_armed=guarded.get("worker_armed", False),
                   guardian_report_reader_stopped=guarded.get("report_reader_stopped", False),
                   worker_supervision_elapsed_seconds=report.get("supervisor_elapsed_seconds"),
                   supervisor_elapsed_seconds=guarded.get("supervisor_elapsed_seconds"))
@@ -476,9 +264,14 @@ def _guard_main(options):
     # The guardian imports no detector, decoder or VR library, and never runs
     # worker code in this process. Its watchdog survives a stalled inference.
     validate = load_validator(options.get("validator") or {})
+
+    def forward(report):
+        # The supervisor parses this line as an event, never as the guardian's report.
+        print(json.dumps({"event": "progress", "report": report}), flush=True)
     result = _supervise_owned(options["command"], options["base_report"], options["timeout"],
                              validate, descendants=options["descendants"],
-                             parent_fd=options["parent_fd"], group_fd=options.get("group_fd"))
+                             parent_fd=options["parent_fd"], group_fd=options.get("group_fd"),
+                             grace=Grace.from_dict(options.get("grace") or {}), progress=forward)
     report = {"report_kind": "bounded_worker_guard", "status": result["status"],
               "exit_code": result["exit_code"], "cleanup_ok": result["cleanup_ok"], "result": result}
     os.close(options["parent_fd"])
@@ -496,6 +289,4 @@ def _guard_main(options):
 if __name__ == "__main__":
     if len(sys.argv) != 3 or sys.argv[1] != "--guard":
         sys.exit(64)
-    # Run as a file: import validators as checkout packages, never as siblings of this file.
-    sys.path[0] = str(ROOT)
     sys.exit(_guard_main(json.loads(sys.argv[2])))

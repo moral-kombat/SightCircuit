@@ -50,6 +50,7 @@ from ..hud.validation import ValidationSink
 from ..pipeline import Pipeline, report_fields
 from ..sources.mirror import MirrorSource, capture
 from ..sources.polled import PolledSource
+from .guard import cleanup_budget
 from .synthetic import fixture_candidate
 
 
@@ -225,6 +226,8 @@ def run_pipeline(source, detector, sink, seconds, *, stop=None, max_fps=5, max_a
             report.update(source_cleanup_ok=True, sink_cleanup_ok=True, cleanup_ok=True)
             return
         stats = pipeline.stats
+        # The capture thread was joined for cleanup_budget(0.5) seconds: under the guard, the supervisor's
+        # cooperative grace less its reserve, so a slow thread is a verdict of the deadline, not of a fixed join.
         report["source_cleanup_ok"] = (not pipeline.capture_thread_started or
                                        (not pipeline.capture_thread_alive and polled.cleanup_ok is True))
         report.update(sink_clear_ok=stats.sink_clear_ok, sink_close_ok=stats.sink_close_ok,
@@ -238,7 +241,7 @@ def run_pipeline(source, detector, sink, seconds, *, stop=None, max_fps=5, max_a
     pipeline = run_report(report, SYNTHETIC, stop, polled, lambda: detector, close=close,
                           sinks=(validation, sink) if validation is not None else (sink,), hud=hud,
                           threshold=threshold, max_fps=max_fps, max_age_ms=max_age_ms, seconds=seconds,
-                          join_timeout=0.5)
+                          join_timeout=cleanup_budget(0.5))
     if pipeline is not None and validation is not None:
         add_validation(report, validation, pipeline, max_age_ms=max_age_ms, max_fps=max_fps, seconds=seconds)
     return report

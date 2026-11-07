@@ -379,16 +379,22 @@ class BoundedWorkerTests(unittest.TestCase):
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.addCleanup(self.finish, process)
         deadline = time.monotonic() + 8
-        # Wait for the real worker's SIGTERM handler, not an arbitrary sleep.
+        # Wait for the real worker's SIGTERM handler, not an arbitrary sleep. The kernel lists a
+        # forked child before it has exec'd, with its parent's caught signals and command line, so
+        # the candidate must be the exec'd worker (its own command line) before SigCgt means anything.
         while True:
             self.assertIsNone(process.poll())
             children = child_pids(process.pid)
             if children:
                 children = child_pids(children[0])
             if children:
-                status = Path(f"/proc/{children[0]}/status").read_text()
-                mask = int(next(line.split()[1] for line in status.splitlines() if line.startswith("SigCgt:")), 16)
-                if mask & (1 << (signal.SIGTERM - 1)):
+                try:
+                    status = Path(f"/proc/{children[0]}/status").read_text()
+                    cmdline = Path(f"/proc/{children[0]}/cmdline").read_bytes()
+                except FileNotFoundError:
+                    status, cmdline = "", b""
+                mask = int(next((line.split()[1] for line in status.splitlines() if line.startswith("SigCgt:")), "0"), 16)
+                if b"--synthetic-worker" in cmdline and mask & (1 << (signal.SIGTERM - 1)):
                     break
             self.assertLess(time.monotonic(), deadline)
             time.sleep(0.005)
@@ -399,4 +405,44 @@ class BoundedWorkerTests(unittest.TestCase):
         shown = json.dumps(report, indent=2, sort_keys=True)
         self.assertEqual(report["status"], "cancelled", shown)
         self.assertTrue(report["cleanup_ok"], shown)
+        self.assertTrue(report["worker_armed"], shown)
+        self.assertFalse(report["worker_forced_termination"], shown)
         self.assertFalse(report["vr_runtime_initialized"], shown)
+
+    def test_a_cancellation_before_the_worker_arms_waits_for_its_handler(self):
+        # The window the probe above used to hit, made deterministic: the worker has exec'd but
+        # installs its handlers 0.4 s later; the launcher is signalled as soon as the worker exists.
+        process = self.launch("slow_arm")
+        self.wait_file("started", process)
+        process.send_signal(signal.SIGTERM)
+        report = self.result(process)
+        shown = json.dumps(report, indent=2, sort_keys=True)
+        self.assertEqual(report["status"], "cancelled", shown)
+        self.assertTrue(report["cleanup_ok"], shown)
+        self.assertTrue(report["worker_armed"] and report["guardian_armed"], shown)
+        self.assertFalse(report["worker_forced_termination"], shown)
+        self.assertEqual(report["worker_exit_code"], 130, shown)
+        self.assertTrue((self.directory / "ready").exists(), "the worker was ended before it armed")
+
+    def test_a_worker_that_never_arms_is_ended_after_the_arm_wait_and_reported_forced(self):
+        process = self.launch("never_arms")
+        self.wait_file("ready", process)
+        started = time.monotonic()
+        process.send_signal(signal.SIGTERM)
+        report = self.result(process)
+        elapsed = time.monotonic() - started
+        shown = json.dumps(report, indent=2, sort_keys=True)
+        self.assertEqual(report["status"], "cancelled", shown)
+        self.assertFalse(report["worker_armed"], shown)
+        self.assertTrue(report["worker_forced_termination"], shown)
+        self.assertFalse(report["cleanup_ok"], shown)
+        # The fixture's budgets: arm 0.8, cooperative 1.0 (SIGTERM ignored), TERM 0.3 (ignored), then KILL.
+        self.assertGreaterEqual(elapsed, 0.8 + 1.0 + 0.3, shown)
+        self.assertLess(elapsed, 8, shown)
+
+    def test_progress_events_stream_through_the_guardian_to_the_launcher(self):
+        report = self.result(self.launch("progress"))
+        self.assertEqual(report["progress_snapshots"], [{"progress_count": 1}, {"progress_count": 2}, {"progress_count": 3}])
+        self.assertEqual((report["status"], report["exit_code"], report["progress_count"]),
+                         ("insufficient_fragment_growth", 2, 3))
+        self.assertTrue(report["worker_armed"])
