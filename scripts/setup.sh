@@ -25,7 +25,7 @@ case "$venv_version" in
     *) echo "The existing .venv is Python $venv_version; the tested versions are 3.12 and 3.14. Remove it and rerun setup." >&2; exit 1 ;;
 esac
 
-uv pip sync --python "$PROJECT_ROOT/.venv/bin/python" "$PROJECT_ROOT/requirements-dev.txt"
+uv pip sync --require-hashes --python "$PROJECT_ROOT/.venv/bin/python" "$PROJECT_ROOT/requirements-dev.lock"
 uv pip check --python "$PROJECT_ROOT/.venv/bin/python"
 "$PROJECT_ROOT/.venv/bin/python" "$PROJECT_ROOT/scripts/fetch_smoke_assets.py"
 

@@ -26,7 +26,8 @@ Decoder integration tests are skipped when PyAV is unavailable.
 ## File-decoding environment
 
 `bash scripts/setup_replay.sh` creates a separate Python 3.12 or 3.14
-`.venv-replay` and installs the pinned binary wheel in `requirements-replay.txt`.
+`.venv-replay` and installs the hashed lock `requirements-replay.lock` (the
+readable pin is `requirements-replay.txt`; see [hashed locks](../development.md#hashed-locks-2026-11-07)).
 Set `SIGHTCIRCUIT_PYTHON=/path/to/python3.14` (or `python3.12`) if the default
 `python3` is another version; the script refuses untested versions.
 This check does not need the full desktop requirements or `uv`.
@@ -67,7 +68,8 @@ bash scripts/setup_window.sh
 .venv-replay/bin/python scripts/replay_window.py /path/to/recording.mp4
 ```
 
-Setup extends `.venv-replay` using `requirements-window.txt` and verifies the
+Setup extends `.venv-replay` from the hashed lock `requirements-window.lock`
+(the readable pins are in `requirements-window.txt`) and verifies the
 existing model/image fixtures. The window runs PyAV and CPU MobileNet-SSD on a
 worker thread through the shared pipeline, keeps one latest annotated result,
 and presents it on the Qt thread. The optional VR panel is a pipeline sink fed

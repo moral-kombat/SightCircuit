@@ -1,3 +1,4 @@
 # File-decoding check only; CPython 3.12 and 3.14 Linux ARM64/x86_64 wheels available.
+# Installed through requirements-replay.lock; after editing, run: bash scripts/compile_locks.sh
 # PyAV bundles FFmpeg libraries; no separate ffmpeg executable is required.
 av==16.1.0
