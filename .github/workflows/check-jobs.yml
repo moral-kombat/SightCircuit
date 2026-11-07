@@ -168,7 +168,7 @@ jobs:
             tests/test_shm_capture_check.py tests/test_mirror_check.py tests/test_capture_publication.py \
             tests/test_capture_import.py tests/test_capture_gpu_resources.py tests/test_capture_provider.py \
             tests/test_capture_provider_check.py tests/test_capture_layer_config.py \
-            tests/test_capture_service_lifecycle.py tests/test_capture_layer_trial.py
+            tests/test_capture_service_lifecycle.py tests/test_capture_layer_trial.py tests/test_supervision.py
 
   replay:
     # The decoder-only and the full replay-window environments, each exercised
@@ -204,7 +204,7 @@ jobs:
             tests/test_replay_window.py tests/test_overlay_bridge.py tests/test_live_pipeline.py \
             tests/test_hud_mask.py tests/test_hud_marker_check.py tests/test_hud_marker_observer.py \
             tests/test_observer_scene.py \
-            tests/test_display_expiry.py tests/test_bounded_worker.py tests/test_overlay_cleanup.py \
+            tests/test_display_expiry.py tests/test_bounded_worker.py tests/test_supervision.py tests/test_overlay_cleanup.py \
             tests/test_frame_session.py tests/test_generate_status.py tests/test_hud_qualification.py \
             tests/test_capture_context.py tests/test_scripts_boundary.py tests/test_gates.py tests/test_hud_contract.py \
             tests/test_frame_session_commands.py tests/test_frame_session_manifest.py tests/test_checkpoint_manifest.py \

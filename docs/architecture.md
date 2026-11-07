@@ -129,7 +129,7 @@ and every production gate stays closed until its acceptance row passes.
 
 ### Supervision and lifecycle
 
-Today, child supervision and signal handling exist in six places: the runtime
+Child supervision and signal handling existed in six places: the runtime
 guard (the only one that reaps a whole process group), the bounded worker in
 `runtime/process.py`, the agent runner, the paused capture supervisor, the
 overlay client and the shared-memory check. They differ in grace periods, in
@@ -138,8 +138,12 @@ is treated. The plan replaces them with one primitive in `sightcircuit/runtime`,
 seeded from the guard: owned-session spawning, a hold-and-arm protocol around
 process start, group termination with reaping, deadline-based cleanup verdicts,
 a declared policy for inherited signal dispositions, progress streaming and one
-report block. Adoption order is the agent runner, then the live pipeline and
-the mirror launcher, then the capture supervisor.
+report block. **Implemented so far:** the primitive itself,
+[`runtime/supervision.py`](reference/pipeline.md#the-supervision-primitive),
+and the guard on it (work-order item B3), with an arm handshake that closes
+the window in which a cancellation reached a worker before its handlers were
+installed. Adoption by the agent runner, then the live pipeline and the mirror
+launcher, then the capture supervisor remains planned (B4 to B6).
 
 ### Native bridge
 
