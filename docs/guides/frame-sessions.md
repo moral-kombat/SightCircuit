@@ -271,6 +271,7 @@ an enforcement test would observe prompts or refusals that come from the
 missing trust and not from the guard. Check `claude doctor` for that line
 before the test; this guide records the condition and does not instruct a
 change to the device.
+
 `scripts/frame_claude_install.sh` runs the Phase 0 stages with a status line
 and a breakpoint before each stage; the procedure is preserved in the
 [Phase 0 procedure](../history/agent-on-frame-2026-11-01.md#phase-0-install-and-verify-manual-owner).
