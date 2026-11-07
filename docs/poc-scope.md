@@ -117,20 +117,21 @@ is absent.
 
 | WP | Current position | Work that can advance offline | Remaining acceptance |
 | --- | --- | --- | --- |
-| 1 | Audit implemented; two independent preprocessing/scoring defects fixed; E61 unresolved | Pinned source/model/runtime tensors and controlled variants; [E73](evidence/e073.md) | Approved original still/reference digest and inspection for E61 reproduction |
-| 2 | Annotation coverage and seed comparison verified offline | Shared evaluator distinguishes factual presence/absence/boxes; [E73](evidence/e073.md) | Representative factual Frame labels, including rug/sofa, before a detector-default decision |
+| 1 | Audit implemented; two independent preprocessing/scoring defects fixed; the E61 miss reproduced file-only on Frame with its digest verified, variants indistinguishable on that image ([E80](evidence/e080.md)) | Pinned source/model/runtime tensors and controlled variants; [E73](evidence/e073.md) | An explanation of the miss, or attribution to the image/model with evidence; the 2026-11-03 re-run reproduces it without explaining it |
+| 2 | Five unboxed Frame stills captured and scored ([E81](evidence/e081.md)); POC object switched to chair | Shared evaluator distinguishes factual presence/absence/boxes; [E73](evidence/e073.md) | Inspected boxes and more representative stills before a detector-default decision; five presence-only stills are not enough |
 | 7 | Complete offline | 75 per-entry records, generated matrix, concise README, preserved history and checked links; [E74](evidence/e074.md), [E75](evidence/e075.md) | Maintenance only; no device requirement |
-| 9 | Schema/G4 design verified offline; historical V4 device attempt rejected | Exact context/lifetime/margin/provenance checks; [G4 method](hud-qualification.md), [V4 evidence](evidence/e075.md) | An accepted bounded observation after G2, eye/composition/all-copy/motion-limit evidence and reviewed mapping |
-| 10 | V4 report/source identity recovered; software termination explained; physical failure unresolved | Verified original report, ten matched source/test files and termination timeline; [E75](evidence/e075.md); shared safeguards [E72](evidence/e072.md) | Existing camera/compositor logs and exact runtime versions for the green event; evidenced physical failure account and wearer-confirmed recovery |
+| 9 | Schema/G4 design verified offline; historical V4 device attempt rejected; the 2026-11-03 attempt stopped at the observer's contour budget before any marker was shown ([E83](evidence/e083.md)) | Exact context/lifetime/margin/provenance checks; [G4 method](hud-qualification.md), [V4 evidence](evidence/e075.md); a scene precondition that measures marker-detection risk rather than raw bright blobs, with diagnostics in the rejection report | A new approval after the precondition change, then an accepted bounded observation, then eye/composition/all-copy/motion-limit evidence and reviewed mapping |
+| 10 | G2 closed on 2026-11-03: software termination explained ([E75](evidence/e075.md)), saved logs analyzed without finding the cause of the green input, recovery procedure rehearsed by the owner ([E79](evidence/e079.md)) | Verified original report, ten matched source/test files and termination timeline; [E75](evidence/e075.md); shared safeguards [E72](evidence/e072.md) | None for the gate; the cause of the green input stays unknown and any green input aborts a run |
 | 11 | Feedback/expiry telemetry and default-off diagnostic design ready offline | Native-mask tests, bounded validation ledger and report template; [E74](evidence/e074.md) | Reviewed diagnostic implementation, qualified mapping, head-motion exclusion and physical expiry evidence |
 | 12 | Shared bounded synthetic loop verified; production closed | Native padded masking, identity/context/age checks and native validation; [E72](evidence/e072.md) | G2–G5, representative detector evidence and combined 60-second headset acceptance |
 
-[G1 passes offline; G2 is open; G3 has a rejected historical attempt; G5/G6 have
-not run; G4 remains
+[G1 passes offline; G2 closed on 2026-11-03; G3 has a rejected historical
+attempt and one approved run pending; G5/G6 have not run; G4 remains
 unqualified](live-capture.md#edge-hud-acceptance-gates). A
 [proposed G4 qualification method](hud-qualification.md#proposed-g4-method) now
 defines the missing evidence; proposal/schema validation is not qualification.
-The critical path is **WP10 → WP9 observation → G4 qualification → WP11 → WP12**. WP1/WP2 and WP7 can advance alongside it.
+The critical path is now **WP9 observation → G4 qualification → WP11 → WP12**.
+WP1/WP2 and WP7 can advance alongside it.
 Offline completion does not close a package whose acceptance requires Frame.
 
 Use the [execution prompt](execution-prompt.md) to complete all unblocked
@@ -317,7 +318,7 @@ none opens a gate in `sightcircuit/gates.py`.
 | WP9 / G3 | One bounded marker-observer run with the owner wearing the headset, approved for after G2 closes and the recovery rehearsal. It follows the [device checkpoint](hud-qualification.md#next-device-checkpoint) and a verified checkpoint manifest. |
 | Catch-up session | One session through `scripts/frame_session.sh`. It covers the E47 replay and VR-panel regression, the E48 mirror regression, the replay pacing measurement, and WP2 stills with the evaluation. The stills include the bottle in view and out of view, the rug, the sofa and a chair. |
 | WP1 | If the original E61 still exists on Frame, its digest is checked locally; nothing is uploaded. If it is gone, WP1 is retired as unreproducible and WP2's new stills take its place. |
-| POC object | **Bottle**. Both detectors have the class, and it is easy to move in and out of view for the expiry check. If the catch-up stills show weak bottle detection on Frame, chair is the fallback; switching needs a new decision. |
+| POC object | **Chair** (changed on 2026-11-04). The first choice was a bottle, with chair as the fallback if bottle detection proved weak on Frame. In the 2026-11-03 catch-up stills, neither detector reported the bottle above 0.05 in the one still where the owner confirmed it was clearly in view. Both found the chair (MobileNet-SSD 0.98, YOLOX-Nano 0.78), consistent with earlier Frame runs (E17, E47, E48). That is five unboxed stills, so the switch is an owner decision, not a detector evaluation. The catch-up results are not yet recorded as evidence. |
 | Arrow tolerance | The arrow is one of eight directions, or a dot near the centre. It must point toward the side of the view where the object is. No bearing accuracy is claimed. |
 | Strip edge | Lower right (the current `HudConfig`). Choosing among several named positions comes after acceptance. Each position needs its own qualified mapping, because a mask is bound to its configuration digest. |
 | Mask fill (G5, E76) | The coder tests a neutral fill for the masked area offline. The strict overlap rule stays as it is. |

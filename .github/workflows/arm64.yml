@@ -3,11 +3,48 @@ name: ARM64 checks
 # Steam Frame is ARM64. These run the same synthetic native and Python suites
 # that were previously repeated by hand on the headset; they do not replace
 # device validation of drivers, SteamVR or cameras.
+#
+# Runs on main pushes and on demand, not on pull requests: x86_64 covers each
+# pull request, and an ARM64 run of a branch is one click away (Actions, "ARM64
+# checks", "Run workflow", pick the branch; tick "pacing" for the runner-CPU
+# replay reports). The documentation-only list matches checks.yml and docs.yml.
 on:
   push:
     branches: [main]
-  pull_request:
+    paths-ignore:
+      - 'docs/evidence/**'
+      - 'docs/status.md'
+      - 'docs/status-data.json'
+      - 'docs/architecture.md'
+      - 'docs/README.md'
+      - 'docs/agent-on-frame.md'
+      - 'docs/capture-reference-review.md'
+      - 'docs/design-review.md'
+      - 'docs/documentation-plan.md'
+      - 'docs/execution-prompt.md'
+      - 'docs/lifecycle-review.md'
+      - 'docs/morning-checklist.md'
+      - 'docs/poc-scope.md'
+      - 'docs/project-history.md'
+      - 'docs/steam-frame-camera.md'
+      - 'docs/vr-overlay.md'
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
+      - 'CONTRIBUTING.md'
+      - 'LICENSE'
+      - 'README.md'
+      - 'THIRD_PARTY.md'
+      - '.github/instructions/**'
   workflow_dispatch:
+    inputs:
+      pacing:
+        description: Replay the synthetic stand-in in real time and upload runner-CPU reports (not Frame results)
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.sha }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -17,4 +54,4 @@ jobs:
     uses: ./.github/workflows/check-jobs.yml
     with:
       runner: ubuntu-24.04-arm
-      pacing: true  # Realtime replay of the synthetic stand-in; uploads runner-CPU reports, not Frame results.
+      pacing: ${{ github.event_name == 'workflow_dispatch' && inputs.pacing }}
