@@ -19,7 +19,7 @@ if not __package__:
 
 from sightcircuit.convert import native_bgr
 from sightcircuit.detection import DEFAULT_DETECTOR, DETECTORS, POC_THRESHOLD
-from sightcircuit.runtime import output, process
+from sightcircuit.runtime import output
 from sightcircuit.runtime.live import new_mirror_report as new_report, run_recognition
 from sightcircuit.sources.mirror import launch
 from sightcircuit.sources.mirror_device import discover
@@ -61,32 +61,24 @@ def write_still(reservation, processed, detector):
             "still_source": frame.source, "still_sequence": frame.sequence, "still_scope": STILL_SCOPE}
 
 
-def _worker(job, seconds, outputs, sender, stop, expected_parent, *, backend_factory=None, detector_factory=None):
-    """``outputs`` maps "preview"/"still" to reservations; files are written after the source closes."""
-    def send(report, event="progress"):
-        process.send_report(sender, report, event)
+def _worker(job, seconds, outputs, progress, stop, *, backend_factory=None, detector_factory=None):
+    """The supervised worker (``sources.mirror.run_worker``): recognition, then the images; returns the report.
 
-    outputs = outputs or {}
+    ``outputs`` maps "preview"/"still" to reservations; files are written after
+    the source closes. ``progress`` receives the recognizer's snapshots.
+    """
     report = new_report()
     try:
-        if not process.enter_worker(expected_parent):
-            return
-        report, last = run_recognition(job["candidate"], seconds, stop, send, max_fps=job["max_fps"],
+        report, last = run_recognition(job["candidate"], seconds, stop, progress, max_fps=job["max_fps"],
                                        threshold=job["threshold"], detector=job["detector"],
                                        backend_factory=backend_factory, detector_factory=detector_factory)
         if last is not None and "preview" in outputs:
             report.update(write_preview(outputs["preview"], last.image))
         if last is not None and "still" in outputs:
             report.update(write_still(outputs["still"], last, report.get("detector", {}).get("name")))
-        send(report, "result")
     except Exception as error:
         report.update(status="error", reason="worker_failed", error=str(error))
-        try:
-            send(report, "result")
-        except (OSError, BrokenPipeError):
-            pass
-    finally:
-        sender.close()
+    return report
 
 
 def resolved(path):

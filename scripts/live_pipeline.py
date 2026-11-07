@@ -14,6 +14,7 @@ from sightcircuit.hud import HUD_CONFIG, HudPipelineAdapter
 from sightcircuit.overlay import OverlaySink
 from sightcircuit.runtime.guard import stop_on_signals, supervise
 from sightcircuit.runtime.live import run_pipeline
+from sightcircuit.runtime.supervision import emit_event
 from sightcircuit.runtime.synthetic import FixtureDetector, HeadlessSink, SyntheticSource, synthetic_hud_calibration
 
 # "real" names the default model, as before the registry choices existed.
@@ -38,7 +39,9 @@ def _worker(options):
         sink = (OverlaySink(hud=HUD_CONFIG if hud_mode else None)
                 if options.get("validate_overlay") else HeadlessSink())
         hud = HudPipelineAdapter(source, sink, synthetic_hud_calibration(), HUD_CONFIG) if hud_mode else None
-        report = run_pipeline(source, detector, sink, options["seconds"], stop=stopped, hud=hud)
+        # Snapshots stream to the launcher as progress events on the report stream; the report is the result.
+        report = run_pipeline(source, detector, sink, options["seconds"], stop=stopped, hud=hud,
+                              progress=lambda snapshot: emit_event("progress", snapshot))
         report["detector"] = name
         report["overlay_validation_only"] = bool(options.get("validate_overlay"))
         report["sink_kind"] = "native_overlay_validation" if options.get("validate_overlay") else "headless"
@@ -67,7 +70,8 @@ def validate_worker_report(report, returncode):
         raise ValueError("invalid_pipeline_worker_report")
 
 
-def supervise_synthetic(options, *, startup_seconds=15, cleanup_seconds=5):
+def supervise_synthetic(options, *, startup_seconds=15, cleanup_seconds=5, progress=None):
+    """Run the synthetic worker under the guard; ``progress`` receives its report snapshots, at most one a second."""
     if not 0.05 <= options.get("seconds", 0) <= 60:
         raise ValueError("synthetic_duration_out_of_bounds")
     base = {"report_kind": "synthetic_recognition_pipeline", "source_kind": "synthetic",
@@ -75,7 +79,7 @@ def supervise_synthetic(options, *, startup_seconds=15, cleanup_seconds=5):
             "hardware_trial_ready": False, "vr_runtime_initialized": False}
     return supervise([sys.executable, str(Path(__file__).resolve()), "--synthetic-worker", json.dumps(options)],
                      base, startup_seconds + options["seconds"] + cleanup_seconds,
-                     validate_worker_report, descendants=bool(options.get("validate_overlay")))
+                     validate_worker_report, descendants=bool(options.get("validate_overlay")), progress=progress)
 
 
 def main(argv=None):

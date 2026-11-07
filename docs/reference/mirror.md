@@ -26,6 +26,25 @@ Raw buffers are bounded at 64 MiB and dimensions at 16 Mi pixels; samples skip
 padding and chroma. The supervisor enforces the driver deadline and handles
 Ctrl+C/SIGTERM; Linux parent-death signaling stops the worker if its launcher dies.
 
+Since 2026-11-07 (work-order item B5) the worker runs under the
+[supervision primitive](pipeline.md#the-supervision-primitive) instead of a
+spawned `multiprocessing` worker. `sources.mirror.launch` names the command's
+module-level worker function and starts an interpreter that imports and runs
+it (`run_worker`): the worker enters with the parent-death guard, arms its
+stop event, streams the capture's snapshots as `progress` events and ends
+with a `result` event whose `exit_code` (0 for `captured` or `recognized`
+with cleanup confirmed, else 1) is also its process exit code. The launcher's
+report keeps every field and meaning of the earlier supervisor (`worker_pid`,
+`worker_exit_code`, `worker_forced_termination`, `worker_elapsed_ms`,
+`cleanup_ok`, `exit_code`; `timed_out` with `worker_deadline`, `error` with
+`worker_exited_without_result` or `worker_exit_failure`, `cancelled` with
+`signal`) and adds the primitive's (`worker_armed`, `worker_reaped`,
+`worker_tree_reaped`, `report_reader_stopped`, `worker_termination_requested`,
+`supervisor_elapsed_seconds`). The cleanup budgets are the earlier ones:
+half a second of cooperative stop after SIGTERM, then one second each for
+SIGTERM and SIGKILL on the worker's group (`WORKER_GRACE`); a cancellation
+first waits up to one second for a worker that has not yet armed.
+
 The launcher is the shared `sightcircuit/sources/mirror.py` `launch`, which mirror
 recognition also uses. An unsuitable `--preview` path stops it before the worker
 starts. The worker writes the reserved grayscale PNG after capture has closed,

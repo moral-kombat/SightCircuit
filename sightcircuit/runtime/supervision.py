@@ -58,6 +58,7 @@ import contextlib
 from dataclasses import dataclass, asdict
 import json
 import os
+from pathlib import Path
 import select
 import signal
 import subprocess
@@ -68,6 +69,10 @@ import time
 MAX_REPORT_BYTES = 256 * 1024
 ARMED_FD_VARIABLE = "SIGHTCIRCUIT_ARMED_FD"
 COOPERATIVE_GRACE_VARIABLE = "SIGHTCIRCUIT_COOPERATIVE_GRACE"
+SUPERVISOR_PID_VARIABLE = "SIGHTCIRCUIT_SUPERVISOR_PID"
+PR_SET_PDEATHSIG = 1
+ROOT = Path(__file__).resolve().parents[2]
+WORKER_PACKAGES = ("sightcircuit", "scripts", "tests")  # Where a worker function may live (``load_function``).
 RECORD, RAISE = "record", "raise"
 OVERRIDE, HONOUR = "override", "honour"
 
@@ -240,6 +245,77 @@ def report_armed():
         with contextlib.suppress(OSError):
             os.close(fd)
     return True
+
+
+def enter_worker(number=signal.SIGTERM):
+    """A supervised worker's parent-death guard; False if its supervisor is already gone.
+
+    On Linux the worker asks for ``number`` (SIGTERM, which ``guard.stop_on_signals``
+    turns into a cooperative stop) when its parent thread dies, so a worker is
+    not stranded by a supervisor killed during a driver call. The check against
+    ``SIGHTCIRCUIT_SUPERVISOR_PID`` (set by ``supervise_owned``) closes the gap in
+    which the parent died before the request was made. Elsewhere, or outside a
+    supervisor, it only reports True.
+    """
+    if sys.platform.startswith("linux"):
+        import ctypes
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.prctl(PR_SET_PDEATHSIG, int(number), 0, 0, 0) != 0:
+            raise OSError(ctypes.get_errno(), "cannot_enable_parent_death_signal")
+    expected = os.environ.get(SUPERVISOR_PID_VARIABLE)
+    return not (expected and expected.isdigit()) or os.getppid() == int(expected)
+
+
+def emit_event(event, report, stream=None):
+    """Write one ``{"event": ..., "report": ...}`` line to the worker's report stream (stdout) and flush it."""
+    stream = sys.stdout if stream is None else stream
+    stream.write(json.dumps({"event": event, "report": report}) + "\n")
+    stream.flush()
+
+
+def function_reference(function):
+    """``{"module", "function"}`` naming a module-level function of this checkout, for a worker to import.
+
+    The module is named by its file's path under the checkout root (so a
+    script run as ``__main__`` and a test module loaded from ``tests/`` both
+    resolve), as a spawned worker was once pickled by reference.
+    """
+    module = sys.modules.get(getattr(function, "__module__", None))
+    path = Path(getattr(module, "__file__", None) or "").resolve()
+    name = getattr(function, "__name__", "")
+    try:
+        parts = path.relative_to(ROOT).with_suffix("").parts
+    except ValueError:
+        parts = ()
+    if (path.suffix != ".py" or len(parts) < 2 or parts[0] not in WORKER_PACKAGES or
+            not all(part.isidentifier() for part in parts) or not name.isidentifier() or
+            getattr(module, name, None) is not function):
+        raise ValueError("worker_must_be_module_level_in_checkout")
+    return {"module": ".".join(parts), "function": name}
+
+
+def load_function(reference):
+    """Import a ``function_reference`` from this checkout only."""
+    import importlib
+    import importlib.util
+    module_name, function_name = reference.get("module", ""), reference.get("function", "")
+    if (not isinstance(module_name, str) or not module_name or
+            not all(part.isidentifier() for part in module_name.split(".")) or
+            not isinstance(function_name, str) or not function_name.isidentifier()):
+        raise ValueError("unsupported_worker_reference")
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    try:
+        spec = importlib.util.find_spec(module_name)
+    except (ImportError, ValueError):
+        spec = None
+    origin = Path(spec.origin) if spec is not None and spec.origin else None
+    # A real file of this checkout's own packages (never a frozen or built-in module, whose pseudo-origin would
+    # resolve against the working directory, and never a package installed under the checkout).
+    if (origin is None or not origin.is_absolute() or not origin.is_file() or
+            not any(origin.resolve().is_relative_to(ROOT / package) for package in WORKER_PACKAGES)):
+        raise ValueError("unsupported_worker_reference")
+    return getattr(importlib.import_module(module_name), function_name)
 
 
 def cooperative_budget(default, reserve=1.0):
@@ -562,6 +638,7 @@ def supervise_owned(command, base_report, timeout, validate, *, descendants=Fals
                 environment = dict(os.environ if env is None else env)
                 environment[ARMED_FD_VARIABLE] = str(arm_write)
                 environment[COOPERATIVE_GRACE_VARIABLE] = repr(grace.cooperative)
+                environment[SUPERVISOR_PID_VARIABLE] = str(os.getpid())
                 extra = {"pass_fds": (*pass_fds, arm_write), "env": environment, "start_new_session": True}
             elif env is not None:
                 extra = {"env": env}

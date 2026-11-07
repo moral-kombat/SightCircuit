@@ -7,38 +7,29 @@ import sys
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from sightcircuit.runtime import output, process  # noqa: E402
+from sightcircuit.runtime import output  # noqa: E402
 from sightcircuit.sources.mirror import capture, launch, new_capture_report as new_report  # noqa: E402
 from sightcircuit.sources.mirror_device import discover, grayscale_png  # noqa: E402
 
 
-def _worker(candidate, seconds, outputs, sender, stop, expected_parent):
-    """``outputs`` maps "preview" to its reservation; the PNG is written after the source closes."""
-    def send(report, event="progress"):
-        process.send_report(sender, report, event)
+def _worker(candidate, seconds, outputs, progress, stop):
+    """The supervised worker (``sources.mirror.run_worker``): capture, then the preview; returns the report.
 
-    outputs = outputs or {}
+    ``outputs`` maps "preview" to its reservation; the PNG is written after the
+    source closes. ``progress`` receives the capture's snapshots.
+    """
     report = new_report()
     report["candidate"] = candidate
     try:
-        # Prevent a stranded worker if its launcher is killed during a driver call.
-        if not process.enter_worker(expected_parent):
-            return
-        report, preview = capture(candidate, seconds, stop, send, "preview" in outputs)
+        report, preview = capture(candidate, seconds, stop, progress, "preview" in outputs)
         if preview is not None and "preview" in outputs:
             # Capture has closed the video FD before any image encoding/writing.
             output.write(outputs["preview"], grayscale_png(*preview))
             report.update(preview_ready=True, preview_width=preview[0], preview_height=preview[1],
                           preview_pixel_format="gray8")
-        send(report, "result")
     except Exception as error:
         report.update(status="error", reason=getattr(error, "reason", "worker_failed"), error=str(error))
-        try:
-            send(report, "result")
-        except (OSError, BrokenPipeError):
-            pass
-    finally:
-        sender.close()
+    return report
 
 
 def main(argv=None):

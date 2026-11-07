@@ -12,12 +12,28 @@ providers observe and stamps each frame with the tokens read for it.
 ``launch`` is the one launcher of the mirror commands (``mirror_check.py`` and
 ``mirror_recognize.py``): it selects the verified candidate, reserves each
 requested image output (``runtime.output``), runs the command's worker under
-the bounded spawned-process supervisor (``runtime.process``), publishes the
-outputs all or nothing and always discards their temporary files. SIGTERM and
-Ctrl+C cancel it (``runtime.guard``).
+the supervision primitive (``runtime.supervision``, through
+``supervise_worker``), publishes the outputs all or nothing and always
+discards their temporary files. SIGTERM and Ctrl+C cancel it
+(``runtime.guard``).
+
+A worker is a module-level function ``worker(job, seconds, outputs, progress,
+stop)`` of this checkout that returns its report; ``launch`` names it by module
+and function (``supervision.function_reference``) and the primitive starts an
+interpreter that imports it and runs it through ``run_worker``: the worker
+enters with the parent-death guard (``supervision.enter_worker``), arms its
+stop event (``guard.stop_on_signals``), streams the report snapshots it is
+given as ``progress`` events and ends with a ``result`` event carrying the
+report and the exit code the launcher used to derive (0 for the success
+status with cleanup confirmed, else 1), which is also its process exit code.
+Its cleanup budgets (``WORKER_GRACE``) are the bounded spawned worker's:
+half a second of cooperative stop, then one second each for SIGTERM and
+SIGKILL on the group.
 """
 import hashlib
+import json
 import math
+import sys
 import threading
 import time
 
@@ -25,8 +41,17 @@ from ..context import SOURCE_FIELDS
 from ..errors import SightCircuitError
 from ..frame import Frame
 from ..hud.contract import SESSION_TOKENS
-from ..runtime import guard, output, process
+from ..runtime import guard, output
+from ..runtime.supervision import (  # noqa: F401 - load_function is the worker bootstrap's import
+    Grace, emit_event, enter_worker, function_reference, load_function, supervise_owned,
+)
 from .mirror_device import NativeMirror, grayscale_sample, select_candidate
+
+WORKER_GRACE = Grace(arm=1.0, cooperative=0.5, terminate=1.0, kill=1.0, report=0.5)
+# The worker interpreter: imports this checkout, then the named worker, and runs it on the payload.
+WORKER_BOOTSTRAP = ("import json, sys; sys.path.insert(0, sys.argv[1]); "
+                    "from sightcircuit.sources.mirror import run_worker, load_function; "
+                    "sys.exit(run_worker(load_function(json.loads(sys.argv[2])), json.loads(sys.argv[3])))")
 
 
 def new_capture_report():
@@ -192,6 +217,69 @@ class MirrorSource:
             raise SightCircuitError(report.get("reason", "capture_failed"), report.get("error", "Capture failed"))
 
 
+def run_worker(worker, payload):
+    """A worker interpreter's main: run ``worker`` on ``payload`` and end with its ``result``; returns the exit code.
+
+    ``payload`` carries ``job``, ``seconds``, ``outputs`` (reservations by kind)
+    and ``success_status``. The report's ``exit_code`` is 0 for the success
+    status with ``cleanup_ok`` true, else 1, as the launcher derived it before,
+    and is the process exit code too, so the launcher's validator can check
+    one against the other. A worker whose supervisor is already gone does not
+    start (exit 1, no result).
+    """
+    if not enter_worker():
+        return 1
+    stop = guard.stop_on_signals()
+    report = worker(payload["job"], payload["seconds"], payload.get("outputs") or {},
+                    lambda snapshot: emit_event("progress", snapshot), stop)
+    report["exit_code"] = 0 if (report.get("status") == payload["success_status"] and
+                                report.get("cleanup_ok") is True) else 1
+    emit_event("result", report)
+    return report["exit_code"]
+
+
+def supervise_worker(worker, job, seconds, outputs=None, *, report_factory, success_status, timeout=None):
+    """Run ``worker`` on ``job`` in its own supervised interpreter; return the launcher's report.
+
+    The worker's ``progress`` snapshots fill the report as they arrive and its
+    ``result`` replaces them; the supervision block (``worker_pid``,
+    ``worker_exit_code``, ``worker_forced_termination``, ``worker_elapsed_ms``,
+    ``cleanup_ok``, ``exit_code`` and the primitive's fields) is the
+    primitive's. The deadline is ``timeout`` or ``seconds`` + 3. Outcomes keep
+    the launcher's names: ``timed_out`` with reason ``worker_deadline``, and
+    ``error`` with ``worker_exited_without_result`` or ``worker_exit_failure``;
+    a cancellation is ``cancelled`` with ``reason`` ``signal``, ``signal`` and
+    exit 128 + signal.
+    """
+    reference = function_reference(worker)
+    base = dict(report_factory(), seconds_requested=seconds)
+    payload = {"job": job, "seconds": seconds, "outputs": outputs or {}, "success_status": success_status}
+    snapshots, seen = {}, {}
+
+    def validate(candidate, returncode):
+        seen["result"] = True
+        if (not isinstance(candidate, dict) or type(candidate.get("exit_code")) is not int or
+                type(candidate.get("cleanup_ok")) is not bool):
+            raise ValueError("invalid_worker_report")
+        if candidate["exit_code"] != returncode:
+            raise ValueError("worker_exit_failure")
+
+    supervised = supervise_owned(
+        [sys.executable, "-c", WORKER_BOOTSTRAP, str(guard.ROOT), json.dumps(reference), json.dumps(payload)],
+        base, seconds + 3 if timeout is None else timeout, validate, grace=WORKER_GRACE, progress=snapshots.update)
+    report = {**snapshots, **supervised}
+    if report["status"] == "timed_out":
+        report["reason"] = "worker_deadline"
+    elif report["status"] in ("invalid_worker_report", "supervisor_lost", "cleanup_failed"):
+        report["status"] = "error"
+        if not seen:
+            report["reason"] = "worker_exited_without_result"
+    elif report["status"] == "cancelled":
+        report.update(reason="signal", signal=report["exit_code"] - 128)
+    report["worker_elapsed_ms"] = round(report["supervisor_elapsed_seconds"] * 1000, 3)
+    return report
+
+
 def launch(report, discovery, device, seconds, *, worker, report_factory, success_status, job=None,
            outputs=None, digests=(), timeout=None, fields=None):
     """Run ``worker`` bounded on the verified candidate and publish its outputs; return the final report.
@@ -214,10 +302,10 @@ def launch(report, discovery, device, seconds, *, worker, report_factory, succes
             candidate = select_candidate(discovery, device)
             for kind, (path, prefix) in (outputs or {}).items():
                 reservations[kind] = output.reserve(path, prefix, kind=kind)
-            report = process.run_bounded(job(candidate) if job is not None else candidate, seconds,
-                                         reservations or None, worker=worker, timeout=timeout,
-                                         report_factory=lambda: dict(report_factory(), candidate=candidate),
-                                         success_status=success_status)
+            report = supervise_worker(worker, job(candidate) if job is not None else candidate, seconds,
+                                      reservations or None, timeout=timeout,
+                                      report_factory=lambda: dict(report_factory(), candidate=candidate),
+                                      success_status=success_status)
             report.update(discovery=discovery, candidate=candidate, **(fields or {}))
             if report["exit_code"] == 0:
                 output.publish_all(reservations, report, digests=digests)

@@ -12,7 +12,7 @@ from sightcircuit.errors import OutputError
 from sightcircuit.frame import Detection, DetectionResult, Frame
 from sightcircuit.latest import LatestSlot
 from sightcircuit.pipeline import LatestResultSink, Pipeline
-from sightcircuit.runtime import output, process
+from sightcircuit.runtime import guard, output
 from sightcircuit.sources.mirror import MirrorSource
 
 
@@ -808,8 +808,8 @@ class OutputTests(unittest.TestCase):
 
 class ProcessTests(unittest.TestCase):
     def test_stop_signal_handler_raises_catchable_cancellation(self):
-        with self.assertRaises(process.StopRequested) as error:
-            process.stop_on_signal(signal.SIGTERM, None)
+        with self.assertRaises(guard.StopRequested) as error:
+            guard.stop_on_signal(signal.SIGTERM, None)
         self.assertEqual(error.exception.number, signal.SIGTERM)
 
 

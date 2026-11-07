@@ -5,6 +5,7 @@ import importlib.util
 import io
 import threading
 import time
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -472,6 +473,19 @@ class LivePipelineTests(unittest.TestCase):
         adapter.start()
         adapter.check_sink()
         self.assertEqual(sink.checked, 2)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "The guardian runs on Linux")
+    def test_the_synthetic_worker_streams_progress_snapshots_to_the_launcher(self):
+        snapshots = []
+        report = command.supervise_synthetic({"seconds": 2, "detector": "fixture"}, progress=snapshots.append)
+        self.assertEqual((report["status"], report["exit_code"], report["cleanup_ok"]), ("completed", 0, True), report)
+        self.assertTrue(snapshots, "no progress snapshot reached the launcher")
+        self.assertEqual(snapshots[0]["report_kind"], "synthetic_recognition_pipeline")
+        self.assertEqual(snapshots[0]["status"], "error")  # The report before the engine started.
+        for snapshot in snapshots[1:]:
+            self.assertIn("pipeline", snapshot)
+            self.assertIn("last_result", snapshot)
+        self.assertNotIn("event", report)  # Events never land in the final report.
 
     def test_worker_builds_the_requested_registered_or_fixture_detector(self):
         from sightcircuit.detection import DEFAULT_DETECTOR
