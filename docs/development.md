@@ -128,6 +128,23 @@ runner results, not Frame results.
 | `QT_QPA_PLATFORM=offscreen .venv-replay/bin/python -m unittest discover -s tests` | `Ran 1145 tests in 278.491s`, `OK (skipped=55)`; all 55 skips are capture-reference fixture tests (27 provider, 11 import, 9 resource, 8 publication) whose `build_capture_reference.sh --<mode>-fixes` builds were not run on this host; CI builds them and runs those modules under its no-skip gate on 3.12 |
 | Python 3.12 with the same files | `pip install --only-binary=:all: -r requirements-window.txt` under CPython 3.12 resolves to the unchanged pins (numpy 2.2.6, opencv-python-headless 4.12.0.88), `pip check` clean; `uv pip install --dry-run -r requirements-dev.txt` on that environment would make no changes. CI runs the 3.12 suites on the pull request |
 
+**Cloud results of the lock change (P1, 2026-11-07)**, x86_64, Ubuntu 24.04:
+fresh `.venv-replay` and `.venv` built by the setup scripts from the locks,
+once under CPython 3.12.3 and once under CPython 3.14.6 (uv-managed). Runner
+results, not Frame results; the aarch64 hashes were checked against PyPI's
+digests only.
+
+| Check | Python 3.12 | Python 3.14 |
+| --- | --- | --- |
+| `bash scripts/setup_window.sh` (pip `--require-hashes`, window lock) | built, `pip check` clean | built, `pip check` clean |
+| `bash scripts/setup.sh` (`uv pip sync --require-hashes`, dev lock) | built, `uv pip check` clean | built, `uv pip check` clean |
+| Installed versions against the requirement files' pins for that version | identical (window and dev sets) | identical (window and dev sets) |
+| `.venv/bin/python scripts/smoke_check.py` | `status: passed` | `status: passed` |
+| `evaluate_detectors.py --fetch --expect evaluation/seed-expected.json` | passed | passed |
+| `QT_QPA_PLATFORM=offscreen .venv-replay/bin/python -m unittest discover -s tests` | CI on the pull request: `native` and `replay` green | `Ran 1199 tests`, `OK (skipped=55)`, the capture-fixture skips; a first run failed 5 native contract tests against an overlay bridge binary built before main's A6 contract change, and rebuilding the bridge fixed them |
+| Every lock hash against PyPI's digests | equal sets for all eleven releases; cp312, cp314, abi3 and pure wheel digests for aarch64 and x86_64 present | same lock |
+| `bash scripts/compile_locks.sh` rerun | reproduces the committed locks byte for byte (uv 0.12.23) | same lock |
+
 **The device step** (not performed here; the Frame manager runs it on the
 owner's word, and its first result is new evidence): move the stale
 `.venv-replay` aside, run `SIGHTCIRCUIT_PYTHON=python3.14 bash scripts/setup_window.sh`
