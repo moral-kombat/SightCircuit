@@ -83,12 +83,12 @@ match a record. Version 2 (item A6 of the
 - The generated native header is unchanged by this: the bridge draws no mask
   and reads no record.
 
-Cloud checks: `tests/test_hud_calibration.py` (`NativeFormatMetadataTests`),
-`tests/test_hud_candidate.py`
-(`test_mirror_format_metadata_is_carried_into_the_record_and_must_be_declared_exactly`)
-and the updated version pins in `tests/test_hud_qualification.py`. The
-metadata values in those tests are generated, not a Frame reading; no mirror
-frame has been checked against a version 2 record on the device.
+Cloud checks: `tests/test_hud_calibration.py` (`NativeFormatMetadataTests`,
+which pins both record versions, the exact context comparison and the mask's
+refusal) and `tests/test_hud_candidate.py`
+(`test_mirror_format_metadata_is_carried_into_the_record_and_must_be_declared_exactly`).
+The metadata values in those tests are generated, not a Frame reading; no
+mirror frame has been checked against a version 2 record on the device.
 
 The offline `scripts/hud_validation_report.py` command checks a candidate against
 a separately supplied current context and explicit monotonic time. It never
