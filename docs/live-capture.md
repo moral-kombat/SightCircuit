@@ -21,7 +21,7 @@ Dedicated camera capture, world-locked labels, depth and splats remain deferred.
 | Preprocessing audit (WP1) | Original E61 still found, digest verified and miss reproduced file-only on Frame; [E80](evidence/e080.md) | Explain the miss or attribute it to the image/model with evidence. The audit variants produce identical model inputs on this still, so the re-run does not distinguish a cause |
 | Detector evaluation (WP2) | Five unboxed Frame stills captured and evaluated; both detectors found the chair and missed the bottle; [E81](evidence/e081.md) | Inspected boxes and more representative stills before choosing a detector default. The owner chose chair for the POC; five presence-only stills do not close WP2 |
 | Lifecycle acceptance (WP10 / G2) | G2 closed on November 3 after log analysis and an owner-rehearsed recovery procedure; [E75](evidence/e075.md), [E79](evidence/e079.md) | None for G2. The green-input cause remains unknown; any green input still aborts a run |
-| HUD mapping (WP9 / G3–G4) | The November 3 observer attempt stopped at the contour budget before any marker appeared, with clean cleanup; [E83](evidence/e083.md). Scene statistics are implemented offline | Reviewed scene-precondition change and a new run approval, then accepted observation, eye/composition and all-copy evidence, bounded motion/filter uncertainty, and reviewed mapping |
+| HUD mapping (WP9 / G3–G4) | The November 3 observer attempt stopped at the contour budget before any marker appeared, with clean cleanup; [E83](evidence/e083.md). Scene statistics are implemented offline, and the file-only analysis of the chair still on Frame predicts that the O3 precondition passes ([E88](evidence/e088.md)), which is not an observation | Reviewed scene-precondition change and a new run approval, then accepted observation, eye/composition and all-copy evidence, bounded motion/filter uncertainty, and reviewed mapping |
 | Feedback and expiry (WP11 / G5) | Native masking, neutral fill, exclusion counters and report design tested offline; [E74](evidence/e074.md), [E78](evidence/e078.md) | Separately reviewed diagnostic, qualified mapping, physical feedback exclusion and expiry evidence |
 | Combined live HUD (WP12 / G6) | Shared bounded synthetic pipeline and latency reporting; production gates closed | G2–G5 and the 60-second headset acceptance run |
 
@@ -177,9 +177,12 @@ removal) and E86 (the installer run and the guard version 4 disclosure) are
 recorded. The installer step that the plan listed as a separate approval
 turned out to be none: guard version 4 became active with the pull to
 `45771fe`, and the installer run at `6e648c7` wrote nothing under `.claude/`
-([E86](evidence/e086.md)). Open: A2 (approved on the chair still, waiting for
-the rebuilt environment on `fe2e10f` or later), A4, A5, A7 to A11, B4 to B8,
-C3b (in progress), C5 to C8, P1, P2, E1. The council's hypothesis for the
+([E86](evidence/e086.md)). The replay environment was rebuilt on the Frame
+under Python 3.14 at `544cf34` ([E87](evidence/e087.md)) and A2 ran on the
+chair still: the O3 precondition is predicted to pass on all five limits, with
+about a tenth of the frame near saturation under the lamps
+([E88](evidence/e088.md)). Open: A4 (next device step, needs its own approval),
+A5, A7 to A11, B4 to B8, C3b (in progress), C5 to C8, P1, P2, E1. The council's hypothesis for the
 cancellation race was wrong; the recorded cause is the readiness probe firing
 on the worker before it had exec'd ([checks reference](reference/development-checks.md)).
 
@@ -192,10 +195,12 @@ on the worker before it had exec'd ([checks reference](reference/development-che
   constant changes by a reviewed edit.
 - The scope of the Phase 2 guard-enforcement test for the agent runner, which
   also needs a decision on the workspace trust dialog ([E86](evidence/e086.md)).
-- Device approvals, each separate: the environment rebuild on `fe2e10f` or a
-  later main (the first run of the Python 3.14 wheels on the Frame; its result
-  is new evidence), then A2 (already approved on the chair still), A4 after A3's
-  review, and the evaluation session C5 with C6.
+- Device approvals, each separate: A4, the marker-observation attempt, now
+  that A3's review is merged and A2 passed ([E88](evidence/e088.md)); its
+  preparation includes the pull to `e4019a4` or later, mirror discovery, the
+  bridge rebuild, a new manifest and the validation-only check, and the owner
+  should consider a darker background around the HUD's lower-right region
+  given E88's saturation; then the evaluation session C5 with C6.
 - The Frame rebooted into SteamOS 0.5.8 ([E85](evidence/e085.md)); a Frame
   manager session exists and the "Frame update check" scheduled task was
   rebound to it on 2026-11-07, with the old task left disabled as a record.
