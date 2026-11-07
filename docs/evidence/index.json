@@ -602,6 +602,20 @@
       "file": "e086.md",
       "kind": "device_report",
       "reconstructed": false
+    },
+    {
+      "id": "E87",
+      "title": "Replay environment rebuilt on Frame under Python 3.14 at 544cf34",
+      "file": "e087.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E88",
+      "title": "A2 file-only still analysis on Frame, the chair still passes the O3 precondition",
+      "file": "e088.md",
+      "kind": "device_report",
+      "reconstructed": false
     }
   ]
 }
