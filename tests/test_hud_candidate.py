@@ -717,7 +717,7 @@ class ObserverCandidateTests(unittest.TestCase):
 
     def test_documented_commands_parse_with_the_real_parser(self):
         found = 0
-        for name in ("docs/hud-qualification.md", "docs/development.md"):
+        for name in ("docs/reference/hud-candidates.md", "docs/reference/hud-development.md"):
             text = (ROOT / name).read_text()
             for block in re.findall(r"```bash\n(.*?)```", text, re.S):
                 for command in block.replace("\\\n", " ").splitlines():

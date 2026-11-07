@@ -28,6 +28,7 @@ class EvidenceGenerationTests(unittest.TestCase):
         self.data = {"schema_version": 1, "review_date": "2026-10-31",
                      "capabilities": [{"capability": "An area", "state": "Blocked",
                                        "evidence": "[E1](#e1-a-reported-failure)"}],
+                     "capability_groups": [{"title": "Active POC", "capabilities": ["An area"]}],
                      "architecture_capabilities": ["An area"]}
         for entry in self.index["entries"]:
             (evidence / entry["file"]).write_text(f"# {entry['id']}: {entry['title']}\n\nUnknown revision.\n")
@@ -35,6 +36,9 @@ class EvidenceGenerationTests(unittest.TestCase):
             "# Untouched before\n\n<!-- BEGIN progress-summary: old -->\nold\n"
             "<!-- END progress-summary -->\n\n## Untouched after\n")
         (self.root / "docs/status.md").write_text("old status\n")
+        (evidence / "README.md").write_text(
+            "# Evidence guidance before\n\n<!-- BEGIN evidence-catalog: old -->\nold\n"
+            "<!-- END evidence-catalog -->\n\n## Maintenance after\n")
         self.write_sources()
 
     def write_sources(self):
@@ -53,6 +57,9 @@ class EvidenceGenerationTests(unittest.TestCase):
         self.assertTrue(architecture.startswith("# Untouched before\n\n"))
         self.assertTrue(architecture.endswith("\n\n## Untouched after\n"))
         self.assertIn("](status.md#e1-a-reported-failure)", architecture)
+        catalog = (self.root / "docs/evidence/README.md").read_text()
+        self.assertTrue(catalog.startswith("# Evidence guidance before\n\n"))
+        self.assertTrue(catalog.endswith("\n\n## Maintenance after\n"))
 
     def test_metadata_order_does_not_reorder_historical_headings(self):
         self.index["entries"].reverse()
@@ -60,6 +67,58 @@ class EvidenceGenerationTests(unittest.TestCase):
         output = generate_status.generated_files(self.root)[self.root / "docs/status.md"]
         self.assertLess(output.index("### E1:"), output.index("### E2:"))
         self.assertIn("[Full evidence](evidence/e001.md). Device report.", output)
+        catalog = generate_status.generated_files(self.root)[self.root / "docs/evidence/README.md"]
+        self.assertLess(catalog.index("[E2](e002.md)"), catalog.index("[E1](e001.md)"))
+        self.assertIn("| [E1](e001.md) | A reported failure | Device report |", catalog)
+
+    def test_group_order_controls_tables_without_losing_or_duplicating_capabilities(self):
+        self.data["capabilities"].append({"capability": "A second area", "state": "Deferred",
+                                          "evidence": "[E2](#e2-an-offline-check)"})
+        self.data["capability_groups"] = [
+            {"title": "First group", "capabilities": ["A second area"]},
+            {"title": "Second group", "capabilities": ["An area"]},
+        ]
+        self.write_sources()
+        output = generate_status.generated_files(self.root)[self.root / "docs/status.md"]
+        self.assertLess(output.index("### First group"), output.index("| A second area |"))
+        self.assertLess(output.index("| A second area |"), output.index("### Second group"))
+        self.assertLess(output.index("### Second group"), output.index("| An area |"))
+        self.assertEqual(output.count("| A second area |"), 1)
+        self.assertEqual(output.count("| An area |"), 1)
+
+    def test_groups_reject_missing_duplicate_and_unknown_members(self):
+        self.data["capabilities"].append({"capability": "A second area", "state": "Deferred",
+                                          "evidence": "[E2](#e2-an-offline-check)"})
+        invalid_groups = [
+            [],
+            [{"title": "Active", "capabilities": ["An area"]}],
+            [{"title": "Active", "capabilities": ["An area", "A second area", "An area"]}],
+            [{"title": "Active", "capabilities": ["An area", "A second area"]},
+             {"title": "Other", "capabilities": ["An area"]}],
+            [{"title": "Active", "capabilities": ["An area", "Unknown"]}],
+            [{"title": "Repeated", "capabilities": ["An area"]},
+             {"title": "Repeated", "capabilities": ["A second area"]}],
+            [{"title": "Active", "capabilities": []}],
+            [{"title": "Active\nInjected heading", "capabilities": ["An area", "A second area"]}],
+        ]
+        for groups in invalid_groups:
+            with self.subTest(groups=groups):
+                self.data["capability_groups"] = groups
+                self.write_sources()
+                with self.assertRaisesRegex(ValueError, "capability group"):
+                    generate_status.generated_files(self.root)
+
+    def test_catalog_freshness_is_checked_and_provenance_is_preserved(self):
+        self.index["entries"][1].update(kind="mixed", reconstructed=True)
+        self.write_sources()
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(generate_status.main(["--root", str(self.root)]), 0)
+        path = self.root / "docs/evidence/README.md"
+        self.assertIn("Mixed source record; reconstructed, original unknowns preserved", path.read_text())
+        path.write_text(path.read_text().replace("[E2](e002.md)", "[E2](wrong.md)"))
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(generate_status.main(["--root", str(self.root), "--check"]), 1)
+        self.assertEqual(output.getvalue(), "stale generated summary: docs/evidence/README.md\n")
 
     def test_invalid_identity_paths_and_unknown_references_are_rejected(self):
         original = copy.deepcopy(self.index)
@@ -107,6 +166,22 @@ class EvidenceGenerationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exactly one"):
             generate_status.generated_files(self.root)
         self.assertEqual((self.root / "docs/status.md").read_bytes(), before)
+
+    def test_catalog_missing_duplicate_and_reversed_markers_fail_before_any_write(self):
+        path = self.root / "docs/evidence/README.md"
+        original = path.read_text()
+        malformed = [
+            original.replace("<!-- END evidence-catalog -->", ""),
+            original + "<!-- BEGIN evidence-catalog: duplicate -->",
+            "<!-- END evidence-catalog -->\n<!-- BEGIN evidence-catalog: reversed -->",
+        ]
+        before = (self.root / "docs/status.md").read_bytes()
+        for content in malformed:
+            with self.subTest(content=content):
+                path.write_text(content)
+                with self.assertRaisesRegex(ValueError, "evidence catalog"):
+                    generate_status.generated_files(self.root)
+                self.assertEqual((self.root / "docs/status.md").read_bytes(), before)
 
 
 if __name__ == "__main__":

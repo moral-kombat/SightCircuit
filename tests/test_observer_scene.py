@@ -365,9 +365,9 @@ class SceneStatisticsTests(unittest.TestCase):
             scene.scene_statistics(grey(10, 10, 0))
 
     def test_the_documented_constants_are_the_code_constants(self):
-        # docs/hud-qualification.md derives one constant per limit; a changed constant must change that table.
-        text = (ROOT / "docs" / "hud-qualification.md").read_text()
-        section = text[text.index("### The O3 rule (2026-11-06)"):text.index("## Next device checkpoint")]
+        # docs/reference/hud-observation.md derives one constant per limit; a changed constant must change that table.
+        text = (ROOT / "docs" / "reference" / "hud-observation.md").read_text()
+        section = text[text.index("### The O3 rule (2026-11-06)"):]
         documented = {}
         for line in section.splitlines():
             cells = [cell.strip() for cell in line.strip().strip("|").split("|")]

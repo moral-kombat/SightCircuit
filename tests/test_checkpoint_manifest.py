@@ -423,13 +423,12 @@ def code_blocks(text):
     return re.findall(r"```[^\n]*\n(.*?)```", text, re.S)
 
 
-PROCEDURES = (("docs/hud-qualification.md", "## Next device checkpoint"),
-              ("docs/on-device.md", "### Bounded edge HUD calibration checkpoint"))
+PROCEDURES = (("docs/guides/hud-checkpoint.md", "## Bounded edge HUD calibration checkpoint"),)
 BRIDGE_RUNS = ("scripts/hud_marker_check.py", "scripts/hud_marker_observer.py")
 
 
 def procedure_blocks():
-    """Code blocks of both documented checkpoint procedures."""
+    """Code blocks of the canonical documented checkpoint procedure."""
     return [block for path, heading in PROCEDURES for block in code_blocks(section(path, heading))]
 
 

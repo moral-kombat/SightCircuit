@@ -355,7 +355,7 @@
       "id": "E51",
       "title": "Media-time replay pacing (unit-tested only)",
       "file": "e051.md",
-      "kind": "offline",
+      "kind": "mixed",
       "reconstructed": false
     },
     {
@@ -528,7 +528,7 @@
     },
     {
       "id": "E76",
-      "title": "Offline work packages A–H, cloud checks",
+      "title": "Offline work packages A\u2013H, cloud checks",
       "file": "e076.md",
       "kind": "offline",
       "reconstructed": false
@@ -544,6 +544,48 @@
       "id": "E78",
       "title": "Mirror session tokens and neutral HUD mask fill, cloud checks",
       "file": "e078.md",
+      "kind": "offline",
+      "reconstructed": false
+    },
+    {
+      "id": "E79",
+      "title": "G2 green-input log analysis and recovery rehearsal on Frame",
+      "file": "e079.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E80",
+      "title": "File-only detector re-run on the E61 still, with audit variants",
+      "file": "e080.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E81",
+      "title": "Catch-up session on Frame: regressions, 400-frame panel run, mirror and WP2 stills",
+      "file": "e081.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E82",
+      "title": "Guarded Claude Code setup installed on Frame (Phase 0)",
+      "file": "e082.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E83",
+      "title": "G3 marker-observer attempt stopped at the observer scene precondition",
+      "file": "e083.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E84",
+      "title": "Ship pass of 2026-11-06, cloud checks for PRs #22, #24, #25, #26 and #27",
+      "file": "e084.md",
       "kind": "offline",
       "reconstructed": false
     }
