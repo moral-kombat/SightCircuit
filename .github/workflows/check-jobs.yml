@@ -47,7 +47,7 @@ jobs:
           python -m pip install ruff==0.14.2
           ruff check .
       - name: Check shell syntax
-        run: bash -n scripts/setup.sh scripts/build_openvr_tool.sh scripts/build_overlay_bridge.sh
+        run: bash -n scripts/setup.sh scripts/setup_replay.sh scripts/setup_window.sh scripts/compile_locks.sh scripts/build_openvr_tool.sh scripts/build_overlay_bridge.sh
       - name: Fail if the generated HUD contract header differs from the Python contract
         run: python3 scripts/hud_contract_header.py --check
       - name: Build the native overlay bridge

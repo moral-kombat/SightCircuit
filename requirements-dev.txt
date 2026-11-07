@@ -1,8 +1,10 @@
 # Linux x86_64 / Python 3.12 or 3.14 development and smoke-check environment.
+# Installed through requirements-dev.lock; after editing, run: bash scripts/compile_locks.sh
 # Direct and transitive versions tested together; no application model is bundled.
 # OpenCV 4.12 retains the Caffe importer needed by the MobileNet-SSD fixture; the
 # Python 3.14 pins follow requirements-window.txt (docs/development.md,
 # "Python 3.14 on the Frame"), where the smoke check proves the 4.13 importer.
+av==16.1.0
 flatbuffers==25.12.19
 numpy==2.2.6; python_version < "3.14"
 numpy==2.3.2; python_version >= "3.14"
