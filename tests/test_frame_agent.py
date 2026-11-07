@@ -13,11 +13,11 @@ import time
 import unittest
 from unittest import mock
 
-from framejacker.agent import guard, runner
-from framejacker.agent.tasks import TASKS, TASKS_BY_ID, TIER_A, Task
+from sightcircuit.agent import guard, runner
+from sightcircuit.agent.tasks import TASKS, TASKS_BY_ID, TIER_A, Task
 
 ROOT = Path(__file__).resolve().parents[1]
-SETTINGS = ROOT / "framejacker" / "agent" / "frame-settings.json"
+SETTINGS = ROOT / "sightcircuit" / "agent" / "frame-settings.json"
 
 
 def quiet(function, *args, **kwargs):
@@ -61,7 +61,7 @@ CHILD_CODE = ("import signal, subprocess, sys, time; "
 # Runs runner.main on one task, 'tier-a/long', in its own process so that signals reach a real runner.
 # argv: checkout, run root, pid file, task code, then the task's own arguments. ``{prelude}`` runs first.
 DRIVER = ("import os, signal, subprocess, sys; sys.path.insert(0, sys.argv[1]); "
-          "from framejacker.agent import runner; from framejacker.agent.tasks import Task\n"
+          "from sightcircuit.agent import runner; from sightcircuit.agent.tasks import Task\n"
           "{prelude}\n"
           "task = Task(id='tier-a/long', tier='A', description='long', timeout=100, "
           "argv=(sys.executable, '-c', sys.argv[4], *sys.argv[5:]))\n"
@@ -246,7 +246,7 @@ class RunnerTests(unittest.TestCase):
 
     def test_a_signal_to_the_runner_terminates_the_task_and_records_the_interruption(self):
         driver = ("import sys; sys.path.insert(0, sys.argv[1]); "
-                  "from framejacker.agent import runner; from framejacker.agent.tasks import Task; "
+                  "from sightcircuit.agent import runner; from sightcircuit.agent.tasks import Task; "
                   "task = Task(id='tier-a/long', tier='A', description='long', timeout=100, argv=(sys.executable, "
                   "'-c', 'import os, sys, time; open(sys.argv[1], \"w\").write(str(os.getpid())); time.sleep(100)', "
                   "sys.argv[3])); "
@@ -406,7 +406,7 @@ class UpdateTests(unittest.TestCase):
         self.pre_agent = self.git(self.origin, "rev-parse", "HEAD")
         self.write_agent(guard.GUARD_VERSION)
         (self.origin / "a").write_text("1")
-        self.git(self.origin, "add", "a", "framejacker", "scripts")
+        self.git(self.origin, "add", "a", "sightcircuit", "scripts")
         self.git(self.origin, "commit", "--quiet", "-m", "one")
         self.first = self.git(self.origin, "rev-parse", "HEAD")
         self.git(self.base, "clone", "--quiet", str(self.origin), str(self.clone))
@@ -446,7 +446,7 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(self.update("--allow-x")[0], 2)
         for revision, reason in ((self.second[:12], "40-character"), ("A" * 40, "40-character"),
                                  (self.unmerged, "not on origin/main"),
-                                 (self.pre_agent, "has no framejacker/agent/guard.py"),
+                                 (self.pre_agent, "has no sightcircuit/agent/guard.py"),
                                  (self.weaker, f"older than version {guard.GUARD_VERSION}")):
             with self.subTest(revision=revision):
                 code, _, err = self.update(revision)
@@ -497,7 +497,7 @@ class UpdateTests(unittest.TestCase):
 
 
 class GuardTests(unittest.TestCase):
-    root = Path("/srv/framejacker")
+    root = Path("/srv/sightcircuit")
 
     def decide(self, tool, **tool_input):
         return guard.decide({"tool_name": tool, "tool_input": tool_input}, self.root)

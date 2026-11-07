@@ -24,10 +24,10 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from framejacker import overlay
-from framejacker.hud import contract, native
-from framejacker.hud.contract import HUD_CONFIG, MARKER
-from framejacker.overlay import DEFAULT_BRIDGE, PANEL_LIMITS, OverlayClient, PanelSettings, packet
+from sightcircuit import overlay
+from sightcircuit.hud import contract, native
+from sightcircuit.hud.contract import HUD_CONFIG, MARKER
+from sightcircuit.overlay import DEFAULT_BRIDGE, PANEL_LIMITS, OverlayClient, PanelSettings, packet
 
 ROOT = Path(__file__).resolve().parents[1]
 HAVE_NUMPY = importlib.util.find_spec("numpy") is not None
@@ -166,7 +166,7 @@ class PythonLimitSitesTests(unittest.TestCase):
         return None
 
     def test_marker_duration_sites(self):
-        from framejacker.hud import marker, observation
+        from sightcircuit.hud import marker, observation
         from scripts import hud_marker_check, hud_marker_observer
 
         temporary = tempfile.TemporaryDirectory()
@@ -218,8 +218,8 @@ class PythonLimitSitesTests(unittest.TestCase):
                                 self.assertEqual(result, accepted)
 
     def test_display_age_sites(self):
-        from framejacker.hud import qualification
-        from framejacker.runtime import live
+        from sightcircuit.hud import qualification
+        from sightcircuit.runtime import live
 
         client = OverlayClient(validation_only=True)
         client.frame_expiry_supported = True
@@ -310,7 +310,7 @@ class NativeContractTests(unittest.TestCase):
     @unittest.skipUnless(HAVE_NUMPY, "NumPy is required for the observer template")
     def test_native_marker_matches_observer_template_pixel_for_pixel(self):
         import numpy as np
-        from framejacker.hud.observation import marker_template
+        from sightcircuit.hud.observation import marker_template
 
         template = marker_template()
         self.assertEqual(template.shape, (HUD_CONFIG.height_px, HUD_CONFIG.width_px))
@@ -328,8 +328,8 @@ class NativeContractTests(unittest.TestCase):
     def test_frame_three_decodes_the_native_tag_bits(self):
         """V4's shape: two clear baseline reads, then the marker analysed on read 3."""
         import numpy as np
-        from framejacker.hud.contract import CaptureFormat
-        from framejacker.hud.observation import BaselineGate, EmpiricalObservation, ObserverConfig
+        from sightcircuit.hud.contract import CaptureFormat
+        from sightcircuit.hud.observation import BaselineGate, EmpiricalObservation, ObserverConfig
 
         data, report = self.render("marker.rgba")
         gray = np.frombuffer(data, np.uint8).reshape(HUD_CONFIG.height_px, HUD_CONFIG.width_px, 4)[:, :, 0]

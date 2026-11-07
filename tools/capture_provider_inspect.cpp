@@ -1,4 +1,4 @@
-// Original Framejacker metadata-only provider diagnostic. MIT.
+// Original SightCircuit metadata-only provider diagnostic. MIT.
 // No Vulkan loader, device creation, image FD request, pixel read or GPU work.
 #include "capture_provider.hpp"
 #include "capture_import.hpp" // Metadata validation only; no Vulkan calls.
@@ -8,8 +8,8 @@
 #include <sys/prctl.h>
 #include <sys/resource.h>
 
-namespace p = framejacker::provider;
-namespace t = framejacker::transport;
+namespace p = sightcircuit::provider;
+namespace t = sightcircuit::transport;
 struct Entry { p::Packet packet; bool compatible; std::string reason; };
 struct Report {
     std::string status = "not_run", reason;
@@ -38,7 +38,7 @@ static std::string uuid(const uint8_t *data) {
 }
 static void emit(const Report &report) {
     std::ostringstream out;
-    out << std::boolalpha << "{\"report_kind\":\"framejacker_provider_metadata\",\"schema_version\":1,\"status\":";
+    out << std::boolalpha << "{\"report_kind\":\"sightcircuit_provider_metadata\",\"schema_version\":1,\"status\":";
     quoted(out, report.status); out << ",\"exit_code\":" << report.code << ",\"reason\":"; quoted(out, report.reason);
     out << ",\"provider_protocol_version\":3,\"metadata_only\":true,\"image_descriptors_requested\":false,"
            "\"image_data_accessed\":false,\"frames_read\":0,\"images_saved\":false,\"gpu_import_attempted\":false,"
@@ -117,7 +117,7 @@ int main(int argc, char **argv) {
         if (path.empty()) {
             const char *runtime = std::getenv("XDG_RUNTIME_DIR");
             if (!runtime || runtime[0] != '/') throw t::Error("runtime_directory_missing");
-            path = std::string(runtime) + "/framejacker-camera-provider/camera.sock";
+            path = std::string(runtime) + "/sightcircuit-camera-provider/camera.sock";
         }
         {
             p::Lease lease(path, p::Access::metadata);
@@ -128,7 +128,7 @@ int main(int argc, char **argv) {
                 Entry entry{record.info, true, {}};
                 try {
                     p::validate_profile(record.info);
-                    framejacker::capture_import::validate_metadata(record.info.buffer);
+                    sightcircuit::capture_import::validate_metadata(record.info.buffer);
                 } catch (const std::exception &error) { entry.compatible = false; entry.reason = error.what(); }
                 report.entries.push_back(std::move(entry));
             }

@@ -1,7 +1,7 @@
 """Offline comparison of fills for the native HUD mask; the runtime never imports this module.
 
 ``scripts/evaluate_mask_fill.py`` runs it and writes a JSON report. The runtime
-fill is ``framejacker.hud.mask.fill_regions``; the other candidates live only
+fill is ``sightcircuit.hud.mask.fill_regions``; the other candidates live only
 here, so the evidence that chose it can be reproduced. Every candidate keeps the
 runtime's contract: it runs on a native-resolution copy whose masked regions
 (footprint plus margin, ``mask_regions``) are already zero, before any resize,

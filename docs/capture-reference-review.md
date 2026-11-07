@@ -47,7 +47,7 @@ flowchart LR
     Layer --> Socket[Local cam.sock: FDs and image metadata]
     Socket --> GPU[ptgrab: own Vulkan device and queue]
     GPU --> SHM[Shared memory: downscaled grayscale frames]
-    SHM --> Reader[Framejacker capture reader]
+    SHM --> Reader[SightCircuit capture reader]
     Reader --> Detect[Detector]
     Detect --> Panel[Existing Qt window and VR panel]
 ```

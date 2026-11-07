@@ -5,9 +5,9 @@ README narrative and links; its next-step instructions are historical. Use the
 [current work order](live-capture.md#current-work-order) and
 [acceptance gates](live-capture.md#edge-hud-acceptance-gates) for current work.
 
-# Framejacker
+# SightCircuit
 
-Framejacker is an early Linux object-recognition app for Steam Frame. It
+SightCircuit is an early Linux object-recognition app for Steam Frame. It
 processes Arcturus recordings and, in a bounded diagnostic, SteamVR mirror
 frames. Recorded video appears in a Qt window and an optional head-relative
 VR panel. Bounded mirror capture/inference works on Frame; continuous live
@@ -39,7 +39,7 @@ a completed Arcturus recording. For initial access or another checkout location,
 follow the [on-device guide](on-device.md).
 
 ```bash
-cd "$HOME/framejacker"
+cd "$HOME/sightcircuit"
 bash scripts/setup_window.sh
 .venv-replay/bin/python scripts/replay_window.py
 ```
@@ -162,5 +162,5 @@ explains the shared detector, candidate models and evaluation procedure.
 
 Original project code and documentation are covered by the [MIT license](../LICENSE).
 External packages and downloaded fixtures retain their upstream terms; see
-[third-party sources](../THIRD_PARTY.md). Framejacker is an independent project and
+[third-party sources](../THIRD_PARTY.md). SightCircuit is an independent project and
 is not affiliated with Valve or Arcturus Vision.

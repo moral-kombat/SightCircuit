@@ -19,8 +19,8 @@ except ImportError as error:  # The dependency-free discovery jobs have no OpenC
     raise unittest.SkipTest("OpenCV is required for observer scene tests") from error
 import numpy as np
 
-from framejacker.hud import observation as hud_observation
-from framejacker.hud import scene
+from sightcircuit.hud import observation as hud_observation
+from sightcircuit.hud import scene
 from scripts import hud_marker_observer as observer
 
 ROOT = Path(__file__).resolve().parents[1]

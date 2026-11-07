@@ -15,7 +15,7 @@ except ImportError:
     import capture_service_lifecycle as lifecycle
 
 config = trial.config
-UNIT = "framejacker-service-rehearsal.service"
+UNIT = "sightcircuit-service-rehearsal.service"
 RUNS = config.ROOT / "artifacts/service-rehearsals"
 SOURCES = ("service_rehearsal.py", "capture_layer_trial.py", "capture_service_lifecycle.py",
            "capture_layer_config.py", "capture_session.py", "capture_provider_check.py",
@@ -69,7 +69,7 @@ def capture_absent(home, runtime, manager):
     for root in (home / ".config", runtime):
         if config.read_entry(root, trial.DROPIN) is not None:
             raise ValueError("existing_capture_dropin")
-    endpoint = runtime / "framejacker-camera-provider/camera.sock"
+    endpoint = runtime / "sightcircuit-camera-provider/camera.sock"
     if endpoint.exists() or endpoint.is_symlink():
         raise ValueError("existing_provider_endpoint")
     if manager.environment_flags():

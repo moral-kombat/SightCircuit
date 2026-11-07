@@ -112,7 +112,7 @@ def within_blind_budget(regions, eye):
 # its "no clamping" comment) is replaced by a check. After the near and widened
 # side planes every point lies on or inside the widened window, so a point
 # outside it means non-finite input or a bug, and raises instead of bending the
-# polygon. Everything after ``hull`` is original Framejacker code.
+# polygon. Everything after ``hull`` is original SightCircuit code.
 
 NEAR_Z = -0.02         # metres; the eye looks down -Z
 CLIP_MARGIN = 0.25     # fraction of the frame kept beyond each edge
@@ -258,7 +258,7 @@ VIEW_MODES = ("left", "right", "both")
 
 
 def _view_record(record):
-    if type(record) is not dict or record.get("report_kind") != "framejacker_headset_view_record":
+    if type(record) is not dict or record.get("report_kind") != "sightcircuit_headset_view_record":
         raise ValueError("hud_view_record_invalid")
     view = record.get("headset_view")
     if type(view) is not dict or view.get("mode") not in VIEW_MODES:
@@ -276,7 +276,7 @@ def predict_hud_footprint(record, config):
 
     The result is a prediction, labelled ``prediction_only`` with
     ``qualifies_mapping`` false: a prediction cannot qualify a mapping and is
-    never read by ``framejacker.hud.qualification`` or ``candidate``. It
+    never read by ``sightcircuit.hud.qualification`` or ``candidate``. It
     assumes the mirror's native pixels are the IVRHeadsetView image of the
     view record's eye at the view size, uncropped. Whether ``/dev/video99``
     carries the IVRHeadsetView output is unknown, so that is recorded as an

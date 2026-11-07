@@ -15,7 +15,7 @@
     {
       "capability": "Vendor Arcturus app live preview and recording",
       "state": "Device-confirmed",
-      "evidence": "User reports the vendor app works; it does not supply frames to Framejacker; [E2](#e2-vendor-app)"
+      "evidence": "User reports the vendor app works; it does not supply frames to SightCircuit; [E2](#e2-vendor-app)"
     },
     {
       "capability": "Selected-track HEVC decoding and RGB conversion",
@@ -140,7 +140,7 @@
     {
       "capability": "Dedicated Arcturus Vulkan capture",
       "state": "Upstream-reported",
-      "evidence": "Community implementation reviewed; no Framejacker deployment or device capture result"
+      "evidence": "Community implementation reviewed; no SightCircuit deployment or device capture result"
     },
     {
       "capability": "Built-in passthrough camera input",

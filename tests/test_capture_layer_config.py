@@ -12,7 +12,7 @@ from scripts import capture_layer_config as config
 
 class LayerConfigurationTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="framejacker-config-tests-")
+        self.temp = tempfile.TemporaryDirectory(prefix="sightcircuit-config-tests-")
         self.root = Path(self.temp.name)
         self.home = self.root / "home"
         self.home.mkdir(mode=0o700)
@@ -41,11 +41,11 @@ class LayerConfigurationTests(unittest.TestCase):
         self.assertFalse(plan["activation_performed"])
         self.assertEqual(plan["provider_protocol_version"], 3)
         self.assertFalse(plan["image_access_enabled"])
-        manifest = json.loads((self.bundle / "framejacker_capture.json").read_text())
+        manifest = json.loads((self.bundle / "sightcircuit_capture.json").read_text())
         self.assertEqual(manifest["layer"]["implementation_version"], "3")
-        self.assertEqual(manifest["layer"]["enable_environment"], {"FRAMEJACKER_CAPTURE_LAYER": "1"})
+        self.assertEqual(manifest["layer"]["enable_environment"], {"SIGHTCIRCUIT_CAPTURE_LAYER": "1"})
         self.assertEqual(manifest["layer"]["library_path"], str(self.home / config.LIBRARY))
-        self.assertFalse((self.bundle / "libframejacker_capture.so").stat().st_mode & 0o111)
+        self.assertFalse((self.bundle / "libsightcircuit_capture.so").stat().st_mode & 0o111)
 
     def test_restore_new_and_partial_installations(self):
         for names in (config.TARGETS, (config.LIBRARY,)):
@@ -125,12 +125,12 @@ class LayerConfigurationTests(unittest.TestCase):
             config.restore(self.bundle, expected_home=self.home)
         self.assertEqual(list(self.home.iterdir()), [])
 
-    @unittest.skipUnless((config.ROOT / "artifacts/capture-provider-reference/framejacker-provider-fixture").is_file(),
+    @unittest.skipUnless((config.ROOT / "artifacts/capture-provider-reference/sightcircuit-provider-fixture").is_file(),
                          "build --provider-fixes first")
     def test_provider_crash_recovery_refuses_living_or_replaced_endpoint(self):
         for replace in (False, True):
             with self.subTest(replace=replace), tempfile.TemporaryDirectory(dir=self.root) as runtime:
-                process = subprocess.Popen([str(config.ROOT / "artifacts/capture-provider-reference/framejacker-provider-fixture"),
+                process = subprocess.Popen([str(config.ROOT / "artifacts/capture-provider-reference/sightcircuit-provider-fixture"),
                                             "--serve-generated", runtime], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 try:
                     with selectors.DefaultSelector() as selector:
@@ -141,7 +141,7 @@ class LayerConfigurationTests(unittest.TestCase):
                         config.recover_provider(runtime)
                     process.kill()
                     process.wait(timeout=2)
-                    endpoint = Path(runtime) / "framejacker-camera-provider/camera.sock"
+                    endpoint = Path(runtime) / "sightcircuit-camera-provider/camera.sock"
                     if replace:
                         endpoint.unlink()
                         endpoint.write_bytes(b"foreign")

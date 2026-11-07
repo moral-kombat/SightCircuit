@@ -3,7 +3,7 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "framejacker"
+name = "sightcircuit"
 version = "0.1.0"
 description = "Object recognition for Steam Frame recordings and bounded live input"
 readme = "README.md"
@@ -16,15 +16,15 @@ dependencies = []
 [project.optional-dependencies]
 replay = ["av>=16.1"]
 window = [
-    "framejacker[replay]",
+    "sightcircuit[replay]",
     "numpy>=2.2",
     "opencv-python-headless>=4.12,<5",  # MobileNet-SSD needs OpenCV 4's Caffe importer.
     "pyside6-essentials>=6.12",
 ]
-dev = ["framejacker[window]", "onnxruntime>=1.31", "ruff==0.14.2"]
+dev = ["sightcircuit[window]", "onnxruntime>=1.31", "ruff==0.14.2"]
 
 [tool.setuptools.packages.find]
-include = ["framejacker*"]
+include = ["sightcircuit*"]
 
 [tool.ruff]
 target-version = "py312"

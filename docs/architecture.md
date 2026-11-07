@@ -1,6 +1,6 @@
 # Architecture and roadmap
 
-Framejacker separates input, inference and presentation so a new camera backend
+SightCircuit separates input, inference and presentation so a new camera backend
 can feed the existing detector and display. The implemented replay path selects
 one recorded track with PyAV, runs MobileNet-SSD on CPU and presents an annotated
 image in Qt and, optionally, a native OpenVR panel. A separate bounded mirror
@@ -36,24 +36,24 @@ layout, orientation, source/session or HUD configuration changes must fail close
 stop result presentation/inference and expire prior content rather than reuse an
 old mask. Stale results must expire independently of inference and heartbeats.
 Do not silently recalibrate or enlarge the visible HUD beyond the qualified mask.
-`framejacker/context.py` holds this rule once: `CaptureContext.admit(frame)` is
+`sightcircuit/context.py` holds this rule once: `CaptureContext.admit(frame)` is
 called on publish, before inference and before output, and its first failure
 invalidates every later admission in the run.
 
-The synthetic-only implementation is now offline-tested: `framejacker/hud/` owns
+The synthetic-only implementation is now offline-tested: `sightcircuit/hud/` owns
 validated source/format/layout contracts, full per-eye footprints plus margins,
 masking before resize and a fixed 320 x 128 tile with up to three names and
 approximate view-direction arrows. Detections overlapping masked regions or
 crossing eye boundaries are rejected. No scene video or leader lines enter the
 HUD. `mirror_recognize.py` and `live_pipeline.py` integrate the owned masked
-input; `framejacker.overlay` freezes geometry/opacity while permitting visibility
+input; `sightcircuit.overlay` freezes geometry/opacity while permitting visibility
 changes. Existing native expiring-frame transport is reused without a new
 bridge/protocol change. Only synthetic calibration is accepted; live mirror HUD
 input is rejected before opening, and real HUD output remains blocked.
 
 A calibration pins five session tokens, and a bound mask rejects a frame
 when any of them is neither declared by its source nor reported by the frame.
-`framejacker/sources/session.py` gives the mirror source a read-only source
+`sightcircuit/sources/session.py` gives the mirror source a read-only source
 for each. `MirrorSource(session=...)` declares them before it opens and stamps
 every frame with the values read for it. A token that cannot be observed then
 stays undeclared for the run with a named reason, so the mask rejects the
@@ -142,7 +142,7 @@ flowchart LR
     Results --> Overlay[Head-relative VR panel]
 ```
 
-These stages are implemented as the `framejacker` package's `FrameSource`,
+These stages are implemented as the `sightcircuit` package's `FrameSource`,
 `convert.to_bgr`, `Detector`, `annotate` and `Sink` interfaces, connected by
 `Pipeline`, the one recognition engine. File replay uses its every-frame mode;
 the bounded mirror recognizer (`MirrorSource`) and the synthetic live HUD run
@@ -177,9 +177,9 @@ and license must be recorded together for reproducible results.
 
 ## Recognition implementation and model replacement
 
-The implemented detector is [`MobileNetSSD`](../framejacker/detection.py), shared
+The implemented detector is [`MobileNetSSD`](../sightcircuit/detection.py), shared
 by file replay and the bounded mirror recognizer through the
-[shared pipeline](../framejacker/pipeline.py). It loads SHA-256-verified
+[shared pipeline](../sightcircuit/pipeline.py). It loads SHA-256-verified
 MobileNet-SSD Caffe weights/configuration into OpenCV DNN, explicitly selects
 CPU execution and limits OpenCV to two threads. It recognizes the 20 Pascal VOC
 foreground classes plus a background output; it has no rug class. A rug labeled
@@ -212,7 +212,7 @@ probabilities or a measured accuracy percentage.
 The detector boundary is the `Detector` protocol; drawing is separate:
 
 ```python
-result = detector.detect(bgr_image, threshold)   # framejacker.frame.DetectionResult
+result = detector.detect(bgr_image, threshold)   # sightcircuit.frame.DetectionResult
 # result.detections: (Detection(label, confidence, box_xyxy), ...) in input pixels
 # result.labels: sorted label strings
 # result.inference_ms: time spent in the model's forward call
@@ -231,7 +231,7 @@ not to a replacement model or a full live VR pipeline.
 
 YOLOX-Nano instead letterboxes its input: the image is scaled to fit 416 × 416
 without distortion, padded at the bottom/right with gray 114, and boxes are
-mapped back through the inverse transform (`framejacker/preprocess.py`). Its
+mapped back through the inverse transform (`sightcircuit/preprocess.py`). Its
 scores are objectness × class probability after class-aware NMS at IoU 0.45.
 Detectors keep native label names in reports (`sofa` for MobileNet-SSD,
 `couch` for YOLOX); evaluation compares them through canonical COCO names.

@@ -1,6 +1,6 @@
 """Compare fills for the native HUD mask with the real detectors; write a JSON report.
 
-The library is ``framejacker/mask_fill_evaluation.py``. Inputs are the
+The library is ``sightcircuit/mask_fill_evaluation.py``. Inputs are the
 synthetic HUD source's uniform gray frames with the fixture calibration and the
 seed stills with a pasted mask. Results are runner-CPU measurements, never
 Frame or headset results. With ``--expect-clean-gray-sweep`` the run fails
@@ -16,12 +16,12 @@ import sys
 
 if not __package__:  # Run as a file: import this checkout's packages without installation.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from framejacker import mask_fill_evaluation as fills
-from framejacker.detection import DETECTORS, create_detector, describe
-from framejacker.errors import FramejackerError
+from sightcircuit import mask_fill_evaluation as fills
+from sightcircuit.detection import DETECTORS, create_detector, describe
+from sightcircuit.errors import SightCircuitError
 
 ROOT = Path(__file__).resolve().parents[1]
-DOWNLOADS = ROOT / ".cache/framejacker/evaluation"
+DOWNLOADS = ROOT / ".cache/sightcircuit/evaluation"
 DEFAULT_MANIFEST = ROOT / "evaluation/seed.json"
 SCOPE = ("Runner CPU on generated 96x64 gray frames (synthetic fixture calibration) and public seed stills with a "
          "pasted mask; not Frame, headset or composited-mirror evidence")
@@ -98,7 +98,7 @@ def main(argv=None):
         report["summary"] = fills.summary(report)
         print_summary(report["summary"])
         report["status"] = "evaluated"
-    except (ImportError, OSError, ValueError, RuntimeError, FramejackerError) as error:
+    except (ImportError, OSError, ValueError, RuntimeError, SightCircuitError) as error:
         report["error"] = str(error)
     text = json.dumps(report, indent=2)
     print(text)

@@ -307,7 +307,7 @@ that object, and any world position, are not claimed.
 The owner answered these in a decision interview; the rows after "Frame agent"
 were answered later the same day. Each device step still needs
 the owner present at the time it runs. None of these decisions is evidence, and
-none opens a gate in `framejacker/gates.py`.
+none opens a gate in `sightcircuit/gates.py`.
 
 | Topic | Decision |
 | --- | --- |

@@ -4,10 +4,10 @@ from pathlib import Path
 import unittest
 from unittest.mock import Mock
 
-from framejacker import gates
+from sightcircuit import gates
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCES = sorted([*(ROOT / "framejacker").rglob("*.py"), *(ROOT / "scripts").glob("*.py")])
+SOURCES = sorted([*(ROOT / "sightcircuit").rglob("*.py"), *(ROOT / "scripts").glob("*.py")])
 CLAIMS = frozenset(gate.claim for gate in gates.GATES)
 GATE_NAMES = {name for name, value in vars(gates).items() if isinstance(value, gates.Gate)}
 

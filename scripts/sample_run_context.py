@@ -17,8 +17,8 @@ import sys
 if not __package__:  # Run as a file: import this checkout's packages without installation.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from framejacker.runtime import sensors  # noqa: E402
-from framejacker.runtime.guard import stop_on_signals  # noqa: E402
+from sightcircuit.runtime import sensors  # noqa: E402
+from sightcircuit.runtime.guard import stop_on_signals  # noqa: E402
 
 
 def build_parser():

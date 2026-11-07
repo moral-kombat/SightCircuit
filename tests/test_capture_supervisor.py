@@ -44,7 +44,7 @@ def keep_another_thread(test):
 class CaptureSupervisorTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.temp = tempfile.TemporaryDirectory(prefix="framejacker-watchdog-tests-")
+        cls.temp = tempfile.TemporaryDirectory(prefix="sightcircuit-watchdog-tests-")
         cls.root = Path(cls.temp.name)
         cls.worker = cls.root / "worker"
         subprocess.run([os.environ.get("CXX", "g++"), "-std=c++17", "-O2", "-Wall", "-Wextra", "-Werror",
@@ -295,7 +295,7 @@ from scripts.capture_supervisor import supervise, StopRequested
 delivered = []
 def stop(number, frame):
     # Read the lease as the recorded cancellation is delivered, before anything else can save it.
-    leases = Path(sys.argv[2]).glob('framejacker-capture-*/lease.json')
+    leases = Path(sys.argv[2]).glob('sightcircuit-capture-*/lease.json')
     delivered.extend(json.loads(path.read_text()) for path in leases)
     raise StopRequested(number)
 signal.signal(signal.SIGINT, stop)
@@ -677,7 +677,7 @@ class RecordedSignalsTests(unittest.TestCase):
             if cancel:
                 signal.raise_signal(signal.SIGTERM)
             raise OSError("synthetic spawn failure")
-        with tempfile.TemporaryDirectory(prefix="framejacker-watchdog-tests-") as runtime:
+        with tempfile.TemporaryDirectory(prefix="sightcircuit-watchdog-tests-") as runtime:
             worker = Path(runtime) / "worker"
             worker.write_bytes(b"")
             worker.chmod(0o700)

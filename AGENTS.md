@@ -1,4 +1,4 @@
-# Framejacker session guide
+# SightCircuit session guide
 
 Object recognition for Steam Frame. Start with [docs/README.md](docs/README.md),
 [docs/status.md](docs/status.md) (evidence) and the
@@ -8,10 +8,10 @@ user-reported headset results distinct, and record evidence in status.
 
 ## Layout
 
-- `framejacker/`: library (frames, `Pipeline`, sources, detectors, evaluation,
+- `sightcircuit/`: library (frames, `Pipeline`, sources, detectors, evaluation,
   runtime helpers). See [development](docs/development.md#python-package-and-pipeline).
 - `scripts/`: documented command entry points only; they import the checkout
-  without installation. Shared code goes in `framejacker/`; no active script
+  without installation. Shared code goes in `sightcircuit/`; no active script
   imports another (`tests/test_scripts_boundary.py`). The paused capture-provider
   scripts are quarantined in place; see
   [the capture track](docs/development.md#paused-capture-provider-track).
@@ -26,7 +26,7 @@ Python 3.12 is required. If `python3` is another version, pass the interpreter:
 
 ```bash
 sudo apt-get install -y --no-install-recommends libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
-FRAMEJACKER_PYTHON=python3.12 bash scripts/setup_window.sh   # .venv-replay: replay, Qt, OpenCV, ONNX Runtime
+SIGHTCIRCUIT_PYTHON=python3.12 bash scripts/setup_window.sh   # .venv-replay: replay, Qt, OpenCV, ONNX Runtime
 bash scripts/setup.sh                                        # .venv: smoke check (needs uv)
 bash scripts/build_overlay_bridge.sh && bash scripts/build_shm_reader.sh
 bash scripts/build_capture_supervisor.sh && bash scripts/build_capture_gpu_check.sh

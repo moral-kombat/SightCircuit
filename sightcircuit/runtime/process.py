@@ -3,7 +3,7 @@
 Used by the SteamVR mirror launcher (``sources.mirror.launch``, for
 ``mirror_check`` and ``mirror_recognize``), whose workers stream progress
 reports. Command workers that need an owned process group and the Linux
-parent-loss guardian use ``framejacker/runtime/guard.py`` (``supervise``).
+parent-loss guardian use ``sightcircuit/runtime/guard.py`` (``supervise``).
 The cancellation pair ``StopRequested``/``stop_on_signal`` is ``guard``'s,
 re-exported here: a launcher runs ``run_bounded`` inside
 ``guard.sigterm_cancels()`` so that a SIGTERM is recognised as a cancellation.

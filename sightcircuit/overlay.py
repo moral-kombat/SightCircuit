@@ -16,7 +16,7 @@ from .hud.contract import (EXPIRING_FRAME_PREFIX_FORMAT, FRAME_PREFIX_FORMAT, HU
                            PACKET_MAGIC, RGBA_BYTES, SETTINGS_FORMAT)
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_BRIDGE = ROOT / "artifacts/overlay-bridge/framejacker-overlay-bridge"
+DEFAULT_BRIDGE = ROOT / "artifacts/overlay-bridge/sightcircuit-overlay-bridge"
 # (name, low, high); the native bridge takes these from the generated tools/hud_contract.hpp.
 PANEL_LIMITS = (("width", .25, 1.5), ("distance", .5, 3), ("x", -1, 1), ("y", -1, 1), ("opacity", .2, 1))
 

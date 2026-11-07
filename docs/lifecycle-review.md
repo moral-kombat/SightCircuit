@@ -86,7 +86,7 @@ MIT, at `066a5c87b4cc57a54ce60fbaea69e9fa39ae3a94`:
 - `headset/vr_overlay.cpp`, `VrOverlay::shutdown`, hides, clears and destroys
   overlays before `VR_Shutdown`, then retires Vulkan textures. Its additional
   400 ms wait is a source pattern, not evidence of physical recovery or a
-  scheduling guarantee. Framejacker retains bounded independent supervision
+  scheduling guarantee. SightCircuit retains bounded independent supervision
   and individual cleanup outcomes; this review does not adopt a guessed delay.
 - The pose-validity check in placement and `readFrameStats` provide useful
   references for a future separately scoped measurement run. Compositor timing
@@ -97,7 +97,7 @@ MIT, at `066a5c87b4cc57a54ce60fbaea69e9fa39ae3a94`:
 - `headset/vk_texture.cpp` checks submission and a bounded one-second fence wait
   for its own uploads. Its texture destruction includes `vkDeviceWaitIdle`.
   This supplies neither producer synchronization for camera allocations nor
-  proof that changing Framejacker's upload method would improve performance.
+  proof that changing SightCircuit's upload method would improve performance.
 
 No upstream source was copied or new dependency activated. No texture-upload
 strategy changed; no profiling on Frame was available. Attribution is retained

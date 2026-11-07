@@ -11,12 +11,12 @@ import json
 from pathlib import Path
 import unittest
 
-from framejacker import assets, detection
+from sightcircuit import assets, detection
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = "dog.jpg"
 SEED_MANIFEST = ROOT / "evaluation/seed.json"
-SEED_IMAGES = ROOT / ".cache/framejacker/evaluation"  # evaluate_detectors.py --fetch downloads here.
+SEED_IMAGES = ROOT / ".cache/sightcircuit/evaluation"  # evaluate_detectors.py --fetch downloads here.
 
 
 def model_assets(*detectors):

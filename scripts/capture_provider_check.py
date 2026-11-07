@@ -1,4 +1,4 @@
-"""Supervise metadata inspection of an already running Framejacker provider."""
+"""Supervise metadata inspection of an already running SightCircuit provider."""
 import argparse
 import json
 import os
@@ -15,7 +15,7 @@ except ImportError:
     from capture_supervisor import StopRequested, cleanup_signals
 
 ROOT = Path(__file__).resolve().parents[1]
-BINARY = ROOT / "artifacts/capture-provider-reference/framejacker-provider-inspect"
+BINARY = ROOT / "artifacts/capture-provider-reference/sightcircuit-provider-inspect"
 MAX_STDOUT = 128 * 1024
 MAX_STDERR = 16 * 1024
 
@@ -32,7 +32,7 @@ def new_report():
 
 
 def validate(native, code):
-    if (not isinstance(native, dict) or native.get("report_kind") != "framejacker_provider_metadata" or
+    if (not isinstance(native, dict) or native.get("report_kind") != "sightcircuit_provider_metadata" or
             native.get("schema_version") != 1 or native.get("provider_protocol_version") != 3 or
             type(native.get("exit_code")) is not int or native["exit_code"] != code or
             (native.get("status"), code) not in (("inspected", 0), ("inspection_failed", 1)) or

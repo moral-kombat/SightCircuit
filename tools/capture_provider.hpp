@@ -1,4 +1,4 @@
-// Original Framejacker provider contract, registry and owned endpoint. MIT.
+// Original SightCircuit provider contract, registry and owned endpoint. MIT.
 // No Vulkan loader, GPU calls or camera acquisition.
 #pragma once
 #include "capture_transport.hpp"
@@ -13,7 +13,7 @@
 #include <thread>
 #include <sstream>
 
-namespace framejacker::provider {
+namespace sightcircuit::provider {
 using namespace transport;
 constexpr uint32_t magic = 0x50434a46; // FJCP, a separate endpoint/ABI from MRHAND.
 enum Kind : uint32_t { data = 1, end = 2, ping = 3, unchanged = 4, changed = 5,
@@ -276,7 +276,7 @@ public:
         if (runtime.empty() || runtime[0] != '/' || lstat(runtime.c_str(), &info))
             throw Error("provider_runtime_missing");
         private_directory(info);
-        directory_path_ = runtime + "/framejacker-camera-provider";
+        directory_path_ = runtime + "/sightcircuit-camera-provider";
         if (mkdir(directory_path_.c_str(), 0700) && errno != EEXIST) throw Error("provider_mkdir_failed");
         directory_ = Fd(open(directory_path_.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
         if (directory_.get() < 0 || fstat(directory_.get(), &directory_identity_)) throw Error("provider_directory_unavailable");
@@ -381,4 +381,4 @@ public:
             response.info.generation != terminal_.generation) throw Error("provider_registry_changed");
     }
 };
-} // namespace framejacker::provider
+} // namespace sightcircuit::provider

@@ -12,11 +12,11 @@ import time
 if not __package__:  # Run as a file: import this checkout's packages without installation.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from framejacker.runtime.output import publish_new  # noqa: E402
-from framejacker.sources.mirror_device import grayscale_png  # noqa: E402
+from sightcircuit.runtime.output import publish_new  # noqa: E402
+from sightcircuit.sources.mirror_device import grayscale_png  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-READER = ROOT / "artifacts/shm-reader/framejacker-shm-reader"
+READER = ROOT / "artifacts/shm-reader/sightcircuit-shm-reader"
 DEFAULT_SOURCE = Path("/dev/shm/mrhand-pt")
 
 
@@ -81,7 +81,7 @@ def run_reader(source, seconds, camera=0, frames=0, max_age_ms=1000,
                     if len(output) > 16384:
                         raise ValueError("oversized native report")
                     native = json.loads(output)
-                    if (native["report_kind"] != "framejacker_shm_reader" or
+                    if (native["report_kind"] != "sightcircuit_shm_reader" or
                             native["exit_code"] != process.returncode):
                         raise ValueError("inconsistent native report")
                     report["native"] = native
@@ -157,7 +157,7 @@ def main(argv=None):
         discovery = inspect_source(source)
         report.update(status="discovery_only", source=discovery, exit_code=0)
         if args.read:
-            with tempfile.TemporaryDirectory(prefix="framejacker-shm-") as temporary:
+            with tempfile.TemporaryDirectory(prefix="sightcircuit-shm-") as temporary:
                 pgm = Path(temporary) / "preview.pgm" if args.preview else None
                 if args.preview:
                     target = args.preview.expanduser().absolute()
@@ -169,7 +169,7 @@ def main(argv=None):
                 if args.preview and report["exit_code"] == 0:
                     png, width, height = encode_preview(pgm)
                     # Publish atomically without replacing any existing target, even in a race.
-                    publish_new(target, png, ".framejacker-shm-")
+                    publish_new(target, png, ".sightcircuit-shm-")
                     report.update(images_saved=True, preview_path=str(target),
                                   preview_width=width, preview_height=height)
     except (OSError, ValueError) as error:

@@ -128,7 +128,7 @@ def validate_worker_report(report, returncode, *, validation_only=None):
         native = bridge.get("native_report") or {}
         mode = "--validate-calibration-marker" if report["calibration_validation_only"] else "--calibration-marker"
         if (report.get("status") != "completed" or not report["cleanup_ok"] or
-                native.get("report_kind") != "framejacker_overlay_bridge" or
+                native.get("report_kind") != "sightcircuit_overlay_bridge" or
                 any(type(native.get(key)) is not int or native[key] < 0 for key in (
                     "native_started_ns", "marker_request_ns", "marker_submit_returned_ns",
                     "display_deadline_ns", "cutoff_requested_ns", "cleanup_returned_ns")) or

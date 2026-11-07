@@ -18,7 +18,7 @@ except ImportError:
     from capture_session import Session, recover
 
 ROOT = Path(__file__).resolve().parents[1]
-LAUNCHER = ROOT / "artifacts/capture-supervisor/framejacker-capture-worker-exec"
+LAUNCHER = ROOT / "artifacts/capture-supervisor/sightcircuit-capture-worker-exec"
 WORKER = ROOT / "artifacts/capture-provider-reference/reference-ptgrab"
 MAX_OUTPUT = 256 * 1024
 MAX_LINE = 8192
@@ -168,8 +168,8 @@ def supervise(*, worker=WORKER, launcher=LAUNCHER, runtime=None, seconds=10, max
             raise ValueError("worker_not_prepared_executable")
         session = Session(runtime or os.environ.get("XDG_RUNTIME_DIR", ""))
         report["session_path"] = str(session.path)
-        environment = dict(os.environ, FRAMEJACKER_CAPTURE_OUTPUT=str(session.path / "frames.shm"),
-                           FRAMEJACKER_CAPTURE_SUPERVISOR_PID=str(os.getpid()))
+        environment = dict(os.environ, SIGHTCIRCUIT_CAPTURE_OUTPUT=str(session.path / "frames.shm"),
+                           SIGHTCIRCUIT_CAPTURE_SUPERVISOR_PID=str(os.getpid()))
         arguments = worker_arguments if worker_arguments is not None else [
             "--allow-experimental-capture", "--seconds", str(seconds), "--max-fps", str(max_fps)]
         # A cancellation while the worker starts is recorded (not masked: the worker would

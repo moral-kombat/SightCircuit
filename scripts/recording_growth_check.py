@@ -1,6 +1,6 @@
 """Bounded MP4 growth observation: top-level headers only, never media payloads.
 
-The header scan (``scan_headers``) lives in ``framejacker.sources.recording``; this
+The header scan (``scan_headers``) lives in ``sightcircuit.sources.recording``; this
 command watches one growing file and reports what changed.
 """
 import argparse
@@ -15,8 +15,8 @@ import time
 if not __package__:  # Run as a file: import this checkout's packages without installation.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from framejacker.runtime.guard import stop_on_signals, supervise  # noqa: E402
-from framejacker.sources.recording import Budget, GrowthError, scan_headers  # noqa: E402
+from sightcircuit.runtime.guard import stop_on_signals, supervise  # noqa: E402
+from sightcircuit.sources.recording import Budget, GrowthError, scan_headers  # noqa: E402
 
 MAX_WAIT_SECONDS = 120
 

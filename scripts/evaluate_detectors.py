@@ -16,15 +16,15 @@ import time
 
 if not __package__:  # Run as a file: import this checkout's packages without installation.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from framejacker import assets, detection, evaluation
-from framejacker.convert import MAX_PROCESSING_SIDE, to_bgr
-from framejacker.detection import DETECTORS, create_detector, describe
-from framejacker.errors import FramejackerError
-from framejacker.frame import Frame
-from framejacker.sources.mirror_device import grayscale_sample, validate_format
+from sightcircuit import assets, detection, evaluation
+from sightcircuit.convert import MAX_PROCESSING_SIDE, to_bgr
+from sightcircuit.detection import DETECTORS, create_detector, describe
+from sightcircuit.errors import SightCircuitError
+from sightcircuit.frame import Frame
+from sightcircuit.sources.mirror_device import grayscale_sample, validate_format
 
 ROOT = Path(__file__).resolve().parents[1]
-DOWNLOADS = ROOT / ".cache/framejacker/evaluation"
+DOWNLOADS = ROOT / ".cache/sightcircuit/evaluation"
 DEFAULT_MANIFEST = ROOT / "evaluation/seed.json"
 MIRROR_PREVIEW_SIDE = 640  # The bound sources/mirror.capture gives the preview mirror_check publishes.
 AUDIT_VARIANTS = {
@@ -181,9 +181,9 @@ def source_revision():
                               capture_output=True, timeout=10).stdout
     except (OSError, subprocess.SubprocessError) as error:
         return {"revision": None, "error": str(error)}
-    source_files = ("framejacker/convert.py", "framejacker/detection.py", "framejacker/evaluation.py",
-                    "framejacker/frame.py", "framejacker/labels.py", "framejacker/preprocess.py",
-                    "framejacker/sources/mirror_device.py", "scripts/evaluate_detectors.py",
+    source_files = ("sightcircuit/convert.py", "sightcircuit/detection.py", "sightcircuit/evaluation.py",
+                    "sightcircuit/frame.py", "sightcircuit/labels.py", "sightcircuit/preprocess.py",
+                    "sightcircuit/sources/mirror_device.py", "scripts/evaluate_detectors.py",
                     "scripts/smoke-assets.json")
     return {"revision": revision, "working_tree_dirty": bool(status),
             "working_tree_paths": [line[3:] for line in status.splitlines()],
@@ -255,7 +255,7 @@ def main(argv=None):
               "code": source_revision(),
               "environment": {"python": platform.python_version(), "platform": platform.platform()},
               "input_decode": "cv2.imread(..., cv2.IMREAD_COLOR) -> BGR24",
-              "conversion": {"function": "framejacker.convert.to_bgr",
+              "conversion": {"function": "sightcircuit.convert.to_bgr",
                              "maximum_processing_side": MAX_PROCESSING_SIDE},
               "warmup": {"runs_per_detector": 1, "input_index": 0, "included_in_timing": False},
               "confidence_is_calibrated_probability": False,
@@ -314,7 +314,7 @@ def main(argv=None):
             report["expectation"].update(evaluation.check_pin(pin, counts))
             print_expectation(args.expect, report["expectation"])
         report["status"] = "evaluated"
-    except (ImportError, OSError, ValueError, RuntimeError, FramejackerError) as error:
+    except (ImportError, OSError, ValueError, RuntimeError, SightCircuitError) as error:
         report["error"] = str(error)
     print(json.dumps(report, indent=2))
     if args.report:

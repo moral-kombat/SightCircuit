@@ -19,11 +19,11 @@ except ImportError as error:
     raise unittest.SkipTest("OpenCV is required for the mask fill evaluation tests") from error
 import numpy as np
 
-from framejacker import hud
-from framejacker import mask_fill_evaluation as fills
-from framejacker.frame import Detection, DetectionResult
-from framejacker.hud.mask import fill_regions, mask_regions
-from framejacker.runtime import synthetic
+from sightcircuit import hud
+from sightcircuit import mask_fill_evaluation as fills
+from sightcircuit.frame import Detection, DetectionResult
+from sightcircuit.hud.mask import fill_regions, mask_regions
+from sightcircuit.runtime import synthetic
 from tests.test_hud_fill import STEREO, calibrations, contaminations, scene
 from tests.test_hud_mask import prepare
 
@@ -287,7 +287,7 @@ class CommandTests(unittest.TestCase):
 
 class BoundaryTests(unittest.TestCase):
     def test_no_runtime_module_imports_the_evaluation(self):
-        for path in sorted([*(ROOT / "framejacker").rglob("*.py"), *(ROOT / "scripts").glob("*.py")]):
+        for path in sorted([*(ROOT / "sightcircuit").rglob("*.py"), *(ROOT / "scripts").glob("*.py")]):
             if path.name in ("mask_fill_evaluation.py", "evaluate_mask_fill.py"):
                 continue
             tree = ast.parse(path.read_text(), str(path))

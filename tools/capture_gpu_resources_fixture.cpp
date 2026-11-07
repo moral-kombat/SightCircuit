@@ -6,8 +6,8 @@
 #include <map>
 #include <sys/mman.h>
 
-namespace gpu = framejacker::gpu;
-using framejacker::transport::Error;
+namespace gpu = sightcircuit::gpu;
+using sightcircuit::transport::Error;
 static void require_at(bool condition, int line) {
     if (!condition) throw std::runtime_error("fixture_assertion_failed_line_" + std::to_string(line));
 }
@@ -25,7 +25,7 @@ struct Fake {
     static Fake *active;
     struct Object { std::string kind; uintptr_t parent = 0, bound_to = 0; bool mapped = false; };
     std::map<uintptr_t, Object> objects;
-    std::map<uintptr_t, framejacker::transport::Fd> imported_fds;
+    std::map<uintptr_t, sightcircuit::transport::Fd> imported_fds;
     std::vector<std::string> calls;
     std::vector<uint8_t> pixels = std::vector<uint8_t>(4096);
     uintptr_t next = 10;
@@ -96,10 +96,10 @@ struct Fake {
         *count = s().queue_count;
     }
     static VKAPI_ATTR void VKAPI_CALL formats(VkPhysicalDevice, VkFormat format, VkFormatProperties2 *out) {
-        if (format == framejacker::capture_import::camera_format) {
+        if (format == sightcircuit::capture_import::camera_format) {
             auto *list = static_cast<VkDrmFormatModifierPropertiesListEXT *>(out->pNext);
             if (list->pDrmFormatModifierProperties) list->pDrmFormatModifierProperties[0] = {
-                framejacker::capture_import::camera_modifier, 2, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT};
+                sightcircuit::capture_import::camera_modifier, 2, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT};
             list->drmFormatModifierCount = 1;
             return;
         }
@@ -109,7 +109,7 @@ struct Fake {
     }
     static VKAPI_ATTR VkResult VKAPI_CALL image_properties(VkPhysicalDevice, const VkPhysicalDeviceImageFormatInfo2 *info,
                                                           VkImageFormatProperties2 *out) {
-        const bool imported = info->format == framejacker::capture_import::camera_format;
+        const bool imported = info->format == sightcircuit::capture_import::camera_format;
         require(imported || (info->format == VK_FORMAT_R8_UNORM && info->usage == (VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT)));
         if (imported) {
             auto *external = static_cast<VkExternalImageFormatProperties *>(out->pNext);
@@ -159,7 +159,7 @@ struct Fake {
     }
     static VKAPI_ATTR VkResult VKAPI_CALL image(VkDevice device_value, const VkImageCreateInfo *info,
                                                const VkAllocationCallbacks *, VkImage *out) {
-        require((info->format == VK_FORMAT_R8_UNORM || info->format == framejacker::capture_import::camera_format) && info->imageType == VK_IMAGE_TYPE_2D &&
+        require((info->format == VK_FORMAT_R8_UNORM || info->format == sightcircuit::capture_import::camera_format) && info->imageType == VK_IMAGE_TYPE_2D &&
                 info->arrayLayers == 1 && info->mipLevels == 1 && info->extent.depth == 1 &&
                 (info->tiling == VK_IMAGE_TILING_OPTIMAL || info->tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT) && !info->flags);
         return s().create("image", id(device_value), out);
@@ -194,7 +194,7 @@ struct Fake {
         s().selected_type = info->memoryTypeIndex;
         auto result = s().create("memory", id(device_value), out);
         if (result == VK_SUCCESS && imported_fd >= 0)
-            s().imported_fds.emplace(id(*out), framejacker::transport::Fd(imported_fd));
+            s().imported_fds.emplace(id(*out), sightcircuit::transport::Fd(imported_fd));
         return result;
     }
     static VKAPI_ATTR void VKAPI_CALL free_memory(VkDevice, VkDeviceMemory value, const VkAllocationCallbacks *) {
@@ -362,14 +362,14 @@ static void memory_fallback() {
 }
 static void imported_parent_lifetime() {
     Fake fake;
-    framejacker::transport::Fd source(memfd_create("framejacker-resource-import", MFD_CLOEXEC));
+    sightcircuit::transport::Fd source(memfd_create("sightcircuit-resource-import", MFD_CLOEXEC));
     require(source.get() >= 0 && ftruncate(source.get(), 1 << 24) == 0);
     MrhandBufInfo info{};
     info.magic = MRHAND_MAGIC; info.generation = info.id = info.hasImage = info.hasModifier = 1;
     info.size = 1 << 24; info.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
-    info.format = framejacker::capture_import::camera_format; info.width = info.height = 2464; info.arrayLayers = 1;
-    info.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT; info.usage = framejacker::capture_import::import_usage;
-    info.modifier = framejacker::capture_import::camera_modifier; info.planeCount = 2;
+    info.format = sightcircuit::capture_import::camera_format; info.width = info.height = 2464; info.arrayLayers = 1;
+    info.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT; info.usage = sightcircuit::capture_import::import_usage;
+    info.modifier = sightcircuit::capture_import::camera_modifier; info.planeCount = 2;
     info.planeOffset[1] = 1024; info.planeRowPitch[0] = info.planeRowPitch[1] = 256;
     gpu::ImportedImage first, second;
     { auto device = gpu::Device::open(fake.api()); first = device.import_image(info, source.get());

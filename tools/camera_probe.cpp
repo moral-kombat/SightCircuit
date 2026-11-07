@@ -426,13 +426,13 @@ int probe(Json& report) {
 
 int main(int argc, char* argv[]) {
     if (argc == 2 && std::string(argv[1]) == "--help") {
-        std::cout << "Usage: framejacker-camera-probe " << kStreamOptIn << '\n'
+        std::cout << "Usage: sightcircuit-camera-probe " << kStreamOptIn << '\n'
                   << kPassthroughWarning << '\n'
                   << "Without the flag, no OpenVR initialization or camera calls occur.\n";
         return 0;
     }
     auto report = Json::object({
-        {"probe", "framejacker_public_openvr_camera"},
+        {"probe", "sightcircuit_public_openvr_camera"},
         {"schema_version", Json::number(1)},
         {"scope", "Public HMD tracked-camera API; source identity and Arcturus RGB support unverified"},
         {"status", "not_started"},

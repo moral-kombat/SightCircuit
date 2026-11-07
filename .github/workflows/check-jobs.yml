@@ -55,7 +55,7 @@ jobs:
       - name: Build transport-only adaptation and test synthetic sockets
         run: |
           bash scripts/build_capture_reference.sh --transport-fixes
-          artifacts/capture-transport-reference/framejacker-transport-fixture --self-test
+          artifacts/capture-transport-reference/sightcircuit-transport-fixture --self-test
       - name: Build publication adaptation and verify generated frames and shutdown
         run: |
           bash scripts/build_capture_reference.sh --publication-fixes
@@ -316,7 +316,7 @@ jobs:
           import tempfile
           from pathlib import Path
 
-          binary = 'artifacts/camera-probe/framejacker-camera-probe'
+          binary = 'artifacts/camera-probe/sightcircuit-camera-probe'
           opt_in = '--allow-passthrough-interruption'
           with tempfile.TemporaryDirectory() as temporary:
               env = dict(os.environ, VR_PATHREG_OVERRIDE=str(Path(temporary) / 'missing.vrpath'))

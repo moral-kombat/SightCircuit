@@ -16,15 +16,15 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 
-from framejacker import gates
-from framejacker.context import SOURCE_CHANGED, CaptureContext
-from framejacker.frame import DetectionResult
-from framejacker.hud import CaptureFormat, Footprint, HudMask
-from framejacker.hud.contract import SESSION_TOKENS, token_valid
-from framejacker.runtime import live, synthetic
-from framejacker.sources import mirror as acquisition
-from framejacker.sources import session as tokens
-from framejacker.sources.mirror import MirrorSource
+from sightcircuit import gates
+from sightcircuit.context import SOURCE_CHANGED, CaptureContext
+from sightcircuit.frame import DetectionResult
+from sightcircuit.hud import CaptureFormat, Footprint, HudMask
+from sightcircuit.hud.contract import SESSION_TOKENS, token_valid
+from sightcircuit.runtime import live, synthetic
+from sightcircuit.sources import mirror as acquisition
+from sightcircuit.sources import session as tokens
+from sightcircuit.sources.mirror import MirrorSource
 
 BOOT_A = "0f0e0d0c-0b0a-4908-8706-050403020100"
 BOOT_B = "11111111-2222-4333-8444-555555555555"

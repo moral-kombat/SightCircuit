@@ -5,7 +5,7 @@
 `ff6a2b29bc50c9497d66fd7ff07e00b61f9eb082`. The upstream
 [MIT notice](../../third_party/mrhand/LICENSE) applies to its source/context.
 Original helpers in `tools/capture_transport.hpp` and the synthetic fixture
-use Framejacker's MIT license.
+use SightCircuit's MIT license.
 
 The optional `--transport-fixes` reference build applies this patch to a
 disposable copy and adds the helper header. The clean pinned cache is retained.
@@ -42,7 +42,7 @@ execution is not tested by the fixture; no XRService producer fence is supplied.
 
 `0005-provider-lifetime-and-provenance.patch` applies after patches 0001–0004.
 The optional `--provider-fixes` mode replaces the old layer implementation with
-the original Framejacker registry/dispatch/server helpers and extends the worker
+the original SightCircuit registry/dispatch/server helpers and extends the worker
 to a separate v2 endpoint/packet ABI. It captures exporter metadata and GPU/driver
 UUIDs, checks generations around copies/publication, scopes handles by device,
 owns callback/server lifetime and preserves foreign runtime files. Original
@@ -54,7 +54,7 @@ This patch contains removed upstream layer text under the upstream MIT notice.
 The current `--provider-fixes` mode applies all six patches. It replaces the
 latest raw camera reader with a no-runtime access gate: explicit capture is
 blocked because producer release/ready/return synchronization is unavailable.
-The original Framejacker provider helpers now use a v3 metadata request, reject
+The original SightCircuit provider helpers now use a v3 metadata request, reject
 image-buffer requests, and retain no image FDs in production layer state.
 The separate metadata inspector reads only bounded registry records and links
 without Vulkan. The patch retains removed upstream/adapted source text under

@@ -4,7 +4,7 @@ An optional sidecar beside a latency run, so a run's numbers can be read
 against CPU load, thermal zones, throttle state, clock caps, GPU frequency,
 power rails, battery and available memory. It only reads ``/proc`` and
 ``/sys``: no OpenVR, no camera, no SteamVR process, no write outside its own
-output. It is never a Tier A runner task (``framejacker/agent/tasks.py``).
+output. It is never a Tier A runner task (``sightcircuit/agent/tasks.py``).
 ``scripts/sample_run_context.py`` is the command.
 
 The Frame paths are **unconfirmed on SteamOS 0.5.6**: upstream tested them on

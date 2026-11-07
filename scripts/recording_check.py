@@ -7,7 +7,7 @@ import sys
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from framejacker.sources.recording import RecordingError, inspect_recording, latest_recording  # noqa: E402
+from sightcircuit.sources.recording import RecordingError, inspect_recording, latest_recording  # noqa: E402
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)

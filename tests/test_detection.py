@@ -6,14 +6,14 @@ import tempfile
 import unittest
 from unittest import mock
 
-from framejacker import assets, detection
-from framejacker.labels import COCO_CLASSES, canonical
-from framejacker.preprocess import Letterbox
+from sightcircuit import assets, detection
+from sightcircuit.labels import COCO_CLASSES, canonical
+from sightcircuit.preprocess import Letterbox
 from tests.asset_gate import model_assets, requires_assets
 
 ROOT = Path(__file__).resolve().parents[1]
 AVAILABLE = all(importlib.util.find_spec(name) for name in ("cv2", "numpy"))
-MODELS = ROOT / ".cache/framejacker/assets"
+MODELS = ROOT / ".cache/sightcircuit/assets"
 
 
 class AssetTests(unittest.TestCase):
@@ -117,7 +117,7 @@ class LabelAndTransformTests(unittest.TestCase):
         self.assertEqual(transform.to_source(-5, 0, 1000, 1000), (0, 0, 831, 623))
 
     def test_letterbox_inverse_uses_realized_resize_ratio(self):
-        from framejacker.preprocess import letterbox_geometry
+        from sightcircuit.preprocess import letterbox_geometry
 
         resized_w, resized_h, transform = letterbox_geometry(1440, 1080, 416)
         self.assertEqual((resized_w, resized_h), (415, 311))
@@ -125,7 +125,7 @@ class LabelAndTransformTests(unittest.TestCase):
         self.assertEqual(transform.to_source(0, 300, 0, 300)[1], 1041)
 
     def test_letterbox_inverse_error_is_subpixel_for_common_sources(self):
-        from framejacker.preprocess import letterbox_geometry
+        from sightcircuit.preprocess import letterbox_geometry
 
         for width, height in ((640, 360), (960, 540), (1280, 720), (1920, 1080), (1440, 1080), (1366, 768)):
             resized_w, resized_h, transform = letterbox_geometry(width, height, 416)
@@ -142,7 +142,7 @@ class LabelAndTransformTests(unittest.TestCase):
 class LetterboxImageTests(unittest.TestCase):
     def test_aspect_preserved_with_padding(self):
         import numpy as np
-        from framejacker.preprocess import letterbox
+        from sightcircuit.preprocess import letterbox
 
         image = np.full((100, 200, 3), 7, dtype=np.uint8)
         padded, transform = letterbox(image, 64)

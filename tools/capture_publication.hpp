@@ -1,4 +1,4 @@
-// Original Framejacker bounded luma publisher; MIT licensed. No Vulkan calls.
+// Original SightCircuit bounded luma publisher; MIT licensed. No Vulkan calls.
 #pragma once
 #include "capture_transport.hpp"
 #include "shm_common.hpp"
@@ -8,7 +8,7 @@
 #include <sys/prctl.h>
 #include <sys/stat.h>
 
-namespace framejacker::publication {
+namespace sightcircuit::publication {
 using transport::Error;
 using transport::Fd;
 
@@ -27,7 +27,7 @@ inline std::string runtime_source() {
     struct stat info{};
     if (lstat(runtime, &info) != 0) throw Error("runtime_directory_unavailable");
     require_private_directory(info);
-    std::string parent = std::string(runtime) + "/framejacker-capture";
+    std::string parent = std::string(runtime) + "/sightcircuit-capture";
     if (mkdir(parent.c_str(), 0700) != 0 && errno != EEXIST)
         throw Error("publication_directory_create_failed");
     if (lstat(parent.c_str(), &info) != 0) throw Error("publication_directory_unavailable");
@@ -48,7 +48,7 @@ public:
     Publisher(const std::string &path, uint32_t width, uint32_t height, uint32_t cameras)
         : width_(width), height_(height), cameras_(cameras) {
         if (!width || !height || width > 8192 || height > 8192 || cameras < 1 || cameras > 2 ||
-            uint64_t(width) * height > framejacker_shm::maxFrameBytes)
+            uint64_t(width) * height > sightcircuit_shm::maxFrameBytes)
             throw Error("invalid_publication_dimensions");
         auto selected = std::filesystem::path(path);
         if (!selected.is_absolute() || selected.filename().empty() ||
@@ -98,12 +98,12 @@ public:
     bool publish(unsigned camera, const uint8_t *pixels, size_t bytes,
                  uint64_t observation_ns, uint32_t buffer_id, uint64_t frame_count) {
         if (camera >= cameras_ || !pixels || bytes != frame_bytes_ || !buffer_id ||
-            !frame_count || !observation_ns || observation_ns > framejacker_shm::nowNs())
+            !frame_count || !observation_ns || observation_ns > sightcircuit_shm::nowNs())
             throw Error("invalid_publication_metadata");
         verify();
         // A delayed stable-strip result must not replace a newer observation.
         if (observation_ns <= last_time_[camera] ||
-            framejacker_shm::ageNs(observation_ns) > 1000000000ull) return false;
+            sightcircuit_shm::ageNs(observation_ns) > 1000000000ull) return false;
         if (frame_count <= last_count_[camera]) throw Error("publication_counter_regressed");
         auto &slot = reinterpret_cast<MrhandPtHeader *>(mapping_)->slot[camera];
         const uint64_t sequence = __atomic_load_n(&slot.seq, __ATOMIC_RELAXED);
@@ -150,9 +150,9 @@ inline RunOptions parse_options(int argc, char **argv) {
         std::string argument(argv[i]);
         if (argument == "--allow-experimental-capture" && !allowed) allowed = true;
         else if (argument == "--seconds" && !seconds && i + 1 < argc) {
-            options.seconds = unsigned(framejacker_shm::number(argv[++i], 1, 10)); seconds = true;
+            options.seconds = unsigned(sightcircuit_shm::number(argv[++i], 1, 10)); seconds = true;
         } else if (argument == "--max-fps" && !fps && i + 1 < argc) {
-            options.fps = unsigned(framejacker_shm::number(argv[++i], 1, 10)); fps = true;
+            options.fps = unsigned(sightcircuit_shm::number(argv[++i], 1, 10)); fps = true;
         } else throw Error("invalid_arguments");
     }
     if (!allowed || !seconds) throw Error("invalid_arguments");
@@ -175,10 +175,10 @@ public:
         if (seconds < 1 || seconds > 10) throw Error("invalid_arguments");
         deadline_ = transport::Clock::now() + std::chrono::seconds(seconds);
         const pid_t parent = getppid();
-        framejacker_shm::stopped = 0;
+        sightcircuit_shm::stopped = 0;
         try {
             struct sigaction action{};
-            action.sa_handler = framejacker_shm::stop;
+            action.sa_handler = sightcircuit_shm::stop;
             sigemptyset(&action.sa_mask);
             if (sigaction(SIGINT, &action, &old_int_) != 0) throw Error("signal_setup_failed");
             has_int_ = true;
@@ -193,7 +193,7 @@ public:
     RunLimit(const RunLimit &) = delete;
     RunLimit &operator=(const RunLimit &) = delete;
     ~RunLimit() { restore(); }
-    bool running() const { return !framejacker_shm::stopped && transport::Clock::now() < deadline_; }
-    int signal() const { return framejacker_shm::stopped; }
+    bool running() const { return !sightcircuit_shm::stopped && transport::Clock::now() < deadline_; }
+    int signal() const { return sightcircuit_shm::stopped; }
 };
-} // namespace framejacker::publication
+} // namespace sightcircuit::publication

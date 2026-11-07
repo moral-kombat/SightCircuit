@@ -15,7 +15,7 @@ Synthetic run. The only accepted acquisition kind remains synthetic. Hardware
 adapters and production output require separate gates; this wrapper lifts none
 of them. ``source`` is an ``open``/``read``/``close`` source (adapted by
 ``PolledSource``); ``sink`` implements ``open``/``submit(processed)``/``clear``/
-``close``. ``hud``, when given, is a ``framejacker.hud.HudStage`` (optionally
+``close``. ``hud``, when given, is a ``sightcircuit.hud.HudStage`` (optionally
 with ``check_sink()``, run at every admission checkpoint, as
 ``hud.stage.HudPipelineAdapter`` provides).
 

@@ -3,8 +3,8 @@
 #include <filesystem>
 #include <iostream>
 #include <sys/mman.h>
-namespace p = framejacker::provider;
-namespace t = framejacker::transport;
+namespace p = sightcircuit::provider;
+namespace t = sightcircuit::transport;
 static void require(bool value) { if (!value) throw t::Error("fixture_assertion"); }
 template<class F> static void rejects(F call) {
     bool rejected = false; try { call(); } catch (const std::exception &) { rejected = true; } require(rejected);
@@ -111,7 +111,7 @@ static void provider_loss() {
 static void endpoint_ownership() {
     Temporary temporary; Source source; p::Server server(source.registry); server.start(temporary.path);
     p::Server other(source.registry); rejects([&] { other.start(temporary.path); }); other.stop();
-    require(std::filesystem::file_size(temporary.path + "/framejacker-camera-provider/provider.lock") > 0);
+    require(std::filesystem::file_size(temporary.path + "/sightcircuit-camera-provider/provider.lock") > 0);
     const auto path = server.path(); require(unlink(path.c_str()) == 0);
     { t::Fd file(open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600)); require(file.get() >= 0); }
     require(!server.stop() && std::filesystem::is_regular_file(path));

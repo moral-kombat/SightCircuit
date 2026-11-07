@@ -8,10 +8,10 @@ import time
 import unittest
 from unittest.mock import patch
 
-from framejacker.frame import Frame, native_format
-from framejacker.hud import HUD_CONFIG, HudPipelineAdapter
-from framejacker.overlay import OverlaySink
-from framejacker.runtime import live, synthetic
+from sightcircuit.frame import Frame, native_format
+from sightcircuit.hud import HUD_CONFIG, HudPipelineAdapter
+from sightcircuit.overlay import OverlaySink
+from sightcircuit.runtime import live, synthetic
 from scripts import live_pipeline as command
 
 
@@ -117,7 +117,7 @@ class LivePipelineTests(unittest.TestCase):
     def test_native_padded_stride_is_owned_then_fully_masked_before_inference_resize(self):
         import cv2
         import numpy as np
-        from framejacker.hud import CaptureFormat, Footprint
+        from sightcircuit.hud import CaptureFormat, Footprint
 
         width, height, stride = 1920, 1080, 5824
         storage = np.full((height, stride), 231, np.uint8)
@@ -211,7 +211,7 @@ class LivePipelineTests(unittest.TestCase):
 
     def test_engine_annotates_an_owned_copy_and_submits_one_processed_record(self):
         import numpy as np
-        from framejacker.frame import Detection, DetectionResult, Processed
+        from sightcircuit.frame import Detection, DetectionResult, Processed
 
         seen = {}
 
@@ -264,7 +264,7 @@ class LivePipelineTests(unittest.TestCase):
         self.assertAlmostEqual(report["elapsed_seconds"], report["pipeline"]["elapsed_ms"] / 1000, delta=0.001)
 
     def test_elapsed_seconds_is_rounded_once_from_the_stats(self):
-        from framejacker.pipeline import Pipeline
+        from sightcircuit.pipeline import Pipeline
 
         def run(pipeline, stop):
             # 1.0014996 s: rounding the block's 1001.5 ms again would give 1.002.
@@ -304,7 +304,7 @@ class LivePipelineTests(unittest.TestCase):
         self.assertTrue(report["cleanup_ok"])
 
     def test_malformed_detector_result_still_closes_source_and_sink(self):
-        from framejacker.frame import DetectionResult
+        from sightcircuit.frame import DetectionResult
 
         for bad in ({"image": None, "labels": [], "detections": [], "inference_ms": 0.0},
                     DetectionResult([], 0.0), DetectionResult((), float("nan")), DetectionResult((), -1.0),
@@ -428,7 +428,7 @@ class LivePipelineTests(unittest.TestCase):
         supervised.assert_not_called()
 
     def test_synthetic_and_mirror_runs_share_one_report_runner(self):
-        from framejacker.sources import mirror_device
+        from sightcircuit.sources import mirror_device
 
         class Unread:
             capabilities, format = {"driver": "fixture"}, mirror_device.validate_format(2, 2, "GREY", 2, 4)
@@ -474,7 +474,7 @@ class LivePipelineTests(unittest.TestCase):
         self.assertEqual(sink.checked, 2)
 
     def test_worker_builds_the_requested_registered_or_fixture_detector(self):
-        from framejacker.detection import DEFAULT_DETECTOR
+        from sightcircuit.detection import DEFAULT_DETECTOR
 
         for options, built in (({}, DEFAULT_DETECTOR), ({"detector": "yolox-nano"}, "yolox-nano"),
                                ({"detector": "fixture"}, None)):

@@ -11,7 +11,7 @@ import tempfile
 import time
 import unittest
 
-from framejacker.overlay import DEFAULT_BRIDGE, MAX_SIDE, PANEL_LIMITS, OverlayClient, PanelSettings, packet
+from sightcircuit.overlay import DEFAULT_BRIDGE, MAX_SIDE, PANEL_LIMITS, OverlayClient, PanelSettings, packet
 
 
 @unittest.skipUnless(DEFAULT_BRIDGE.is_file(), "Build scripts/build_overlay_bridge.sh first")
@@ -351,7 +351,7 @@ class PanelSettingsTests(unittest.TestCase):
 
 class SharedOverlayContractTests(unittest.TestCase):
     def test_commands_use_the_shared_sink_and_frozen_settings(self):
-        from framejacker.overlay import OverlaySink
+        from sightcircuit.overlay import OverlaySink
         from scripts import live_pipeline
 
         self.assertIs(live_pipeline.OverlaySink, OverlaySink)
@@ -360,8 +360,8 @@ class SharedOverlayContractTests(unittest.TestCase):
     def test_caller_owned_client_keeps_its_placement_visibility_and_close(self):
         from types import SimpleNamespace
         from unittest.mock import Mock
-        from framejacker.hud import HUD_CONFIG
-        from framejacker.overlay import OverlaySink
+        from sightcircuit.hud import HUD_CONFIG
+        from sightcircuit.overlay import OverlaySink
 
         client = Mock()
         sink = OverlaySink(client)
@@ -377,8 +377,8 @@ class SharedOverlayContractTests(unittest.TestCase):
 
     def test_owned_hud_sink_freezes_placement_and_accepts_only_its_tiles(self):
         from types import SimpleNamespace
-        from framejacker.hud import HUD_CONFIG, HudOutput
-        from framejacker.overlay import OverlaySink
+        from sightcircuit.hud import HUD_CONFIG, HudOutput
+        from sightcircuit.overlay import OverlaySink
 
         class Client:
             def __init__(self, validation_only):

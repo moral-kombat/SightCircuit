@@ -22,7 +22,7 @@
 // Changes: the message is a caller-built JSON report swapped in with SIGALRM
 // blocked, a torn protocol line is terminated first, the alarm is re-armed per
 // phase and loop step, and the exit code is kWatchdogExitCode.
-// See THIRD_PARTY.md. The connect sequence below is original Framejacker code.
+// See THIRD_PARTY.md. The connect sequence below is original SightCircuit code.
 #pragma once
 #include <cerrno>
 #include <csignal>
@@ -33,7 +33,7 @@
 #include <unistd.h>
 #include <vector>
 
-namespace framejacker_lifecycle {
+namespace sightcircuit_lifecycle {
 constexpr int kWatchdogExitCode = 124;
 constexpr std::size_t kWatchdogMessageBytes = 2048;
 
@@ -179,4 +179,4 @@ ConnectResult connect_overlay(Probe probe, ShutdownProbe shutdown_probe, Connect
     result.error = "overlay_connect_failed:" + result.overlay_errors.back();
     return result;
 }
-} // namespace framejacker_lifecycle
+} // namespace sightcircuit_lifecycle

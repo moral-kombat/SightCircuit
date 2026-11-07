@@ -14,14 +14,14 @@ import unittest
 from scripts import shm_capture_check as check
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURE = ROOT / "artifacts/capture-publication-reference/framejacker-publication-fixture"
+FIXTURE = ROOT / "artifacts/capture-publication-reference/sightcircuit-publication-fixture"
 
 
 @unittest.skipUnless(FIXTURE.is_file() and check.READER.is_file(),
                      "build publication reference and shared-memory reader first")
 class CapturePublicationTests(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="framejacker-publication-test-")
+        temporary = tempfile.TemporaryDirectory(prefix="sightcircuit-publication-test-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
 

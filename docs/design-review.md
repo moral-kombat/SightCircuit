@@ -114,7 +114,7 @@ processed fps.
 About 35 flat scripts used `if __package__` import shims; there was no
 `pyproject.toml`, and three virtual environments are built with two installers
 (uv for development, pip for replay). Suggestion: a
-`src/framejacker/` package, one `pyproject.toml` with optional extras and
+`src/sightcircuit/` package, one `pyproject.toml` with optional extras and
 console entry points, and a lock covering x86_64 and aarch64. There was no
 linting: add ruff, mypy on the core interfaces, shellcheck and clang-format or
 clang-tidy for `tools/`.
@@ -171,7 +171,7 @@ own file and generate the status matrix, and state each caveat once.
 ## Progress
 
 - Item 1, partly done: [`pyproject.toml`](../pyproject.toml) with extras and
-  ruff configuration, a `framejacker/` library package beside the `scripts/`
+  ruff configuration, a `sightcircuit/` library package beside the `scripts/`
   commands, a ruff CI job and an [ARM64 workflow](../.github/workflows/arm64.yml)
   sharing [one job definition](../.github/workflows/check-jobs.yml) with x86_64.
   The package sits at the repository root rather than under `src/` so that
@@ -182,7 +182,7 @@ own file and generate the status matrix, and state each caveat once.
   supervision and output publication. `smoke_check.py` uses the shared
   detector, and detection is separate from annotation. The V4L2 mirror module,
   the overlay client's own pending-frame holder and the capture supervisor's
-  process handling are not yet consolidated. `framejacker/sources/mirror.py`
+  process handling are not yet consolidated. `sightcircuit/sources/mirror.py`
   currently adapts callback-based acquisition to `Frame`; the V4L2 read loop
   remains in the scripts.
 - Item 3, implemented in the cloud: YOLOX-Nano (ONNX Runtime, OpenCV DNN

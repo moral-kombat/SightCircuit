@@ -2,7 +2,7 @@
 
 ``mobilenet-ssd`` is the device-validated baseline (Pascal VOC, 20 classes).
 ``yolox-nano`` is an 80-class COCO candidate under evaluation. Detectors keep
-their native label names; ``framejacker.labels.canonical`` compares them.
+their native label names; ``sightcircuit.labels.canonical`` compares them.
 
 Each ``DETECTORS`` class owns everything callers need to know about it: its
 constructor takes the registry name, and the class methods ``model_files(name)``

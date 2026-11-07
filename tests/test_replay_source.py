@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from framejacker.sources.replay import PlaybackClock, ReplaySource
+from sightcircuit.sources.replay import PlaybackClock, ReplaySource
 
 AVAILABLE = all(importlib.util.find_spec(name) for name in ("av", "numpy"))
 FPS, FRAMES, GOP = 30, 90, 10

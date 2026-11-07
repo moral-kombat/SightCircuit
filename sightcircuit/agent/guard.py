@@ -69,7 +69,7 @@ KNOWN_UNSAFE = (
 
 
 def block(reason):
-    return 2, f"Blocked by framejacker agent guard: {reason}. Use 'python3 {RUNNER} list' for allowed tasks."
+    return 2, f"Blocked by sightcircuit agent guard: {reason}. Use 'python3 {RUNNER} list' for allowed tasks."
 
 
 def check_bash(command):

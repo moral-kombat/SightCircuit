@@ -2,7 +2,7 @@
 #include "capture_publication.hpp"
 #include <iostream>
 #include <memory>
-using namespace framejacker;
+using namespace sightcircuit;
 static void event(const std::string &text) { std::cout << text << std::endl; }
 int main(int argc, char **argv) {
     if (argc != 2) return 64;
@@ -13,7 +13,7 @@ int main(int argc, char **argv) {
     if (mode == "missing") return 0;
     if (mode == "crash") { raise(SIGSEGV); return 1; }
     if (mode == "hang_startup") { signal(SIGTERM, SIG_IGN); for (;;) pause(); }
-    const std::string path = std::getenv("FRAMEJACKER_CAPTURE_OUTPUT");
+    const std::string path = std::getenv("SIGHTCIRCUIT_CAPTURE_OUTPUT");
     publication::RunLimit limit(10);
     auto publisher = std::make_unique<publication::Publisher>(path, 16, 16, 2);
     struct stat info{};

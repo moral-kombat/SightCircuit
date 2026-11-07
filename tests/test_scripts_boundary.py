@@ -1,4 +1,4 @@
-"""``scripts/`` holds command entry points; shared code lives in ``framejacker/``."""
+"""``scripts/`` holds command entry points; shared code lives in ``sightcircuit/``."""
 import ast
 from pathlib import Path
 import sys
@@ -52,10 +52,10 @@ class ScriptsBoundaryTests(unittest.TestCase):
                 if path.stem in FROZEN_CAPTURE_TRACK:
                     self.assertLessEqual(imported, FROZEN_CAPTURE_TRACK)
                 else:
-                    self.assertEqual(imported, set(), "move shared code into framejacker/")
+                    self.assertEqual(imported, set(), "move shared code into sightcircuit/")
 
     def test_library_never_imports_commands(self):
-        for path in sorted((ROOT / "framejacker").rglob("*.py")):
+        for path in sorted((ROOT / "sightcircuit").rglob("*.py")):
             with self.subTest(module=str(path.relative_to(ROOT))):
                 tree = ast.parse(path.read_text(), str(path))
                 modules = [alias.name for node in ast.walk(tree) if isinstance(node, ast.Import)

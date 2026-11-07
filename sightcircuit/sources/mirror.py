@@ -22,7 +22,7 @@ import threading
 import time
 
 from ..context import SOURCE_FIELDS
-from ..errors import FramejackerError
+from ..errors import SightCircuitError
 from ..frame import Frame
 from ..hud.contract import SESSION_TOKENS
 from ..runtime import guard, output, process
@@ -189,7 +189,7 @@ class MirrorSource:
         report = self.acquire(stop, on_frame, self._update)
         self._update(report)
         if report.get("status") == "error":
-            raise FramejackerError(report.get("reason", "capture_failed"), report.get("error", "Capture failed"))
+            raise SightCircuitError(report.get("reason", "capture_failed"), report.get("error", "Capture failed"))
 
 
 def launch(report, discovery, device, seconds, *, worker, report_factory, success_status, job=None,
@@ -221,7 +221,7 @@ def launch(report, discovery, device, seconds, *, worker, report_factory, succes
             report.update(discovery=discovery, candidate=candidate, **(fields or {}))
             if report["exit_code"] == 0:
                 output.publish_all(reservations, report, digests=digests)
-        except (FramejackerError, OSError, ValueError) as error:
+        except (SightCircuitError, OSError, ValueError) as error:
             reason = getattr(error, "reason", "output_or_launch_failed")
             report.update(status="unavailable" if reason == "mirror_unavailable" else "error",
                           reason=reason, error=str(error), exit_code=1)

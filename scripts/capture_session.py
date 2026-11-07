@@ -34,7 +34,7 @@ class Session:
         self.fd = self.lease = None
         root = private_directory(runtime)
         try:
-            self.path = Path(tempfile.mkdtemp(prefix="framejacker-capture-", dir=runtime))
+            self.path = Path(tempfile.mkdtemp(prefix="sightcircuit-capture-", dir=runtime))
         finally:
             os.close(root)
         try:
@@ -126,7 +126,7 @@ def recover(path):
     """Explicit stale-session recovery: never signal or delete a living run."""
     session = Session.__new__(Session)
     session.path = Path(path).absolute()
-    if not session.path.name.startswith("framejacker-capture-"):
+    if not session.path.name.startswith("sightcircuit-capture-"):
         raise ValueError("invalid_session_path")
     session.fd = session.lease = None
     try:

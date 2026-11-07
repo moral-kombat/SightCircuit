@@ -10,7 +10,7 @@ terminates and reaps that orphaned group itself. Windows callers must be single-
 process workers (no native overlay helper) and have no parent-death guarantee.
 
 Callers pass their own module-level ``validate(report, returncode, **options)``
-from ``scripts/`` or ``framejacker/``. The guardian imports that validator by
+from ``scripts/`` or ``sightcircuit/``. The guardian imports that validator by
 dotted module name from this checkout only, so it knows no command and never
 imports worker code beyond the validator's module (no detector, decoder or VR
 library is loaded at import time).
@@ -356,7 +356,7 @@ def _supervise_owned(command, base_report, timeout, validate, *, descendants=Fal
 
 
 ROOT = Path(__file__).resolve().parents[2]
-VALIDATOR_PACKAGES = ("scripts", "framejacker")
+VALIDATOR_PACKAGES = ("scripts", "sightcircuit")
 
 
 def _dotted(name):

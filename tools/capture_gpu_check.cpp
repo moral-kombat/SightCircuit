@@ -281,7 +281,7 @@ int main(int argc, char **argv) {
             if (!runtime.destroy) throw std::runtime_error("missing vkDestroyInstance");
             auto create = runtime.function<PFN_vkCreateInstance>("vkCreateInstance");
             VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
-            app.pApplicationName = "framejacker-gpu-check"; app.apiVersion = VK_API_VERSION_1_1;
+            app.pApplicationName = "sightcircuit-gpu-check"; app.apiVersion = VK_API_VERSION_1_1;
             VkInstanceCreateInfo info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO}; info.pApplicationInfo = &app;
             check(create(&info, nullptr, &runtime.instance), "create instance"); created = true;
             auto enumerate = runtime.function<PFN_vkEnumeratePhysicalDevices>("vkEnumeratePhysicalDevices");
@@ -296,7 +296,7 @@ int main(int argc, char **argv) {
             code = 0; status = "queried";
         } catch (const std::exception &exception) { error = exception.what(); }
     }
-    std::cout << object({{"report_kind", quote("framejacker_capture_gpu_query")}, {"schema_version", "1"},
+    std::cout << object({{"report_kind", quote("sightcircuit_capture_gpu_query")}, {"schema_version", "1"},
         {"status", quote(status)}, {"exit_code", std::to_string(code)}, {"error", quote(error)},
         {"loader_api_version", version(loader_version)}, {"devices", array(devices)},
         {"vulkan_instance_created", boolean(created)}, {"vulkan_instance_destroyed", boolean(destroyed)},

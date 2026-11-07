@@ -14,12 +14,12 @@ except ImportError as error:
     raise unittest.SkipTest("OpenCV is required for HUD fill tests") from error
 import numpy as np
 
-from framejacker import hud
-from framejacker.detection import DEFAULT_DETECTOR, DETECTORS, create_detector
-from framejacker.frame import Frame
-from framejacker.hud.render import draw_tile
-from framejacker.overlay import DEFAULT_BRIDGE
-from framejacker.runtime import synthetic
+from sightcircuit import hud
+from sightcircuit.detection import DEFAULT_DETECTOR, DETECTORS, create_detector
+from sightcircuit.frame import Frame
+from sightcircuit.hud.render import draw_tile
+from sightcircuit.overlay import DEFAULT_BRIDGE
+from sightcircuit.runtime import synthetic
 from tests.asset_gate import model_assets, requires_assets
 from tests.test_hud_mask import calibration, prepare
 

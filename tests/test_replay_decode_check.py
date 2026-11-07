@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from framejacker.sources.recording import inspect_recording
+from sightcircuit.sources.recording import inspect_recording
 from scripts import replay_decode_check as command
 
 

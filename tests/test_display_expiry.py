@@ -9,9 +9,9 @@ import threading
 import time
 import unittest
 
-from framejacker.runtime import live, synthetic
-from framejacker.overlay import DEFAULT_BRIDGE, OverlayClient, PanelSettings, packet
-from framejacker.overlay import OverlaySink
+from sightcircuit.runtime import live, synthetic
+from sightcircuit.overlay import DEFAULT_BRIDGE, OverlayClient, PanelSettings, packet
+from sightcircuit.overlay import OverlaySink
 
 
 @unittest.skipUnless(os.name == "posix" and DEFAULT_BRIDGE.is_file(), "Build native validation bridge on Linux")

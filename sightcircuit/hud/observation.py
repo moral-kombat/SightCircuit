@@ -8,12 +8,12 @@ copies, requires a changed clear baseline before the marker is shown
 composition or unseen copy is inferred, so ``mapping_qualified`` stays False.
 Used by ``scripts/hud_marker_observer.py``. ``validate_observer_report`` is
 that command's worker report contract, applied by its supervisor and before a
-report becomes a mapping candidate (``framejacker.hud.candidate``). Every
+report becomes a mapping candidate (``sightcircuit.hud.candidate``). Every
 worker report carries ``session_tokens`` (``validate_session_tokens``): the
 report of the run's ``sources.session.MirrorSession`` when the observer was
 given one, otherwise why none was recorded. The tokens identify the run; they
 qualify nothing. The scene precondition (``bright_contours``,
-``candidate_quad`` and their budgets) lives in ``framejacker.hud.scene``; a
+``candidate_quad`` and their budgets) lives in ``sightcircuit.hud.scene``; a
 frame rejected by either budget carries its ``scene_statistics`` in the match
 diagnostics, and a report rejected there carries them with their source
 (``validate_rejection_scene_statistics``).

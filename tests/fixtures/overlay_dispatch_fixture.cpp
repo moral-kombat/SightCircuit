@@ -3,7 +3,7 @@
 #include <cassert>
 #include <string>
 
-using namespace framejacker_overlay;
+using namespace sightcircuit_overlay;
 struct FakeOverlay {
     unsigned calls = 0;
     void frame(std::uint32_t w, std::uint32_t h, const void* data) {
@@ -40,7 +40,7 @@ int main() {
     try { decode_frame(1, payload); } catch (const std::runtime_error&) { rejected = true; }
     assert(rejected);
     // The generated display-age cap is accepted exactly and rejected one nanosecond later.
-    constexpr auto cap = framejacker_contract::kMaxDisplayAgeNs;
+    constexpr auto cap = sightcircuit_contract::kMaxDisplayAgeNs;
     assert(deadline_current({1, 1, now + cap, nullptr}, now));
     for (auto expiry : {std::uint64_t{0}, now + cap + 1}) {
         rejected = false;

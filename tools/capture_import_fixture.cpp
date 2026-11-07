@@ -7,8 +7,8 @@
 #include <map>
 #include <sys/mman.h>
 
-namespace ci = framejacker::capture_import;
-using framejacker::transport::Fd;
+namespace ci = sightcircuit::capture_import;
+using sightcircuit::transport::Fd;
 using ci::Error;
 
 static void require(bool value) { if (!value) throw Error("fixture_assertion_failed"); }
@@ -34,7 +34,7 @@ static MrhandBufInfo metadata(uint32_t plane_count = 4) {
     return info;
 }
 static Fd payload() {
-    Fd fd(memfd_create("framejacker-synthetic-import", MFD_CLOEXEC));
+    Fd fd(memfd_create("sightcircuit-synthetic-import", MFD_CLOEXEC));
     require(fd.get() >= 0 && ftruncate(fd.get(), metadata().size) == 0);
     require(write(fd.get(), "synthetic", 9) == 9);
     return fd;

@@ -9,12 +9,12 @@ import time
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from framejacker.detection import DEFAULT_DETECTOR, DETECTORS, create_detector
-from framejacker.hud import HUD_CONFIG, HudPipelineAdapter
-from framejacker.overlay import OverlaySink
-from framejacker.runtime.guard import stop_on_signals, supervise
-from framejacker.runtime.live import run_pipeline
-from framejacker.runtime.synthetic import FixtureDetector, HeadlessSink, SyntheticSource, synthetic_hud_calibration
+from sightcircuit.detection import DEFAULT_DETECTOR, DETECTORS, create_detector
+from sightcircuit.hud import HUD_CONFIG, HudPipelineAdapter
+from sightcircuit.overlay import OverlaySink
+from sightcircuit.runtime.guard import stop_on_signals, supervise
+from sightcircuit.runtime.live import run_pipeline
+from sightcircuit.runtime.synthetic import FixtureDetector, HeadlessSink, SyntheticSource, synthetic_hud_calibration
 
 # "real" names the default model, as before the registry choices existed.
 DETECTOR_CHOICES = (*DETECTORS, "real", "fixture")

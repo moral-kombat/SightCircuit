@@ -63,7 +63,7 @@ repository if it is not already present:
 
 ```bash
 git clone https://github.com/moral-kombat/framejacker.git
-cd framejacker
+cd sightcircuit
 ```
 
 If a checkout already exists, preserve its local changes and use it. Update a
@@ -100,7 +100,7 @@ recordings and their metadata for the replay checks below.
 
 See [inventory evidence](status.md#e1-frame-inventory) and
 [vendor-app evidence](status.md#e2-vendor-app) for the reported baseline.
-Device-node presence does not demonstrate frame access. Keep Framejacker's
+Device-node presence does not demonstrate frame access. Keep SightCircuit's
 live-input work separate from the vendor app and use the active plan for a
 new capture trial.
 
@@ -149,7 +149,7 @@ To inspect a new recording, one command runs the read-only inventory and selects
 newest completed stereo recording automatically:
 
 ```bash
-cd "$HOME/framejacker"
+cd "$HOME/sightcircuit"
 bash scripts/frame_replay_check.sh
 ```
 
@@ -175,7 +175,7 @@ If it is approved again, start the watcher first, then start a **new**
 recording in the vendor app within the wait window:
 
 ```bash
-cd "$HOME/framejacker"
+cd "$HOME/sightcircuit"
 python3 scripts/recording_growth_check.py \
   --watch-directory "$HOME/Videos/ArcturusVisionCamera" \
   --wait-for-new 30 --seconds 15
@@ -203,7 +203,7 @@ unavailable, retain and share the error before choosing another setup route.
 ```bash
 (
   set -e
-  cd "$HOME/framejacker"
+  cd "$HOME/sightcircuit"
   git pull --ff-only
   bash scripts/setup_replay.sh
   .venv-replay/bin/python scripts/replay_decode_check.py \
@@ -213,7 +213,7 @@ unavailable, retain and share the error before choosing another setup route.
 
 This downloads PyAV into ignored `.venv-replay/`; its wheel includes FFmpeg
 libraries, so a separate `ffmpeg` executable, OpenCV and Qt are not required.
-The existing desktop `.venv` remains separate. `FRAMEJACKER_PYTHON` can select
+The existing desktop `.venv` remains separate. `SIGHTCIRCUIT_PYTHON` can select
 another Python 3.12 executable for setup.
 
 The check reads only the selected file. It defaults to video-stream ordinal
@@ -241,7 +241,7 @@ Run this from the same normal-user graphical session on Frame:
 ```bash
 (
   set -e
-  cd "$HOME/framejacker"
+  cd "$HOME/sightcircuit"
   git pull --ff-only
   bash scripts/setup_window.sh
   .venv-replay/bin/python scripts/replay_window.py \
@@ -321,7 +321,7 @@ On Frame:
 ```bash
 (
   set -e
-  cd "$HOME/framejacker"
+  cd "$HOME/sightcircuit"
   git pull --ff-only
   python3 scripts/mirror_check.py
 )
@@ -394,7 +394,7 @@ absolute local-file URL so a browser does not interpret `artifacts/...` as a
 web address:
 
 ```bash
-xdg-open "file://$HOME/framejacker/artifacts/mirror-check/scene-check.png"
+xdg-open "file://$HOME/sightcircuit/artifacts/mirror-check/scene-check.png"
 ```
 
 `xdg-open` uses the system's associated viewer. The reported Chrome launcher
@@ -450,12 +450,12 @@ panel and creates no visible Qt window during processing:
 ```bash
 (
   set -e
-  cd "$HOME/framejacker"
+  cd "$HOME/sightcircuit"
   QT_QPA_PLATFORM=offscreen .venv-replay/bin/python scripts/replay_window.py \
     artifacts/mirror-check/scene-check.png --max-frames 1 \
     --preview artifacts/mirror-check/scene-detections.png \
     --report artifacts/mirror-check/scene-detections.json
-  xdg-open "file://$HOME/framejacker/artifacts/mirror-check/scene-detections.png"
+  xdg-open "file://$HOME/sightcircuit/artifacts/mirror-check/scene-detections.png"
 )
 ```
 
@@ -503,14 +503,14 @@ passthrough working before starting:
 ```bash
 (
   set -e
-  cd "$HOME/framejacker"
+  cd "$HOME/sightcircuit"
   git pull --ff-only
   mkdir -p artifacts/poc
-  framejacker_demo_dir="$(mktemp -d "$PWD/artifacts/poc/live-XXXXXX")"
+  sightcircuit_demo_dir="$(mktemp -d "$PWD/artifacts/poc/live-XXXXXX")"
   .venv-replay/bin/python scripts/mirror_recognize.py --capture \
     --device /dev/video99 --seconds 10 --max-fps 5 \
-    --preview "$framejacker_demo_dir/detections.png"
-  xdg-open "file://$framejacker_demo_dir/detections.png"
+    --preview "$sightcircuit_demo_dir/detections.png"
+  xdg-open "file://$sightcircuit_demo_dir/detections.png"
 )
 ```
 
@@ -574,7 +574,7 @@ is distinct from the subsequent device execution result.
 because it adds the pinned ONNX Runtime wheel and the checksum-verified model:
 
 ```bash
-cd "$HOME/framejacker" && git pull --ff-only && bash scripts/setup_window.sh
+cd "$HOME/sightcircuit" && git pull --ff-only && bash scripts/setup_window.sh
 ```
 
 Then capture unannotated stills for a private evaluation set. `--still` saves
@@ -593,14 +593,14 @@ the scene:
 ```bash
 (
   set -e
-  cd "$HOME/framejacker"
+  cd "$HOME/sightcircuit"
   mkdir -p evaluation/local
-  framejacker_still="evaluation/local/room-$(date +%Y%m%d-%H%M%S)"
+  sightcircuit_still="evaluation/local/room-$(date +%Y%m%d-%H%M%S)"
   .venv-replay/bin/python scripts/mirror_recognize.py --capture --device /dev/video99 \
-    --seconds 5 --detector yolox-nano --still "$framejacker_still.png" > "$framejacker_still.json"
+    --seconds 5 --detector yolox-nano --still "$sightcircuit_still.png" > "$sightcircuit_still.json"
   .venv-replay/bin/python scripts/frame_session_manifest.py --manifest evaluation/local/frame.json \
-    --id "${framejacker_still##*/}" --image "$framejacker_still.png" \
-    --still-report "$framejacker_still.json" --present chair --absent couch
+    --id "${sightcircuit_still##*/}" --image "$sightcircuit_still.png" \
+    --still-report "$sightcircuit_still.json" --present chair --absent couch
 )
 ```
 
@@ -666,16 +666,16 @@ panel to finish, then opens the saved grayscale still:
 ```bash
 (
   set -e
-  cd "$HOME/framejacker"
-  test -x artifacts/overlay-bridge/framejacker-overlay-bridge
+  cd "$HOME/sightcircuit"
+  test -x artifacts/overlay-bridge/sightcircuit-overlay-bridge
   mkdir -p artifacts/mirror-check
-  artifacts/overlay-bridge/framejacker-overlay-bridge --test-panel --seconds 15 &
-  framejacker_panel_pid=$!
+  artifacts/overlay-bridge/sightcircuit-overlay-bridge --test-panel --seconds 15 &
+  sightcircuit_panel_pid=$!
   sleep 2
   python3 scripts/mirror_check.py --capture --device /dev/video99 --seconds 5 \
     --preview artifacts/mirror-check/feedback-check.png
-  wait "$framejacker_panel_pid"
-  xdg-open "file://$HOME/framejacker/artifacts/mirror-check/feedback-check.png"
+  wait "$sightcircuit_panel_pid"
+  xdg-open "file://$HOME/sightcircuit/artifacts/mirror-check/feedback-check.png"
 )
 ```
 
@@ -725,7 +725,7 @@ and needs no setup beyond the checkout. Start it before the test and leave it
 running:
 
 ```bash
-cd "$HOME/framejacker"
+cd "$HOME/sightcircuit"
 RUN="artifacts/frame-session/$(date +%Y%m%d-%H%M%S)"
 python3 scripts/observation_page.py --run-dir "$RUN" --minutes 20
 ```
@@ -757,7 +757,7 @@ fixed task table by ID. Tier A tasks never touch VR output, cameras or
 services; Tier B (wearer present) and Tier C (person-only) IDs are refused.
 
 ```bash
-cd "$HOME/framejacker"
+cd "$HOME/sightcircuit"
 python3 scripts/frame_agent_run.py list
 python3 scripts/frame_agent_run.py run tier-a/inventory
 python3 scripts/frame_agent_run.py run-tier tier-a
@@ -793,7 +793,7 @@ absent. Read each task's status and reason rather than the overall exit code.
 
 coah80/framecorder's development guide ([`AGENTS.md` on `dev`](https://github.com/coah80/framecorder/blob/0c624afb008e0f2e1e467eacae9a9206480943ba/AGENTS.md) at
 `0c624afb008e0f2e1e467eacae9a9206480943ba`, MIT) gives this advice from its own
-Frame work. It is upstream advice, not a Framejacker result:
+Frame work. It is upstream advice, not a SightCircuit result:
 
 - The headset does not answer ping. Check that port 22 answers instead
   (for example `nc -z -w 3 <frame-host> 22`); if it does not, the headset may
@@ -808,7 +808,7 @@ Frame work. It is upstream advice, not a Framejacker result:
   SteamVR is off: starting it pulls SteamVR up, and a SteamVR started outside
   its own launcher can leave the headset stuck in passthrough ([L62](https://github.com/coah80/framecorder/blob/0c624afb008e0f2e1e467eacae9a9206480943ba/AGENTS.md#L62)).
 
-Framejacker's own rule, beside that advice: no runner task touches
+SightCircuit's own rule, beside that advice: no runner task touches
 `dsp_service`, `/dev/cdsp`, `/dev/adsp` or SteamVR's `drivers/cv/bin`.
 `tests/test_frame_agent.py` checks the task table for those names.
 
@@ -825,9 +825,9 @@ To let Claude Code use it, install the guarded settings once, in the Frame
 checkout only:
 
 ```bash
-cd "$HOME/framejacker"
+cd "$HOME/sightcircuit"
 mkdir -p .claude
-cp framejacker/agent/frame-settings.json .claude/settings.local.json
+cp sightcircuit/agent/frame-settings.json .claude/settings.local.json
 ```
 
 That file is git-ignored. It refuses every tool call that is not allowed
@@ -854,7 +854,7 @@ statistics on the private PNG stills already in `evaluation/local/` (written by
 device, mirror or bridge and makes no VR call.
 
 ```bash
-cd "$HOME/framejacker"
+cd "$HOME/sightcircuit"
 mkdir -p artifacts/scene-analysis
 shopt -s nullglob
 stills=(evaluation/local/*.png)
@@ -903,7 +903,7 @@ so live HUD input stays rejected after this check.
 Run the offline checks on the reviewed revision, in the cloud or on Frame:
 
 ```bash
-cd "$HOME/framejacker"
+cd "$HOME/sightcircuit"
 QT_QPA_PLATFORM=offscreen .venv-replay/bin/python -m unittest \
   tests.test_hud_marker_check tests.test_hud_marker_observer tests.test_hud_mask \
   tests.test_checkpoint_manifest
@@ -927,7 +927,7 @@ bridge with the [checkpoint artifact manifest](hud-qualification.md#next-device-
 Write it on Frame; built binaries are never transferred:
 
 ```bash
-cd "$HOME/framejacker"
+cd "$HOME/sightcircuit"
 mkdir -p artifacts/hud-calibration
 .venv-replay/bin/python scripts/checkpoint_manifest.py \
   --write artifacts/hud-calibration/checkpoint-manifest.json
@@ -942,7 +942,7 @@ never initializes VR. `&&` stops before the bridge runs if anything differs
 from the manifest:
 
 ```bash
-cd "$HOME/framejacker"
+cd "$HOME/sightcircuit"
 .venv-replay/bin/python scripts/checkpoint_manifest.py \
   --verify artifacts/hud-calibration/checkpoint-manifest.json &&
   .venv-replay/bin/python scripts/hud_marker_check.py --validate --seconds 3
@@ -963,9 +963,9 @@ attached to the active `:0` display.
 ```bash
 (
   set -e
-  cd "$HOME/framejacker"
+  cd "$HOME/sightcircuit"
   test -z "$(git status --porcelain)"
-  test -x artifacts/overlay-bridge/framejacker-overlay-bridge
+  test -x artifacts/overlay-bridge/sightcircuit-overlay-bridge
   mkdir -p artifacts/hud-calibration
   run="$(mktemp -d "$PWD/artifacts/hud-calibration/run-XXXXXX")"
   git rev-parse HEAD > "$run/revision.txt"
@@ -1030,7 +1030,7 @@ passthrough source is unknown; this command does not select or identify it.
 Update a clean checkout and run:
 
 ```bash
-cd "$HOME/framejacker" &&
+cd "$HOME/sightcircuit" &&
 git pull --ff-only &&
 python3 scripts/device_check.py --capture-prerequisites
 ```
@@ -1063,7 +1063,7 @@ before deployment. It does not provide a runnable live-capture command.
 In the existing Frame checkout, run:
 
 ```bash
-cd "$HOME/framejacker" &&
+cd "$HOME/sightcircuit" &&
 git pull --ff-only &&
 bash scripts/build_capture_reference.sh &&
 bash scripts/build_shm_reader.sh &&
@@ -1094,10 +1094,10 @@ Frame ARM64; see [E25](status.md#e25-descriptor-transport-on-frame). Keep this
 procedure for a changed implementation/runtime; the next check is publication below.
 
 ```bash
-cd "$HOME/framejacker" &&
+cd "$HOME/sightcircuit" &&
 git pull --ff-only &&
 bash scripts/build_capture_reference.sh --transport-fixes &&
-artifacts/capture-transport-reference/framejacker-transport-fixture --self-test
+artifacts/capture-transport-reference/sightcircuit-transport-fixture --self-test
 ```
 
 The build applies our versioned patch to a disposable source copy, preserving
@@ -1124,7 +1124,7 @@ import suite below have also passed; remaining engineering tasks are in the
 In the existing Frame checkout, run:
 
 ```bash
-cd "$HOME/framejacker" &&
+cd "$HOME/sightcircuit" &&
 git pull --ff-only &&
 bash scripts/build_capture_reference.sh --publication-fixes &&
 bash scripts/build_shm_reader.sh &&
@@ -1142,7 +1142,7 @@ OpenVR calls occur. Share the build report and final test summary; expect eight
 tests with no skips.
 
 The future provider source is a private runtime file at
-`$XDG_RUNTIME_DIR/framejacker-capture/frames.shm`; the upstream
+`$XDG_RUNTIME_DIR/sightcircuit-capture/frames.shm`; the upstream
 `/dev/shm/mrhand-pt` file is not used by this publication adaptation. The tests
 use temporary paths and remove their generated inputs. Normal publisher cleanup
 removes only the identity-checked file it created. Abrupt parent death kills
@@ -1163,7 +1163,7 @@ changed tool/runtime; repeating it unchanged is not the next task. It queries
 the GPU requirements of the reviewed Arcturus import path:
 
 ```bash
-cd "$HOME/framejacker" &&
+cd "$HOME/sightcircuit" &&
 git pull --ff-only &&
 bash scripts/build_capture_gpu_check.sh &&
 python3 scripts/capture_gpu_check.py --query-device
@@ -1226,7 +1226,7 @@ Keep this procedure for changed code/runtime or batch it with a later native
 validation milestone; there is no need to repeat the original checks unchanged:
 
 ```bash
-cd "$HOME/framejacker" &&
+cd "$HOME/sightcircuit" &&
 git pull --ff-only &&
 bash scripts/build_capture_reference.sh --import-fixes &&
 python3 -m unittest discover -s tests -p test_capture_import.py -v
@@ -1253,7 +1253,7 @@ This optional check can be batched with a later milestone. It does not create
 a real Vulkan device or open a camera:
 
 ```bash
-cd "$HOME/framejacker" &&
+cd "$HOME/sightcircuit" &&
 git pull --ff-only &&
 bash scripts/build_capture_reference.sh --resource-fixes &&
 python3 -m unittest discover -s tests -p test_capture_gpu_resources.py -v
@@ -1281,7 +1281,7 @@ private local sockets and fake Vulkan dispatch, without opening a camera or
 loading the layer. The actual capture artifacts remain non-executable:
 
 ```bash
-cd "$HOME/framejacker" &&
+cd "$HOME/sightcircuit" &&
 git pull --ff-only &&
 bash scripts/build_capture_supervisor.sh &&
 bash scripts/build_capture_reference.sh --provider-fixes &&
@@ -1305,7 +1305,7 @@ python3 scripts/capture_layer_config.py --prepare artifacts/capture-layer-plan-n
 
 Expect `prepared_inactive_bundle`, with activation/restart both false. Existing
 bundles are preserved; use another new directory if that name exists. The plan
-backs up exact prior bytes/modes or absence for the proposed Framejacker manifest
+backs up exact prior bytes/modes or absence for the proposed SightCircuit manifest
 and library. It creates no active manifest/library and does not set the required
 enable environment variable. No install command is provided yet. Keep the bundle
 local; do not commit its backups. Inspection library bytes in the bundle still
@@ -1325,7 +1325,7 @@ python3 scripts/capture_layer_config.py --restore artifacts/capture-layer-plan-n
 
 Restoration preserves later edits and does not restart SteamVR or unload a
 library already loaded by the compositor. A controlled restart is required if
-it was loaded. There has been no Framejacker layer activation to restore yet.
+it was loaded. There has been no SightCircuit layer activation to restore yet.
 
 The synchronization review found no coordinated producer handoff. The latest
 layer therefore retains/exports no image FDs and the capture CLI is blocked.
@@ -1346,7 +1346,7 @@ driver calls. It does not load the layer, contact a real camera provider or
 restart SteamVR:
 
 ```bash
-cd "$HOME/framejacker" &&
+cd "$HOME/sightcircuit" &&
 git pull --ff-only &&
 git rev-parse HEAD &&
 bash scripts/build_capture_reference.sh --provider-fixes &&
@@ -1367,7 +1367,7 @@ inactive bundle from the tested build and collect service metadata. Run on
 Frame in the existing checkout:
 
 ```bash
-cd "$HOME/framejacker" &&
+cd "$HOME/sightcircuit" &&
 python3 scripts/capture_layer_config.py --prepare artifacts/capture-layer-plan-v3-new &&
 systemctl --user show steamvr.service \
   -p LoadState -p ActiveState -p SubState -p MainPID \
@@ -1404,7 +1404,7 @@ The earlier preparation command is retained below for investigation; do not
 use it to resume activation. Preserve existing bundles:
 
 ```bash
-cd "$HOME/framejacker" &&
+cd "$HOME/sightcircuit" &&
 git pull --ff-only &&
 bash scripts/build_capture_reference.sh --provider-fixes &&
 python3 -m unittest discover -s tests -p test_capture_provider.py -v &&
@@ -1419,12 +1419,12 @@ Current suites contain **14, 12, 10 and 48 tests**, with no skips; the original
 preparation expected `prepared_inactive_bundle`
 and `preflight_passed`. If the new directory already exists, preserve it and
 use a different new name throughout. Preflight requires matching current
-build/helper hashes, absent prior Framejacker active targets, no existing
+build/helper hashes, absent prior SightCircuit active targets, no existing
 provider/enable flags, and the reported active simple/control-group service
 with a 20-second stop timeout and no drop-ins. The revised preflight also needs
 an idle job and a live compositor in the original unified cgroup. It refuses changed conditions
 without restarting anything. This trial does not support replacing an existing
-Framejacker installation.
+SightCircuit installation.
 
 The earlier activation command is now blocked; it is retained for reference:
 
@@ -1434,7 +1434,7 @@ python3 scripts/capture_layer_trial.py --start-metadata-test artifacts/capture-l
 
 Before touching SteamVR, the launcher runs a dummy one-second timeout to verify
 this Frame's systemd executes the cleanup command. Failure refuses activation.
-After a passing rehearsal it schedules `framejacker-metadata-trial.service`,
+After a passing rehearsal it schedules `sightcircuit-metadata-trial.service`,
 which stages only the metadata layer and a temporary runtime drop-in scoped
 to `steamvr.service`. It waits for the provider and inspects metadata for two
 seconds. Systemd's separate `ExecStopPost` then stops SteamVR, restores the
@@ -1447,7 +1447,7 @@ Restoring SteamVR does not relaunch the terminal/console application. Open a
 terminal independently, or use SSH from another computer, then read reports:
 
 ```bash
-cd "$HOME/framejacker" &&
+cd "$HOME/sightcircuit" &&
 python3 scripts/capture_layer_trial.py --report-latest
 ```
 
@@ -1464,7 +1464,7 @@ From another computer, read the same report without restarting or activating
 anything on Frame:
 
 ```bash
-ssh steamos@<FRAME_IP> 'cd "$HOME/framejacker" && python3 scripts/capture_layer_trial.py --report-latest'
+ssh steamos@<FRAME_IP> 'cd "$HOME/sightcircuit" && python3 scripts/capture_layer_trial.py --report-latest'
 ```
 
 If SSH cannot connect, first establish whether the normal headset interface
@@ -1476,7 +1476,7 @@ If recovery fails, use the known `trial_directory` from the launch/result
 report. From a separate terminal/SSH session, stop any remaining trial first:
 
 ```bash
-systemctl --user stop framejacker-metadata-trial.service
+systemctl --user stop sightcircuit-metadata-trial.service
 ```
 
 Then use `python3 scripts/capture_layer_trial.py --rollback /exact/trial-directory`,
@@ -1515,7 +1515,7 @@ On Frame, read the existing journal for 10:36:30–10:37:05 Eastern on 2026-10-1
 change or image access is performed:
 
 ```bash
-journalctl --user -u steamvr.service -u framejacker-metadata-trial.service \
+journalctl --user -u steamvr.service -u sightcircuit-metadata-trial.service \
   --since '2026-10-17 14:36:30 UTC' --until '2026-10-17 14:37:05 UTC' \
   --no-pager -o short-iso -n 200 \
   --grep='(?i)fail|error|denied|refus|cancel|dependency|start|stop|job'
@@ -1543,7 +1543,7 @@ paths on Frame. This changes repository files only; the diagnostic performs
 one `systemctl show` query and makes no runtime/configuration change:
 
 ```bash
-cd "$HOME/framejacker" &&
+cd "$HOME/sightcircuit" &&
 git pull --ff-only &&
 python3 scripts/capture_layer_trial.py --service-details
 ```
@@ -1615,7 +1615,7 @@ successful check just to continue the review. The command remains available as
 a read-only reference, without a rebuild or inactive bundle:
 
 ```bash
-cd "$HOME/framejacker" &&
+cd "$HOME/sightcircuit" &&
 git pull --ff-only &&
 python3 scripts/capture_layer_trial.py --runtime-status
 ```
@@ -1690,7 +1690,7 @@ recovery instead. Do not edit service policy to get past the guard.
 To confirm the guard or read the saved result, run on Frame:
 
 ```bash
-cd "$HOME/framejacker"
+cd "$HOME/sightcircuit"
 python3 scripts/service_rehearsal.py --preflight
 python3 scripts/service_rehearsal.py --report-latest
 ```
@@ -1720,7 +1720,7 @@ VR panels and anything else in it close. Repeat it only for a changed platform
 (SteamOS, SteamOS Manager or Gamescope session files), and only with approval.
 
 ```bash
-cd "$HOME/framejacker"
+cd "$HOME/sightcircuit"
 python3 scripts/session_rehearsal.py --preflight
 bundle="artifacts/session-bundle-$(date +%Y%m%d-%H%M%S)"
 python3 scripts/session_rehearsal.py --prepare "$bundle"
@@ -1737,7 +1737,7 @@ The approved run must be started **from an SSH session on another computer**,
 so the session that is logged out is not the one running the command:
 
 ```bash
-cd "$HOME/framejacker"
+cd "$HOME/sightcircuit"
 python3 scripts/session_rehearsal.py --start "$bundle" --allow-session-logout --wait
 python3 scripts/session_rehearsal.py --report-latest
 ```
@@ -1784,7 +1784,7 @@ metadata inspector built with `bash scripts/build_capture_reference.sh
 `artifacts/session-rehearsals/` on the same platform.
 
 ```bash
-cd "$HOME/framejacker"
+cd "$HOME/sightcircuit"
 trial="artifacts/metadata-session-$(date +%Y%m%d-%H%M%S)"
 python3 scripts/metadata_session_trial.py --prepare "$trial" \
   --metadata-bundle artifacts/capture-layer-plan-v3-NAME \
@@ -1798,7 +1798,7 @@ different platform. `--check` must report `metadata_session_test_ready`. The
 approved run, again from an SSH session on another computer:
 
 ```bash
-cd "$HOME/framejacker"
+cd "$HOME/sightcircuit"
 python3 scripts/metadata_session_trial.py --start "$trial" --allow-session-logouts --wait
 python3 scripts/metadata_session_trial.py --report-latest
 ```
@@ -1822,9 +1822,9 @@ is different: it pins a checkout and bridge built on Frame itself, and nothing
 is transferred.
 
 That historical file list is also insufficient for the current adapters:
-shared code now lives only in `framejacker/` (for example the mirror reader in
-`framejacker/sources/mirror_device.py` and the guardian in
-`framejacker/runtime/guard.py`); `scripts/` holds entry points. A new manifest must include the complete
+shared code now lives only in `sightcircuit/` (for example the mirror reader in
+`sightcircuit/sources/mirror_device.py` and the guardian in
+`sightcircuit/runtime/guard.py`); `scripts/` holds entry points. A new manifest must include the complete
 package/script dependency closure and matching source revision, plus the
 target-built ARM64 bridge. This delivery's local x86_64 bridge is an offline
 validation artifact, not a device deployment candidate.
@@ -1848,7 +1848,7 @@ the real command shape when that work is reviewed.
 ### Check existing luma shared memory
 
 This is a separate diagnostic for an **already running** compatible provider.
-Framejacker has not installed or started that provider. With no flags the
+SightCircuit has not installed or started that provider. With no flags the
 command only checks file metadata; it does not read a header, map pixels or
 start capture:
 
@@ -1922,7 +1922,7 @@ Building the probe does not initialize OpenVR:
 
 ```bash
 bash scripts/build_camera_probe.sh
-artifacts/camera-probe/framejacker-camera-probe --help
+artifacts/camera-probe/sightcircuit-camera-probe --help
 ```
 
 The build uses Git, Bash and a C++17 compiler. It needs no `uv`, Python packages,
@@ -1975,12 +1975,12 @@ not use it to repeat the already failed test on the unchanged runtime:
 (
   set -e
   bash scripts/build_camera_probe.sh
-  framejacker_probe_status=0
-  artifacts/camera-probe/framejacker-camera-probe --allow-passthrough-interruption \
-    > artifacts/camera-probe/report.json || framejacker_probe_status=$?
+  sightcircuit_probe_status=0
+  artifacts/camera-probe/sightcircuit-camera-probe --allow-passthrough-interruption \
+    > artifacts/camera-probe/report.json || sightcircuit_probe_status=$?
   python3 -m json.tool artifacts/camera-probe/report.json || cat artifacts/camera-probe/report.json
-  printf 'Probe exit code: %s\n' "$framejacker_probe_status"
-  exit "$framejacker_probe_status"
+  printf 'Probe exit code: %s\n' "$sightcircuit_probe_status"
+  exit "$sightcircuit_probe_status"
 )
 ```
 
@@ -2006,7 +2006,7 @@ describe later acceptance criteria, including spatial labels and offline splats.
 ## Context for a new development session
 
 ```text
-Continue moral-kombat/framejacker on this Steam Frame.
+Continue moral-kombat/sightcircuit on this Steam Frame.
 Read docs/README.md and docs/status.md first, then docs/on-device.md.
 Confirm where this terminal executes before running device commands.
 Use docs/vr-overlay.md to resume recorded replay and the head-relative panel.
@@ -2064,7 +2064,7 @@ binaries are still non-executable inspection artifacts.
 The isolated shared-memory reader and synthetic fixture are implemented and
 tested on cloud x86_64 and Frame ARM64; real-provider validation and capture-layer
 deployment are pending.
-Since 2026-10-25 the replay and mirror commands run on the shared framejacker
+Since 2026-10-25 the replay and mirror commands run on the shared sightcircuit
 pipeline (cloud and CI only so far; reconfirm replay/overlay and mirror recognition
 on Frame). Re-run scripts/setup_window.sh, then compare detectors on Frame stills:
 docs/on-device.md#compare-detectors-on-frame-stills. Next steps are in

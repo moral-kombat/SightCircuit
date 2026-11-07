@@ -3,9 +3,9 @@
 #include <filesystem>
 #include <iostream>
 #include <sys/mman.h>
-namespace l = framejacker::layer;
-namespace p = framejacker::provider;
-namespace t = framejacker::transport;
+namespace l = sightcircuit::layer;
+namespace p = sightcircuit::provider;
+namespace t = sightcircuit::transport;
 struct Dispatchable { void *dispatch; };
 static int table, device_table;
 static Dispatchable instance_handle{&table}, physical_handle{&table}, device_handles[2]{{&device_table}, {&device_table}};
@@ -94,7 +94,7 @@ static void lifecycle(const std::string &runtime) {
     require(records.size() == 2 && records[0].info.device != records[1].info.device);
     require(records[0].fd.get() == -1 && records[1].fd.get() == -1);
     for (const auto &record : records) p::validate_profile(record.info);
-    p::Lease lease(runtime + "/framejacker-camera-provider/camera.sock", p::Access::metadata); lease.check();
+    p::Lease lease(runtime + "/sightcircuit-camera-provider/camera.sock", p::Access::metadata); lease.check();
     auto retained = l::device(first);
     l::DestroyDevice(first, nullptr); // Purges only this device, even without per-resource callbacks.
     require(!l::device(first) && retained.use_count() == 1 && l::devices.size() == 1);
@@ -105,7 +105,7 @@ static void lifecycle(const std::string &runtime) {
     l::FreeMemory(second, reinterpret_cast<VkDeviceMemory>(20), nullptr);
     l::DestroyDevice(second, nullptr); l::DestroyInstance(inst, nullptr);
     require(l::registry().empty() && l::devices.empty() && l::instances.empty());
-    require(!std::filesystem::exists(runtime + "/framejacker-camera-provider/camera.sock"));
+    require(!std::filesystem::exists(runtime + "/sightcircuit-camera-provider/camera.sock"));
 }
 static void failures() {
     const auto instance = start_instance(); const auto device = start_device();
@@ -126,16 +126,16 @@ static void failures() {
 static void gating(const std::string &runtime) {
     VkNegotiateLayerInterface info{}; info.loaderLayerInterfaceVersion = 2;
     require(mrhand_NegotiateLoaderLayerInterfaceVersion(&info) == VK_ERROR_INITIALIZATION_FAILED);
-    require(framejacker::layer_gate::claim(runtime)); require(framejacker::layer_gate::claim(runtime));
-    require(!framejacker::layer_gate::claim(runtime));
-    const auto path = runtime + "/framejacker-layer-guard/starts";
+    require(sightcircuit::layer_gate::claim(runtime)); require(sightcircuit::layer_gate::claim(runtime));
+    require(!sightcircuit::layer_gate::claim(runtime));
+    const auto path = runtime + "/sightcircuit-layer-guard/starts";
     unlink(path.c_str()); require(symlink("/dev/null", path.c_str()) == 0);
-    require(!framejacker::layer_gate::claim(runtime)); require(std::filesystem::is_symlink(path));
+    require(!sightcircuit::layer_gate::claim(runtime)); require(std::filesystem::is_symlink(path));
 }
 static void negotiation_fallback(const std::string &runtime, bool exhausted) {
     if (exhausted) {
-        require(framejacker::layer_gate::claim(runtime));
-        require(framejacker::layer_gate::claim(runtime));
+        require(sightcircuit::layer_gate::claim(runtime));
+        require(sightcircuit::layer_gate::claim(runtime));
     }
     VkNegotiateLayerInterface info{}; info.loaderLayerInterfaceVersion = 2;
     require(mrhand_NegotiateLoaderLayerInterfaceVersion(&info) == VK_ERROR_INITIALIZATION_FAILED);
@@ -144,13 +144,13 @@ static void negotiation_fallback(const std::string &runtime, bool exhausted) {
     auto instance = start_instance(); auto device = start_device();
     require(l::device(device)->token == 0);
     import(device);
-    require(!std::filesystem::exists(runtime + "/framejacker-camera-provider"));
+    require(!std::filesystem::exists(runtime + "/sightcircuit-camera-provider"));
     l::DestroyImage(device, reinterpret_cast<VkImage>(10), nullptr);
     l::FreeMemory(device, reinterpret_cast<VkDeviceMemory>(20), nullptr);
     l::DestroyDevice(device, nullptr); l::DestroyInstance(instance, nullptr);
     require(created == destroyed && images == 0 && allocations == 0);
     require(l::devices.empty() && l::instances.empty());
-    require(!std::filesystem::exists(runtime + "/framejacker-camera-provider"));
+    require(!std::filesystem::exists(runtime + "/sightcircuit-camera-provider"));
     if (!exhausted) require(std::filesystem::is_empty(runtime));
 }
 int main(int argc, char **argv) {
@@ -162,8 +162,8 @@ int main(int argc, char **argv) {
     try {
         std::string selected = argv[2];
         if (selected == "lifecycle" || selected == "failures" || selected == "guard_fallback")
-            setenv("FRAMEJACKER_CAPTURE_LAYER", "1", 1);
-        else unsetenv("FRAMEJACKER_CAPTURE_LAYER");
+            setenv("SIGHTCIRCUIT_CAPTURE_LAYER", "1", 1);
+        else unsetenv("SIGHTCIRCUIT_CAPTURE_LAYER");
         if (selected == "lifecycle") lifecycle(runtime);
         else if (selected == "failures") failures();
         else if (selected == "gating") gating(runtime);

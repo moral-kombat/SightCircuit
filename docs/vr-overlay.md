@@ -54,10 +54,10 @@ running and use the normal `steamos` graphical session. On Frame:
 ```bash
 (
   set -e
-  cd "$HOME/framejacker"
+  cd "$HOME/sightcircuit"
   git pull --ff-only
   bash scripts/build_overlay_bridge.sh
-  artifacts/overlay-bridge/framejacker-overlay-bridge --test-panel --seconds 10
+  artifacts/overlay-bridge/sightcircuit-overlay-bridge --test-panel --seconds 10
 )
 ```
 
@@ -98,7 +98,7 @@ flowchart LR
 ```bash
 (
   set -e
-  cd "$HOME/framejacker"
+  cd "$HOME/sightcircuit"
   bash scripts/setup_window.sh
   .venv-replay/bin/python scripts/replay_window.py --overlay \
     "$HOME/Videos/ArcturusVisionCamera/2026-10-15_21-20-34_stereo.mp4"
@@ -175,7 +175,7 @@ fd 1 at stderr before anything can load the SDK, so SDK output cannot corrupt a
 report. A SIGALRM watchdog (6 s for the connect, 5 s for any one loop step,
 re-armed per step, and 5 s for cleanup) writes one prepared JSON error
 (`watchdog_expired:<phase>`, exit code 124, `cleanup_ok: false`) and calls
-`_exit` without running cleanup. It sits beside `framejacker/runtime/guard.py`
+`_exit` without running cleanup. It sits beside `sightcircuit/runtime/guard.py`
 and the Python client's bounded termination; it does not replace them. A torn
 protocol line is terminated before the watchdog line, so the last line always
 parses. The handler pattern is adapted from frame-testbench (MIT; see
@@ -187,7 +187,7 @@ and Sippbox/frame-passthrough-pip
 [`src/app/main.cpp` L94-L110](https://github.com/Sippbox/frame-passthrough-pip/blob/babae0b9d8f1a0955207bcca3d91c4db6e2474b2/src/app/main.cpp#L94-L110);
 no code was copied. Upstream reports that a SteamVR server started outside its
 launcher leaves the Frame black or stuck on passthrough. That is a third-party
-claim, not Framejacker evidence.
+claim, not SightCircuit evidence.
 
 Cloud checks cover the no-server refusal in every mode (with and without
 `--connect-as background`), the validation modes and scripted fakes of the
@@ -205,8 +205,8 @@ explicit preview/report flags still control optional file outputs.
 The binary protocol uses little-endian `FJO1`, a uint32 opcode, a uint32 payload
 length, and a bounded payload. It is private to these two project components.
 The opcodes, layouts and frame-side limit below are defined once in
-`framejacker/hud/contract.py`, and the settings ranges in
-`framejacker/overlay.py` (`PANEL_LIMITS`); the bridge reads both from the
+`sightcircuit/hud/contract.py`, and the settings ranges in
+`sightcircuit/overlay.py` (`PANEL_LIMITS`); the bridge reads both from the
 generated [`tools/hud_contract.hpp`](development.md#generated-hud-contract-header).
 The ten- and three-second input timeouts are the bridge's own.
 

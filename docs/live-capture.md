@@ -202,7 +202,7 @@ must carry, as one numbered evidence entry separate from cloud results:
   (handoff item 5). Software deadlines are not guarantees.
 - About 5 processed frames per second with roughly 40 ms inference (E48)
   limits how quickly names update.
-- G6 output path, third-party reports (unverified, not Framejacker evidence):
+- G6 output path, third-party reports (unverified, not SightCircuit evidence):
   two projects report that `SetOverlayRaw` stops updating after about 200
   calls per process. Brobert-in-aus/cuff
   [`docs/INTERNALS.md` L337](https://github.com/Brobert-in-aus/cuff/blob/4b7f54a8cd240f6118dd3c35e41ea0ac22afc787/docs/INTERNALS.md#L337) reports it on the Frame with SteamVR
@@ -241,14 +241,14 @@ Live HUD input and production HUD output stay closed in code until G4 and G5
 pass: the pipeline rejects non-synthetic sources
 (`live_image_source_not_approved`), the HUD mask rejects hardware mappings
 (`hud_hardware_mapping_not_approved`), and the bridge rejects expiring packets
-in real output mode. [`framejacker/gates.py`](../framejacker/gates.py) is the
+in real output mode. [`sightcircuit/gates.py`](../sightcircuit/gates.py) is the
 single table of these closed gates (live image input, hardware mapping, live
 HUD output) and the rows that lift each one. Every Python `*_not_approved`
 refusal goes through a gate's `require`, every report's
 `production_*_enabled`/`mapping_qualified` claim comes from `gates.claims()`,
 and `tests/test_gates.py` rejects a hand-written `not_approved` refusal or a
 gate claim written as a constant (dictionary entry, keyword argument or
-subscript assignment) in `framejacker/` and `scripts/`. The HUD sink's own
+subscript assignment) in `sightcircuit/` and `scripts/`. The HUD sink's own
 contract checks (`hud_sink_*`, `hud_requires_fixed_validation_sink`) and the
 native bridge's `expiring_frames_validation_only` refusal stay hand-written as
 defence in depth; the test does not scan native code. Nothing in the
@@ -282,7 +282,7 @@ symptom, but neither is shown on our device; G2's status above is unchanged.
 G1 can be rerun at any time without a device:
 
 ```bash
-cd "$HOME/framejacker"
+cd "$HOME/sightcircuit"
 QT_QPA_PLATFORM=offscreen .venv-replay/bin/python -m unittest \
   tests.test_hud_mask tests.test_hud_fill tests.test_live_pipeline tests.test_display_expiry
 QT_QPA_PLATFORM=offscreen .venv-replay/bin/python -m scripts.live_pipeline \
@@ -317,7 +317,7 @@ cannot go backwards. One frame at most waits for inference, and inputs or
 results older than one second are dropped. Do not label a real source
 `synthetic` to get past the gate.
 
-**HUD contract.** `HudMask` in `framejacker/hud/` accepts only synthetic calibration and
+**HUD contract.** `HudMask` in `sightcircuit/hud/` accepts only synthetic calibration and
 rejects hardware mappings. It masks the full HUD footprint at native
 resolution before any resize. Detections that overlap the mask or cross an eye
 boundary are dropped from presentation and counted, and a synthetic validation
@@ -341,7 +341,7 @@ authorized device check, and the [acceptance gates](#edge-hud-acceptance-gates)
 say which. To rerun the contract tests without a device:
 
 ```bash
-cd "$HOME/framejacker"
+cd "$HOME/sightcircuit"
 QT_QPA_PLATFORM=offscreen .venv-replay/bin/python -m unittest \
   tests.test_live_pipeline tests.test_display_expiry tests.test_bounded_worker \
   tests.test_overlay_cleanup tests.test_hud_mask
@@ -350,7 +350,7 @@ QT_QPA_PLATFORM=offscreen .venv-replay/bin/python -m unittest \
 ## Next deliverable: mirror diagnostic
 
 The standalone diagnostic is implemented in `scripts/mirror_check.py` with
-read-only V4L2 handling now in `framejacker/sources/mirror_device.py`. It has passed controlled
+read-only V4L2 handling now in `sightcircuit/sources/mirror_device.py`. It has passed controlled
 cloud checks. After correcting its initial polling gate, the Frame trial
 received 100 complete 1920 × 1080 RGB3 frames from `/dev/video99` in ten seconds,
 with 99 changed grayscale samples, zero would-block/short reads and clean

@@ -7,7 +7,7 @@ index 14ac520..490c1d6 100644
  // (the driver decompresses).  Nothing is submitted on the compositor's queues.
  //
 -//   ptgrab identify OUTDIR      dump every passthrough buffer's Y plane twice (PGM)
-+// Framejacker inspection adaptation: validated imports; not deployment-ready.
++// SightCircuit inspection adaptation: validated imports; not deployment-ready.
  #include <vulkan/vulkan.h>
  
  #include <algorithm>
@@ -23,7 +23,7 @@ index 14ac520..490c1d6 100644
      VkCommandPool pool;
      VkPhysicalDeviceMemoryProperties mp;
      PFN_vkGetMemoryFdPropertiesKHR getFdProps;
-+    framejacker::capture_import::Completion importCompletion;
++    sightcircuit::capture_import::Completion importCompletion;
  
      void init() {
          VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
@@ -32,7 +32,7 @@ index 14ac520..490c1d6 100644
      MrhandBufInfo info;
      VkImage img;
 -    VkDeviceMemory mem;
-+    framejacker::capture_import::Image owned;
++    sightcircuit::capture_import::Image owned;
  };
  
  static CamImage importImage(Gpu &g, const Buf &b) {
@@ -71,7 +71,7 @@ index 14ac520..490c1d6 100644
 -    CHECK(vkAllocateMemory(g.dev, &ai, nullptr, &ci.mem));
 -    CHECK(vkBindImageMemory(g.dev, ci.img, ci.mem, 0));
 -    return ci;
-+    using namespace framejacker::capture_import;
++    using namespace sightcircuit::capture_import;
 +    Context context;
 +    context.physical = g.phys; context.device = g.dev; context.memory = g.mp;
 +    context.completion = &g.importCompletion;
@@ -107,7 +107,7 @@ index 14ac520..490c1d6 100644
 -    vkResetFences(g.dev, 1, &fence);
 -    CHECK(vkQueueSubmit(g.queue, 1, &si, fence));
 -    CHECK(vkWaitForFences(g.dev, 1, &fence, VK_TRUE, 2000000000ull));
-+    framejacker::capture_import::submit_and_wait(g.importCompletion,
++    sightcircuit::capture_import::submit_and_wait(g.importCompletion,
 +        {vkResetFences, vkQueueSubmit, vkWaitForFences}, g.dev, g.queue, fence, si);
      VkMappedMemoryRange mr{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, dst.mem, 0, VK_WHOLE_SIZE};
 -    vkInvalidateMappedMemoryRanges(g.dev, 1, &mr);
@@ -138,7 +138,7 @@ index 14ac520..490c1d6 100644
 -        vkResetFences(g.dev, 1, &fence);
 -        CHECK(vkQueueSubmit(g.queue, 1, &si, fence));
 -        CHECK(vkWaitForFences(g.dev, 1, &fence, VK_TRUE, 2000000000ull));
-+        framejacker::capture_import::submit_and_wait(g.importCompletion,
++        sightcircuit::capture_import::submit_and_wait(g.importCompletion,
 +            {vkResetFences, vkQueueSubmit, vkWaitForFences}, g.dev, g.queue, fence, si);
          VkMappedMemoryRange mr{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, host.mem, 0, VK_WHOLE_SIZE};
 -        vkInvalidateMappedMemoryRanges(g.dev, 1, &mr);
@@ -153,7 +153,7 @@ index 14ac520..490c1d6 100644
 +        // Reject malformed candidate metadata before initializing Vulkan.
 +        for (const auto &buffer : bufs)
 +            if (buffer.info.hasImage && buffer.info.width == 2464 && buffer.info.height == 2464)
-+                framejacker::capture_import::validate_metadata(buffer.info);
++                sightcircuit::capture_import::validate_metadata(buffer.info);
          Gpu g;
          g.init();
          std::vector<CamImage> ims;

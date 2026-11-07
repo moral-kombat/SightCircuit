@@ -96,13 +96,13 @@ extended by rewriting a timestamp.
 
 ## Offline candidate records
 
-`framejacker/hud/qualification.py` provides `MappingCandidate.from_mapping()`
+`sightcircuit/hud/qualification.py` provides `MappingCandidate.from_mapping()`
 and `check_context(current, now_ns)` to reject malformed, changed or expired
 candidate records. This validates structure and context; it supplies no
 production adapter or device authorization. Every accepted candidate remains
 `observed_unqualified`, including when every evidence role is filled.
 
-Records and the runtime mask share one contract in `framejacker/hud/`: the
+Records and the runtime mask share one contract in `sightcircuit/hud/`: the
 native format rule, the eye partition (`geometry.eye_viewports`) and the
 per-eye blind-region budget. `MappingCandidate.calibration()` expresses a
 candidate as a runtime `Calibration` that is always unvalidated with
@@ -153,7 +153,7 @@ options were checked against the implemented command's `--help`.
 
 `scripts/hud_validation_report.py --from-observer` builds a version 1
 candidate record from one saved `hud_marker_observer.py` report. The
-conversion is `framejacker/hud/candidate.py`; the command only reads files and
+conversion is `sightcircuit/hud/candidate.py`; the command only reads files and
 writes the result. Its tests use reports from the real observer and
 observation algorithm on generated frames, run in the cloud. No Frame observer
 report has been converted, and no accepted G3 observation exists.
@@ -246,7 +246,7 @@ These options were checked against the command's `--help`.
 The runtime `Calibration` that `HudMask` applies now comes from exactly two
 factories. It carries the context and lifetime of its record, and the mask
 fails closed when either no longer holds. Nothing here opens a gate: `HudMask`
-still uses synthetic fixtures only, and every gate in `framejacker/gates.py`
+still uses synthetic fixtures only, and every gate in `sightcircuit/gates.py`
 stays closed. The tests are cloud runs on generated frames and fixture
 records, not Frame evidence.
 
@@ -312,7 +312,7 @@ records, not Frame evidence.
 
 ### One margin rule
 
-Every consumer applies `margin_valid` in `framejacker/hud/contract.py`: a
+Every consumer applies `margin_valid` in `sightcircuit/hud/contract.py`: a
 margin is an integer from `max(8, ceil(sum of measured error terms) + 2)` to
 128 pixels.
 
@@ -354,7 +354,7 @@ Synthetic HUD runs now feed the `ValidationLedger` and report the G5 software
 counts that the [device report template](templates/hud-device-validation-report.json)
 names. The tests are cloud runs on generated frames. They are not Frame
 evidence, they observe no device, native hide or physical expiry, and every
-gate in `framejacker/gates.py` stays closed.
+gate in `sightcircuit/gates.py` stays closed.
 
 - **Engine counters.** With a HUD stage, the report's `pipeline` block gains
   `hud_checks`; without one it is null. It counts `frames_checked`, the
@@ -377,7 +377,7 @@ gate in `framejacker/gates.py` stays closed.
   Outside validation, for example in the mirror recognizer, the box is only
   dropped. A validation run with any such box fails.
 - **Ledger feed.** `runtime.live.run_pipeline` with a HUD stage puts a
-  `ValidationSink` (`framejacker/hud/validation.py`) ahead of the presenting
+  `ValidationSink` (`sightcircuit/hud/validation.py`) ahead of the presenting
   sink. Its candidate is `synthetic.fixture_candidate(calibration)`: the
   fixture calibration's context, lifetime and footprints as an unqualified
   version 1 record. Every observation term is an explicit unknown, and the one
@@ -448,7 +448,7 @@ that its counts are exactly the ones the synthetic report provides. The field
 names already matched, so the template is unchanged.
 
 **One maximum age.** `MAX_DISPLAY_AGE_NS` and `MAX_DISPLAY_AGE_MS` (1,000 ms) in
-`framejacker/hud/contract.py` are the single cap and now also the default. The
+`sightcircuit/hud/contract.py` are the single cap and now also the default. The
 ledger defaulted to 750 ms with no recorded derivation. The pipeline, the
 mirror recognizer, the native bridge, this design (`observed_ns + max_age_ns`,
 at most 1,000 ms) and the template use 1,000 ms. No smaller operating default
@@ -470,7 +470,7 @@ template agree. From the checkout:
 [E76](evidence/e076.md) recorded that no hardware source declares the HUD
 session tokens, so a bound mask could never accept a mirror frame. The cloud
 results of this change are [E78](evidence/e078.md).
-`framejacker/sources/session.py` now names a read-only source for each token.
+`sightcircuit/sources/session.py` now names a read-only source for each token.
 `MirrorSource(session=MirrorSession(...))` declares the tokens and stamps every
 frame with them. The tests are cloud runs on a fake /proc root (a temporary
 directory laid out like /proc) and on hand-written runtime events. Nothing ran
@@ -808,7 +808,7 @@ run on such a box.
   - a ring of 4 or 16 px.
 
 **Evaluation.** `scripts/evaluate_mask_fill.py` (library
-`framejacker/mask_fill_evaluation.py`, which the runtime never imports) writes
+`sightcircuit/mask_fill_evaluation.py`, which the runtime never imports) writes
 a JSON report; the command is in
 [development](development.md#hud-mask-fill-evaluation). It compares six fills,
 each run on the zeroed copy under the same surround rule:
@@ -1001,11 +1001,11 @@ Package M adds a geometry-only prediction of where the HUD quad should land in
 the mirror's native pixels, to cross-check a G3 observation and the G4
 composition contract. **A prediction cannot qualify a mapping.** It is
 labelled `kind: geometric_prediction`, `prediction_only: true` and
-`qualifies_mapping: false`; `framejacker.hud.qualification` and `candidate`
+`qualifies_mapping: false`; `sightcircuit.hud.qualification` and `candidate`
 never read it, and a candidate whose evidence names `geometric_prediction` as
 its kind is rejected (`hud_evidence_provenance_invalid`).
 
-- `framejacker/hud/geometry.py` `project()` clips an eye-space polygon against
+- `sightcircuit/hud/geometry.py` `project()` clips an eye-space polygon against
   a near plane (z = −0.02 m) and side planes widened by a quarter of the frame,
   then applies the pinhole given by the four `GetProjectionRaw` tangents.
   `hull()` is a monotone-chain convex hull. Both are ported from
@@ -1032,7 +1032,7 @@ its kind is rejected (`hud_evidence_provenance_invalid`).
 The view record comes from a read-only bridge mode:
 
 ```bash
-artifacts/overlay-bridge/framejacker-overlay-bridge --headset-view-record --allow-runtime-query
+artifacts/overlay-bridge/sightcircuit-overlay-bridge --headset-view-record --allow-runtime-query
 ```
 
 It joins a running SteamVR as `VRApplication_Background` only (never an
@@ -1176,7 +1176,7 @@ the 25-pixel area filter for candidate quads comes after it. The budget was
 tuned on synthetic frames and never checked against a real mirror frame.
 
 **What this adds (packages O1 and O2; the precondition itself is unchanged).**
-The precondition now lives in `framejacker/hud/scene.py` (`bright_contours`,
+The precondition now lives in `sightcircuit/hud/scene.py` (`bright_contours`,
 `candidate_quad`), which `locate_copies` calls, so its statistics describe
 exactly what the observer applies:
 
@@ -1246,7 +1246,7 @@ unchanged. Pin the final checkout/bridge/module hashes at delivery with the
 checkpoint artifact manifest below; do not substitute a previously built ARM64
 artifact.
 
-`scripts/checkpoint_manifest.py` (library `framejacker/runtime/manifest.py`)
+`scripts/checkpoint_manifest.py` (library `sightcircuit/runtime/manifest.py`)
 writes and verifies that manifest. Both commands run on Frame: `--write` right
 after the bridge is built there, and `--verify` immediately before the
 validation and observer commands. Built binaries are never transferred, so a
@@ -1255,8 +1255,8 @@ The manifest records the full git commit, whether the tree is clean (tracked
 changes and untracked, non-ignored files count as dirty), the Python version
 and implementation, `platform.machine()`, the OS (with its os-release ID,
 version and build) and kernel release, and SHA-256 values of the built
-`artifacts/overlay-bridge/framejacker-overlay-bridge`, every
-`framejacker/**/*.py`, the scripts this procedure runs, the bridge sources
+`artifacts/overlay-bridge/sightcircuit-overlay-bridge`, every
+`sightcircuit/**/*.py`, the scripts this procedure runs, the bridge sources
 including `tools/hud_contract.hpp`, and the models and fixture listed in
 `scripts/smoke-assets.json`. It also records the installed `numpy` and
 `opencv-python-headless` versions. Paths are relative to the checkout. The JSON

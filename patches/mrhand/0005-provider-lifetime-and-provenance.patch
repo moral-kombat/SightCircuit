@@ -177,7 +177,7 @@ index 5c080ff..4d358f0 100644
 -
 -// ---------------------------------------------------------------- socket server
 -static void serveClient(int c) {
--    using namespace framejacker::transport;
+-    using namespace sightcircuit::transport;
 -    Fd client(c);
 -    try {
 -        require_same_user(client.get());
@@ -503,7 +503,7 @@ index 5c080ff..4d358f0 100644
 -    v->pfnGetPhysicalDeviceProcAddr = nullptr;
 -    return VK_SUCCESS;
 -}
-+// Framejacker inspection adaptation. Upstream context is covered by its MIT notice.
++// SightCircuit inspection adaptation. Upstream context is covered by its MIT notice.
 +#include "capture_layer_impl.hpp"
 diff --git a/capture/ptgrab.cpp b/capture/ptgrab.cpp
 index 4b8f7e3..39e1871 100644
@@ -518,19 +518,19 @@ index 4b8f7e3..39e1871 100644
  
  #define CHECK(x) do { VkResult r_ = (x); if (r_ != VK_SUCCESS) { fprintf(stderr, "%s:%d %s -> %d\n", __FILE__, __LINE__, #x, r_); throw std::runtime_error("Vulkan_operation_failed"); } } while (0)
  
- using Buf = framejacker::transport::Record;
+ using Buf = sightcircuit::transport::Record;
  
 -static std::vector<Buf> fetchBuffers() {
--    using namespace framejacker::transport;
-+static framejacker::provider::Lease fetchBuffers() {
+-    using namespace sightcircuit::transport;
++static sightcircuit::provider::Lease fetchBuffers() {
      const char *runtime = getenv("XDG_RUNTIME_DIR");
 -    if (!runtime || runtime[0] != '/') throw Error("XDG_RUNTIME_DIR_missing_or_relative");
 -    std::string path = std::string(runtime) + "/mrhand/cam.sock";
 -    const auto deadline = Clock::now() + std::chrono::milliseconds(500);
 -    auto connection = connect_registry(path.c_str(), deadline);
 -    return receive_registry(connection.get(), deadline);
-+    if (!runtime || runtime[0] != '/') throw framejacker::transport::Error("runtime_missing");
-+    return framejacker::provider::Lease(std::string(runtime) + "/framejacker-camera-provider/camera.sock");
++    if (!runtime || runtime[0] != '/') throw sightcircuit::transport::Error("runtime_missing");
++    return sightcircuit::provider::Lease(std::string(runtime) + "/sightcircuit-camera-provider/camera.sock");
  }
  
  struct Gpu {
@@ -538,8 +538,8 @@ index 4b8f7e3..39e1871 100644
  // that frame's luma into the shm slot of its camera.  Cameras = the two halves
  // of the id-sorted buffer list (XRService allocates each camera's ring together).
  static int stream(Gpu &g, std::vector<CamImage> &ims, int maxFps, uint32_t outSize,
--                  framejacker::publication::RunLimit &limit) {
-+                  framejacker::publication::RunLimit &limit, framejacker::provider::Lease &lease) {
+-                  sightcircuit::publication::RunLimit &limit) {
++                  sightcircuit::publication::RunLimit &limit, sightcircuit::provider::Lease &lease) {
      std::sort(ims.begin(), ims.end(), [](const CamImage &a, const CamImage &b) { return a.info.id < b.info.id; });
      const uint32_t W = ims[0].info.width, H = ims[0].info.height;
      const uint32_t S0 = H / 2 - 8, SR = 16;   // probe strip
@@ -547,11 +547,11 @@ index 4b8f7e3..39e1871 100644
      std::vector<int> camOf(ims.size());
      for (size_t i = 0; i < ims.size(); i++) camOf[i] = i < ims.size() / 2 ? 0 : 1;
  
--    const std::string shmPath = framejacker::publication::runtime_source();
-+    const char *output = getenv("FRAMEJACKER_CAPTURE_OUTPUT");
-+    if (!output || output[0] != '/') throw framejacker::transport::Error("supervisor_output_missing");
+-    const std::string shmPath = sightcircuit::publication::runtime_source();
++    const char *output = getenv("SIGHTCIRCUIT_CAPTURE_OUTPUT");
++    if (!output || output[0] != '/') throw sightcircuit::transport::Error("supervisor_output_missing");
 +    const std::string shmPath = output;
-     framejacker::publication::Publisher publisher(shmPath, OW, OH, 2);
+     sightcircuit::publication::Publisher publisher(shmPath, OW, OH, 2);
      uint64_t publications = 0;
 -    printf("{\"event\":\"publication_ready\",\"physical_camera_identity\":\"unverified\"}\n");
 +    const auto &identity = publisher.identity();
@@ -608,10 +608,10 @@ index 4b8f7e3..39e1871 100644
          return 3;
      }
      try {
-+        const char *parent = getenv("FRAMEJACKER_CAPTURE_SUPERVISOR_PID");
-+        const char *output = getenv("FRAMEJACKER_CAPTURE_OUTPUT");
++        const char *parent = getenv("SIGHTCIRCUIT_CAPTURE_SUPERVISOR_PID");
++        const char *output = getenv("SIGHTCIRCUIT_CAPTURE_OUTPUT");
 +        int parentSignal = 0;
-+        if (!parent || framejacker_shm::number(parent, 2, INT32_MAX) != static_cast<uint64_t>(getppid()) ||
++        if (!parent || sightcircuit_shm::number(parent, 2, INT32_MAX) != static_cast<uint64_t>(getppid()) ||
 +            !output || output[0] != '/' || prctl(PR_GET_PDEATHSIG, &parentSignal) || parentSignal != SIGKILL)
 +            throw Error("capture_supervisor_required");
          rlimit core{0, 0};
@@ -624,10 +624,10 @@ index 4b8f7e3..39e1871 100644
 +        for (const auto &record : lease.records()) {
 +            const auto &packet = record.info;
 +            if (!packet.buffer.hasImage || packet.buffer.width != 2464 || packet.buffer.height != 2464) continue;
-+            framejacker::provider::validate_profile(packet);
++            sightcircuit::provider::validate_profile(packet);
 +            if (sourceDevice && sourceDevice != packet.device) throw Error("multiple_exporter_devices");
 +            sourceDevice = packet.device;
-+            bufs.push_back({packet.buffer, framejacker::transport::duplicate(record.fd.get())});
++            bufs.push_back({packet.buffer, sightcircuit::transport::duplicate(record.fd.get())});
 +        }
 +        lease.check();
          if (!limit.running()) throw Error("capture_cancelled");
@@ -638,7 +638,7 @@ index 4b8f7e3..39e1871 100644
          // Reject malformed candidate metadata before initializing Vulkan.
          for (const auto &buffer : bufs)
              if (buffer.info.hasImage && buffer.info.width == 2464 && buffer.info.height == 2464)
-                 framejacker::capture_import::validate_metadata(buffer.info);
+                 sightcircuit::capture_import::validate_metadata(buffer.info);
          Gpu g;
          g.init();
 +        VkPhysicalDeviceIDProperties ids{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
@@ -647,7 +647,7 @@ index 4b8f7e3..39e1871 100644
 +        for (const auto &record : lease.records())
 +            if (record.info.device == sourceDevice && record.info.buffer.hasImage &&
 +                record.info.buffer.width == 2464 && record.info.buffer.height == 2464)
-+                framejacker::provider::validate_profile(record.info, ids.deviceUUID, ids.driverUUID);
++                sightcircuit::provider::validate_profile(record.info, ids.deviceUUID, ids.driverUUID);
 +        lease.check();
 +        if (bufs.size() < 2 || (bufs.size() % 2)) throw Error("unsupported_buffer_grouping");
          std::vector<CamImage> ims;

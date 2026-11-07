@@ -16,7 +16,7 @@ if __name__ == "__main__":
 if not __package__:  # Run as a file: import this checkout's packages without installation.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from framejacker.runtime import manifest  # noqa: E402
+from sightcircuit.runtime import manifest  # noqa: E402
 
 
 def build_parser():

@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from framejacker.sources import recording
+from sightcircuit.sources import recording
 from scripts import recording_check as command
 
 

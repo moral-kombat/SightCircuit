@@ -1,4 +1,4 @@
-# Framejacker
+# SightCircuit
 
 Object recognition for Steam Frame: recorded-video replay and bounded SteamVR
 mirror recognition work on Frame. The active POC is a fixed head-relative edge

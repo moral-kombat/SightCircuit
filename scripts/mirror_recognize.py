@@ -1,6 +1,6 @@
 """Bounded CPU recognition from a verified SteamVR mirror, without live display.
 
-The worker runs ``framejacker.runtime.live.run_recognition``: the shared
+The worker runs ``sightcircuit.runtime.live.run_recognition``: the shared
 ``Pipeline`` over ``MirrorSource``, with latest input only, a one-second
 input/result age limit and capture-context admission. ``sources.mirror.launch``
 bounds it and publishes ``--preview`` and ``--still``, both taken from the last
@@ -17,16 +17,16 @@ import sys
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from framejacker.convert import native_bgr
-from framejacker.detection import DEFAULT_DETECTOR, DETECTORS
-from framejacker.runtime import output, process
-from framejacker.runtime.live import new_mirror_report as new_report, run_recognition
-from framejacker.sources.mirror import launch
-from framejacker.sources.mirror_device import discover
+from sightcircuit.convert import native_bgr
+from sightcircuit.detection import DEFAULT_DETECTOR, DETECTORS
+from sightcircuit.runtime import output, process
+from sightcircuit.runtime.live import new_mirror_report as new_report, run_recognition
+from sightcircuit.sources.mirror import launch
+from sightcircuit.sources.mirror_device import discover
 
 STILL_SCOPE = ("Unannotated native mirror frame of last_result (not resized or masked); "
                "evaluate_detectors.py applies the same conversion to at most 960 pixels")
-OUTPUT_PREFIXES = {"preview": ".framejacker-recognition-", "still": ".framejacker-still-"}
+OUTPUT_PREFIXES = {"preview": ".sightcircuit-recognition-", "still": ".sightcircuit-still-"}
 
 
 def encode_png(image):

@@ -20,10 +20,10 @@ except ImportError:
     import capture_service_lifecycle as lifecycle
 
 ROOT = config.ROOT
-UNIT = "framejacker-metadata-trial.service"
+UNIT = "sightcircuit-metadata-trial.service"
 SERVICE = "steamvr.service"
-DROPIN = "systemd/user/steamvr.service.d/90-framejacker-metadata-trial.conf"
-ENABLE = b"[Service]\nEnvironment=FRAMEJACKER_CAPTURE_LAYER=1\n"
+DROPIN = "systemd/user/steamvr.service.d/90-sightcircuit-metadata-trial.conf"
+ENABLE = b"[Service]\nEnvironment=SIGHTCIRCUIT_CAPTURE_LAYER=1\n"
 EXPECTED = {"LoadState": "loaded", "ActiveState": "active", "SubState": "running",
             "Type": "simple", "KillMode": "control-group", "TimeoutStopUSec": "20s",
             "FragmentPath": "/usr/lib/systemd/user/steamvr.service", "DropInPaths": ""}
@@ -36,7 +36,7 @@ SERVICE_DETAIL_PROPERTIES = (
     "JobTimeoutUSec", "JobRunningTimeoutUSec", "KillMode", "SendSIGKILL", "TimeoutStopUSec",
     "FragmentPath", "DropInPaths")
 SERVICE_EXEC_PROPERTIES = ("ExecCondition", "ExecStartPre", "ExecStart", "ExecStartPost", "ExecStop", "ExecStopPost")
-FLAG_NAMES = {"FRAMEJACKER_CAPTURE_LAYER", "FRAMEJACKER_DISABLE_CAPTURE_LAYER"}
+FLAG_NAMES = {"SIGHTCIRCUIT_CAPTURE_LAYER", "SIGHTCIRCUIT_DISABLE_CAPTURE_LAYER"}
 RUNS = ROOT / "artifacts/metadata-trials"
 ACTIVATION_BLOCKED_REASON = "service_control_failure_unresolved"
 
@@ -167,8 +167,8 @@ def verify_bundle(bundle, home):
     layer = manifest.get("layer", {})
     if (layer.get("implementation_version") != "3" or
             layer.get("library_path") != str(home / config.LIBRARY) or
-            layer.get("enable_environment") != {"FRAMEJACKER_CAPTURE_LAYER": "1"} or
-            layer.get("disable_environment") != {"FRAMEJACKER_DISABLE_CAPTURE_LAYER": "1"}):
+            layer.get("enable_environment") != {"SIGHTCIRCUIT_CAPTURE_LAYER": "1"} or
+            layer.get("disable_environment") != {"SIGHTCIRCUIT_DISABLE_CAPTURE_LAYER": "1"}):
         raise ValueError("trial_manifest_mismatch")
     build = read_json(config.SOURCE.parent, "build-report.json")
     if (build.get("provider_protocol_version") != 3 or build.get("image_fd_export_enabled") is not False or
@@ -181,7 +181,7 @@ def verify_bundle(bundle, home):
             raise ValueError("provider_rebuild_required")
     library = next(item for item in build["artifacts"] if item["name"] == config.SOURCE.name)
     expected = plan["after"][config.LIBRARY]
-    if library["sha256"] != expected["sha256"] or config.read_entry(bundle, "libframejacker_capture.so") != expected:
+    if library["sha256"] != expected["sha256"] or config.read_entry(bundle, "libsightcircuit_capture.so") != expected:
         raise ValueError("bundle_library_build_mismatch")
     inspector = build["metadata_inspector"]
     data = metadata.BINARY.read_bytes()
@@ -218,7 +218,7 @@ def preflight(bundle, runtime, home, manager):
         raise ValueError("baseline_runtime_unconfirmed")
     if manager.environment_flags():
         raise ValueError("existing_layer_environment_flag")
-    endpoint = runtime / "framejacker-camera-provider/camera.sock"
+    endpoint = runtime / "sightcircuit-camera-provider/camera.sock"
     if endpoint.exists() or endpoint.is_symlink():
         raise ValueError("existing_provider_endpoint")
     return plan, service
@@ -327,7 +327,7 @@ def execute(run, manager, inspect=metadata.inspect, verify_peer=peer_is_composit
         transition("start")
         mark_phase("waiting_for_provider")
         end = time.monotonic() + min(wait_seconds, max(0, controller.remaining() - 4))
-        endpoint = runtime / "framejacker-camera-provider/camera.sock"
+        endpoint = runtime / "sightcircuit-camera-provider/camera.sock"
         while not endpoint.exists() and time.monotonic() < end:
             time.sleep(0.1)
         if controller.remaining() < 4:
@@ -458,7 +458,7 @@ def rollback(run, manager):
                     controller.require_stopped()
                     config.restore(run, expected_home=home, before_change=controller.require_stopped)
                     report["configuration_restored"] = True
-                    endpoint = runtime / "framejacker-camera-provider/camera.sock"
+                    endpoint = runtime / "sightcircuit-camera-provider/camera.sock"
                     if endpoint.exists() or endpoint.is_symlink():
                         config.recover_provider(runtime)
                 except (ValueError, OSError) as error:
@@ -510,7 +510,7 @@ def check_recovery(parent=RUNS, runner=command, budget=8):
     path = safe_path(parent / ("recovery-" + uuid.uuid4().hex))
     path.mkdir(mode=0o700)
     python, script = safe_path(sys.executable), safe_path(Path(__file__))
-    unit = "framejacker-metadata-recovery-" + path.name[9:] + ".service"
+    unit = "sightcircuit-metadata-recovery-" + path.name[9:] + ".service"
     cleanup = f"{python} {script} --recovery-complete {path}"
     runner(["systemd-run", "--user", "--collect", "--no-ask-password", "--unit=" + unit,
             "--property=Type=exec", "--property=RuntimeMaxSec=1", "--property=TimeoutStopSec=2",

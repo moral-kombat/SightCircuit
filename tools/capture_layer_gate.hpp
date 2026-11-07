@@ -3,12 +3,12 @@
 #include "capture_provider.hpp"
 #include <cstdlib>
 #include <time.h>
-namespace framejacker::layer_gate {
+namespace sightcircuit::layer_gate {
 inline bool claim(const std::string &runtime) {
     struct stat info{};
     if (runtime.empty() || runtime[0] != '/' || lstat(runtime.c_str(), &info)) return false;
     provider::private_directory(info);
-    const std::string directory_path = runtime + "/framejacker-layer-guard";
+    const std::string directory_path = runtime + "/sightcircuit-layer-guard";
     if (mkdir(directory_path.c_str(), 0700) && errno != EEXIST) return false;
     transport::Fd directory(open(directory_path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
     if (directory.get() < 0 || fstat(directory.get(), &info)) return false;
@@ -30,7 +30,7 @@ inline bool claim(const std::string &runtime) {
 inline bool allowed() noexcept {
     static const bool decided = [] {
         try {
-            const char *opt_in = std::getenv("FRAMEJACKER_CAPTURE_LAYER");
+            const char *opt_in = std::getenv("SIGHTCIRCUIT_CAPTURE_LAYER");
             const char *runtime = std::getenv("XDG_RUNTIME_DIR");
             if (!opt_in || std::string(opt_in) != "1" || !runtime) return false;
             char executable[4096]{};
@@ -42,4 +42,4 @@ inline bool allowed() noexcept {
     }();
     return decided;
 }
-} // namespace framejacker::layer_gate
+} // namespace sightcircuit::layer_gate

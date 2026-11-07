@@ -1,6 +1,6 @@
 """Decode a few frames from one recorded video track, without camera/runtime access.
 
-The decoder runs in a child process under ``framejacker.runtime.guard.supervise``
+The decoder runs in a child process under ``sightcircuit.runtime.guard.supervise``
 (an owned process group, a 45-second deadline, reaping and, on Linux, the
 parent-loss guardian), which accepts its JSON report only through
 ``validate_worker_report``.
@@ -13,8 +13,8 @@ import sys
 if not __package__:  # Run as a file: import this checkout's packages without installation.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from framejacker.runtime.guard import supervise  # noqa: E402
-from framejacker.sources.recording import RecordingError, latest_recording  # noqa: E402
+from sightcircuit.runtime.guard import supervise  # noqa: E402
+from sightcircuit.sources.recording import RecordingError, latest_recording  # noqa: E402
 
 DECODE_SECONDS = 45
 

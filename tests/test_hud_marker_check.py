@@ -15,9 +15,9 @@ import unittest
 from unittest.mock import Mock, patch
 
 from scripts import hud_marker_check as marker
-from framejacker.hud import HUD_CONFIG
-from framejacker.hud import marker as marker_client
-from framejacker.overlay import DEFAULT_BRIDGE, OverlayClient, bridge_closed_cleanly
+from sightcircuit.hud import HUD_CONFIG
+from sightcircuit.hud import marker as marker_client
+from sightcircuit.overlay import DEFAULT_BRIDGE, OverlayClient, bridge_closed_cleanly
 
 ROOT = Path(__file__).resolve().parents[1]
 

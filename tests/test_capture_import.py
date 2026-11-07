@@ -5,7 +5,7 @@ import subprocess
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURE = ROOT / "artifacts/capture-import-reference/framejacker-import-fixture"
+FIXTURE = ROOT / "artifacts/capture-import-reference/sightcircuit-import-fixture"
 
 
 @unittest.skipUnless(FIXTURE.is_file(), "build scripts/build_capture_reference.sh --import-fixes first")

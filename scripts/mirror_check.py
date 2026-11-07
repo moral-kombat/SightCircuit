@@ -7,9 +7,9 @@ import sys
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from framejacker.runtime import output, process  # noqa: E402
-from framejacker.sources.mirror import capture, launch, new_capture_report as new_report  # noqa: E402
-from framejacker.sources.mirror_device import discover, grayscale_png  # noqa: E402
+from sightcircuit.runtime import output, process  # noqa: E402
+from sightcircuit.sources.mirror import capture, launch, new_capture_report as new_report  # noqa: E402
+from sightcircuit.sources.mirror_device import discover, grayscale_png  # noqa: E402
 
 
 def _worker(candidate, seconds, outputs, sender, stop, expected_parent):
@@ -55,7 +55,7 @@ def main(argv=None):
     if args.capture:
         report = launch(report, discovery, args.device, args.seconds, worker=_worker, report_factory=new_report,
                         success_status="captured",
-                        outputs={"preview": (args.preview, ".framejacker-mirror-")} if args.preview else None)
+                        outputs={"preview": (args.preview, ".sightcircuit-mirror-")} if args.preview else None)
     print(json.dumps(report, indent=2))
     return report["exit_code"]
 

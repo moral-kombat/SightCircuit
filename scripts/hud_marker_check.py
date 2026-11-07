@@ -8,11 +8,11 @@ import time
 if not __package__:  # Run as a file: import this checkout's packages without installation.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from framejacker.hud.contract import MARKER_MAX_SECONDS, MARKER_MIN_SECONDS  # noqa: E402
-from framejacker.hud.marker import (  # noqa: E402
+from sightcircuit.hud.contract import MARKER_MAX_SECONDS, MARKER_MIN_SECONDS  # noqa: E402
+from sightcircuit.hud.marker import (  # noqa: E402
     MarkerClient, new_report, validate_visibility_evidence, validate_worker_report)
-from framejacker.overlay import bridge_closed_cleanly  # noqa: E402
-from framejacker.runtime.guard import stop_on_signals, supervise  # noqa: E402
+from sightcircuit.overlay import bridge_closed_cleanly  # noqa: E402
+from sightcircuit.runtime.guard import stop_on_signals, supervise  # noqa: E402
 
 
 def worker(options):

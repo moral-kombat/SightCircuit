@@ -10,7 +10,7 @@ import tempfile
 import time
 import unittest
 
-from framejacker import assets
+from sightcircuit import assets
 from tests.asset_gate import FIXTURE, model_assets, requires_assets
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -189,13 +189,13 @@ class ReplayWindowTests(unittest.TestCase):
         self.assertEqual(report["status"], "error")
         self.assertEqual(hashlib.sha256(self.clip.read_bytes()).hexdigest(), before)
 
-    @unittest.skipUnless((ROOT / "artifacts/overlay-bridge/framejacker-overlay-bridge").is_file(), "Build overlay bridge first")
+    @unittest.skipUnless((ROOT / "artifacts/overlay-bridge/sightcircuit-overlay-bridge").is_file(), "Build overlay bridge first")
     def test_overlay_controls_and_real_transport_in_validation_mode(self):
         # Inject only the bridge's explicit non-VR mode. The report must retain
         # validation_only=true and runtime_initialized=false; this is not a
         # headset rendering test.
         code = (
-            "import sys\nfrom framejacker import overlay as overlay_client\nfrom scripts import replay_window\n"
+            "import sys\nfrom sightcircuit import overlay as overlay_client\nfrom scripts import replay_window\n"
             "class ValidationClient(overlay_client.OverlayClient):\n"
             "    def __init__(self): super().__init__(validation_only=True)\n"
             "overlay_client.OverlayClient = ValidationClient\n"
@@ -215,7 +215,7 @@ class ReplayWindowTests(unittest.TestCase):
 
     def test_overlay_rgba_conversion_and_size_limit(self):
         import numpy as np
-        from framejacker.overlay import rgba_from_bgr
+        from sightcircuit.overlay import rgba_from_bgr
 
         image = np.array([[[0, 0, 255], [255, 0, 0]]], dtype=np.uint8)
         width, height, pixels = rgba_from_bgr(image)

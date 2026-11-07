@@ -14,13 +14,13 @@ from unittest.mock import patch
 
 from dataclasses import replace
 
-from framejacker.convert import to_bgr
-from framejacker.detection import DEFAULT_DETECTOR
-from framejacker.errors import FrameFormatError
-from framejacker.frame import Detection, DetectionResult
-from framejacker.runtime import live, process
-from framejacker.sources import mirror as acquisition
-from framejacker.sources import mirror_device as device
+from sightcircuit.convert import to_bgr
+from sightcircuit.detection import DEFAULT_DETECTOR
+from sightcircuit.errors import FrameFormatError
+from sightcircuit.frame import Detection, DetectionResult
+from sightcircuit.runtime import live, process
+from sightcircuit.sources import mirror as acquisition
+from sightcircuit.sources import mirror_device as device
 from scripts import mirror_recognize as command
 from tests.asset_gate import model_assets, requires_assets
 
@@ -54,7 +54,7 @@ class FixtureMirror(MarkedMirror):
         import cv2
 
         super().open()
-        image = cv2.imread(str(ROOT / ".cache/framejacker/assets/dog.jpg"))
+        image = cv2.imread(str(ROOT / ".cache/sightcircuit/assets/dog.jpg"))
         if image is None:
             raise AssertionError("Missing checked development fixture")
         height, width = image.shape[:2]
@@ -240,7 +240,7 @@ class RecognitionGuardTests(unittest.TestCase):
 
     def test_progress_snapshot_aliases_come_from_the_block_it_embeds(self):
         from types import SimpleNamespace
-        from framejacker.pipeline import PipelineStats
+        from sightcircuit.pipeline import PipelineStats
 
         snapshots = []
         report = live.new_mirror_report()
@@ -375,7 +375,7 @@ class RecognitionIntegrationTests(unittest.TestCase):
             self.assertLessEqual(max(image.shape[:2]), 640)
             self.assertGreater(image.std(), 1)
             self.assertEqual(report["detector"]["name"], "mobilenet-ssd")  # The default is unchanged.
-            fixture = cv2.imread(str(ROOT / ".cache/framejacker/assets/dog.jpg"))
+            fixture = cv2.imread(str(ROOT / ".cache/sightcircuit/assets/dog.jpg"))
             self.assertTrue(np.array_equal(cv2.imread(str(still)), fixture))  # Unannotated, lossless.
             self.assertEqual(report["still_path"], str(still))
             self.assertEqual(report["still_sha256"], hashlib.sha256(still.read_bytes()).hexdigest())
@@ -393,8 +393,8 @@ class RecognitionIntegrationTests(unittest.TestCase):
                     patch.object(os, "link", side_effect=race_link), redirect_stdout(io.StringIO()):
                 self.assertEqual(command.main(["--capture", "--seconds", "1", "--preview", str(target)]), 1)
             self.assertEqual(target.read_bytes(), b"preserve concurrent output")
-            self.assertEqual(list(Path(directory).glob(".framejacker-recognition-*")), [])
-            self.assertEqual(list(Path(directory).glob(".framejacker-still-*")), [])
+            self.assertEqual(list(Path(directory).glob(".sightcircuit-recognition-*")), [])
+            self.assertEqual(list(Path(directory).glob(".sightcircuit-still-*")), [])
 
     def test_still_capture_report_and_manifest_entry_pass_required_digests(self):
         """Done condition: --capture --still, its report, its manifest entry, --require-input-digests."""

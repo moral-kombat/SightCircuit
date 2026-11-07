@@ -8,9 +8,9 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from framejacker.errors import OutputError
-from framejacker.runtime import guard, output, process
-from framejacker.sources import mirror
+from sightcircuit.errors import OutputError
+from sightcircuit.runtime import guard, output, process
+from sightcircuit.sources import mirror
 
 CANDIDATE = {"node": "/dev/fixture", "name": "SteamVR"}
 DISCOVERY = {"status": "candidates_found", "candidates": [CANDIDATE]}

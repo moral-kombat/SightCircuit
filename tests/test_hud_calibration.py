@@ -11,15 +11,15 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from framejacker.context import CaptureContext
-from framejacker.frame import Frame
-from framejacker.gates import claims
-from framejacker.hud import HUD_CONFIG, Calibration, CaptureFormat, Footprint, HudMask, HudStage, config_digest
-from framejacker.hud import contract, observation
-from framejacker.hud import mask as hud_mask
-from framejacker.hud.geometry import expand
-from framejacker.hud.qualification import MappingCandidate, validate_context
-from framejacker.runtime import synthetic
+from sightcircuit.context import CaptureContext
+from sightcircuit.frame import Frame
+from sightcircuit.gates import claims
+from sightcircuit.hud import HUD_CONFIG, Calibration, CaptureFormat, Footprint, HudMask, HudStage, config_digest
+from sightcircuit.hud import contract, observation
+from sightcircuit.hud import mask as hud_mask
+from sightcircuit.hud.geometry import expand
+from sightcircuit.hud.qualification import MappingCandidate, validate_context
+from sightcircuit.runtime import synthetic
 from tests.test_hud_qualification import candidate_record
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -91,12 +91,12 @@ class CalibrationFactoryTests(unittest.TestCase):
 
     def test_only_the_two_factories_issue_calibrations(self):
         callers = set()
-        for path in sorted(list((ROOT / "framejacker").rglob("*.py")) + list((ROOT / "scripts").glob("*.py")) +
+        for path in sorted(list((ROOT / "sightcircuit").rglob("*.py")) + list((ROOT / "scripts").glob("*.py")) +
                            list((ROOT / "tests").glob("*.py"))):
             tree = ast.parse(path.read_text(), str(path))
             if any(isinstance(node, ast.Attribute) and node.attr == "_issue" for node in ast.walk(tree)):
                 callers.add(str(path.relative_to(ROOT)))
-        self.assertEqual(callers, {"framejacker/hud/qualification.py", "framejacker/runtime/synthetic.py"})
+        self.assertEqual(callers, {"sightcircuit/hud/qualification.py", "sightcircuit/runtime/synthetic.py"})
 
     def test_fixture_calibration_carries_context_tokens_and_lifetime(self):
         before = time.monotonic_ns()
@@ -304,7 +304,7 @@ class SessionAndExpiryTests(unittest.TestCase):
                      "NumPy and OpenCV required for the synthetic HUD pipeline")
 class ExpiringPipelineTests(unittest.TestCase):
     def test_expired_calibration_stops_inference_and_presentation_and_withdraws_output(self):
-        from framejacker.runtime import live
+        from sightcircuit.runtime import live
         lifetime_ns, slack_ns = 1_000_000_000, 50_000_000
         calibration = synthetic.synthetic_hud_calibration(lifetime_ns=lifetime_ns)
         events = []

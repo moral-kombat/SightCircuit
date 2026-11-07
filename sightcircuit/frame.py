@@ -151,7 +151,7 @@ class Processed:
     output_age_ms: float | None = None
     detector_input_size: tuple[int, int] | None = None
     native_to_inference_scale: tuple[float, float] | None = None
-    hud: object = None  # framejacker.hud.HudOutput when ``image`` is the HUD tile.
+    hud: object = None  # sightcircuit.hud.HudOutput when ``image`` is the HUD tile.
     completed_ns: int | None = None  # Monotonic time the result passed the output boundary (output_age_ms).
 
     @property

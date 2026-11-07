@@ -7,14 +7,14 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from framejacker import overlay
-from framejacker.overlay import OverlayClient, OverlaySink, bridge_closed_cleanly
+from sightcircuit import overlay
+from sightcircuit.overlay import OverlayClient, OverlaySink, bridge_closed_cleanly
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def clean_close_report():
-    native = {"report_kind": "framejacker_overlay_bridge", "exit_code": 0, "cleanup_ok": True}
+    native = {"report_kind": "sightcircuit_overlay_bridge", "exit_code": 0, "cleanup_ok": True}
     return {"worker_reaped": True, "worker_exit_code": 0, "transport_threads_stopped": True,
             "forced_termination": False, "error": None, "native_report": native}
 
@@ -81,9 +81,9 @@ class BridgeClosedCleanlyTests(unittest.TestCase):
                 check.assert_called_once_with(report)
 
     def test_callers_share_this_check_instead_of_repeating_it(self):
-        sources = [*ROOT.glob("framejacker/**/*.py"), *ROOT.glob("scripts/*.py")]
+        sources = [*ROOT.glob("sightcircuit/**/*.py"), *ROOT.glob("scripts/*.py")]
         repeated = sorted(str(path.relative_to(ROOT)) for path in sources
-                          if path != ROOT / "framejacker/overlay.py"
+                          if path != ROOT / "sightcircuit/overlay.py"
                           and '"transport_threads_stopped"' in path.read_text())
         self.assertEqual(repeated, [])
 

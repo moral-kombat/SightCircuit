@@ -10,11 +10,11 @@ ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / "artifacts/capture-provider-reference"
 
 
-@unittest.skipUnless((BUILD / "framejacker-provider-fixture").is_file(), "build --provider-fixes first")
+@unittest.skipUnless((BUILD / "sightcircuit-provider-fixture").is_file(), "build --provider-fixes first")
 class ProviderTests(unittest.TestCase):
     def run_case(self, name, binary="provider"):
         with tempfile.TemporaryDirectory(prefix="fj-layer-executable-") as temporary:
-            executable = BUILD / f"framejacker-{binary}-fixture"
+            executable = BUILD / f"sightcircuit-{binary}-fixture"
             if binary == "layer" and name in ("lifecycle", "failures", "guard_fallback"):
                 # /proc/self/exe resolves symlinks; use an actual copy so the
                 # real production basename gate is exercised by these cases.

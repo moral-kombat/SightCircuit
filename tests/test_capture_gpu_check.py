@@ -20,7 +20,7 @@ from scripts import capture_gpu_check as check
 class CaptureGpuTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.temporary = tempfile.TemporaryDirectory(prefix="framejacker-gpu-tests-")
+        cls.temporary = tempfile.TemporaryDirectory(prefix="sightcircuit-gpu-tests-")
         cls.root = Path(cls.temporary.name)
         cls.library = cls.root / "libvulkan.so.1"
         subprocess.run([
@@ -40,8 +40,8 @@ class CaptureGpuTests(unittest.TestCase):
     @contextlib.contextmanager
     def driver(self, mode="supported"):
         with patch.dict(os.environ, {
-            "LD_LIBRARY_PATH": str(self.root), "FRAMEJACKER_FAKE_VULKAN_MODE": mode,
-            "FRAMEJACKER_FAKE_VULKAN_TRACE": str(self.trace),
+            "LD_LIBRARY_PATH": str(self.root), "SIGHTCIRCUIT_FAKE_VULKAN_MODE": mode,
+            "SIGHTCIRCUIT_FAKE_VULKAN_TRACE": str(self.trace),
         }):
             yield
 
@@ -211,7 +211,7 @@ time.sleep(30)
 
 class GpuSupervisorTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="framejacker-gpu-supervisor-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="sightcircuit-gpu-supervisor-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
 

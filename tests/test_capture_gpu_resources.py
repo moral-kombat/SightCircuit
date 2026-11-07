@@ -5,7 +5,7 @@ import subprocess
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURE = ROOT / "artifacts/capture-resources-reference/framejacker-gpu-resources-fixture"
+FIXTURE = ROOT / "artifacts/capture-resources-reference/sightcircuit-gpu-resources-fixture"
 
 
 @unittest.skipUnless(FIXTURE.is_file(), "build scripts/build_capture_reference.sh --resource-fixes first")

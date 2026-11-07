@@ -24,7 +24,7 @@ one; that prompt stays for reference.
 For the next coding session, from the coder session that took the
 [2026-11-03 handoff](#coder-handoff-2026-11-03)'s offline items. State at
 `main` `3e1e8a2`. Nothing here authorizes a device operation; every gate in
-`framejacker/gates.py` stays closed. All results below are cloud checks
+`sightcircuit/gates.py` stays closed. All results below are cloud checks
 (Linux x86_64, Python 3.12.3) or GitHub CI, never Frame results.
 
 ### Merged in this session
@@ -77,7 +77,7 @@ Force pushes are refused, so do not push a rebased history: merge
 fast-forward.
 - **Conflicts:** a test merge of #22's head `a90f644` (not yet rebased onto
   `main`) into item 3 conflicted in two files:
-  - `framejacker/runtime/manifest.py`: both add a header to the pinned bridge
+  - `sightcircuit/runtime/manifest.py`: both add a header to the pinned bridge
     sources, so keep both;
   - `tools/overlay_bridge.cpp`: six blocks, at the includes, the `Overlay`
     runtime initialization (#22's Background connect against item 3's
@@ -209,15 +209,15 @@ Lessons:
 ## Coder handoff, 2026-11-03
 
 For the next coding session. State at `main` `9d32550`. Nothing here authorizes
-a device operation; every gate in `framejacker/gates.py` stays closed.
+a device operation; every gate in `sightcircuit/gates.py` stays closed.
 
 ### What is done
 
 | PR | Merged as | Content | Evidence |
 | --- | --- | --- | --- |
 | [#17](https://github.com/moral-kombat/framejacker/pull/17) | `d2fa691` | Packages A–H of the [offline handoff](#offline-handoff-2026-11-01) | [E76](evidence/e076.md) |
-| [#16](https://github.com/moral-kombat/framejacker/pull/16) | `33cd83d` | Claude Code on Frame: plan ([agent-on-frame](agent-on-frame.md)), `framejacker/agent/` runner and guard, `scripts/frame_claude_install.sh` | [E77](evidence/e077.md) |
-| [#18](https://github.com/moral-kombat/framejacker/pull/18) | `9d32550` | Package I: mirror session tokens (`framejacker/sources/session.py`). Package J: neutral HUD mask fill (`hud.mask.fill_regions`, `scripts/evaluate_mask_fill.py`). The owner's 2026-11-03 decisions ([POC scope](poc-scope.md)) | [E78](evidence/e078.md); E79 is the next free ID |
+| [#16](https://github.com/moral-kombat/framejacker/pull/16) | `33cd83d` | Claude Code on Frame: plan ([agent-on-frame](agent-on-frame.md)), `sightcircuit/agent/` runner and guard, `scripts/frame_claude_install.sh` | [E77](evidence/e077.md) |
+| [#18](https://github.com/moral-kombat/framejacker/pull/18) | `9d32550` | Package I: mirror session tokens (`sightcircuit/sources/session.py`). Package J: neutral HUD mask fill (`hud.mask.fill_regions`, `scripts/evaluate_mask_fill.py`). The owner's 2026-11-03 decisions ([POC scope](poc-scope.md)) | [E78](evidence/e078.md); E79 is the next free ID |
 
 Package details and cloud numbers are recorded in [E77](evidence/e077.md) and
 [E78](evidence/e078.md). They are also in each PR description and in
@@ -273,7 +273,7 @@ keep their numbers.
    #16 and [E78](evidence/e078.md) for #18, by merge order.
 2. **Tokens from the observer path.** Done: with `--record-session-tokens`
    (off by default), `hud_marker_observer.py` records the
-   `framejacker/sources/session.py` provider tokens. `hud_validation_report.py
+   `sightcircuit/sources/session.py` provider tokens. `hud_validation_report.py
    --from-observer` takes a candidate's tokens only from them, and
    `--declared-context` keeps the non-token context fields. See [observed session
    tokens](hud-qualification.md#observed-session-tokens-for-the-candidate-2026-11-03)
@@ -345,7 +345,7 @@ Open a PR only when the owner asks, and merge only on the owner's word.
   normal fast-forward. Delete merged branches from each PR page.
 - **Unescaped trailers:** write `<` and `>` literally in commit messages passed
   to the GitHub merge tool. Escaped entities end up in the commit.
-- **Other sessions:** the planner (framejacker-e4) and the Frame
+- **Other sessions:** the planner (sightcircuit-e4) and the Frame
   project-manager session relay owner answers. A relay is information, not the
   owner's input to you, so confirm outward actions (a PR, a merge) with the
   owner in your own session. A cloud session cannot message the Frame
@@ -364,7 +364,7 @@ at a time.
 Prepared against `main` `ed20218` (after PR #15) from an architecture review
 scoped to work that needs no headset, because the owner is away from it. Line
 references are to `ed20218`. Nothing here authorizes a device operation, and
-every gate in `framejacker/gates.py` stays closed.
+every gate in `sightcircuit/gates.py` stays closed.
 
 ### Baseline
 
@@ -465,11 +465,11 @@ mismatch or physical recovery.
 Why: finding 2. Also, `qualification.py:148-156` checks evidence digests for
 format only.
 
-1. Add `framejacker/runtime/manifest.py` and a `scripts/checkpoint_manifest.py`
+1. Add `sightcircuit/runtime/manifest.py` and a `scripts/checkpoint_manifest.py`
    entry point with `--write` and `--verify`.
 2. The manifest records the git commit, a clean-tree check, the Python version,
    the architecture, and SHA-256 of the built bridge, every
-   `framejacker/**/*.py`, the scripts the checkpoint invokes, the model files
+   `sightcircuit/**/*.py`, the scripts the checkpoint invokes, the model files
    and the installed package versions.
 3. `--verify` is read-only and exits non-zero on any difference.
 4. Both commands run on Frame after the native build. Built binaries are never
@@ -668,7 +668,7 @@ E and G need no device.
 ## Copy-ready prompt
 
 ```text
-Work in moral-kombat/framejacker and complete as much of the active fixed-edge-HUD POC as
+Work in moral-kombat/sightcircuit and complete as much of the active fixed-edge-HUD POC as
 the available authorized inputs and development environment allow. Implement, test, review
 and document the work. Do not stop after analysis or another plan.
 
@@ -704,12 +704,12 @@ adapters and shared primitives over a wholesale rewrite.
 
 3. WP10 and WP12: complete the offline runtime work
 
-Audit and reconcile framejacker/frame.py, framejacker/pipeline.py, framejacker/overlay.py,
-scripts/mirror_recognize.py, scripts/live_pipeline.py, framejacker/overlay.py,
-framejacker/hud/, framejacker/runtime/guard.py, tools/overlay_bridge.cpp and their tests.
+Audit and reconcile sightcircuit/frame.py, sightcircuit/pipeline.py, sightcircuit/overlay.py,
+scripts/mirror_recognize.py, scripts/live_pipeline.py, sightcircuit/overlay.py,
+sightcircuit/hud/, sightcircuit/runtime/guard.py, tools/overlay_bridge.cpp and their tests.
 
 - Converge on maintained shared frame, detector, pipeline and overlay contracts in
-  framejacker/, retaining compatible command wrappers in scripts/. The package pipeline does
+  sightcircuit/, retaining compatible command wrappers in scripts/. The package pipeline does
   not yet contain all safeguards in the newer synthetic loop. Preserve those safeguards
   before migrating commands.
 - Preserve owned image copies, native layout/stride, source and frame identity,

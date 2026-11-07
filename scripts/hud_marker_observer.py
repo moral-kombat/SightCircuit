@@ -3,12 +3,12 @@
 Native-resolution capture is retained. Only candidate quads are rectified to
 check the fixed marker. No eye identity or unseen/occluded copy is inferred.
 The copy-location algorithm and the worker report contract live in
-``framejacker.hud.observation``; this command runs the bounded trial, its
+``sightcircuit.hud.observation``; this command runs the bounded trial, its
 marker and its report.
 
 ``--record-session-tokens`` (off by default, only with the complete
 calibration opt-in) also records the HUD session tokens of the run from the
-read-only providers of ``framejacker.sources.session``: the SteamVR server
+read-only providers of ``sightcircuit.sources.session``: the SteamVR server
 process and the SHA-256 of its running binary, this process's clock, and a
 tracking observer that nothing feeds yet. Without it nothing is read under
 /proc for session tokens, and the report records that no tokens were
@@ -23,21 +23,21 @@ import time
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from framejacker.gates import claims  # noqa: E402
-from framejacker.hud.contract import MARKER_MAX_SECONDS, MARKER_MIN_SECONDS  # noqa: E402
+from sightcircuit.gates import claims  # noqa: E402
+from sightcircuit.hud.contract import MARKER_MAX_SECONDS, MARKER_MIN_SECONDS  # noqa: E402
 
-from framejacker.hud.observation import (  # noqa: E402
+from sightcircuit.hud.observation import (  # noqa: E402
     SESSION_TOKENS_DECLARATION_FAILED, SESSION_TOKENS_NOT_REPORTED, SESSION_TOKENS_NOT_REQUESTED,
     SESSION_TOKENS_REPORT_INVALID, BaselineGate, EmpiricalObservation, ObserverConfig, native_bgr,
     rejection_scene_statistics, session_tokens_record, unrecorded_session_tokens, validate_marker_evidence,
     validate_observer_report as validate_worker_report)
-from framejacker.hud.scene import analyze_still  # noqa: E402
-from framejacker.hud.marker import STOP_GRACE_SECONDS, MarkerClient  # noqa: E402
-from framejacker.overlay import bridge_closed_cleanly  # noqa: E402
-from framejacker.runtime.guard import stop_on_signals, supervise  # noqa: E402
-from framejacker.sources.mirror import capture  # noqa: E402
-from framejacker.sources.mirror_device import discover, select_candidate  # noqa: E402
-from framejacker.sources.session import HostClock, MirrorSession, RuntimeProcess, TrackingObserver  # noqa: E402
+from sightcircuit.hud.scene import analyze_still  # noqa: E402
+from sightcircuit.hud.marker import STOP_GRACE_SECONDS, MarkerClient  # noqa: E402
+from sightcircuit.overlay import bridge_closed_cleanly  # noqa: E402
+from sightcircuit.runtime.guard import stop_on_signals, supervise  # noqa: E402
+from sightcircuit.sources.mirror import capture  # noqa: E402
+from sightcircuit.sources.mirror_device import discover, select_candidate  # noqa: E402
+from sightcircuit.sources.session import HostClock, MirrorSession, RuntimeProcess, TrackingObserver  # noqa: E402
 
 BASELINE_WINDOW_SECONDS = 2.0
 # The supervisor's bound is --seconds plus this margin, counted from the worker's start.

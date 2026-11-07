@@ -21,7 +21,7 @@ from unittest.mock import patch
 from scripts import capture_provider_check as check
 from scripts import capture_supervisor
 
-FIXTURE = check.BINARY.parent / "framejacker-provider-fixture"
+FIXTURE = check.BINARY.parent / "sightcircuit-provider-fixture"
 
 
 @unittest.skipUnless(check.BINARY.is_file() and FIXTURE.is_file(), "build --provider-fixes first")
@@ -115,7 +115,7 @@ class ProviderMetadataTests(unittest.TestCase):
         report = check.inspect(runtime=self.root)
         self.assertEqual(report["status"], "inspection_failed")
         self.assertFalse(report["native"]["lease_established"])
-        parent = self.root / "framejacker-camera-provider"
+        parent = self.root / "sightcircuit-camera-provider"
         parent.mkdir(mode=0o700)
         (parent / "camera.sock").symlink_to("/dev/null")
         report = check.inspect(runtime=self.root)

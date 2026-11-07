@@ -10,7 +10,7 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-BINARY = ROOT / "artifacts/capture-gpu-check/framejacker-capture-gpu-check"
+BINARY = ROOT / "artifacts/capture-gpu-check/sightcircuit-capture-gpu-check"
 MAX_STDOUT = 256 * 1024
 MAX_STDERR = 32 * 1024
 
@@ -83,7 +83,7 @@ def run_query(*, binary=BINARY, timeout=10):
                 try:
                     native = json.loads(output)
                     if (not isinstance(native, dict) or
-                            native.get("report_kind") != "framejacker_capture_gpu_query" or
+                            native.get("report_kind") != "sightcircuit_capture_gpu_query" or
                             native.get("schema_version") != 1 or
                             type(native.get("exit_code")) is not int or
                             native["exit_code"] != process.returncode or

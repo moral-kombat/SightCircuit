@@ -31,7 +31,7 @@ class Manager(SessionManager):
             self.fail_reload = False
             raise ValueError("generated_reload_error")
         self.enabled = config.read_entry(self.runtime, metadata.DROPIN) == metadata.ENABLE
-        self.flags = ["FRAMEJACKER_CAPTURE_LAYER"] if self.enabled else []
+        self.flags = ["SIGHTCIRCUIT_CAPTURE_LAYER"] if self.enabled else []
 
     def switch_to_game(self, timeout=10):
         self.calls.append("switch_to_game_mode")
@@ -174,7 +174,7 @@ class MetadataSessionTests(unittest.TestCase):
             self.assertTrue(state["startup_may_be_enabled"])
             document = json.loads(config.payload(config.read_entry(self.home, config.MANIFEST)))
             self.assertEqual(document["layer"]["library_path"], str(run / "library.so"))
-            self.assertEqual(document["layer"]["enable_environment"], {"FRAMEJACKER_CAPTURE_LAYER": "1"})
+            self.assertEqual(document["layer"]["enable_environment"], {"SIGHTCIRCUIT_CAPTURE_LAYER": "1"})
             self.assertFalse((self.home / config.LIBRARY).exists())
         self.manager.after_switch = inspect_stage
         self.assertEqual(self.execute(run)["status"], "inspected")
@@ -319,7 +319,7 @@ class MetadataSessionTests(unittest.TestCase):
         self.assertEqual(self.manager.calls, [])
 
     def test_process_environment_only_checks_capture_flags_without_reporting_other_values(self):
-        data = b"PRIVATE_TOKEN=never-report\0FRAMEJACKER_CAPTURE_LAYER=1\0"
+        data = b"PRIVATE_TOKEN=never-report\0SIGHTCIRCUIT_CAPTURE_LAYER=1\0"
         observed = snapshot()
         with patch.object(metadata, "proc_bytes", return_value=data), patch.object(metadata, "process_start", return_value=100):
             metadata.Systemd().compositor_flags(observed, True)
@@ -358,7 +358,7 @@ class MetadataSessionTests(unittest.TestCase):
                 clock=lambda: self.clock, pause=self.pause)
 
     def test_unidentified_and_replaced_provider_endpoints_are_preserved(self):
-        directory = self.runtime / "framejacker-camera-provider"
+        directory = self.runtime / "sightcircuit-camera-provider"
         directory.mkdir(mode=0o700)
         endpoint = directory / "camera.sock"
         with socket.socket(socket.AF_UNIX) as server:

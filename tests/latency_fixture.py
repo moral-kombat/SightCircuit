@@ -10,7 +10,7 @@ Imported by the tests and by the replay subprocess they start.
 import os
 import signal
 
-from framejacker.frame import DetectionResult
+from sightcircuit.frame import DetectionResult
 
 # 5, 40, 75, 10, ... ms: each multiple of 5 ms from 5 to 100 once, in a scrambled order.
 DELAYS_MS = tuple(5.0 * ((7 * index) % 20 + 1) for index in range(20))

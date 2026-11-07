@@ -1,4 +1,4 @@
-// Original Framejacker exec boundary. No Vulkan, socket or camera access.
+// Original SightCircuit exec boundary. No Vulkan, socket or camera access.
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>

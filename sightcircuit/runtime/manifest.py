@@ -3,7 +3,7 @@
 It is written on Frame after the native build and verified there just before
 the run; built binaries are never transferred. It records the git commit and
 whether the tree is clean, the Python and platform identity, the SHA-256 of the
-built bridge, every ``framejacker`` module, the checkpoint scripts, the bridge's
+built bridge, every ``sightcircuit`` module, the checkpoint scripts, the bridge's
 native sources and the assets in ``scripts/smoke-assets.json``, and the
 installed versions of the packages the checkpoint imports. Paths are relative
 to the checkout root. It pins software identity only: it is not device,
@@ -22,7 +22,7 @@ import subprocess
 import tempfile
 
 from .. import assets
-from ..errors import FramejackerError
+from ..errors import SightCircuitError
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_VERSION = 1
@@ -30,7 +30,7 @@ REPORT_KIND = "checkpoint_artifact_manifest"
 VERIFICATION_KIND = "checkpoint_manifest_verification"
 SCOPE = ("Pins software identity only (checkout, interpreter, packages and the bridge built on this machine); "
          "not device, Frame, physical-display or qualification evidence")
-BRIDGE = "artifacts/overlay-bridge/framejacker-overlay-bridge"
+BRIDGE = "artifacts/overlay-bridge/sightcircuit-overlay-bridge"
 # Everything the checkpoint procedure runs: docs/hud-qualification.md#next-device-checkpoint and
 # docs/on-device.md#bounded-edge-hud-calibration-checkpoint. tests/test_checkpoint_manifest.py
 # fails if a script named in those procedures is missing here.
@@ -41,7 +41,7 @@ CHECKPOINT_SCRIPTS = (
 NATIVE_SOURCES = ("tools/hud_contract.hpp", "tools/overlay_bridge.cpp", "tools/overlay_frame.hpp",
                   "tools/overlay_lifecycle.hpp")
 ASSET_MANIFEST = "scripts/smoke-assets.json"
-ASSET_DIRECTORY = ".cache/framejacker/assets"
+ASSET_DIRECTORY = ".cache/sightcircuit/assets"
 # Import name -> distribution of every third-party module the checkpoint scripts import (tested).
 CHECKPOINT_PACKAGES = {"cv2": "opencv-python-headless", "numpy": "numpy"}
 FILE_GROUPS = ("assets", "bridge", "modules", "native_sources", "scripts")
@@ -53,7 +53,7 @@ SHA256 = re.compile(r"[0-9a-f]{64}")
 COMMIT = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 
 
-class ManifestError(FramejackerError):
+class ManifestError(SightCircuitError):
     """The checkout cannot be pinned, or the manifest cannot be written."""
 
 
@@ -139,7 +139,7 @@ def observe(root=ROOT, packages=CHECKPOINT_PACKAGES):
     """The manifest of the checkout and interpreter as they are now, plus its dirty entries; writes nothing."""
     root = Path(root)
     commit, changes = git_state(root)
-    modules = sorted(path.relative_to(root).as_posix() for path in (root / "framejacker").rglob("*.py"))
+    modules = sorted(path.relative_to(root).as_posix() for path in (root / "sightcircuit").rglob("*.py"))
     groups = {"assets": asset_paths(root), "bridge": [BRIDGE], "modules": modules,
               "native_sources": NATIVE_SOURCES, "scripts": CHECKPOINT_SCRIPTS}
     current = {"schema_version": SCHEMA_VERSION, "report_kind": REPORT_KIND, "scope": SCOPE,

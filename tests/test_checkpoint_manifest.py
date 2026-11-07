@@ -22,11 +22,11 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from framejacker.runtime import manifest
+from sightcircuit.runtime import manifest
 from scripts import checkpoint_manifest as command
 
 ROOT = Path(__file__).resolve().parents[1]
-GIT = ("git", "-c", "user.name=Framejacker Test", "-c", "user.email=test@example.invalid",
+GIT = ("git", "-c", "user.name=SightCircuit Test", "-c", "user.email=test@example.invalid",
        "-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main", "-c", "core.hooksPath=/dev/null")
 VERSIONS = {"numpy": "2.2.6", "opencv-python-headless": "4.12.0.88"}
 ASSET = b"detector model bytes"
@@ -67,8 +67,8 @@ class CheckoutCase(unittest.TestCase):
         self.root, self.out = base / "checkout", base / "out"
         self.out.mkdir()
         files = {".gitignore": "/artifacts/\n/.cache/\n__pycache__/\n", "README.md": "Checkout\n",
-                 "framejacker/__init__.py": "", "framejacker/gates.py": "OPEN = False\n",
-                 "framejacker/hud/__init__.py": "", "framejacker/hud/contract.py": "MARKER = 1\n",
+                 "sightcircuit/__init__.py": "", "sightcircuit/gates.py": "OPEN = False\n",
+                 "sightcircuit/hud/__init__.py": "", "sightcircuit/hud/contract.py": "MARKER = 1\n",
                  manifest.ASSET_MANIFEST: json.dumps({"assets": [{
                      "name": "model.onnx", "url": "https://example.invalid/model.onnx",
                      "sha256": hashlib.sha256(ASSET).hexdigest()}]})}
@@ -143,8 +143,8 @@ class WriteTests(CheckoutCase):
                                             "os_release": manifest.os_release()})
         self.assertEqual(set(data["platform"]["os_release"]), {"id", "version_id", "build_id"})
         self.assertEqual(data["bridge"], {manifest.BRIDGE: hashlib.sha256(self.bridge.read_bytes()).hexdigest()})
-        self.assertEqual(sorted(data["modules"]), ["framejacker/__init__.py", "framejacker/gates.py",
-                                                   "framejacker/hud/__init__.py", "framejacker/hud/contract.py"])
+        self.assertEqual(sorted(data["modules"]), ["sightcircuit/__init__.py", "sightcircuit/gates.py",
+                                                   "sightcircuit/hud/__init__.py", "sightcircuit/hud/contract.py"])
         self.assertEqual(sorted(data["scripts"]), sorted(manifest.CHECKPOINT_SCRIPTS))
         self.assertIn("tools/hud_contract.hpp", data["native_sources"])
         self.assertEqual(data["assets"], {f"{manifest.ASSET_DIRECTORY}/model.onnx": hashlib.sha256(ASSET).hexdigest()})
@@ -190,10 +190,10 @@ class WriteTests(CheckoutCase):
         self.assertEqual([path.name for path in self.out.iterdir()], [self.path.name])  # No partial file.
 
     def test_write_refuses_a_dirty_tree_unless_it_records_dirty(self):
-        (self.root / "framejacker/gates.py").write_text("OPEN = True\n")
+        (self.root / "sightcircuit/gates.py").write_text("OPEN = True\n")
         code, out, err = self.run_command("--write", str(self.path))
         self.assertEqual((code, out), (1, ""))
-        self.assertIn("framejacker/gates.py", err)
+        self.assertIn("sightcircuit/gates.py", err)
         self.assertFalse(self.path.exists())
         self.assertTrue(self.write("--allow-dirty")["dirty"])
         self.assertTrue(json.loads(self.path.read_text())["git"]["dirty"])
@@ -249,20 +249,20 @@ class VerifyTests(CheckoutCase):
         self.assertEqual(report["manifest_sha256"], hashlib.sha256(self.path.read_bytes()).hexdigest())
         self.assertIn("not device", report["scope"])
 
-    def test_fails_for_a_changed_framejacker_module(self):
+    def test_fails_for_a_changed_sightcircuit_module(self):
         self.write()
-        (self.root / "framejacker/gates.py").write_text("OPEN = True\n")
+        (self.root / "sightcircuit/gates.py").write_text("OPEN = True\n")
         self.git("commit", "-q", "-am", "change a module")
-        self.assertDiffers(("modules.framejacker/gates.py", "changed"), ("git.commit", "changed"))
+        self.assertDiffers(("modules.sightcircuit/gates.py", "changed"), ("git.commit", "changed"))
 
     def test_fails_for_an_added_or_removed_module(self):
         self.write()
-        (self.root / "framejacker/extra.py").write_text("")
-        self.git("add", "framejacker/extra.py")
-        self.git("rm", "-q", "framejacker/hud/contract.py")
+        (self.root / "sightcircuit/extra.py").write_text("")
+        self.git("add", "sightcircuit/extra.py")
+        self.git("rm", "-q", "sightcircuit/hud/contract.py")
         self.git("commit", "-q", "-m", "add and remove modules")
-        self.assertDiffers(("modules.framejacker/extra.py", "unexpected"),
-                           ("modules.framejacker/hud/contract.py", "missing"))
+        self.assertDiffers(("modules.sightcircuit/extra.py", "unexpected"),
+                           ("modules.sightcircuit/hud/contract.py", "missing"))
 
     def test_fails_for_a_rebuilt_or_missing_bridge(self):
         self.write()
@@ -302,8 +302,8 @@ class VerifyTests(CheckoutCase):
         self.write()
         (self.root / "artifacts/hud-calibration").mkdir(parents=True)
         (self.root / "artifacts/hud-calibration/observer.json").write_text("{}\n")
-        (self.root / "framejacker/__pycache__").mkdir()
-        (self.root / "framejacker/__pycache__/gates.cpython-312.pyc").write_bytes(b"cache")
+        (self.root / "sightcircuit/__pycache__").mkdir()
+        (self.root / "sightcircuit/__pycache__/gates.cpython-312.pyc").write_bytes(b"cache")
         self.assertVerifies()
 
     def test_fails_for_a_different_architecture(self):
@@ -386,7 +386,7 @@ class VerifyTests(CheckoutCase):
         for change in (None, "module"):
             with self.subTest(change=change):
                 if change == "module":
-                    (self.root / "framejacker/gates.py").write_text("OPEN = True\n")
+                    (self.root / "sightcircuit/gates.py").write_text("OPEN = True\n")
                 before = tree_state(self.root, self.out)
                 code, _ = self.verify()
                 self.assertEqual(code, 1 if change else 0)
@@ -408,8 +408,8 @@ class DigestTests(unittest.TestCase):
                     manifest.verify_file_digest(path, invalid)
 
     def test_real_package_lookup_records_an_absent_distribution_as_null(self):
-        self.assertEqual(manifest.package_versions({"absent": "framejacker-absent-distribution"}),
-                         {"framejacker-absent-distribution": None})
+        self.assertEqual(manifest.package_versions({"absent": "sightcircuit-absent-distribution"}),
+                         {"sightcircuit-absent-distribution": None})
 
 
 def section(path, heading):
@@ -508,14 +508,14 @@ class ProcedureDriftTests(unittest.TestCase):
             seen.add(path)
             for name in imported_modules(path):
                 parts = name.split(".")
-                if parts[0] == "framejacker":
+                if parts[0] == "sightcircuit":
                     for end in range(1, len(parts) + 1):
                         base = ROOT.joinpath(*parts[:end])
                         pending += [candidate for candidate in (base / "__init__.py", base.with_suffix(".py"))
                                     if candidate.is_file()]
                 elif parts[0] not in sys.stdlib_module_names:
                     third_party.add(parts[0])
-        self.assertIn(ROOT / "framejacker/hud/observation.py", seen)
+        self.assertIn(ROOT / "sightcircuit/hud/observation.py", seen)
         self.assertEqual(third_party, set(manifest.CHECKPOINT_PACKAGES))
         installed = metadata.packages_distributions()
         for module, distribution in manifest.CHECKPOINT_PACKAGES.items():

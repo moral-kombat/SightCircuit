@@ -9,11 +9,11 @@
 
 namespace {
 bool mode(const char *value) {
-    const char *configured = std::getenv("FRAMEJACKER_FAKE_VULKAN_MODE");
+    const char *configured = std::getenv("SIGHTCIRCUIT_FAKE_VULKAN_MODE");
     return configured && std::strcmp(configured, value) == 0;
 }
 void trace(const char *value) {
-    const char *path = std::getenv("FRAMEJACKER_FAKE_VULKAN_TRACE");
+    const char *path = std::getenv("SIGHTCIRCUIT_FAKE_VULKAN_TRACE");
     if (!path) return;
     int fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
     if (fd < 0) _exit(90);

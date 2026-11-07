@@ -8,9 +8,9 @@ validation evidence and compatibility limits.
 
 ## Python package and pipeline
 
-Reusable code lives in the `framejacker/` package; `scripts/` keeps the
+Reusable code lives in the `sightcircuit/` package; `scripts/` keeps the
 documented command-line entry points. No active script imports another, and
-`framejacker/` never imports `scripts/`; `tests/test_scripts_boundary.py`
+`sightcircuit/` never imports `scripts/`; `tests/test_scripts_boundary.py`
 enforces both (the paused capture-provider scripts are exempt while frozen). Scripts add the checkout root to `sys.path`
 when run as files, so headset commands need no installation step.
 `pip install -e '.[window]'` (or `uv pip install -e .`) also works for desktop
@@ -18,21 +18,21 @@ development; exact tested pins remain in the `requirements-*.txt` files.
 
 | Module | Responsibility |
 | --- | --- |
-| `framejacker/frame.py` | `Frame`, the only frame type (pixels, layout, source, sequence, observation time, media time, declared `native_format`), with `Frame.owned_bgr` (validated private BGR copy) and `owned()` (the engine's copy on publish); `DetectionResult`, which every detector returns; `Processed`, the one record every engine submits to sinks (annotated image or HUD tile with `HudOutput` rows and exclusion checks, expiry, completion time, sizes and coordinate space) |
-| `framejacker/pipeline.py` | `FrameSource`/`Sink` interfaces and `Pipeline`, the one engine for replay, mirror recognition and the synthetic live HUD: latest-only or every-frame scheduling, rate cap, `CaptureContext` admission, HUD stage or annotation, HUD exclusion counts, result expiry and deadline, optional sink `open`/`clear`/`close` with cleanup results. `PipelineStats.report()` is the one statistics vocabulary, including the [latency statistics](#latency-statistics): the replay, mirror and synthetic live reports embed it as `pipeline` (mirror and synthetic live once the engine is constructed, replay once its engine has started, on error too, with `statistics_final` false if its worker had not stopped; a report that ends earlier has no block and only the fields its command already wrote) and keep their earlier field names only as aliases (`report_fields`) until a schema version bump |
-| `framejacker/latest.py` | One-pending-item handoff; newer items replace older ones |
-| `framejacker/gates.py` | The closed approval gates (live image input, hardware mapping, live HUD output): each boundary's `require` and every report's gate claims; nothing here opens a gate |
-| `framejacker/context.py` | `CaptureContext`: pins declared source identity, frame source/native layout/session metadata and an optional HUD mask binding (calibration source, format, layout, session tokens and lifetime); `admit(frame)` fails closed and latches the first failure |
-| `framejacker/convert.py` | One native pixel rule (`buffer_bgr`: BGR24 arrays and padded RGB3/BGR3 buffers), `native_bgr` for frames and `to_bgr` for detector input of at most 960 pixels |
-| `framejacker/detection.py` | `Detector` interface, `MobileNetSSD` baseline (model-free `decode_ssd()`), `YoloxDetector` candidate, the `DETECTORS` registry whose classes own their `model_files()` and `preprocessing()` description, `create_detector()`, separate `annotate()` and `require_result()` (rejects malformed detector output before any output) |
-| `framejacker/preprocess.py`, `framejacker/labels.py` | Letterbox input and inverse box mapping; COCO vocabulary and VOC-to-canonical label names |
-| `framejacker/evaluation.py`, `framejacker/assets.py` | Detector evaluation scoring; checksum-verified model/fixture download and verification |
-| `framejacker/mask_fill_evaluation.py` | Offline comparison of HUD mask fills (the runtime's `hud.mask.fill_regions` and the candidates it was chosen over) on the gray sweep and the seed stills, used by `evaluate_mask_fill.py`; the runtime never imports it ([HUD mask fill evaluation](#hud-mask-fill-evaluation)) |
-| `framejacker/sources/` | `ReplaySource` (PyAV); `standin` (the synthetic realtime-replay [stand-in clip](#continuous-integration)); `mirror_device` (read-only V4L2 SteamVR mirror discovery and reads); `mirror` (bounded acquisition loop `capture`, `MirrorSource` (its optional `session` declares the HUD session tokens and stamps each frame), and `launch`, the one launcher of both mirror commands: candidate selection, output reservation, the bounded worker and all-or-nothing publication); `recording` (one MP4 box-header decoder for finished-file inspection and the growing-file scan used by `recording_growth_check`; newest recording); `PolledSource` (adapter for `open`/`read`/`close` sources); `session` (read-only [session-token providers](hud-qualification.md#session-tokens-for-the-mirror-source-2026-11-03) for a mirror run: `HostClock`, `RuntimeProcess`, `TrackingObserver` and `MirrorSession`). Adapters forward the wrapped source's declared identity |
-| `framejacker/overlay.py` | Overlay bridge client and `OverlaySink`, the one panel sink: with a caller-owned client (replay's interactive panel) it only submits images; otherwise it owns a validation-only client through `open`/`clear`/`close`, optionally with the frozen HUD placement and payload contract |
-| `framejacker/hud/` | Fixed edge HUD contract, shared eye/rectangle geometry (and the [geometric prediction cross-check](hud-qualification.md#geometric-prediction-cross-check-2026-11-04), which never feeds qualification), the one margin rule, synthetic-only native mask (calibrations from two factories only, with expiry, session tokens and view fields; zeroed regions refilled from their surround by `fill_regions`), tile rendering, the `HudStage` engine stage (and `HudPipelineAdapter`, the stage bound to its sink's fixed output contract, used by `live_pipeline.py`), offline mapping qualification, the calibration marker client, `observation` (empirical marker-copy location in native pixels and the observer report contract, used by `hud_marker_observer.py`), `candidate` (an observer report to an unqualified mapping candidate, used by `hud_validation_report.py --from-observer`) and `validation` (the synthetic HUD run's ledger feed and G5 software counts) |
-| `framejacker/runtime/` | `process` (bounded spawned workers, parent-death signalling), `guard` (owned process-group supervision with the Linux parent-loss guardian, and the one stop-on-signal convention: `sigterm_cancels` and `cancelled` for launchers, `stop_on_signals` for workers), `output` (reserve, write, publish all or none, withdraw and discard explicit image outputs; `publish_new` for finished bytes), `live` (`run_report`, the one report runner on `Pipeline`, used by `run_pipeline`, the gated synthetic run, whose HUD run also feeds the validation ledger, and by `run_recognition`, the mirror recognizer), `synthetic` (the generated source and its declared `SyntheticSession`, the fixture calibration factory and its candidate record, `FixtureDetector` and `HeadlessSink`) `manifest` (the [checkpoint artifact manifest](#checkpoint-artifact-manifest): software identity written and verified on Frame) and `sensors` (the read-only [run-context sensor sidecar](#run-context-sensor-sidecar)) |
-| `framejacker/agent/` | On-device agent support: the fixed task table, the `frame_agent_run.py` runner (timeouts, lock, run budget, `result.json`), the PreToolUse guard and the Frame-only Claude Code settings template; standard library only ([plan](agent-on-frame.md)) |
+| `sightcircuit/frame.py` | `Frame`, the only frame type (pixels, layout, source, sequence, observation time, media time, declared `native_format`), with `Frame.owned_bgr` (validated private BGR copy) and `owned()` (the engine's copy on publish); `DetectionResult`, which every detector returns; `Processed`, the one record every engine submits to sinks (annotated image or HUD tile with `HudOutput` rows and exclusion checks, expiry, completion time, sizes and coordinate space) |
+| `sightcircuit/pipeline.py` | `FrameSource`/`Sink` interfaces and `Pipeline`, the one engine for replay, mirror recognition and the synthetic live HUD: latest-only or every-frame scheduling, rate cap, `CaptureContext` admission, HUD stage or annotation, HUD exclusion counts, result expiry and deadline, optional sink `open`/`clear`/`close` with cleanup results. `PipelineStats.report()` is the one statistics vocabulary, including the [latency statistics](#latency-statistics): the replay, mirror and synthetic live reports embed it as `pipeline` (mirror and synthetic live once the engine is constructed, replay once its engine has started, on error too, with `statistics_final` false if its worker had not stopped; a report that ends earlier has no block and only the fields its command already wrote) and keep their earlier field names only as aliases (`report_fields`) until a schema version bump |
+| `sightcircuit/latest.py` | One-pending-item handoff; newer items replace older ones |
+| `sightcircuit/gates.py` | The closed approval gates (live image input, hardware mapping, live HUD output): each boundary's `require` and every report's gate claims; nothing here opens a gate |
+| `sightcircuit/context.py` | `CaptureContext`: pins declared source identity, frame source/native layout/session metadata and an optional HUD mask binding (calibration source, format, layout, session tokens and lifetime); `admit(frame)` fails closed and latches the first failure |
+| `sightcircuit/convert.py` | One native pixel rule (`buffer_bgr`: BGR24 arrays and padded RGB3/BGR3 buffers), `native_bgr` for frames and `to_bgr` for detector input of at most 960 pixels |
+| `sightcircuit/detection.py` | `Detector` interface, `MobileNetSSD` baseline (model-free `decode_ssd()`), `YoloxDetector` candidate, the `DETECTORS` registry whose classes own their `model_files()` and `preprocessing()` description, `create_detector()`, separate `annotate()` and `require_result()` (rejects malformed detector output before any output) |
+| `sightcircuit/preprocess.py`, `sightcircuit/labels.py` | Letterbox input and inverse box mapping; COCO vocabulary and VOC-to-canonical label names |
+| `sightcircuit/evaluation.py`, `sightcircuit/assets.py` | Detector evaluation scoring; checksum-verified model/fixture download and verification |
+| `sightcircuit/mask_fill_evaluation.py` | Offline comparison of HUD mask fills (the runtime's `hud.mask.fill_regions` and the candidates it was chosen over) on the gray sweep and the seed stills, used by `evaluate_mask_fill.py`; the runtime never imports it ([HUD mask fill evaluation](#hud-mask-fill-evaluation)) |
+| `sightcircuit/sources/` | `ReplaySource` (PyAV); `standin` (the synthetic realtime-replay [stand-in clip](#continuous-integration)); `mirror_device` (read-only V4L2 SteamVR mirror discovery and reads); `mirror` (bounded acquisition loop `capture`, `MirrorSource` (its optional `session` declares the HUD session tokens and stamps each frame), and `launch`, the one launcher of both mirror commands: candidate selection, output reservation, the bounded worker and all-or-nothing publication); `recording` (one MP4 box-header decoder for finished-file inspection and the growing-file scan used by `recording_growth_check`; newest recording); `PolledSource` (adapter for `open`/`read`/`close` sources); `session` (read-only [session-token providers](hud-qualification.md#session-tokens-for-the-mirror-source-2026-11-03) for a mirror run: `HostClock`, `RuntimeProcess`, `TrackingObserver` and `MirrorSession`). Adapters forward the wrapped source's declared identity |
+| `sightcircuit/overlay.py` | Overlay bridge client and `OverlaySink`, the one panel sink: with a caller-owned client (replay's interactive panel) it only submits images; otherwise it owns a validation-only client through `open`/`clear`/`close`, optionally with the frozen HUD placement and payload contract |
+| `sightcircuit/hud/` | Fixed edge HUD contract, shared eye/rectangle geometry (and the [geometric prediction cross-check](hud-qualification.md#geometric-prediction-cross-check-2026-11-04), which never feeds qualification), the one margin rule, synthetic-only native mask (calibrations from two factories only, with expiry, session tokens and view fields; zeroed regions refilled from their surround by `fill_regions`), tile rendering, the `HudStage` engine stage (and `HudPipelineAdapter`, the stage bound to its sink's fixed output contract, used by `live_pipeline.py`), offline mapping qualification, the calibration marker client, `observation` (empirical marker-copy location in native pixels and the observer report contract, used by `hud_marker_observer.py`), `candidate` (an observer report to an unqualified mapping candidate, used by `hud_validation_report.py --from-observer`) and `validation` (the synthetic HUD run's ledger feed and G5 software counts) |
+| `sightcircuit/runtime/` | `process` (bounded spawned workers, parent-death signalling), `guard` (owned process-group supervision with the Linux parent-loss guardian, and the one stop-on-signal convention: `sigterm_cancels` and `cancelled` for launchers, `stop_on_signals` for workers), `output` (reserve, write, publish all or none, withdraw and discard explicit image outputs; `publish_new` for finished bytes), `live` (`run_report`, the one report runner on `Pipeline`, used by `run_pipeline`, the gated synthetic run, whose HUD run also feeds the validation ledger, and by `run_recognition`, the mirror recognizer), `synthetic` (the generated source and its declared `SyntheticSession`, the fixture calibration factory and its candidate record, `FixtureDetector` and `HeadlessSink`) `manifest` (the [checkpoint artifact manifest](#checkpoint-artifact-manifest): software identity written and verified on Frame) and `sensors` (the read-only [run-context sensor sidecar](#run-context-sensor-sidecar)) |
+| `sightcircuit/agent/` | On-device agent support: the fixed task table, the `frame_agent_run.py` runner (timeouts, lock, run budget, `result.json`), the PreToolUse guard and the Frame-only Claude Code settings template; standard library only ([plan](agent-on-frame.md)) |
 
 `scripts/hud_view_prediction.py` turns a saved headset view record into the
 [geometric prediction](hud-qualification.md#geometric-prediction-cross-check-2026-11-04);
@@ -41,7 +41,7 @@ it is a cross-check that never qualifies a mapping.
 File replay uses every-frame scheduling, so each decoded frame is processed in
 order. Mirror recognition uses latest-only scheduling with a one-second input
 age limit. The V4L2 mirror device module and acquisition loop live in
-`framejacker/sources/mirror_device.py` and `framejacker/sources/mirror.py`;
+`sightcircuit/sources/mirror_device.py` and `sightcircuit/sources/mirror.py`;
 `scripts/mirror_check.py` is the diagnostic command. Both mirror commands start
 their workers through `sources.mirror.launch`. `tests/test_report_characterization.py`
 pins the report keys, value types and status and exit-code mapping of the
@@ -89,7 +89,7 @@ against the source's monotonic observation clock.
 
 ### Run-context sensor sidecar
 
-`scripts/sample_run_context.py` (library `framejacker/runtime/sensors.py`) is an
+`scripts/sample_run_context.py` (library `sightcircuit/runtime/sensors.py`) is an
 optional sidecar for latency runs. It writes one CSV row per interval of CPU
 load, thermal zones, throttle state, clock caps, GPU frequency, power rails,
 battery and available memory, so a run's latency numbers can be read against
@@ -123,7 +123,7 @@ the application's conversion path (scaled to at most 960 pixels) and scores
 them against a manifest. The default
 [seed manifest](../evaluation/seed.json) holds six checksum-pinned outdoor
 darknet photos with image-level labels; `--fetch` downloads them into ignored
-`.cache/framejacker/evaluation/`. It is a regression check for wiring, label
+`.cache/sightcircuit/evaluation/`. It is a regression check for wiring, label
 mapping and gross confusions, not evidence about Frame's indoor input.
 
 ```bash
@@ -132,13 +132,13 @@ mapping and gross confusions, not evidence about Frame's indoor input.
   --detector yolox-nano --threshold 0.5 --report /tmp/evaluation.json
 ```
 
-Each class in `framejacker.detection.DETECTORS` owns what callers need to know
+Each class in `sightcircuit.detection.DETECTORS` owns what callers need to know
 about it: its constructor takes the registry name, `model_files(name)` lists
 its checksum-pinned assets and `preprocessing(name)` describes its model input
 (input size, stretch or letterbox resize, interpolation, channel order, layout,
 dtype, mean, scale, padding value and box mapping). The evaluator's provenance,
 the smoke check and the asset tests read these, so adding a detector changes
-`framejacker/detection.py` and its `scripts/smoke-assets.json` entries only.
+`sightcircuit/detection.py` and its `scripts/smoke-assets.json` entries only.
 The default detector and the 0.5 threshold are unchanged.
 
 Manifest entries (`schema_version: 1`) need a unique `id` and either `path`
@@ -196,7 +196,7 @@ are separate from the unchanged baseline, one controlled change at a time:
 
 `mirror-preview` replaces the decoded still with what E61's detector actually
 saw: the `mirror_check` preview, which is
-`framejacker.sources.mirror_device.grayscale_sample` at a 640-pixel bound
+`sightcircuit.sources.mirror_device.grayscale_sample` at a 640-pixel bound
 (every third pixel of a 1920-pixel frame, integer luma) replicated to three
 channels. The variant calls that function itself rather than a copy of it.
 `gray-replicated` keeps full resolution and OpenCV's luma, so it does not
@@ -292,7 +292,7 @@ annotations and writes a nonblank screenshot. A separate bundled ONNX
 multiplication graph executes with checked numerical output.
 
 It invalidates the previous `artifacts/smoke/readiness.json` before importing
-`framejacker` or any runtime dependency and writes a new report only after
+`sightcircuit` or any runtime dependency and writes a new report only after
 success. The detector fixture is a development check, not a selected production
 model.
 
@@ -300,7 +300,7 @@ model.
 | --- | --- | --- |
 | `.venv/` | Dedicated Python environment | No |
 | `.cache/uv/` | Default package cache | No |
-| `.cache/framejacker/assets/` | Verified model, model configuration and sample image | No |
+| `.cache/sightcircuit/assets/` | Verified model, model configuration and sample image | No |
 | `artifacts/smoke/readiness.json` | Current passing validation report | No |
 | `artifacts/smoke/detection-window.png` | Rendered detection result | No |
 | `artifacts/smoke/sample.avi` | Generated repeated-image MJPEG video | No |
@@ -352,7 +352,7 @@ Decoder integration tests are skipped when PyAV is unavailable.
 
 `bash scripts/setup_replay.sh` creates a separate Python 3.12 `.venv-replay` and
 installs the pinned binary wheel in `requirements-replay.txt`. Set
-`FRAMEJACKER_PYTHON=/path/to/python3.12` if the default `python3` differs.
+`SIGHTCIRCUIT_PYTHON=/path/to/python3.12` if the default `python3` differs.
 This check does not need the full desktop requirements or `uv`.
 
 ```bash
@@ -360,7 +360,7 @@ This check does not need the full desktop requirements or `uv`.
 .venv-replay/bin/python -m unittest discover -s tests -v
 ```
 
-The decoder runs in a child process under `framejacker/runtime/guard.py`
+The decoder runs in a child process under `sightcircuit/runtime/guard.py`
 `supervise`: an owned process group, a 45-second deadline, reaping and, on
 Linux, the parent-loss guardian. The parent accepts the child's report only
 through `validate_worker_report`. The report keeps its fields and adds
@@ -378,7 +378,7 @@ calibration, metadata payloads, dependent stereo views or HDR color management.
 
 ## Annotated replay window
 
-Replay and bounded mirror recognition share `framejacker/detection.py` through
+Replay and bounded mirror recognition share `sightcircuit/detection.py` through
 the [shared pipeline](#python-package-and-pipeline): the same checked
 MobileNet-SSD model, CPU execution, 20 labels, preprocessing and annotation code.
 The smoke check uses the same detector. Boxes now show explicit percentage confidence scores. These
@@ -493,7 +493,7 @@ uploads the two reports, the stand-in's description and the runner's CPU
 description as the artifact `replay-pacing-ubuntu-24.04-arm-runner-cpu-not-frame`.
 These are runner-CPU numbers on synthetic input, for comparing commits: they are
 not Frame measurements and not status evidence. E62's generator was never
-committed, so `scripts/replay_standin.py` (`framejacker/sources/standin.py`)
+committed, so `scripts/replay_standin.py` (`sightcircuit/sources/standin.py`)
 encodes a clip to its documented parameters: 2464 × 2464 HEVC, 60 fps, 10 s,
 one-second GOP, 320 Mbit/s target. The content is new seeded noise, so bitrate
 and decode speed differ from E62's clip. On the 4-core x86_64 cloud runner it
@@ -530,7 +530,7 @@ Raw buffers are bounded at 64 MiB and dimensions at 16 Mi pixels; samples skip
 padding and chroma. The supervisor enforces the driver deadline and handles
 Ctrl+C/SIGTERM; Linux parent-death signaling stops the worker if its launcher dies.
 
-The launcher is the shared `framejacker/sources/mirror.py` `launch`, which mirror
+The launcher is the shared `sightcircuit/sources/mirror.py` `launch`, which mirror
 recognition also uses. An unsuitable `--preview` path stops it before the worker
 starts. The worker writes the reserved grayscale PNG after capture has closed,
 and the launcher links it into place only after a `captured` run with confirmed
@@ -560,7 +560,7 @@ validation evidence.
 `scripts/mirror_recognize.py` reuses the guarded capture loop and supervised
 process deadline, and runs recognition through the latest-only
 [shared pipeline](#python-package-and-pipeline). Its worker runs
-`framejacker/runtime/live.py` `run_recognition` on `run_report`, the report
+`sightcircuit/runtime/live.py` `run_recognition` on `run_report`, the report
 runner the synthetic run also uses, and `sources.mirror.launch` starts it and
 publishes its outputs. Default execution performs metadata-only discovery. Opt-in
 capture/inference needs the existing OpenCV/NumPy environment and checked model
@@ -577,7 +577,7 @@ pixels, and `--still`, the unannotated frame at its native mirror size, for
 [evaluation sets](#detector-evaluation). Each refuses an existing path, is
 written to an owned temporary file after the source closes, and is hard-linked
 into place only after a recognized run with confirmed cleanup
-(`framejacker/runtime/output.py`). The two need paths that resolve to different
+(`sightcircuit/runtime/output.py`). The two need paths that resolve to different
 files, and publication is all or nothing: if a later hard link fails, outputs
 this run already linked are withdrawn and the report gives
 `<kind>_publish_failed`; Ctrl+C or SIGTERM during publication also withdraws
@@ -732,7 +732,7 @@ That procedure now passed on Frame ARM64; see [E23](status.md#e23-reference-buil
 
 ```bash
 bash scripts/build_capture_reference.sh --transport-fixes
-artifacts/capture-transport-reference/framejacker-transport-fixture --self-test
+artifacts/capture-transport-reference/sightcircuit-transport-fixture --self-test
 ```
 
 The optional adaptation applies the [versioned patch](../patches/mrhand/README.md)
@@ -780,7 +780,7 @@ it does not synchronize the original XRService GPU writes.
 
 Normal cleanup unmaps/closes and removes its identity-checked file; existing or
 replaced paths are preserved. The future runtime source is
-`$XDG_RUNTIME_DIR/framejacker-capture/frames.shm`. The adaptation drops image-dump
+`$XDG_RUNTIME_DIR/sightcircuit-capture/frames.shm`. The adaptation drops image-dump
 mode, parses explicit duration/rate/opt-in before capture work and checks a
 1–10 second deadline/SIGINT/SIGTERM in its stream loop. Parent death uses SIGKILL;
 its stale file may remain, and overwrite is refused. No automatic stale-file
@@ -1055,7 +1055,7 @@ Clean cancellation is distinguished from forced termination. A killed process
 does not establish graceful Vulkan API cleanup.
 
 Each run uses an exclusive mode-0700
-`$XDG_RUNTIME_DIR/framejacker-capture-*/` directory and a locked, mode-0600 lease.
+`$XDG_RUNTIME_DIR/sightcircuit-capture-*/` directory and a locked, mode-0600 lease.
 The worker publishes to its assigned `frames.shm` and announces device/inode/size.
 The supervisor records those identities before recovery and removes a remaining
 publication only after reaping that worker and matching the private file. It
@@ -1161,7 +1161,7 @@ had `worker_reaped` true). Neither fix has a Frame result.
 [`capture_provider.hpp`](../tools/capture_provider.hpp) defines a separate v3,
 328-byte native little-endian/64-bit packet ABI, not an extension sent to old
 MRHAND clients. The endpoint is
-`$XDG_RUNTIME_DIR/framejacker-camera-provider/camera.sock`; there is no `/tmp`
+`$XDG_RUNTIME_DIR/sightcircuit-camera-provider/camera.sock`; there is no `/tmp`
 fallback. An explicit first request chooses metadata or image buffers; the
 server rejects buffer access because no producer handoff is available. Old
 protocol clients/providers fail closed. Snapshot records retain
@@ -1200,7 +1200,7 @@ locks that lease and removes the socket only after the recorded process is gone
 and the endpoint still matches. Competing/live providers and foreign replacements
 are preserved. Server shutdown interrupts an idle client; there is no detached
 thread. The opt-in gate permits only `vrcompositor` with
-`FRAMEJACKER_CAPTURE_LAYER=1`, and allows at most two accepted starts in 120
+`SIGHTCIRCUIT_CAPTURE_LAYER=1`, and allows at most two accepted starts in 120
 seconds using locked private runtime state. Other processes/default invocation
 cannot start a provider; the setting must not be enabled globally. The gate is
 enforced at device creation as well as negotiation, because the loader can
@@ -1213,7 +1213,7 @@ forward calls without observing resources or creating a runtime endpoint.
 action. `--prepare NEW_DIRECTORY` creates a private local bundle containing a
 disabled-by-default manifest, the inspection library and a checksummed plan.
 It snapshots exact existing bytes/modes or absence at the two proposed
-Framejacker manifest/library paths. It does not write those active paths,
+SightCircuit manifest/library paths. It does not write those active paths,
 install anything, set environment variables or restart a runtime. Backups may
 contain local configuration and remain in ignored artifacts.
 
@@ -1269,7 +1269,7 @@ recommendation. The runner restores SteamVR but never relaunches a console app.
 
 [`capture_layer_trial.py`](../scripts/capture_layer_trial.py) defaults to
 `not_run`/exit 3. `--preflight BUNDLE` checks a fresh metadata-only build,
-matching bundle/checksums/home, absent prior Framejacker targets, no existing
+matching bundle/checksums/home, absent prior SightCircuit targets, no existing
 provider or enable flags, and the exact reported SteamVR service properties.
 It also requires an idle service job and a live compositor in the original
 unified cgroup, with a consistent invocation ID across baseline observations.
@@ -1397,7 +1397,7 @@ For a manual generated-image check, run this producer in one terminal:
 
 ```bash
 mkdir -p artifacts/shm-check
-artifacts/shm-reader/framejacker-shm-fixture \
+artifacts/shm-reader/sightcircuit-shm-fixture \
   --create artifacts/shm-check/new-synthetic.shm --seconds 10 --mode split
 ```
 
@@ -1543,7 +1543,7 @@ The ownership strategy does not require holding SteamVR stopped:
    environment condition. The [Khronos loader contract](https://github.com/KhronosGroup/Vulkan-Loader/blob/main/docs/LoaderLayerInterface.md#layer-manifest-file-format)
    gates implicit loading on the application environment. Current compositor
    capture flags must be absent before preparation/activation.
-3. An exact runtime drop-in sets only `FRAMEJACKER_CAPTURE_LAYER=1` for future
+3. An exact runtime drop-in sets only `SIGHTCIRCUIT_CAPTURE_LAYER=1` for future
    `steamvr.service` starts. A manager reload does not modify the current
    process's environment. The worker records cleanup intent before exposing
    configuration, then requests one platform session cycle.
@@ -1654,9 +1654,9 @@ runtime compatibility. No install, transfer or device execution is implied.
 ### Checkpoint artifact manifest
 
 `scripts/checkpoint_manifest.py` is the command and
-`framejacker/runtime/manifest.py` the library. `--write PATH` pins the git
+`sightcircuit/runtime/manifest.py` the library. `--write PATH` pins the git
 commit, a clean-tree check, the Python, architecture and OS identity, and
-SHA-256 values of the built bridge, every `framejacker/**/*.py`, the
+SHA-256 values of the built bridge, every `sightcircuit/**/*.py`, the
 checkpoint scripts, the bridge sources and the assets in
 `scripts/smoke-assets.json`. It also pins the installed package versions, all
 as deterministic JSON with checkout-relative paths. It creates a new file
@@ -1689,7 +1689,7 @@ Frame evidence.
 offline modes. `--check-candidate` checks a mapping candidate record against a
 declared current context and time. `--from-observer` builds a candidate from a
 saved `hud_marker_observer.py` report and a declared context, using
-`framejacker/hud/candidate.py`. The candidate's session tokens come only from
+`sightcircuit/hud/candidate.py`. The candidate's session tokens come only from
 the tokens the observer recorded (`--record-session-tokens`, off by default).
 The declared context holds the other fields and must not carry a token. A
 report without recorded tokens, or with a token that was not observed or that
@@ -1713,7 +1713,7 @@ cloud results, not Frame evidence, and they open no device or gate.
 
 ## Observer scene precondition statistics
 
-`framejacker/hud/scene.py` holds the observer's scene precondition (the grey
+`sightcircuit/hud/scene.py` holds the observer's scene precondition (the grey
 threshold, the bright-contour budget and the candidate-quad filter and
 budget) and `scene_statistics`, which describes one frame against it in counts
 only. `locate_copies` uses the same functions, so the statistics cannot drift
@@ -1733,8 +1733,8 @@ has the background and the seed-still reference.
 
 ## Synthetic HUD validation counts
 
-A synthetic HUD run, `framejacker/runtime/live.run_pipeline` with a HUD stage,
-is also a validation run. `framejacker/hud/validation.py` puts a
+A synthetic HUD run, `sightcircuit/runtime/live.run_pipeline` with a HUD stage,
+is also a validation run. `sightcircuit/hud/validation.py` puts a
 `ValidationSink` ahead of the result sink. It records each result in a
 `ValidationLedger` built from `synthetic.fixture_candidate(calibration)` with
 the run's own maximum age. The engine counts the stage's exclusion checks in
@@ -1751,7 +1751,7 @@ rejection ends the run `validation_failed` with exit 1, and a rejected result
 never reaches the result sink. A run that already failed on its own, for
 example on a capture-context change, keeps its status and reason, and
 `g5_software` names the validation failure. `MAX_DISPLAY_AGE_MS` in
-`framejacker/hud/contract.py` is the one maximum age and default for the
+`sightcircuit/hud/contract.py` is the one maximum age and default for the
 pipeline, the ledger and both commands, and `Pipeline` refuses a HUD stage
 with a longer one. The
 [qualification design](hud-qualification.md#synthetic-validation-counts-and-one-maximum-age-2026-11-01)
@@ -1785,7 +1785,7 @@ Only after that does the resize run. The fill reads only the zeroed copy, so a
 count of 0 still proves that no HUD pixel reaches the detector, and the strict
 overlap and eye rule is unchanged.
 
-`scripts/evaluate_mask_fill.py` (library `framejacker/mask_fill_evaluation.py`,
+`scripts/evaluate_mask_fill.py` (library `sightcircuit/mask_fill_evaluation.py`,
 outside the runtime path) reproduces the comparison that chose this fill. It
 compares six fills:
 
@@ -1871,7 +1871,7 @@ exclusion of our panel remain unknown.
 
 The [lifecycle audit](status.md#e67-offline-cancellation-and-cleanup-audit)
 replaces the pipeline's blocking multiprocessing report receive and the probe's
-plain `subprocess.run` with [a shared supervisor](../framejacker/runtime/guard.py).
+plain `subprocess.run` with [a shared supervisor](../sightcircuit/runtime/guard.py).
 It caps report bytes before parsing, keeps its deadline independent of report
 I/O, handles catchable SIGINT/TERM/HUP without interrupting cleanup, and verifies
 exit status against the final report. On Linux, a separate guardian now owns
@@ -1885,13 +1885,13 @@ single-process supervision and explicitly reports parent-death containment
 unavailable; native-helper supervision requires Linux. Each command passes its
 own module-level `validate_worker_report` (and options such as
 `validation_only`); the guardian imports that validator by dotted module name
-from this checkout's `scripts/` or `framejacker/` only, so it holds no table of
+from this checkout's `scripts/` or `sightcircuit/` only, so it holds no table of
 commands.
 
 Two supervision policies remain, each with one implementation:
-`framejacker/runtime/guard.py` (command workers in an owned process group under
+`sightcircuit/runtime/guard.py` (command workers in an owned process group under
 the Linux guardian, used by the live pipeline, HUD marker/observer, recording
-growth check and replay decode check) and `framejacker/runtime/process.py`
+growth check and replay decode check) and `sightcircuit/runtime/process.py`
 (spawned Python workers that stream progress, with parent-death signalling and
 terminate/kill escalation, used by `sources.mirror.launch` for `mirror_check.py`
 and `mirror_recognize.py`). The paused capture track's `capture_supervisor.py`
@@ -1966,15 +1966,15 @@ read [VR replay panel](vr-overlay.md).
 
 [`tools/hud_contract.hpp`](../tools/hud_contract.hpp) is committed and
 generated from the Python contract by
-[`framejacker/hud/native.py`](../framejacker/hud/native.py). It holds
+[`sightcircuit/hud/native.py`](../sightcircuit/hud/native.py). It holds
 `HudConfig` and its digest, the calibration `MARKER` (sizes, positions, gray
 levels and corner ids), the pipe packet layouts and opcodes, the marker
 duration (1–20 s), display age (1 s) and frame side (512) limits, and
 `PANEL_LIMITS` with the `PanelSettings` defaults. `tools/overlay_bridge.cpp`
 and `tools/overlay_frame.hpp` include it and keep no copies of those values;
 they share one little-endian `read_u32`. Python call sites import the same
-constants from `framejacker/hud/contract.py` (`PANEL_LIMITS` and
-`PanelSettings` stay in `framejacker/overlay.py`). Change a value only on the
+constants from `sightcircuit/hud/contract.py` (`PANEL_LIMITS` and
+`PanelSettings` stay in `sightcircuit/overlay.py`). Change a value only on the
 Python side, then:
 
 ```bash
@@ -1991,10 +1991,10 @@ Each Python marker-duration site must reject with its own reason, and
 `tests/fixtures/overlay_dispatch_fixture.cpp` accepts a deadline exactly at the
 generated display-age cap and rejects one a nanosecond later.
 
-`framejacker-overlay-bridge --render-calibration-marker NEW_RGBA_FILE` draws
+`sightcircuit-overlay-bridge --render-calibration-marker NEW_RGBA_FILE` draws
 the native marker into a new file (exclusive creation) and reports the contract
 and HUD configuration digests. It makes no OpenVR call. The tests require its
-RGBA bytes to equal `framejacker.hud.observation.marker_template()` pixel for
+RGBA bytes to equal `sightcircuit.hud.observation.marker_template()` pixel for
 pixel, with every pixel opaque. They also replay V4's shape offline: two clear
 baseline reads, then the native marker on read 3, which must decode all four
 corner tags with zero tag and bit error. The compared marker function is

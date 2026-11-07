@@ -18,9 +18,9 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from framejacker.runtime import process
-from framejacker.sources import mirror as acquisition
-from framejacker.sources import mirror_device as device
+from sightcircuit.runtime import process
+from sightcircuit.sources import mirror as acquisition
+from sightcircuit.sources import mirror_device as device
 from scripts import mirror_check as check
 
 
@@ -326,7 +326,7 @@ class MirrorWorkerTests(unittest.TestCase):
     def test_sigterm_cancels_launcher_and_reaps_its_worker(self):
         code = '''import json, sys
 sys.path[:0] = sys.argv[1:3]
-from framejacker.runtime import guard
+from sightcircuit.runtime import guard
 from test_mirror_check import CANDIDATE, run_bounded, stuck_worker
 with guard.sigterm_cancels():
     report = run_bounded(dict(CANDIDATE, ready_file=sys.argv[3]), 10, worker=stuck_worker)

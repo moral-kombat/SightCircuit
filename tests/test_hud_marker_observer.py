@@ -27,13 +27,13 @@ except ImportError as error:
     raise unittest.SkipTest("OpenCV is required for HUD marker observer tests") from error
 import numpy as np
 
-from framejacker.hud import observation as hud_observation
+from sightcircuit.hud import observation as hud_observation
 from scripts import hud_marker_observer as observer
-from framejacker.hud import CaptureFormat, HUD_CONFIG
-from framejacker.hud.contract import SESSION_TOKENS, token_valid
-from framejacker.sources import mirror as mirror_check
-from framejacker.sources import session as session_tokens
-from framejacker.overlay import DEFAULT_BRIDGE, bridge_closed_cleanly
+from sightcircuit.hud import CaptureFormat, HUD_CONFIG
+from sightcircuit.hud.contract import SESSION_TOKENS, token_valid
+from sightcircuit.sources import mirror as mirror_check
+from sightcircuit.sources import session as session_tokens
+from sightcircuit.overlay import DEFAULT_BRIDGE, bridge_closed_cleanly
 from tests.test_mirror_session import PID, STATE, FakeProc
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -57,7 +57,7 @@ def clean_bridge_fixture(seconds=1):
                   corner_order="top_left,top_right,bottom_left,bottom_right", config_id=HUD_CONFIG.layout_id,
                   visible_in_dashboard=True)
     marker.update({key: getattr(HUD_CONFIG, key) for key in ("panel_width_m", "distance_m", "x_m", "y_m", "opacity")})
-    native = dict(report_kind="framejacker_overlay_bridge", status="validated_marker", exit_code=0, cleanup_ok=True,
+    native = dict(report_kind="sightcircuit_overlay_bridge", status="validated_marker", exit_code=0, cleanup_ok=True,
                   mode="--validate-calibration-marker", runtime_initialized=False, calibration_only=True,
                   native_started_ns=0, marker_request_ns=1, marker_submit_returned_ns=2,
                   display_deadline_ns=seconds*1000000000, cutoff_requested_ns=seconds*1000000000,

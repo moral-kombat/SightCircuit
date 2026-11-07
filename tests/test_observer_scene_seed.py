@@ -15,7 +15,7 @@ try:
 except ImportError as error:  # The dependency-free discovery jobs have no OpenCV.
     raise unittest.SkipTest("OpenCV is required for observer scene seed tests") from error
 
-from framejacker.hud import scene
+from sightcircuit.hud import scene
 from tests.asset_gate import SEED_IMAGES, SEED_MANIFEST, requires_seed_images
 
 # id: ((width, height), contours, (below 25, 25 to 400, 400 to 10000, from 10000), quads,

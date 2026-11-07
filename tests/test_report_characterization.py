@@ -27,11 +27,11 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 
-from framejacker import detection
-from framejacker.frame import Detection, DetectionResult
-from framejacker.runtime import process
-from framejacker.sources import mirror as acquisition
-from framejacker.sources import mirror_device as device
+from sightcircuit import detection
+from sightcircuit.frame import Detection, DetectionResult
+from sightcircuit.runtime import process
+from sightcircuit.sources import mirror as acquisition
+from sightcircuit.sources import mirror_device as device
 from scripts import mirror_check, mirror_recognize
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -239,7 +239,7 @@ class SyntheticRunCharacterizationTests(ShapeAssertions):
     """``runtime.live.run_pipeline``: one gated synthetic run as a report."""
 
     def run_synthetic(self, detector=None, sink=None, seconds=0.25, source=None, **options):
-        from framejacker.runtime import live, synthetic
+        from sightcircuit.runtime import live, synthetic
         return live.run_pipeline(source or synthetic.SyntheticSource(), detector or synthetic.FixtureDetector(),
                                  sink or synthetic.HeadlessSink(), seconds, **options)
 
@@ -263,7 +263,7 @@ class SyntheticRunCharacterizationTests(ShapeAssertions):
         self.assert_aliases(report, SYNTHETIC_ALIASES)
 
     def test_empty_failed_and_unclean_runs(self):
-        from framejacker.runtime import synthetic
+        from sightcircuit.runtime import synthetic
 
         class Stale(synthetic.SyntheticSource):
             def read(self, stop, timeout=0.05):
@@ -294,7 +294,7 @@ class SyntheticRunCharacterizationTests(ShapeAssertions):
         self.assert_shape(report, SYNTHETIC_KEYS)
 
     def test_cancelled_before_and_during_the_run(self):
-        from framejacker.runtime import synthetic
+        from sightcircuit.runtime import synthetic
 
         stop = threading.Event()
         stop.set()
@@ -316,7 +316,7 @@ class SyntheticRunCharacterizationTests(ShapeAssertions):
         self.assert_shape(report, SYNTHETIC_KEYS)
 
     def test_refused_gate_and_invalid_limits_raise_before_the_source_opens(self):
-        from framejacker.runtime import synthetic
+        from sightcircuit.runtime import synthetic
 
         source = synthetic.SyntheticSource()
         source.kind = "live_camera"
@@ -332,8 +332,8 @@ class SyntheticRunCharacterizationTests(ShapeAssertions):
             opened.assert_not_called()
 
     def test_hud_run_reports_the_stage_and_validation(self):
-        from framejacker.hud import HudStage
-        from framejacker.runtime import synthetic
+        from sightcircuit.hud import HudStage
+        from sightcircuit.runtime import synthetic
 
         source = synthetic.SyntheticSource()
         report = self.run_synthetic(source=source, hud=HudStage(source, synthetic.synthetic_hud_calibration()))
@@ -349,8 +349,8 @@ class SyntheticRunCharacterizationTests(ShapeAssertions):
         self.assertIs(type(report["pipeline"]["hud_checks"]), dict)
 
     def test_hud_validation_failure_and_refused_calibration(self):
-        from framejacker.hud import HudStage
-        from framejacker.runtime import synthetic
+        from sightcircuit.hud import HudStage
+        from sightcircuit.runtime import synthetic
 
         class Footprint(synthetic.FixtureDetector):
             def detect(self, image, threshold):
@@ -635,7 +635,7 @@ class LauncherCancellationCharacterizationTests(unittest.TestCase):
     PROGRAM = '''import sys
 from unittest.mock import patch
 sys.path[:0] = [sys.argv[1]]
-from framejacker.runtime import process
+from sightcircuit.runtime import process
 from scripts import {script} as command
 from tests.test_report_characterization import stuck_worker
 real = process.run_bounded

@@ -17,7 +17,7 @@ from scripts import shm_capture_check as check
 
 ROOT = Path(__file__).resolve().parents[1]
 READER = check.READER
-FIXTURE = READER.with_name("framejacker-shm-fixture")
+FIXTURE = READER.with_name("sightcircuit-shm-fixture")
 
 
 class ShmTestCase(unittest.TestCase):
@@ -215,7 +215,7 @@ class ShmNativeTests(ShmTestCase):
             code = check.main(["--read", "--source", str(source), "--frames", "1", "--preview", str(race)])
         self.assertEqual(code, 1)
         self.assertEqual(race.read_bytes(), b"preserve concurrent file")
-        self.assertEqual(list(self.root.glob(".framejacker-shm-*")), [])
+        self.assertEqual(list(self.root.glob(".sightcircuit-shm-*")), [])
 
     def test_fixture_refuses_existing_and_reserved_outputs(self):
         path = self.root / "preserve"

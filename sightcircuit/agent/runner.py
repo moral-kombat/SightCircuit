@@ -34,8 +34,8 @@ import sys
 import threading
 import time
 
-from framejacker.agent.guard import GUARD_VERSION
-from framejacker.agent.tasks import TASKS, TASKS_BY_ID, TIER_A, VENV_PYTHON
+from sightcircuit.agent.guard import GUARD_VERSION
+from sightcircuit.agent.tasks import TASKS, TASKS_BY_ID, TIER_A, VENV_PYTHON
 
 RUNS = Path("artifacts/agent-runs")
 DEFAULT_BUDGET = 5400
@@ -43,7 +43,7 @@ KILL_GRACE = 10
 FETCH_TIMEOUT = 180
 REVISION = re.compile(r"^[0-9a-f]{40}$")
 RUN_DIR = re.compile(r"^\d{8}T\d{6}Z-")
-AGENT_FILES = ("framejacker/agent/guard.py", "scripts/frame_agent_guard.py", "scripts/frame_agent_run.py")
+AGENT_FILES = ("sightcircuit/agent/guard.py", "scripts/frame_agent_guard.py", "scripts/frame_agent_run.py")
 INTERRUPTING = tuple(getattr(signal, name) for name in ("SIGINT", "SIGTERM", "SIGHUP") if hasattr(signal, name))
 PROVENANCE = ("frame_agent_run.py output: command exit codes and reports from the machine named in "
               "'host'. On Frame this is agent-run device evidence, not a user report or a cloud check. "
@@ -305,7 +305,7 @@ def execute(root, tasks, label, budget=DEFAULT_BUDGET, clock=time.monotonic):
     interrupted or killed still shows which task was running.
     """
     run_dir = new_run_dir(root, label)
-    result = {"schema": "framejacker.agent-run.v1", "provenance": PROVENANCE, "label": label,
+    result = {"schema": "sightcircuit.agent-run.v1", "provenance": PROVENANCE, "label": label,
               "started_at": utc_now(), "host": host_info(), "checkout": checkout_state(root),
               "budget_s": budget, "tasks": []}
     deadline = clock() + budget
@@ -379,7 +379,7 @@ def update(root, revision):
     for path in AGENT_FILES:
         if run("cat-file", "-e", f"{revision}:{path}")[0] != 0:
             raise Refused(f"revision has no {path}; older revisions are checked out by a person")
-    _, source, _ = run("show", f"{revision}:framejacker/agent/guard.py")
+    _, source, _ = run("show", f"{revision}:sightcircuit/agent/guard.py")
     found = re.search(r"^GUARD_VERSION = (\d+)$", source, re.MULTILINE)
     if not found or int(found.group(1)) < GUARD_VERSION:
         raise Refused(f"revision's agent guard is older than version {GUARD_VERSION}; "

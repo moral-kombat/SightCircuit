@@ -14,7 +14,7 @@
 #include <unistd.h>
 #include <vector>
 
-using namespace framejacker_shm;
+using namespace sightcircuit_shm;
 
 struct Options {
     std::string path, preview;
@@ -175,7 +175,7 @@ static void emit(Result result, const Options& options) {
         result.reason = "native_error";
     uint64_t age = result.timestamp ? ageNs(result.timestamp) : 0;
     std::cout << std::boolalpha
-        << "{\"report_kind\":\"framejacker_shm_reader\",\"schema_version\":1,\"status\":\"" << result.status
+        << "{\"report_kind\":\"sightcircuit_shm_reader\",\"schema_version\":1,\"status\":\"" << result.status
         << "\",\"reason\":\"" << result.reason << "\",\"exit_code\":" << result.code
         << ",\"width\":" << result.width << ",\"height\":" << result.height << ",\"camera_slots\":" << result.cameras
         << ",\"selected_slot\":" << options.camera << ",\"frames_received\":" << result.frames

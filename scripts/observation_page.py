@@ -100,7 +100,7 @@ def render_page(run_id, token, saved):
     parts = [
         "<!doctype html><meta charset=utf-8>",
         "<meta name=viewport content='width=device-width,initial-scale=1'>",
-        "<title>Framejacker observations</title>",
+        "<title>SightCircuit observations</title>",
         "<style>body{font:20px system-ui;margin:16px;max-width:40em}"
         "fieldset{margin:1em 0;padding:.5em 1em}label{display:block;padding:.4em 0}"
         "input[type=text],textarea{width:100%;font:inherit;box-sizing:border-box}"

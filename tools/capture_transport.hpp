@@ -1,4 +1,4 @@
-// Original Framejacker transport helpers; MIT licensed. No camera or Vulkan calls.
+// Original SightCircuit transport helpers; MIT licensed. No camera or Vulkan calls.
 #pragma once
 
 #include "handcam_proto.h"
@@ -19,7 +19,7 @@
 #include <utility>
 #include <vector>
 
-namespace framejacker::transport {
+namespace sightcircuit::transport {
 static_assert(sizeof(MrhandBufInfo) == 144, "unexpected native registry ABI");
 static_assert(offsetof(MrhandBufInfo, size) == 16 &&
               offsetof(MrhandBufInfo, planeOffset) == 80 &&
@@ -217,4 +217,4 @@ inline std::vector<Record> receive_registry(int socket, Deadline deadline) {
         records.push_back(std::move(record));
     }
 }
-} // namespace framejacker::transport
+} // namespace sightcircuit::transport

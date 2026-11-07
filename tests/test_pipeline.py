@@ -8,12 +8,12 @@ import threading
 import time
 import unittest
 
-from framejacker.errors import OutputError
-from framejacker.frame import Detection, DetectionResult, Frame
-from framejacker.latest import LatestSlot
-from framejacker.pipeline import LatestResultSink, Pipeline
-from framejacker.runtime import output, process
-from framejacker.sources.mirror import MirrorSource
+from sightcircuit.errors import OutputError
+from sightcircuit.frame import Detection, DetectionResult, Frame
+from sightcircuit.latest import LatestSlot
+from sightcircuit.pipeline import LatestResultSink, Pipeline
+from sightcircuit.runtime import output, process
+from sightcircuit.sources.mirror import MirrorSource
 
 
 def frame(number, observed_ns=None):
@@ -502,7 +502,7 @@ class StatsReportTests(unittest.TestCase):
                  "input_age_ms", "processing_ms", "inference_ms", "output_age_ms", "stage_ms", "percentile_method"}
 
     def test_one_canonical_block_with_rounded_milliseconds(self):
-        from framejacker.pipeline import PipelineStats, report_fields
+        from sightcircuit.pipeline import PipelineStats, report_fields
 
         stats = PipelineStats(frames_processed=2, total_inference_ms=1.23456, max_input_age_ms=9.87654,
                               labels_seen={"dog", "cat"}, started=10.0, finished=12.5)
@@ -517,7 +517,7 @@ class StatsReportTests(unittest.TestCase):
                          {"seen": ["cat", "dog"], "seconds": 2.5})
 
     def test_a_run_without_timed_frames_reports_unknown_percentiles(self):
-        from framejacker.pipeline import STAGES, PipelineStats
+        from sightcircuit.pipeline import STAGES, PipelineStats
 
         block = PipelineStats().report()
         empty = {"count": 0, "samples": 0, "p50": None, "p95": None, "max": None}
@@ -530,7 +530,7 @@ class StatsReportTests(unittest.TestCase):
 
 class PercentileTests(unittest.TestCase):
     def test_nearest_rank_on_known_inputs(self):
-        from framejacker.pipeline import nearest_rank
+        from sightcircuit.pipeline import nearest_rank
 
         self.assertIsNone(nearest_rank([], 50))
         for percent in (1, 50, 95, 100):  # n = 1: every percentile is the one value.
@@ -549,7 +549,7 @@ class PercentileTests(unittest.TestCase):
                 nearest_rank([1.0], percent)
 
     def test_timing_sample_is_exact_below_capacity_and_bounded_above_it(self):
-        from framejacker.pipeline import TIMING_SAMPLE_CAPACITY, TimingSample
+        from sightcircuit.pipeline import TIMING_SAMPLE_CAPACITY, TimingSample
         from tests.latency_fixture import DELAYS_MS, EXPECTED
 
         exact = TimingSample()
@@ -575,7 +575,7 @@ class PercentileTests(unittest.TestCase):
 
     def test_known_delays_give_exact_percentiles_for_every_stage(self):
         from unittest.mock import patch
-        from framejacker.pipeline import Pipeline
+        from sightcircuit.pipeline import Pipeline
         from tests.latency_fixture import EXPECTED, KnownDelays
 
         known = KnownDelays()
@@ -610,7 +610,7 @@ class PercentileTests(unittest.TestCase):
 
     def test_inference_is_the_detectors_own_time_not_the_detect_stage(self):
         from unittest.mock import patch
-        from framejacker.pipeline import Pipeline
+        from sightcircuit.pipeline import Pipeline
         from tests.latency_fixture import EXPECTED, KnownDelays
 
         known = KnownDelays(overhead_ms=4.0)  # Each call takes 4 ms more than the detector reports.
@@ -742,7 +742,7 @@ class PolledSourceTests(unittest.TestCase):
             return self.close_result
 
     def test_emits_until_stopped_and_forwards_declared_identity(self):
-        from framejacker.sources.polled import PolledSource
+        from sightcircuit.sources.polled import PolledSource
 
         inner = self.Source([frame(1), frame(2)])
         polled = PolledSource(inner)
@@ -757,7 +757,7 @@ class PolledSourceTests(unittest.TestCase):
         self.assertIs(polled.cleanup_ok, True)
 
     def test_read_and_close_failures_are_kept_and_never_skip_close(self):
-        from framejacker.sources.polled import PolledSource
+        from sightcircuit.sources.polled import PolledSource
 
         stopped = threading.Event()
         stopped.set()

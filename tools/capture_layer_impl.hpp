@@ -1,4 +1,4 @@
-// Original Framejacker Vulkan dispatch/registry lifecycle. MIT licensed.
+// Original SightCircuit Vulkan dispatch/registry lifecycle. MIT licensed.
 // Inspection adaptation; no commands, queues, camera controls or source switching.
 #pragma once
 #include <vulkan/vulkan.h>
@@ -9,7 +9,7 @@
 #include <unordered_map>
 
 #define FJ_EXPORT extern "C" __attribute__((visibility("default")))
-namespace framejacker::layer {
+namespace sightcircuit::layer {
 namespace p = provider;
 template<class Handle> static void *key(Handle handle) { return handle ? *reinterpret_cast<void **>(handle) : nullptr; }
 template<class Handle> static uint64_t handle_id(Handle handle) { return uint64_t(reinterpret_cast<uintptr_t>(handle)); }
@@ -183,7 +183,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL CreateDevice(VkPhysicalDevice physical, co
     // A rejected negotiation may fall back to manifest-named legacy entry
     // points. Enforce the decision here too; forward calls without observing
     // resources or starting a server when this process is not opted in.
-    if (!framejacker::layer_gate::allowed()) return result;
+    if (!sightcircuit::layer_gate::allowed()) return result;
     record([&] {
         const auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(gipa(parent_handle, "vkGetPhysicalDeviceProperties2"));
         if (!properties) throw transport::Error("provider_device_uuid_unavailable");
@@ -216,10 +216,10 @@ static PFN_vkVoidFunction hook(const char *name) {
     if (!std::strcmp(name, "vkBindImageMemory2KHR")) return reinterpret_cast<PFN_vkVoidFunction>(BindImageMemory2);
     return nullptr;
 }
-} // namespace framejacker::layer
+} // namespace sightcircuit::layer
 FJ_EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL mrhand_GetDeviceProcAddr(VkDevice handle, const char *name);
 FJ_EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL mrhand_GetInstanceProcAddr(VkInstance handle, const char *name) {
-    using namespace framejacker::layer;
+    using namespace sightcircuit::layer;
     if (!name) return nullptr;
     if (!std::strcmp(name, "vkGetInstanceProcAddr")) return reinterpret_cast<PFN_vkVoidFunction>(mrhand_GetInstanceProcAddr);
     if (!std::strcmp(name, "vkGetDeviceProcAddr")) return reinterpret_cast<PFN_vkVoidFunction>(mrhand_GetDeviceProcAddr);
@@ -232,7 +232,7 @@ FJ_EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL mrhand_GetInstanceProcAddr(Vk
     return next;
 }
 FJ_EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL mrhand_GetDeviceProcAddr(VkDevice handle, const char *name) {
-    using namespace framejacker::layer;
+    using namespace sightcircuit::layer;
     if (!name) return nullptr;
     if (!std::strcmp(name, "vkGetDeviceProcAddr")) return reinterpret_cast<PFN_vkVoidFunction>(mrhand_GetDeviceProcAddr);
     auto current = device(handle); if (!current) return nullptr;
@@ -241,7 +241,7 @@ FJ_EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL mrhand_GetDeviceProcAddr(VkDe
     return next;
 }
 FJ_EXPORT VKAPI_ATTR VkResult VKAPI_CALL mrhand_NegotiateLoaderLayerInterfaceVersion(VkNegotiateLayerInterface *info) {
-    if (!info || !framejacker::layer_gate::allowed() || info->loaderLayerInterfaceVersion < 2) return VK_ERROR_INITIALIZATION_FAILED;
+    if (!info || !sightcircuit::layer_gate::allowed() || info->loaderLayerInterfaceVersion < 2) return VK_ERROR_INITIALIZATION_FAILED;
     info->loaderLayerInterfaceVersion = 2;
     info->pfnGetInstanceProcAddr = mrhand_GetInstanceProcAddr;
     info->pfnGetDeviceProcAddr = mrhand_GetDeviceProcAddr;

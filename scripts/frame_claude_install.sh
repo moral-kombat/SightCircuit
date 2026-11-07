@@ -20,7 +20,7 @@
 #   (default ~/claude-phase0/<UTC time>), STEP_TIMEOUT=<seconds> (default 300).
 #
 # Never uses sudo, never touches the system partition, SteamVR, cameras or the
-# framejacker checkout. Results are a user-run device report; see the summary file.
+# sightcircuit checkout. Results are a user-run device report; see the summary file.
 set -uo pipefail
 
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -161,7 +161,7 @@ stage_path() {
   local reply=y
   [ -n "${YES:-}" ] || { read -r -p "   Append 'export PATH=\"\$HOME/.local/bin:\$PATH\"' to ~/.bashrc? [Y/n] " reply || reply=n; }
   if [ "$reply" != n ]; then
-    printf '\n# Claude Code (framejacker Phase 0)\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$HOME/.bashrc"
+    printf '\n# Claude Code (sightcircuit Phase 0)\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$HOME/.bashrc"
     pass "added ~/.local/bin to PATH in ~/.bashrc"
   else
     warn "PATH not changed; use ~/.local/bin/claude or add it yourself"

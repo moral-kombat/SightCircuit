@@ -6,7 +6,7 @@ import sys
 if not __package__:  # Run as a file: import this checkout's packages without installation.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from framejacker.hud import native  # noqa: E402
+from sightcircuit.hud import native  # noqa: E402
 
 
 def main(argv=None):

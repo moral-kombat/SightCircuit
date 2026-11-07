@@ -8,12 +8,12 @@ import tempfile
 import unittest
 from unittest import mock
 
-from framejacker import assets, detection, evaluation
-from framejacker.frame import Detection, DetectionResult
+from sightcircuit import assets, detection, evaluation
+from sightcircuit.frame import Detection, DetectionResult
 from tests.asset_gate import model_assets, requires_assets
 
 ROOT = Path(__file__).resolve().parents[1]
-ASSETS = ROOT / ".cache/framejacker/assets"
+ASSETS = ROOT / ".cache/sightcircuit/assets"
 AVAILABLE = all(importlib.util.find_spec(name) for name in ("cv2", "numpy"))
 VOC = ("sofa", "chair", "dog", "car")
 COUNTS = {"images": 6, "present_checks": 9, "present_hits": 7, "absence_checks": 22, "absent_violations": 2,
@@ -273,10 +273,10 @@ class ProvenanceTests(unittest.TestCase):
         self.assertIsInstance(source["working_tree_dirty"], bool)
         self.assertRegex(source["tracked_diff_sha256"], r"^[0-9a-f]{64}$")
         self.assertIsInstance(source["working_tree_paths"], list)
-        self.assertIn("framejacker/preprocess.py", source["source_files_sha256"])
+        self.assertIn("sightcircuit/preprocess.py", source["source_files_sha256"])
 
     def test_detector_preprocessing_is_explicit(self):
-        from framejacker.detection import preprocessing  # Owned by each detector class, not the evaluator.
+        from sightcircuit.detection import preprocessing  # Owned by each detector class, not the evaluator.
 
         ssd = preprocessing("mobilenet-ssd")
         self.assertEqual(ssd["input_size"], [300, 300])
@@ -341,7 +341,7 @@ class PreprocessingAuditTests(unittest.TestCase):
     def test_model_inputs_retain_bgr_order_scaling_padding_and_inverse_geometry(self):
         import cv2
         import numpy as np
-        from framejacker.detection import MobileNetSSD, YoloxDetector
+        from sightcircuit.detection import MobileNetSSD, YoloxDetector
         from scripts.evaluate_detectors import preprocessing_audit
 
         image = np.full((1081, 1920, 3), (10, 80, 240), dtype=np.uint8)
@@ -371,7 +371,7 @@ class PreprocessingAuditTests(unittest.TestCase):
     def test_audit_mapping_comes_from_the_detector_description(self):
         """A centered letterbox detector is audited as its description says, not as YOLOX's top-left."""
         import numpy as np
-        from framejacker.preprocess import letterbox
+        from sightcircuit.preprocess import letterbox
         from scripts.evaluate_detectors import prepare_image, preprocessing_audit
 
         class Centered:
@@ -396,8 +396,8 @@ class PreprocessingAuditTests(unittest.TestCase):
 
     def test_padded_rgb_and_bgr_convert_identically_without_mixing_padding(self):
         import numpy as np
-        from framejacker.convert import to_bgr
-        from framejacker.frame import Frame
+        from sightcircuit.convert import to_bgr
+        from sightcircuit.frame import Frame
 
         width, height, stride = 1920, 1081, 1920 * 3 + 17
         data = bytearray([255]) * (height * stride)
@@ -411,8 +411,8 @@ class PreprocessingAuditTests(unittest.TestCase):
     def test_gray_file_replication_identity_digest_and_controlled_warmups(self):
         import cv2
         import numpy as np
-        from framejacker.detection import MobileNetSSD
-        from framejacker.frame import DetectionResult
+        from sightcircuit.detection import MobileNetSSD
+        from sightcircuit.frame import DetectionResult
         from scripts import evaluate_detectors as command
 
         detector = MobileNetSSD.__new__(MobileNetSSD)
@@ -669,8 +669,8 @@ class RegistryGrowthTests(unittest.TestCase):
 
 
 class SmokeCheckOrderTests(unittest.TestCase):
-    def test_previous_readiness_is_invalidated_before_framejacker_is_imported(self):
-        """A broken framejacker import must not leave the last passing readiness report in place."""
+    def test_previous_readiness_is_invalidated_before_sightcircuit_is_imported(self):
+        """A broken sightcircuit import must not leave the last passing readiness report in place."""
         import os
         import subprocess
         import sys
@@ -680,8 +680,8 @@ class SmokeCheckOrderTests(unittest.TestCase):
             "from pathlib import Path\n"
             "class Broken(importlib.abc.MetaPathFinder):\n"
             "    def find_spec(self, name, path=None, target=None):\n"
-            "        if name.split('.')[0] == 'framejacker':\n"
-            "            raise ImportError('generated framejacker import failure')\n"
+            "        if name.split('.')[0] == 'sightcircuit':\n"
+            "            raise ImportError('generated sightcircuit import failure')\n"
             "sys.meta_path.insert(0, Broken())\n"
             "spec = importlib.util.spec_from_file_location('smoke_check', sys.argv[1])\n"
             "module = importlib.util.module_from_spec(spec)\n"
@@ -710,7 +710,7 @@ class MirrorPreviewVariantTests(unittest.TestCase):
     def test_variant_is_the_mirror_check_grayscale_sample_replicated(self):
         """E61's detector input: grayscale_sample's every-third-pixel integer luma, in three channels."""
         import numpy as np
-        from framejacker.sources.mirror_device import grayscale_sample, validate_format
+        from sightcircuit.sources.mirror_device import grayscale_sample, validate_format
         from scripts.evaluate_detectors import AUDIT_VARIANTS, prepare_image
 
         self.assertIn("mirror-preview", AUDIT_VARIANTS)
@@ -729,7 +729,7 @@ class MirrorPreviewVariantTests(unittest.TestCase):
     def test_variant_runs_through_the_command_with_its_own_results(self):
         import cv2
         import numpy as np
-        from framejacker.sources.mirror_device import grayscale_sample, validate_format
+        from sightcircuit.sources.mirror_device import grayscale_sample, validate_format
         from scripts import evaluate_detectors as command
 
         seen = []

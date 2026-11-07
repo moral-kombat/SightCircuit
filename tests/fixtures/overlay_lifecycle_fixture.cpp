@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-using namespace framejacker_lifecycle;
+using namespace sightcircuit_lifecycle;
 namespace {
 struct Script {
     std::vector<std::string> probes, connects;  // results consumed in order

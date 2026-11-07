@@ -17,7 +17,7 @@ except ImportError:
     import service_rehearsal as service
 
 trial, config, lifecycle = service.trial, service.config, service.lifecycle
-UNIT = "framejacker-session-rehearsal.service"
+UNIT = "sightcircuit-session-rehearsal.service"
 RUNS = config.ROOT / "artifacts/session-rehearsals"
 SOURCES = ("session_rehearsal.py", *service.SOURCES)
 UNITS = ("steamvr.service", "gamescope-session.service", "gamescope-session.target", "graphical-session.target")
@@ -187,7 +187,7 @@ def check(bundle, manager):
 
 def new_report(kind):
     return {"report_kind": "frame_session_" + kind, "schema_version": 1, "status": "not_run", "exit_code": 3,
-            "capture_enabled": False, "image_data_accessed": False, "framejacker_configuration_written": False,
+            "capture_enabled": False, "image_data_accessed": False, "sightcircuit_configuration_written": False,
             "session_request_sent": False, "normal_runtime_observed": False,
             "visual_confirmation_required": True}
 

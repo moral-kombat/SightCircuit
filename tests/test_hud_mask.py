@@ -14,11 +14,11 @@ except ImportError as error:
     raise unittest.SkipTest("OpenCV is required for HUD mask tests") from error
 import numpy as np
 
-from framejacker import hud
-from framejacker.frame import Detection, DetectionResult, Frame
-from framejacker.runtime import live, synthetic
+from sightcircuit import hud
+from sightcircuit.frame import Detection, DetectionResult, Frame
+from sightcircuit.runtime import live, synthetic
 from scripts import live_pipeline as command
-from framejacker.overlay import DEFAULT_BRIDGE, OverlayClient, OverlaySink, PanelSettings, rgba_from_bgr
+from sightcircuit.overlay import DEFAULT_BRIDGE, OverlayClient, OverlaySink, PanelSettings, rgba_from_bgr
 
 
 def run_hud(source, detector, sink, seconds, calibration, *, config=hud.HUD_CONFIG, **options):

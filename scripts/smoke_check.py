@@ -9,8 +9,8 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 if not __package__:  # Run as a file: import this checkout's packages without installation.
     sys.path.insert(0, str(ROOT))
-# framejacker is imported only inside functions, after main() has invalidated the previous report.
-ASSETS = ROOT / ".cache" / "framejacker" / "assets"
+# sightcircuit is imported only inside functions, after main() has invalidated the previous report.
+ASSETS = ROOT / ".cache" / "sightcircuit" / "assets"
 RESULTS = ROOT / "artifacts" / "smoke"
 FRAME_COUNT = 12
 THRESHOLD = 0.5
@@ -20,7 +20,7 @@ FIXTURE = {"id": "dog.jpg", "present": ["bicycle", "dog", ["car", "truck"]]}
 
 def require_fixture_labels(detector, result):
     """Fail unless ``result`` holds every fixture label ``detector``'s vocabulary has."""
-    from framejacker import evaluation
+    from sightcircuit import evaluation
 
     score = evaluation.score_image(FIXTURE, result.detections, detector.classes)
     if score["present_misses"] or not score["present_hits"]:
@@ -30,7 +30,7 @@ def require_fixture_labels(detector, result):
 
 def check_detectors(image):
     """Create every registered detector, with no per-name code, and check it on the fixture."""
-    from framejacker.detection import DETECTORS, create_detector, describe
+    from sightcircuit.detection import DETECTORS, create_detector, describe
 
     detectors, report = {}, {}
     for name in DETECTORS:
@@ -55,7 +55,7 @@ def main() -> None:
     import onnxruntime as ort
     from PySide6 import QtCore, QtGui, QtWidgets
 
-    from framejacker.detection import DEFAULT_DETECTOR, annotate, describe
+    from sightcircuit.detection import DEFAULT_DETECTOR, annotate, describe
 
     ort.disable_telemetry_events()
 
@@ -98,7 +98,7 @@ def main() -> None:
 
     app = QtWidgets.QApplication([])
     window = QtWidgets.QLabel()
-    window.setWindowTitle("Framejacker environment validation")
+    window.setWindowTitle("SightCircuit environment validation")
     window.resize(width, height)
     window.show()
     state = {"frames": 0, "labels": [], "confidence": {}}

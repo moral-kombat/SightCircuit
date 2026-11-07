@@ -18,7 +18,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from framejacker.pipeline import Pipeline
+from sightcircuit.pipeline import Pipeline
 from tests.latency_fixture import DELAYS_MS, EXPECTED, KnownDelays
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,7 +32,7 @@ ENCODER = all(importlib.util.find_spec(name) for name in ("av", "numpy"))
 # "join_seconds" shortens the command's wait for its worker. Afterwards the held worker is released and joined.
 REPLAY_WITH_KNOWN_DELAYS = (
     "import json, sys, threading\n"
-    "from framejacker import pipeline\n"
+    "from sightcircuit import pipeline\n"
     "from scripts import replay_window\n"
     "from tests.latency_fixture import KnownDelays\n"
     "options, release = json.loads(sys.argv[1]), threading.Event()\n"
@@ -80,8 +80,8 @@ def resolve(report, dotted):
 class SyntheticReportTests(KnownDelayAssertions, unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        from framejacker.hud import HudStage
-        from framejacker.runtime import live, synthetic
+        from sightcircuit.hud import HudStage
+        from sightcircuit.runtime import live, synthetic
 
         stop = threading.Event()
         known = KnownDelays(stop, stop_after=len(DELAYS_MS))
@@ -125,8 +125,8 @@ class SyntheticReportTests(KnownDelayAssertions, unittest.TestCase):
 @unittest.skipUnless(MIRROR, "Run scripts/setup_window.sh for mirror recognition checks")
 class MirrorReportTests(KnownDelayAssertions, unittest.TestCase):
     def test_mirror_report_carries_the_known_delay_percentiles(self):
-        from framejacker.sources import mirror_device as device
-        from framejacker.runtime import live
+        from sightcircuit.sources import mirror_device as device
+        from sightcircuit.runtime import live
 
         class Mirror:
             closed = True
@@ -254,14 +254,14 @@ class ReplayReportTests(KnownDelayAssertions, unittest.TestCase):
 @unittest.skipUnless(ENCODER, "Install requirements-window.txt for the stand-in encoder")
 class ReplayStandinTests(unittest.TestCase):
     def test_defaults_are_the_documented_e62_clip(self):
-        from framejacker.sources import standin
+        from sightcircuit.sources import standin
 
         self.assertEqual(standin.STANDIN, {"side": 2464, "fps": 60, "seconds": 10, "gop_frames": 60,
                                            "bitrate_kbps": 320_000})
 
     def test_writes_a_new_hevc_clip_with_fixed_keyframes_and_refuses_to_overwrite(self):
         import av
-        from framejacker.sources import standin
+        from sightcircuit.sources import standin
 
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "standin.mp4"

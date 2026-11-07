@@ -16,7 +16,7 @@ static_assert(offsetof(MrhandPtHeader, slot) == 16 && offsetof(MrhandPtSlot, fra
 static_assert(__atomic_always_lock_free(sizeof(uint64_t), nullptr),
               "This tool requires lock-free aligned 64-bit sequence access");
 
-namespace framejacker_shm {
+namespace sightcircuit_shm {
 constexpr uint64_t maxFrameBytes = 16 * 1024 * 1024;
 constexpr uint64_t maxFileBytes = sizeof(MrhandPtHeader) + 2 * maxFrameBytes;
 inline volatile std::sig_atomic_t stopped = 0;
@@ -45,4 +45,4 @@ inline bool validHeader(const MrhandPtHeader& header) {
            uint64_t(header.width) * header.height <= maxFrameBytes &&
            header.cams >= 1 && header.cams <= 2;
 }
-} // namespace framejacker_shm
+} // namespace sightcircuit_shm

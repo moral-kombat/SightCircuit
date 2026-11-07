@@ -11,8 +11,8 @@ import threading
 import unittest
 from unittest.mock import MagicMock, patch
 
-from framejacker.runtime import guard as bounded_worker
-from framejacker.sources import recording as mp4
+from sightcircuit.runtime import guard as bounded_worker
+from sightcircuit.sources import recording as mp4
 from scripts import recording_growth_check as growth
 
 

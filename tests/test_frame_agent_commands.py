@@ -1,4 +1,4 @@
-"""Every Tier A command in ``framejacker/agent/tasks.py`` parses with its script's own parser.
+"""Every Tier A command in ``sightcircuit/agent/tasks.py`` parses with its script's own parser.
 
 ``test_frame_agent.py`` checks that each script exists and carries no opt-in
 flag. Here each argument vector, with its placeholders filled, goes to the
@@ -14,7 +14,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from framejacker.agent.tasks import TIER_A
+from sightcircuit.agent.tasks import TIER_A
 
 ROOT = Path(__file__).resolve().parents[1]
 

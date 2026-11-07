@@ -26,7 +26,7 @@ experimental Vulkan capture path delivers the Arcturus passthrough pair.
 Treat this as evidence for an implementation experiment, not a vendor support
 contract or a result for every firmware version.
 
-| Source | Information useful to Framejacker | Evidence and limits |
+| Source | Information useful to SightCircuit | Evidence and limits |
 | --- | --- | --- |
 | [Valve OpenVR camera interface][openvr-api] | Discovery, shared streaming, CPU RGBA frames, GL textures, intrinsics and projection | Official SDK contract; Arcturus support must be probed on-device |
 | [Valve tracked-camera sample][openvr-sample] | Buffer allocation, sequence checking, frame copy and cleanup | Official general example; not a Steam Frame compatibility test |
@@ -47,7 +47,7 @@ Do not repeat the unchanged public probe. Its explicit interruption guard and
 future-retest procedure remain in the
 [on-device guide](on-device.md#then-verify-camera-access). This reference records
 public contracts and upstream research; those sources do not establish a
-working Framejacker live backend.
+working SightCircuit live backend.
 
 ## Valve's documented application interface
 
@@ -165,7 +165,7 @@ installed in the cloud environment or on a headset as part of this project.
 
 ## Third-party camera claims (2026-11-04)
 
-These are claims from other projects, recorded separately from Framejacker
+These are claims from other projects, recorded separately from SightCircuit
 evidence. None has been checked on our Frame.
 
 From danthedaniel/roommate-radar
@@ -201,7 +201,7 @@ are facts restated in our own words; nothing is copied from it.
 | roommate-radar [L80-L95](https://github.com/danthedaniel/roommate-radar/blob/d6e8a8cbdb6c1197514e382662951231fd641941/docs/arcturus-av1.md#L80-L95) | TP10 UBWC (Qualcomm compressed 10-bit) as XRService's default; 8-bit linear NV12 only for about a second while SteamVR starts |
 
 They may describe different consumers, settings or SteamOS and SteamVR builds;
-Framejacker has no device evidence that chooses between them. Any importer must
+SightCircuit has no device evidence that chooses between them. Any importer must
 read the format, modifier and plane layout from the buffer it is handed.
 
 **No producer fence.** None of these sources, nor the spyjacob capture path
@@ -211,7 +211,7 @@ not order reads against the camera producer.
 ## Community references selected for follow-up (2026-10-16)
 
 These are references 1 and 3 from the community scan, rechecked against upstream
-documentation/source. They are research leads, not Framejacker hardware
+documentation/source. They are research leads, not SightCircuit hardware
 validation, a supported SDK, or authorization to install anything. The existing
 capture-only reader plan and pinned producer remain unchanged.
 
@@ -258,7 +258,7 @@ Related leads from reference 3:
   Its [README](https://github.com/NotZoeyDev/QuestLHSync/blob/steam-frame/README.md)
   describes transmitting bright-spot positions rather than images.
   Investigate it as a source-access/calibration lead, not an RGB frame API
-  already suitable for Framejacker. Installation changes SteamVR services/drivers
+  already suitable for SightCircuit. Installation changes SteamVR services/drivers
   and is outside this documentation update.
 
 The links in this section follow moving upstream branches; re-pin an audited

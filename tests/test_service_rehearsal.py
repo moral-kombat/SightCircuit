@@ -120,13 +120,13 @@ class ServiceRehearsalTests(unittest.TestCase):
                     rehearsal.preflight(self.home, self.runtime, self.manager)
                 self.assertEqual(config.payload(config.read_entry(root, name)), b"foreign")
                 config.write_entry(root, name, None)
-        self.manager.flags = ["FRAMEJACKER_CAPTURE_LAYER"]
+        self.manager.flags = ["SIGHTCIRCUIT_CAPTURE_LAYER"]
         with self.assertRaisesRegex(ValueError, "existing_layer_environment"):
             rehearsal.preflight(self.home, self.runtime, self.manager)
         self.assertEqual(self.manager.calls, [])
 
     def test_preflight_refuses_dangling_provider_socket_and_pending_job(self):
-        endpoint = self.runtime / "framejacker-camera-provider/camera.sock"
+        endpoint = self.runtime / "sightcircuit-camera-provider/camera.sock"
         endpoint.parent.mkdir(mode=0o700)
         endpoint.symlink_to(self.root / "missing")
         with self.assertRaisesRegex(ValueError, "existing_provider"):
@@ -171,7 +171,7 @@ class ServiceRehearsalTests(unittest.TestCase):
         cleanup = next(value for value in command if value.startswith("--property=ExecStopPost="))
         self.assertIn(str(run / "code/service_rehearsal.py"), cleanup)
         self.assertIn("--recover " + str(run), cleanup)
-        self.assertFalse(any("FRAMEJACKER_CAPTURE_LAYER=" in arg for arg in command))
+        self.assertFalse(any("SIGHTCIRCUIT_CAPTURE_LAYER=" in arg for arg in command))
         self.assert_no_capture()
 
     def test_success_stops_once_starts_once_and_recovery_only_observes(self):

@@ -70,5 +70,5 @@ reference research. The [on-device handoff](on-device.md#context-for-a-new-devel
 provides a short prompt for continuing on the headset.
 
 Procedures describe implemented tools. Capture experiments marked planned have
-no runnable Framejacker command yet. Research reports describe the cited runtime
+no runnable SightCircuit command yet. Research reports describe the cited runtime
 or source revision, not compatibility with every headset update.

@@ -9,10 +9,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from framejacker.hud import HUD_CONFIG, Calibration, HudMask, viewports
-from framejacker.hud.geometry import eye_viewports
-from framejacker.hud.mask import mask_regions
-from framejacker.hud.qualification import MappingCandidate, ValidationLedger, config_digest
+from sightcircuit.hud import HUD_CONFIG, Calibration, HudMask, viewports
+from sightcircuit.hud.geometry import eye_viewports
+from sightcircuit.hud.mask import mask_regions
+from sightcircuit.hud.qualification import MappingCandidate, ValidationLedger, config_digest
 from scripts.hud_validation_report import main, read_record
 
 

@@ -12,7 +12,7 @@ from pathlib import Path
 import unittest
 from unittest import mock
 
-from framejacker import detection
+from sightcircuit import detection
 from tests.asset_gate import model_assets, requires_assets, requires_seed_images
 
 ROOT = Path(__file__).resolve().parents[1]

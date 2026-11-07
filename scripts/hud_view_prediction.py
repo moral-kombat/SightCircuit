@@ -2,7 +2,7 @@
 
 Input is the JSON the bridge's read-only ``--headset-view-record`` mode printed
 (the whole bridge report, or just its ``view_record`` object). Output is the
-prediction from ``framejacker.hud.geometry.predict_hud_footprint`` for the
+prediction from ``sightcircuit.hud.geometry.predict_hud_footprint`` for the
 current ``HUD_CONFIG``, printed as one JSON document. It reads one regular file
 and makes no OpenVR call.
 
@@ -22,10 +22,10 @@ import sys
 if not __package__:  # Run as a file: import this checkout's packages without installation.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from framejacker import gates  # noqa: E402
-from framejacker.hud import HUD_CONFIG  # noqa: E402
-from framejacker.hud.geometry import predict_hud_footprint  # noqa: E402
-from framejacker.hud.qualification import config_digest, parse_record  # noqa: E402
+from sightcircuit import gates  # noqa: E402
+from sightcircuit.hud import HUD_CONFIG  # noqa: E402
+from sightcircuit.hud.geometry import predict_hud_footprint  # noqa: E402
+from sightcircuit.hud.qualification import config_digest, parse_record  # noqa: E402
 
 MAX_RECORD_BYTES = 65536
 REPORT_KIND = "hud_view_prediction"
@@ -48,7 +48,7 @@ def read_view_record(path):
     document = parse_record(data.decode("utf-8", errors="strict"))
     if type(document) is not dict:
         raise ValueError("hud_view_record_invalid")
-    if document.get("report_kind") == "framejacker_overlay_bridge":
+    if document.get("report_kind") == "sightcircuit_overlay_bridge":
         document = document.get("view_record")
     if type(document) is not dict:
         raise ValueError("hud_view_record_missing")

@@ -63,7 +63,7 @@ TASKS = (
        env=OFFSCREEN, requires=(VENV_PYTHON,)),
     _a("marker-validate", "Calibration marker validation mode; generated marker, never initializes VR",
        ["{venv_python}", "scripts/hud_marker_check.py", "--validate", "--seconds", "3"], 60,
-       requires=(VENV_PYTHON, "artifacts/overlay-bridge/framejacker-overlay-bridge")),
+       requires=(VENV_PYTHON, "artifacts/overlay-bridge/sightcircuit-overlay-bridge")),
     _a("replay-regression", "Offscreen replay of the newest recording, 30 frames",
        ["{venv_python}", "scripts/replay_window.py", "--max-frames", "30",
         "--report", "{run_dir}/replay-offscreen.json"], 300, env=OFFSCREEN, requires=(VENV_PYTHON,)),

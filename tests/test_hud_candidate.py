@@ -22,14 +22,14 @@ try:
 except ImportError as error:
     raise unittest.SkipTest("OpenCV is required for generated observer reports") from error
 
-from framejacker.gates import claims
-from framejacker.hud import HUD_CONFIG, HudMask, config_digest
-from framejacker.hud import candidate as hud_candidate
-from framejacker.hud import contract
-from framejacker.hud.geometry import expand
-from framejacker.hud.mask import mask_regions
-from framejacker.hud.qualification import MappingCandidate
-from framejacker.sources.session import TrackingObserver
+from sightcircuit.gates import claims
+from sightcircuit.hud import HUD_CONFIG, HudMask, config_digest
+from sightcircuit.hud import candidate as hud_candidate
+from sightcircuit.hud import contract
+from sightcircuit.hud.geometry import expand
+from sightcircuit.hud.mask import mask_regions
+from sightcircuit.hud.qualification import MappingCandidate
+from sightcircuit.sources.session import TrackingObserver
 from scripts import hud_marker_observer as observer
 from scripts import hud_validation_report
 from tests.test_hud_marker_observer import (FakeClock, FakeStop, clean_bridge_fixture, fake_session, scene,

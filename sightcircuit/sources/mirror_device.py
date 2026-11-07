@@ -13,7 +13,7 @@ import stat
 import struct
 import zlib
 
-from ..errors import FramejackerError
+from ..errors import SightCircuitError
 
 
 MAX_BUFFER_BYTES = 64 * 1024 * 1024
@@ -21,7 +21,7 @@ MAX_PIXELS = 16 * 1024 * 1024
 CAP_CAPTURE, CAP_READWRITE, CAP_DEVICE_CAPS = 1, 0x01000000, 0x80000000
 
 
-class MirrorError(FramejackerError):
+class MirrorError(SightCircuitError):
     pass
 
 

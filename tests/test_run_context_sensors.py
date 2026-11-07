@@ -12,7 +12,7 @@ import tempfile
 import threading
 import unittest
 
-from framejacker.runtime import sensors
+from sightcircuit.runtime import sensors
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/sample_run_context.py"
@@ -199,12 +199,12 @@ class SampleRunContextCommandTests(unittest.TestCase):
                 self.assertEqual(result.stdout, "")
 
     def test_sampler_is_not_a_runner_task_and_touches_no_vr(self):
-        tasks = (ROOT / "framejacker/agent/tasks.py").read_text()
+        tasks = (ROOT / "sightcircuit/agent/tasks.py").read_text()
         self.assertNotIn("sample_run_context", tasks)
         self.assertNotIn("sensors", tasks)
         allowed = {"argparse", "csv", "datetime", "glob", "json", "os", "pathlib", "re", "sys", "time",
-                   "framejacker.runtime", "framejacker.runtime.guard"}
-        for path in (ROOT / "framejacker/runtime/sensors.py", SCRIPT):
+                   "sightcircuit.runtime", "sightcircuit.runtime.guard"}
+        for path in (ROOT / "sightcircuit/runtime/sensors.py", SCRIPT):
             tree = ast.parse(path.read_text())
             imported = {alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names}
             imported |= {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}

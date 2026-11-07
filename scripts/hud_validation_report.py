@@ -3,7 +3,7 @@
 A valid record exits 2 (unqualified). JSON fields and artifact references do
 not establish hardware evidence. ``--from-observer`` turns a saved
 ``hud_marker_observer.py`` report into a candidate whose unknown terms stay
-explicit (``framejacker.hud.candidate``). Its session tokens come only from
+explicit (``sightcircuit.hud.candidate``). Its session tokens come only from
 the tokens the observer recorded (``--record-session-tokens``); a report
 without them, or with a token that was not observed, is rejected. No capture,
 inference or OpenVR is started.
@@ -19,11 +19,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from framejacker.gates import claims  # noqa: E402
-from framejacker.hud.candidate import (  # noqa: E402
+from sightcircuit.gates import claims  # noqa: E402
+from sightcircuit.hud.candidate import (  # noqa: E402
     MAX_OBSERVER_REPORT_BYTES, candidate_report, observer_candidate, rejection_report)
-from framejacker.hud.qualification import MAX_RECORD_BYTES, MappingCandidate, parse_record  # noqa: E402
-from framejacker.runtime.output import publish_new  # noqa: E402
+from sightcircuit.hud.qualification import MAX_RECORD_BYTES, MappingCandidate, parse_record  # noqa: E402
+from sightcircuit.runtime.output import publish_new  # noqa: E402
 
 CHECK_OPTIONS = ("current_context", "now_ns")
 OBSERVER_OPTIONS = ("declared_context", "lifetime_seconds")

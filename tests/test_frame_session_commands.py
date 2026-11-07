@@ -21,7 +21,7 @@ SESSION = ROOT / "scripts/frame_session.sh"
 SCRIPT = re.compile(r"(?:\S*/)?scripts/(\w+)\.py")
 VARIABLE = re.compile(r"\$\{(\w+)\}|\$(\w+)")
 # Representative values for the session's variables. A new variable fails until it is added here.
-PLACEHOLDERS = {"device": "/dev/video99", "out": "/tmp/framejacker-session/20261101-120000",
+PLACEHOLDERS = {"device": "/dev/video99", "out": "/tmp/sightcircuit-session/20261101-120000",
                 "file": "evaluation/local/rug-20261101-120000.png", "id": "rug", "stamp": "20261101-120000",
                 "present": "chair,tv", "absent": "couch"}
 # "${recording_args[@]}" is empty unless RECORDING is set; both expansions are checked.

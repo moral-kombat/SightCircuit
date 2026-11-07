@@ -10,7 +10,7 @@ rule for the runtime mask, the marker observer and candidate records.
 This module also owns the values the native bridge shares: ``HUD_CONFIG``, the
 calibration ``MARKER``, the pipe packet layout and opcodes, and the duration,
 age and frame-size limits. ``tools/hud_contract.hpp`` is generated from them
-(``framejacker.hud.native``); neither side keeps its own copy.
+(``sightcircuit.hud.native``); neither side keeps its own copy.
 """
 from dataclasses import asdict, dataclass, fields, is_dataclass
 import hashlib

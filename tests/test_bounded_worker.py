@@ -12,7 +12,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from framejacker.runtime import guard as bounded_worker
+from sightcircuit.runtime import guard as bounded_worker
 from scripts import recording_growth_check as growth
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,20 +45,20 @@ class ValidatorReferenceTests(unittest.TestCase):
     """The guardian imports only a caller-named validator of this checkout, never a command table."""
 
     def test_reference_names_a_module_level_validator_in_the_checkout_only(self):
-        from framejacker.hud import marker
+        from sightcircuit.hud import marker
 
         self.assertEqual(bounded_worker.validator_reference(growth.validate_worker_report, {"limit": 1}),
                          {"module": "scripts.recording_growth_check", "function": "validate_worker_report",
                           "options": {"limit": 1}})
         self.assertEqual(bounded_worker.validator_reference(marker.validate_worker_report)["module"],
-                         "framejacker.hud.marker")
+                         "sightcircuit.hud.marker")
         for validate in (lambda report, code: None, json.loads, bounded_worker.load_validator.__call__,
                          child_pids):
             with self.subTest(validate=validate), self.assertRaisesRegex(ValueError, "module_level_in_checkout"):
                 bounded_worker.validator_reference(validate)
 
     def test_loader_imports_only_checkout_packages_and_binds_options(self):
-        from framejacker.hud import marker
+        from sightcircuit.hud import marker
 
         for reference in ({"module": "json", "function": "loads"}, {"module": "os.path", "function": "join"},
                           {"module": "tests.test_bounded_worker", "function": "child_pids"},
@@ -271,7 +271,7 @@ class BoundedWorkerTests(unittest.TestCase):
                    "base_report": growth.new_report(), "timeout": 2, "descendants": False, "parent_fd": reader,
                    "validator": bounded_worker.validator_reference(growth.validate_worker_report)}
         try:
-            result = subprocess.run([sys.executable, str(ROOT / "framejacker/runtime/guard.py"),
+            result = subprocess.run([sys.executable, str(ROOT / "sightcircuit/runtime/guard.py"),
                 "--guard", json.dumps(options)], pass_fds=(reader,), capture_output=True, timeout=5)
         finally:
             os.close(reader)

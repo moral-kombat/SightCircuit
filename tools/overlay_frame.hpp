@@ -6,7 +6,7 @@
 #include <stdexcept>
 #include <vector>
 
-namespace framejacker_overlay {
+namespace sightcircuit_overlay {
 inline std::uint32_t read_u32(const std::uint8_t* p) {
     return std::uint32_t(p[0]) | (std::uint32_t(p[1]) << 8) |
            (std::uint32_t(p[2]) << 16) | (std::uint32_t(p[3]) << 24);
@@ -17,7 +17,7 @@ struct FrameView {
     const std::uint8_t* rgba;
 };
 inline FrameView decode_frame(std::uint32_t kind, const std::vector<std::uint8_t>& payload) {
-    namespace contract = framejacker_contract;
+    namespace contract = sightcircuit_contract;
     if (kind != contract::kOpcodeFrame && kind != contract::kOpcodeExpiringFrame)
         throw std::runtime_error("invalid_frame_kind");
     const bool expiring = kind == contract::kOpcodeExpiringFrame;
@@ -36,7 +36,7 @@ inline FrameView decode_frame(std::uint32_t kind, const std::vector<std::uint8_t
     return {w, h, expiry, payload.data() + pixels};
 }
 inline bool deadline_current(const FrameView& frame, std::uint64_t now) {
-    if (!frame.expiry || frame.expiry > now + framejacker_contract::kMaxDisplayAgeNs)
+    if (!frame.expiry || frame.expiry > now + sightcircuit_contract::kMaxDisplayAgeNs)
         throw std::runtime_error("invalid_frame_expiry");
     return frame.expiry > now;
 }
@@ -56,4 +56,4 @@ Retirement retire_overlay(Hide hide, Clear clear, Destroy destroy) {
     result.destroyed = destroy();
     return result;
 }
-} // namespace framejacker_overlay
+} // namespace sightcircuit_overlay

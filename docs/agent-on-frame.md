@@ -57,7 +57,7 @@ is Claude Desktop, not Claude Code), so that is the proven fallback if the
 on-device install fails (see [Phase 0](#phase-0-install-and-verify-manual-owner)). Second, frame-control
 already provides approvals and headset screenshots, so Tier B should reuse it
 after review rather than rebuild those parts. It does not replace the Tier A
-runner: frame-control has no Framejacker checks, and its approvals assume a
+runner: frame-control has no SightCircuit checks, and its approvals assume a
 person is watching.
 
 ## Where Claude Code runs
@@ -69,8 +69,8 @@ agent has to run on Frame or be attached to it.
 | Option | How | Verdict |
 | --- | --- | --- |
 | **A. Claude Code CLI installed on Frame** | Native Linux ARM64 install into `~/.local/bin` as `steamos`; started over SSH inside `tmux`, interactively or headless (`claude -p`) | **Recommended base.** Commands run in the right place; guards live next to the commands; no root, no read-only-OS changes |
-| **B. Remote Control from Frame** | Option A plus `claude remote-control` started in `~/framejacker`; a Claude Code session in the app or cloud then attaches to that folder | **Recommended way to drive it** from the phone/desktop app or from a cloud development session. Same guards as A, because commands still run through Frame's Claude Code |
-| C. Claude Code on the PC, commands sent over SSH | Agent runs on the PC; it calls the Frame runner as `ssh steamos@<FRAME_IP> python3 framejacker/scripts/frame_agent_run.py run <task>` | **Fallback** if Phase 0 fails; this is how the Frame projects in [prior work](#prior-work) that run tests or control the headset operate. **Not ready as written:** the shipped guard and settings cover option A only and block every `ssh` command, and a PC-side prefix rule is not enough, because `ssh` joins its arguments and Frame's login shell parses them again, so an escaped or quoted `;` or `$(…)` that matches the prefix locally becomes a second command on Frame. Option C first needs its own enforcement on Frame, such as an `authorized_keys` forced command that reads `SSH_ORIGINAL_COMMAND` and accepts only runner task IDs, and a separate review. Free-form `ssh` stays denied |
+| **B. Remote Control from Frame** | Option A plus `claude remote-control` started in `~/sightcircuit`; a Claude Code session in the app or cloud then attaches to that folder | **Recommended way to drive it** from the phone/desktop app or from a cloud development session. Same guards as A, because commands still run through Frame's Claude Code |
+| C. Claude Code on the PC, commands sent over SSH | Agent runs on the PC; it calls the Frame runner as `ssh steamos@<FRAME_IP> python3 sightcircuit/scripts/frame_agent_run.py run <task>` | **Fallback** if Phase 0 fails; this is how the Frame projects in [prior work](#prior-work) that run tests or control the headset operate. **Not ready as written:** the shipped guard and settings cover option A only and block every `ssh` command, and a PC-side prefix rule is not enough, because `ssh` joins its arguments and Frame's login shell parses them again, so an escaped or quoted `;` or `$(…)` that matches the prefix locally becomes a second command on Frame. Option C first needs its own enforcement on Frame, such as an `authorized_keys` forced command that reads `SSH_ORIGINAL_COMMAND` and accepts only runner task IDs, and a separate review. Free-form `ssh` stays denied |
 | D. Self-hosted GitHub Actions runner on Frame | Runner service picks up workflow jobs | **Rejected for now.** Pull-request code would execute on the headset, it adds a permanent service, and CI cannot judge headset behaviour anyway |
 
 ## Safety model
@@ -84,7 +84,7 @@ to reach them, whatever its prompt says.
 
 ### 1. A fixed task runner is the only command the agent may run
 
-`scripts/frame_agent_run.py` (logic and task table in `framejacker/agent/`)
+`scripts/frame_agent_run.py` (logic and task table in `sightcircuit/agent/`)
 takes a **task ID**, not a command line:
 
 ```bash
@@ -105,7 +105,7 @@ procedure is in [on-device](on-device.md#run-automated-checks-with-an-on-device-
 ### 2. Claude Code permissions allow only the runner
 
 `.claude/settings.local.json` in the Frame checkout, copied from the reviewed
-template `framejacker/agent/frame-settings.json`. The local settings file is
+template `sightcircuit/agent/frame-settings.json`. The local settings file is
 git-ignored, so cloud sessions are unaffected:
 
 - `permissions.defaultMode: "dontAsk"`, so anything not allowed is refused
@@ -276,9 +276,9 @@ The manual equivalent:
 **Implemented 2026-11-01, cloud-tested only** (`tests/test_frame_agent.py`;
 no Frame execution yet; [E77](evidence/e077.md)).
 
-1. Implement `framejacker/agent/` and `scripts/frame_agent_run.py` with the
+1. Implement `sightcircuit/agent/` and `scripts/frame_agent_run.py` with the
    Tier A table; Tier B and C IDs exist only as refusals with a reason.
-2. Add the settings template `framejacker/agent/frame-settings.json` and the
+2. Add the settings template `sightcircuit/agent/frame-settings.json` and the
    hook `scripts/frame_agent_guard.py`.
 3. Cloud tests: unknown IDs and extra arguments refused; every Tier A argument
    vector names an existing script without opt-in flags and parses with that
@@ -296,7 +296,7 @@ On Frame, install the settings as in
 `tmux`:
 
 ```bash
-cd "$HOME/framejacker"
+cd "$HOME/sightcircuit"
 mkdir -p artifacts/agent-runs   # the redirect below needs it before the first run
 claude -p "Run every tier-a task with scripts/frame_agent_run.py, then write artifacts/agent-runs/<run>/summary.md comparing results with docs/status.md. Do not run anything else." \
   --max-turns 40 --output-format json > artifacts/agent-runs/last-session.json
@@ -309,7 +309,7 @@ run `service_rehearsal.py --start` and expects a refusal.
 
 ### Phase 3: on-demand runs from the app or cloud
 
-Start `claude remote-control` in `~/framejacker` inside `tmux` on Frame. A
+Start `claude remote-control` in `~/sightcircuit` inside `tmux` on Frame. A
 development session can then attach to that folder and run "update to
 `<revision>` and run Tier A" after each merge to `main`, without anyone at the
 PC.

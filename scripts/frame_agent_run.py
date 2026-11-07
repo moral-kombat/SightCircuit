@@ -10,7 +10,7 @@ import sys
 if not __package__:  # Run as a file: import this checkout's packages without installation.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from framejacker.agent.runner import main  # noqa: E402
+from sightcircuit.agent.runner import main  # noqa: E402
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -1,6 +1,6 @@
 """The marker observer's scene precondition, and statistics that describe it; counts only, never pixels.
 
-``locate_copies`` (``framejacker.hud.observation``) thresholds the grey frame
+``locate_copies`` (``sightcircuit.hud.observation``) thresholds the grey frame
 at ``BRIGHT_THRESHOLD``, finds every bright contour, rejects the frame when
 there are more than ``MAX_CONTOURS``, then keeps contours of at least
 ``MIN_QUAD_AREA`` (``cv2.contourArea``: the polygon through pixel centres, so a

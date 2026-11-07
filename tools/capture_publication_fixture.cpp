@@ -5,7 +5,7 @@
 #include <sys/resource.h>
 #include <thread>
 
-using namespace framejacker::publication;
+using namespace sightcircuit::publication;
 
 static void require(bool condition) { if (!condition) throw Error("fixture_assertion_failed"); }
 template <typename Function> static void rejects(Function action) {
@@ -14,7 +14,7 @@ template <typename Function> static void rejects(Function action) {
 }
 static int self_test() {
     struct Directory {
-        char path[64] = "/tmp/framejacker-publication-XXXXXX";
+        char path[64] = "/tmp/sightcircuit-publication-XXXXXX";
         Directory() { require(mkdtemp(path) != nullptr); }
         ~Directory() { rmdir(path); }
     } directory;
@@ -23,17 +23,17 @@ static int self_test() {
     {
         Publisher publisher(path, 64, 48, 2);
         rejects([&] { Publisher other(path, 64, 48, 2); });
-        require(publisher.publish(0, pixels.data(), pixels.size(), framejacker_shm::nowNs(), 11, 1));
-        const uint64_t now = framejacker_shm::nowNs();
+        require(publisher.publish(0, pixels.data(), pixels.size(), sightcircuit_shm::nowNs(), 11, 1));
+        const uint64_t now = sightcircuit_shm::nowNs();
         require(publisher.publish(1, pixels.data(), pixels.size(), now, 12, 1));
         require(!publisher.publish(1, pixels.data(), pixels.size(), now, 12, 2));
         require(!publisher.publish(1, pixels.data(), pixels.size(), now > 2000000000ull ? now - 2000000000ull : 1, 12, 2));
-        rejects([&] { publisher.publish(1, pixels.data(), pixels.size(), framejacker_shm::nowNs(), 12, 1); });
-        rejects([&] { publisher.publish(2, pixels.data(), pixels.size(), framejacker_shm::nowNs(), 12, 2); });
-        rejects([&] { publisher.publish(0, pixels.data(), 1, framejacker_shm::nowNs(), 12, 2); });
+        rejects([&] { publisher.publish(1, pixels.data(), pixels.size(), sightcircuit_shm::nowNs(), 12, 1); });
+        rejects([&] { publisher.publish(2, pixels.data(), pixels.size(), sightcircuit_shm::nowNs(), 12, 2); });
+        rejects([&] { publisher.publish(0, pixels.data(), 1, sightcircuit_shm::nowNs(), 12, 2); });
         rejects([&] { publisher.publish(0, pixels.data(), pixels.size(), UINT64_MAX, 12, 2); });
         require(chmod(path.c_str(), 0644) == 0);
-        rejects([&] { publisher.publish(0, pixels.data(), pixels.size(), framejacker_shm::nowNs(), 11, 2); });
+        rejects([&] { publisher.publish(0, pixels.data(), pixels.size(), sightcircuit_shm::nowNs(), 11, 2); });
         require(chmod(path.c_str(), 0600) == 0);
         require(publisher.close() && publisher.close());
         require(access(path.c_str(), F_OK) != 0);
@@ -41,7 +41,7 @@ static int self_test() {
     {
         Publisher publisher(path, 64, 48, 1);
         require(truncate(path.c_str(), 0) == 0);
-        rejects([&] { publisher.publish(0, pixels.data(), pixels.size(), framejacker_shm::nowNs(), 1, 1); });
+        rejects([&] { publisher.publish(0, pixels.data(), pixels.size(), sightcircuit_shm::nowNs(), 1, 1); });
         require(publisher.close());
     }
     rejects([&] { Publisher invalid(path, 8192, 8192, 2); });
@@ -105,7 +105,7 @@ int main(int argc, char **argv) {
         if (argc != 5 || std::string(argv[1]) != "--create" || std::string(argv[3]) != "--seconds")
             throw Error("invalid_arguments");
         path = argv[2];
-        seconds = unsigned(framejacker_shm::number(argv[4], 1, 10));
+        seconds = unsigned(sightcircuit_shm::number(argv[4], 1, 10));
     } catch (...) { return 64; }
     std::unique_ptr<Publisher> publisher;
     int code = 0;
@@ -122,7 +122,7 @@ int main(int argc, char **argv) {
             ++count;
             for (unsigned camera = 0; camera != 2; ++camera) {
                 std::fill(pixels.begin(), pixels.end(), uint8_t((count + camera * 17) % 256));
-                publisher->publish(camera, pixels.data(), pixels.size(), framejacker_shm::nowNs(), 100 + camera, count);
+                publisher->publish(camera, pixels.data(), pixels.size(), sightcircuit_shm::nowNs(), 100 + camera, count);
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(16));
         }

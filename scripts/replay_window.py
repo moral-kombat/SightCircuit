@@ -13,10 +13,10 @@ import time
 
 if not __package__:  # Run as a file: import this checkout's packages without installation.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from framejacker.detection import DEFAULT_DETECTOR, DETECTORS, create_detector, describe
-from framejacker.pipeline import LatestResultSink, Pipeline, report_fields
-from framejacker.sources.replay import ReplaySource
-from framejacker.sources.recording import RecordingError, latest_recording
+from sightcircuit.detection import DEFAULT_DETECTOR, DETECTORS, create_detector, describe
+from sightcircuit.pipeline import LatestResultSink, Pipeline, report_fields
+from sightcircuit.sources.replay import ReplaySource
+from sightcircuit.sources.recording import RecordingError, latest_recording
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKER_JOIN_SECONDS = 5  # Shutdown wait; a worker still running afterwards fails the run.
@@ -190,7 +190,7 @@ def main(argv=None):
             raise RuntimeError(f"Window dependencies unavailable: {error}. Run bash scripts/setup_window.sh") from error
         check_display_libraries(QtCore)
         if args.overlay:
-            from framejacker.overlay import PANEL_LIMITS, OverlayClient, OverlaySink, PanelSettings
+            from sightcircuit.overlay import PANEL_LIMITS, OverlayClient, OverlaySink, PanelSettings
             overlay = OverlayClient()
             overlay.start()
 
@@ -211,7 +211,7 @@ def main(argv=None):
 
         app = QtWidgets.QApplication([])
         window = QtWidgets.QWidget()
-        window.setWindowTitle("Framejacker — annotated replay")
+        window.setWindowTitle("SightCircuit — annotated replay")
         window.resize(960, 800)
         layout = QtWidgets.QVBoxLayout(window)
         title = QtWidgets.QLabel(f"{path.name} · video track {args.video_stream} · {args.detector} · "

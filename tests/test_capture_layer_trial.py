@@ -128,7 +128,7 @@ class MetadataLayerTrialTests(unittest.TestCase):
             path.mkdir(mode=0o700)
         self.source = self.build / "reference-libVkLayer_mrhand.so"
         self.source.write_bytes(b"\x7fELFgenerated-metadata-library")
-        self.inspector = self.build / "framejacker-provider-inspect"
+        self.inspector = self.build / "sightcircuit-provider-inspect"
         self.inspector.write_bytes(b"\x7fELFgenerated-inspector")
         self.inspector.chmod(0o700)
         self.patches = [patch.object(config, "SOURCE", self.source), patch.object(trial.metadata, "BINARY", self.inspector)]
@@ -210,7 +210,7 @@ class MetadataLayerTrialTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "properties_changed"):
                     trial.preflight(self.bundle, self.runtime, self.home, self.manager)
                 self.manager.properties[key] = original
-        self.manager.flags = ["FRAMEJACKER_CAPTURE_LAYER"]
+        self.manager.flags = ["SIGHTCIRCUIT_CAPTURE_LAYER"]
         with self.assertRaisesRegex(ValueError, "environment_flag"):
             self.create()
         self.assertEqual(list(self.home.iterdir()), [])
@@ -231,7 +231,7 @@ class MetadataLayerTrialTests(unittest.TestCase):
         self.assertEqual(list(self.home.iterdir()), [])
 
     def test_existing_endpoint_dropin_and_foreign_target_are_preserved(self):
-        endpoint = self.runtime / "framejacker-camera-provider/camera.sock"
+        endpoint = self.runtime / "sightcircuit-camera-provider/camera.sock"
         endpoint.parent.mkdir(mode=0o700)
         endpoint.symlink_to("/dev/null")
         with self.assertRaisesRegex(ValueError, "existing_provider_endpoint"):

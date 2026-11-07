@@ -7,7 +7,7 @@
 #include <sys/mman.h>
 #include <thread>
 
-using namespace framejacker::transport;
+using namespace sightcircuit::transport;
 using namespace std::chrono_literals;
 
 static void require(bool condition) { if (!condition) throw Error("fixture_assertion_failed"); }
@@ -26,7 +26,7 @@ static MrhandBufInfo metadata(uint32_t id = 1, uint32_t generation = 7) {
     return info;
 }
 static Fd payload() {
-    Fd fd(memfd_create("framejacker-synthetic-transport", MFD_CLOEXEC));
+    Fd fd(memfd_create("sightcircuit-synthetic-transport", MFD_CLOEXEC));
     require(fd.get() >= 0 && write(fd.get(), "abc", 3) == 3);
     return fd;
 }
@@ -176,7 +176,7 @@ static void send_deadlines() {
 }
 static void named_connection() {
     struct Directory {
-        char name[64] = "/tmp/framejacker-transport-XXXXXX";
+        char name[64] = "/tmp/sightcircuit-transport-XXXXXX";
         std::string path;
         Directory() {
             require(mkdtemp(name) != nullptr);

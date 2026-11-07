@@ -18,15 +18,15 @@ index 490c1d6..4b8f7e3 100644
 -    VkPhysicalDevice phys;
 -    VkDevice dev;
 -    VkQueue queue;
-+    framejacker::gpu::Device device;
-+    framejacker::gpu::Resource probeCommands;
++    sightcircuit::gpu::Device device;
++    sightcircuit::gpu::Resource probeCommands;
 +    VkDevice dev = VK_NULL_HANDLE;
 +    VkQueue queue = VK_NULL_HANDLE;
      uint32_t qfam = 0;
 -    VkCommandPool pool;
 -    VkPhysicalDeviceMemoryProperties mp;
 -    PFN_vkGetMemoryFdPropertiesKHR getFdProps;
--    framejacker::capture_import::Completion importCompletion;
+-    sightcircuit::capture_import::Completion importCompletion;
 -
      void init() {
 -        VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
@@ -65,7 +65,7 @@ index 490c1d6..4b8f7e3 100644
 -        pci.queueFamilyIndex = qfam;
 -        CHECK(vkCreateCommandPool(dev, &pci, nullptr, &pool));
 -        getFdProps = (PFN_vkGetMemoryFdPropertiesKHR)vkGetDeviceProcAddr(dev, "vkGetMemoryFdPropertiesKHR");
-+        device = framejacker::gpu::Device::open(framejacker::gpu::system_api());
++        device = sightcircuit::gpu::Device::open(sightcircuit::gpu::system_api());
 +        dev = device.handle(); queue = device.queue(); qfam = device.family();
      }
 -    uint32_t memType(uint32_t bits, VkMemoryPropertyFlags want) {
@@ -84,12 +84,12 @@ index 490c1d6..4b8f7e3 100644
  struct CamImage {
      MrhandBufInfo info;
      VkImage img;
--    framejacker::capture_import::Image owned;
-+    framejacker::gpu::ImportedImage owned;
+-    sightcircuit::capture_import::Image owned;
++    sightcircuit::gpu::ImportedImage owned;
  };
  
  static CamImage importImage(Gpu &g, const Buf &b) {
--    using namespace framejacker::capture_import;
+-    using namespace sightcircuit::capture_import;
 -    Context context;
 -    context.physical = g.phys; context.device = g.dev; context.memory = g.mp;
 -    context.completion = &g.importCompletion;
@@ -104,7 +104,7 @@ index 490c1d6..4b8f7e3 100644
  
 -struct HostBuf { VkBuffer buf; VkDeviceMemory mem; void *ptr; VkDeviceSize size; };
 +struct HostBuf {
-+    framejacker::gpu::Resource owned;
++    sightcircuit::gpu::Resource owned;
 +    VkBuffer buf = VK_NULL_HANDLE;
 +    void *ptr = nullptr;
 +    VkDeviceSize size = 0;
@@ -154,8 +154,8 @@ index 490c1d6..4b8f7e3 100644
      VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
      si.commandBufferCount = 1;
      si.pCommandBuffers = &cb;
--    framejacker::capture_import::submit_and_wait(g.importCompletion,
-+    framejacker::capture_import::submit_and_wait(g.device.completion(),
+-    sightcircuit::capture_import::submit_and_wait(g.importCompletion,
++    sightcircuit::capture_import::submit_and_wait(g.device.completion(),
          {vkResetFences, vkQueueSubmit, vkWaitForFences}, g.dev, g.queue, fence, si);
 -    VkMappedMemoryRange mr{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, dst.mem, 0, VK_WHOLE_SIZE};
 -    CHECK(vkInvalidateMappedMemoryRanges(g.dev, 1, &mr));
@@ -168,9 +168,9 @@ index 490c1d6..4b8f7e3 100644
      uint32_t outSize = 640;
      VkImage full = VK_NULL_HANDLE, mid = VK_NULL_HANDLE, out = VK_NULL_HANDLE;
 -    VkDeviceMemory mem[3] = {};
-+    framejacker::gpu::Resource images[3];
++    sightcircuit::gpu::Resource images[3];
      HostBuf host{};
-+    framejacker::gpu::Resource commands;
++    sightcircuit::gpu::Resource commands;
      VkCommandBuffer cb = VK_NULL_HANDLE;
      VkFence fence = VK_NULL_HANDLE;
 -
@@ -216,8 +216,8 @@ index 490c1d6..4b8f7e3 100644
          VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
          si.commandBufferCount = 1;
          si.pCommandBuffers = &cb;
--        framejacker::capture_import::submit_and_wait(g.importCompletion,
-+        framejacker::capture_import::submit_and_wait(g.device.completion(),
+-        sightcircuit::capture_import::submit_and_wait(g.importCompletion,
++        sightcircuit::capture_import::submit_and_wait(g.device.completion(),
              {vkResetFences, vkQueueSubmit, vkWaitForFences}, g.dev, g.queue, fence, si);
 -        VkMappedMemoryRange mr{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, host.mem, 0, VK_WHOLE_SIZE};
 -        CHECK(vkInvalidateMappedMemoryRanges(g.dev, 1, &mr));

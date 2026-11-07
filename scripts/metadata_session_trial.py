@@ -17,10 +17,10 @@ except ImportError:
 
 service, trial, config = session.service, session.trial, session.config
 metadata = trial.metadata
-UNIT = "framejacker-metadata-session.service"
+UNIT = "sightcircuit-metadata-session.service"
 RUNS = config.ROOT / "artifacts/metadata-session-trials"
-DROPIN = "systemd/user/steamvr.service.d/90-framejacker-session-metadata.conf"
-ENABLE = config.describe(b"[Service]\nEnvironment=FRAMEJACKER_CAPTURE_LAYER=1\n", 0o600)
+DROPIN = "systemd/user/steamvr.service.d/90-sightcircuit-session-metadata.conf"
+ENABLE = config.describe(b"[Service]\nEnvironment=SIGHTCIRCUIT_CAPTURE_LAYER=1\n", 0o600)
 SOURCES = ("metadata_session_trial.py", *session.SOURCES)
 ERRORS = session.ERRORS
 
@@ -43,9 +43,9 @@ class Systemd(session.Systemd):
             selected = {}
             for item in proc_bytes(peer["pid"], "environ", 2 * 1024 * 1024).split(b"\0"):
                 name, _, value = item.partition(b"=")
-                if name in (b"FRAMEJACKER_CAPTURE_LAYER", b"FRAMEJACKER_DISABLE_CAPTURE_LAYER"):
+                if name in (b"SIGHTCIRCUIT_CAPTURE_LAYER", b"SIGHTCIRCUIT_DISABLE_CAPTURE_LAYER"):
                     selected[name] = value
-            expected = {b"FRAMEJACKER_CAPTURE_LAYER": b"1"} if enabled else {}
+            expected = {b"SIGHTCIRCUIT_CAPTURE_LAYER": b"1"} if enabled else {}
             if selected != expected or process_start(peer["pid"]) != peer["start_ticks"]:
                 raise ValueError("unexpected_compositor_capture_environment")
 
@@ -64,7 +64,7 @@ class Systemd(session.Systemd):
         return found
 
     def provider_identity(self, runtime, snapshot, library):
-        directory = runtime / "framejacker-camera-provider"
+        directory = runtime / "sightcircuit-camera-provider"
         entry = config.read_entry(directory, "provider.lock")
         if entry is None:
             return None
@@ -93,7 +93,7 @@ class Systemd(session.Systemd):
             raise ValueError("metadata_peer_generation_changed")
 
     def clean_provider(self, runtime, owner):
-        endpoint = runtime / "framejacker-camera-provider/camera.sock"
+        endpoint = runtime / "sightcircuit-camera-provider/camera.sock"
         if not endpoint.exists() and not endpoint.is_symlink():
             return
         if owner is None:
@@ -170,9 +170,9 @@ def load(run, verify_files=True):
             plan.get("provider_protocol_version") != 3 or set(plan.get("helpers", {})) != set(SOURCES)):
         raise ValueError("invalid_metadata_session_plan")
     layer = plan["manifest_template"]["layer"]
-    if (layer.get("name") != "VK_LAYER_FRAMEJACKER_capture" or layer.get("implementation_version") != "3" or
-            layer.get("enable_environment") != {"FRAMEJACKER_CAPTURE_LAYER": "1"} or
-            layer.get("disable_environment") != {"FRAMEJACKER_DISABLE_CAPTURE_LAYER": "1"}):
+    if (layer.get("name") != "VK_LAYER_SIGHTCIRCUIT_capture" or layer.get("implementation_version") != "3" or
+            layer.get("enable_environment") != {"SIGHTCIRCUIT_CAPTURE_LAYER": "1"} or
+            layer.get("disable_environment") != {"SIGHTCIRCUIT_DISABLE_CAPTURE_LAYER": "1"}):
         raise ValueError("invalid_metadata_manifest")
     if verify_files:
         for name, expected in plan["helpers"].items():

@@ -38,7 +38,7 @@ passing checks tied to what actually executed.
 
 - Keep capture, preprocessing, inference and display components separate. A
   file/replay input should remain useful without camera hardware. Add reusable
-  code to the `framejacker/` package (a new input is a `FrameSource`, a new
+  code to the `sightcircuit/` package (a new input is a `FrameSource`, a new
   output a `Sink`, a new model a `Detector`); keep `scripts/` for commands.
 - Preserve timestamps, timebase provenance, image layout and calibration
   information when adding a camera backend.

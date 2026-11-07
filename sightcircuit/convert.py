@@ -14,7 +14,7 @@ def native_bgr(frame):
     """Validate ``frame`` and return its full native-resolution BGR pixels.
 
     The result may be a read-only view of the source buffer. Exclusion masks
-    (``framejacker.hud``) take this before any spatial resize.
+    (``sightcircuit.hud``) take this before any spatial resize.
     """
     return buffer_bgr(frame.pixels, frame.pixel_format, frame.width, frame.height, frame.stride)
 

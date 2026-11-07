@@ -12,7 +12,7 @@
 #include <thread>
 #include <unistd.h>
 
-using namespace framejacker_shm;
+using namespace sightcircuit_shm;
 struct Options {
     std::string path, mode = "live";
     unsigned seconds = 3, width = 64, height = 48, fps = 20;

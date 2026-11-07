@@ -10,10 +10,10 @@ import sys
 import tempfile
 import unittest
 
-from framejacker.hud import HUD_CONFIG
-from framejacker.hud.geometry import (NEAR_Z, clip_to_frame, head_to_eye, hud_quad, hull, polygon_area,
+from sightcircuit.hud import HUD_CONFIG
+from sightcircuit.hud.geometry import (NEAR_Z, clip_to_frame, head_to_eye, hud_quad, hull, polygon_area,
                                       predict_hud_footprint, project)
-from framejacker.hud.qualification import MappingCandidate, config_digest
+from sightcircuit.hud.qualification import MappingCandidate, config_digest
 from tests.test_hud_qualification import candidate_record
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,7 +31,7 @@ def rounded(points):
 def view_record(mode="left", cropped=False, eye_to_head=None, tangents=TANGENTS, size=SIZE):
     eye = {"eye_to_head": eye_to_head or deepcopy(IDENTITY),
            "projection_raw": dict(zip(("left", "right", "top", "bottom"), tangents))}
-    return {"report_kind": "framejacker_headset_view_record", "schema_version": 1,
+    return {"report_kind": "sightcircuit_headset_view_record", "schema_version": 1,
             "headset_view": {"mode": mode, "mode_value": ("left", "right", "both").index(mode),
                              "width": size[0], "height": size[1], "cropped": cropped, "aspect_ratio": 1.0,
                              "blend_range": [0.25, 0.75]},
@@ -181,7 +181,7 @@ class PredictionTests(unittest.TestCase):
             MappingCandidate.from_mapping(record)
         prediction_names = {"predict_hud_footprint", "project", "hull", "clip_to_frame", "hud_quad", "head_to_eye"}
         for module in ("qualification", "candidate", "mask", "stage", "observation", "validation", "marker"):
-            tree = ast.parse((ROOT / f"framejacker/hud/{module}.py").read_text())
+            tree = ast.parse((ROOT / f"sightcircuit/hud/{module}.py").read_text())
             used = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
             used |= {alias.name for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) for alias in node.names}
             used |= {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
@@ -206,7 +206,7 @@ class ViewPredictionCommandTests(unittest.TestCase):
         bare = self.root / "record.json"
         bare.write_text(json.dumps(record))
         wrapped = self.root / "report.json"
-        wrapped.write_text(json.dumps({"report_kind": "framejacker_overlay_bridge", "status": "view_recorded",
+        wrapped.write_text(json.dumps({"report_kind": "sightcircuit_overlay_bridge", "status": "view_recorded",
                                        "view_record": record}))
         results = []
         for path in (bare, wrapped):
@@ -238,7 +238,7 @@ class ViewPredictionCommandTests(unittest.TestCase):
         list_doc.write_text("[1]")
         cases.append((list_doc, "hud_view_record_invalid"))
         no_record = self.root / "no-record.json"
-        no_record.write_text(json.dumps({"report_kind": "framejacker_overlay_bridge", "view_record": None}))
+        no_record.write_text(json.dumps({"report_kind": "sightcircuit_overlay_bridge", "view_record": None}))
         cases.append((no_record, "hud_view_record_missing"))
         bad_mode = self.root / "mode.json"
         bad_mode.write_text(json.dumps(view_record(mode="left")).replace('"left"', '"up"', 1))

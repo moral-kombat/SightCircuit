@@ -18,10 +18,10 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from framejacker.frame import Detection, DetectionResult
-from framejacker.hud import HUD_CONFIG, CaptureFormat, Footprint, HudMask, HudStage, config_digest, contract
-from framejacker.hud.qualification import UNKNOWN_TERMS, ValidationLedger
-from framejacker.runtime import synthetic
+from sightcircuit.frame import Detection, DetectionResult
+from sightcircuit.hud import HUD_CONFIG, CaptureFormat, Footprint, HudMask, HudStage, config_digest, contract
+from sightcircuit.hud.qualification import UNKNOWN_TERMS, ValidationLedger
+from sightcircuit.runtime import synthetic
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / "docs" / "templates" / "hud-device-validation-report.json"
@@ -76,7 +76,7 @@ class Presented(synthetic.HeadlessSink):
 
 class TemplateTests(unittest.TestCase):
     def test_template_is_json_and_names_exactly_the_reported_g5_software_counts(self):
-        from framejacker.hud import validation
+        from sightcircuit.hud import validation
         template = json.loads(TEMPLATE.read_text(encoding="utf-8"))
         g5 = template["g5_software"]
         self.assertTrue(template["template_only"])
@@ -89,10 +89,10 @@ class TemplateTests(unittest.TestCase):
 
 class MaximumAgeTests(unittest.TestCase):
     def test_every_consumer_uses_the_contract_maximum_age(self):
-        from framejacker import overlay
-        from framejacker.pipeline import Pipeline
-        from framejacker.runtime import live
-        from framejacker.sources import mirror_device
+        from sightcircuit import overlay
+        from sightcircuit.pipeline import Pipeline
+        from sightcircuit.runtime import live
+        from sightcircuit.sources import mirror_device
         from scripts import live_pipeline, mirror_recognize
 
         def default(function, name):
@@ -132,7 +132,7 @@ class MaximumAgeTests(unittest.TestCase):
         self.assertEqual(contract.MAX_DISPLAY_AGE_MS * 1_000_000, contract.MAX_DISPLAY_AGE_NS)
 
     def test_the_engine_refuses_a_hud_result_lifetime_past_the_cap(self):
-        from framejacker.pipeline import Pipeline
+        from sightcircuit.pipeline import Pipeline
         for age_ms in (contract.MAX_DISPLAY_AGE_MS + 1, contract.MAX_DISPLAY_AGE_MS + .001, 300_000):
             with self.subTest(age_ms=age_ms), self.assertRaisesRegex(ValueError, "hud_max_age_exceeds_contract"):
                 Pipeline(object(), synthetic.FixtureDetector(), (), max_input_age_ms=age_ms, hud=object())
@@ -206,7 +206,7 @@ class LedgerFailureKindTests(unittest.TestCase):
 
     def setUp(self):
         from tests.test_hud_qualification import candidate_record
-        from framejacker.hud.qualification import MappingCandidate
+        from sightcircuit.hud.qualification import MappingCandidate
         self.record = candidate_record()
         self.candidate = MappingCandidate.from_mapping(self.record)
         self.context = self.record["context"]
@@ -240,7 +240,7 @@ class LedgerFailureKindTests(unittest.TestCase):
         self.assertEqual(ledger.report()["max_age_ns"], contract.MAX_DISPLAY_AGE_NS)
 
     def test_ledger_context_failure_is_a_counted_context_invalidation(self):
-        from framejacker.hud.validation import ValidationSink
+        from sightcircuit.hud.validation import ValidationSink
         sink = ValidationSink(None, None, 100)
         sink.ledger = self.failed(current_context=dict(self.context, recenter_epoch=1))
         checks = dict.fromkeys(("frames_checked", "unmasked_footprint_px", "mask_zeroing_failures",
@@ -286,7 +286,7 @@ class G1RerunTests(unittest.TestCase):
         return code, supervised
 
     def test_cli_passes_the_detector_choice_to_the_worker(self):
-        from framejacker.detection import DEFAULT_DETECTOR, DETECTORS
+        from sightcircuit.detection import DEFAULT_DETECTOR, DETECTORS
         # "real" stays accepted as the default model's earlier name.
         choices = [([], DEFAULT_DETECTOR), (["--detector", "real"], DEFAULT_DETECTOR),
                    (["--detector", "fixture"], "fixture")]
@@ -338,9 +338,9 @@ class RunStatusPrecedenceTests(unittest.TestCase):
     """``validation_failed`` replaces a clean or empty run's status; a run's own failure keeps its status and reason."""
 
     def outcome(self, status, exit_code, reason=None, *, ledger_reason=None, overlaps=1):
-        from framejacker.pipeline import HUD_CHECK_FIELDS
-        from framejacker.runtime import live
-        from framejacker.hud.validation import ValidationSink
+        from sightcircuit.pipeline import HUD_CHECK_FIELDS
+        from sightcircuit.runtime import live
+        from sightcircuit.hud.validation import ValidationSink
         calibration = synthetic.synthetic_hud_calibration()
         validation = ValidationSink(None, None, contract.MAX_DISPLAY_AGE_NS)
         validation.ledger = ValidationLedger(synthetic.fixture_candidate(calibration), calibration.context(),
@@ -381,7 +381,7 @@ class RunStatusPrecedenceTests(unittest.TestCase):
 
 class ObservedContextTests(unittest.TestCase):
     def test_observed_context_takes_declared_and_reported_view_fields(self):
-        from framejacker.hud.validation import observed_context
+        from sightcircuit.hud.validation import observed_context
         calibration = synthetic.synthetic_hud_calibration()
         source = type("Declared", (synthetic.SyntheticSession,),
                       {"source_id": calibration.source_id, "capture_layout": calibration.capture_layout})()
@@ -409,9 +409,9 @@ class ObservedContextTests(unittest.TestCase):
     def test_sink_hands_the_ledger_the_view_fields_a_frame_reports(self):
         """Defence in depth behind the mask: the ledger sees what each frame reports, not only the source."""
         import numpy as np
-        from framejacker.frame import Frame
-        from framejacker.hud.contract import HudChecks, HudOutput
-        from framejacker.hud.validation import ValidationSink
+        from sightcircuit.frame import Frame
+        from sightcircuit.hud.contract import HudChecks, HudOutput
+        from sightcircuit.hud.validation import ValidationSink
         calibration = synthetic.synthetic_hud_calibration()
         source = type("Declared", (synthetic.SyntheticSession,),
                       {"source_id": calibration.source_id, "capture_layout": calibration.capture_layout})()
@@ -437,8 +437,8 @@ class ObservedContextTests(unittest.TestCase):
 @unittest.skipUnless(NUMPY_CV2, "NumPy and OpenCV required for the synthetic HUD pipeline")
 class PipelineCounterTests(unittest.TestCase):
     def test_runtime_drops_rejected_boxes_and_counts_them_per_frame_and_in_total(self):
-        from framejacker.pipeline import Pipeline
-        from framejacker.sources.polled import PolledSource
+        from sightcircuit.pipeline import Pipeline
+        from sightcircuit.sources.polled import PolledSource
 
         source, sink = StereoSource(), Presented()
         detector = Boxes(("footprint", (30, 46, 36, 52)), ("between-eyes", (40, 5, 56, 20)), ("chair", (5, 5, 15, 15)))
@@ -467,7 +467,7 @@ class PipelineCounterTests(unittest.TestCase):
 @unittest.skipUnless(NUMPY_CV2, "NumPy and OpenCV required for the synthetic HUD pipeline")
 class SyntheticValidationRunTests(unittest.TestCase):
     def run_hud(self, detector, *, source=None, calibration=None, sink=None, **options):
-        from framejacker.runtime import live
+        from sightcircuit.runtime import live
         source = source or synthetic.SyntheticSource()
         calibration = calibration or synthetic.synthetic_hud_calibration()
         options.setdefault("seconds", .3)
@@ -504,8 +504,8 @@ class SyntheticValidationRunTests(unittest.TestCase):
                          {"mask_overlap_rejections": 0, "eye_crossing_rejections": 0, "unmasked_footprint_px": 0})
 
     def test_detector_boxing_the_hud_footprint_fails_the_run(self):
-        from framejacker.hud import HudPipelineAdapter
-        from framejacker.runtime import live
+        from sightcircuit.hud import HudPipelineAdapter
+        from sightcircuit.runtime import live
         from scripts import live_pipeline
         sink = Presented()
         report = self.run_hud(Boxes(("hud", MONO_FOOTPRINT_BOX), ("chair", (5, 5, 15, 15))), sink=sink)

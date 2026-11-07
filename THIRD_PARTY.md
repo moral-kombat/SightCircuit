@@ -1,6 +1,6 @@
 # Third-party sources
 
-The repository's MIT license covers original Framejacker code and documentation.
+The repository's MIT license covers original SightCircuit code and documentation.
 Dependencies, reused code and downloaded fixtures retain their upstream terms.
 No model weights, images or SDK binaries are bundled. The protocol header and
 adaptation patches identified below are the bundled capture-project code.
@@ -8,7 +8,7 @@ adaptation patches identified below are the bundled capture-project code.
 ## Development fixtures
 
 The setup script downloads these files into the ignored
-`.cache/framejacker/assets/` directory. Exact immutable URLs and SHA-256 checksums
+`.cache/sightcircuit/assets/` directory. Exact immutable URLs and SHA-256 checksums
 are recorded in [scripts/smoke-assets.json](scripts/smoke-assets.json).
 
 | Files | Source | Use |
@@ -20,11 +20,11 @@ are recorded in [scripts/smoke-assets.json](scripts/smoke-assets.json).
 The [seed evaluation manifest](evaluation/seed.json) lists six further
 [darknet sample images](https://github.com/pjreddie/darknet/tree/f6afaabcdf85f77e7aff2ec55c020c0e297c77f9/data)
 by immutable URL and checksum; `scripts/evaluate_detectors.py --fetch` downloads
-them into ignored `.cache/framejacker/evaluation/`. Their labels are original
-Framejacker annotations.
+them into ignored `.cache/sightcircuit/evaluation/`. Their labels are original
+SightCircuit annotations.
 
 The license links identify the upstream repositories' notices; they do not
-relicense individual assets as original Framejacker material. Generated sample
+relicense individual assets as original SightCircuit material. Generated sample
 videos and screenshots are also excluded from Git.
 
 ONNX Runtime's installed package supplies the small `datasets/mul_1.onnx`
@@ -69,7 +69,7 @@ or JsonCpp sources are copied into the project tree outside that ignored cache.
 unmodified from `spyjacob/steam-frame-hand-tracking` at commit
 `ff6a2b29bc50c9497d66fd7ff07e00b61f9eb082`. Its
 [upstream MIT license](third_party/mrhand/LICENSE) and
-[provenance](third_party/mrhand/README.md) are included. Framejacker uses the
+[provenance](third_party/mrhand/README.md) are included. SightCircuit uses the
 luma shared-memory layout. The adaptation patches below include upstream
 source context/deletions; no upstream capture binary, installer, driver
 or hand-tracking model is bundled or activated. The controlled producer is
@@ -90,12 +90,12 @@ contains modifications/context from that MIT-licensed capture source, with
 [provenance](patches/mrhand/README.md) and the retained upstream notice above.
 The builder's optional `--transport-fixes` mode applies it to a disposable copy
 and compiles separate inspection artifacts. The transport helper and synthetic
-socket fixture are original Framejacker code. This mode also installs nothing
+socket fixture are original SightCircuit code. This mode also installs nothing
 and does not run the capture binaries.
 
 [patches/mrhand/0002-owned-bounded-publication.patch](patches/mrhand/0002-owned-bounded-publication.patch)
 applies after the transport patch at the same pin and retains the same MIT
-attribution. The optional `--publication-fixes` build adds original Framejacker
+attribution. The optional `--publication-fixes` build adds original SightCircuit
 publication/control helpers and a generated-data fixture. Capture binaries remain
 non-executable inspection artifacts; tests run only the original synthetic fixture
 and the existing reader. No upstream installer or camera operation is executed.
@@ -122,9 +122,9 @@ Vulkan/camera operation is executed by this build/test procedure.
 [patches/mrhand/0005-provider-lifetime-and-provenance.patch](patches/mrhand/0005-provider-lifetime-and-provenance.patch)
 applies after patches 0001–0004 at the same pin and retains upstream MIT
 attribution, including the removed layer implementation in its diff. The
-`--provider-fixes` mode adds original Framejacker provider/protocol, layer
+`--provider-fixes` mode adds original SightCircuit provider/protocol, layer
 dispatch/lifetime, opt-in guard and synthetic fixtures. The worker supervisor,
-exec boundary and configuration/recovery tools are original Framejacker code.
+exec boundary and configuration/recovery tools are original SightCircuit code.
 Tests run fake downstream Vulkan dispatch and generated local peers only; no
 upstream installer or real layer/camera operation is executed.
 
@@ -132,7 +132,7 @@ upstream installer or real layer/camera operation is executed.
 applies after patches 0001–0005 and retains MIT attribution for removed
 upstream/adapted reader text. The current `--provider-fixes` mode applies it
 to block raw camera access before runtime initialization. Its v3 metadata-only
-provider and standalone inspector are original Framejacker code. The inspector
+provider and standalone inspector are original SightCircuit code. The inspector
 uses Vulkan header types for metadata validation without linking/loading the
 Vulkan loader or requesting image descriptors.
 
@@ -168,14 +168,14 @@ No code was copied from either.
 
 | Source | Licence | Taken | Changed |
 | --- | --- | --- | --- |
-| [JonahSimon/steam-frame-harness `frame/frame-sensors.py`](https://github.com/JonahSimon/steam-frame-harness/blob/6c16bf39780acbda28dfac41269b8fd82d97b27d/frame/frame-sensors.py) at `6c16bf39780acbda28dfac41269b8fd82d97b27d` | [MIT](https://github.com/JonahSimon/steam-frame-harness/blob/6c16bf39780acbda28dfac41269b8fd82d97b27d/LICENSE), Copyright (c) 2026 Jonah Paul Simon | Sensor discovery and sampling: thermal zones, cooling states, `max34417` power rails, cpufreq policies, GPU devfreq, battery, charger, PMIC VADC skin temperatures, `/proc/stat` load and `MemAvailable` | Ported to [framejacker/runtime/sensors.py](framejacker/runtime/sensors.py), which carries the notice: blank cells instead of -999 (and instead of 0 for a missing throttle state), Wi-Fi columns and `iw` dropped, one clock reading per row as UTC with offset and monotonic, a `root` for fake trees, bounded rows |
+| [JonahSimon/steam-frame-harness `frame/frame-sensors.py`](https://github.com/JonahSimon/steam-frame-harness/blob/6c16bf39780acbda28dfac41269b8fd82d97b27d/frame/frame-sensors.py) at `6c16bf39780acbda28dfac41269b8fd82d97b27d` | [MIT](https://github.com/JonahSimon/steam-frame-harness/blob/6c16bf39780acbda28dfac41269b8fd82d97b27d/LICENSE), Copyright (c) 2026 Jonah Paul Simon | Sensor discovery and sampling: thermal zones, cooling states, `max34417` power rails, cpufreq policies, GPU devfreq, battery, charger, PMIC VADC skin temperatures, `/proc/stat` load and `MemAvailable` | Ported to [sightcircuit/runtime/sensors.py](sightcircuit/runtime/sensors.py), which carries the notice: blank cells instead of -999 (and instead of 0 for a missing throttle state), Wi-Fi columns and `iw` dropped, one clock reading per row as UTC with offset and monotonic, a `root` for fake trees, bounded rows |
 | [sasaken1102r/frame-perf-overlay `headset/sensors.cpp`](https://github.com/sasaken1102r/frame-perf-overlay/blob/066a5c87b4cc57a54ce60fbaea69e9fa39ae3a94/headset/sensors.cpp) at `066a5c87b4cc57a54ce60fbaea69e9fa39ae3a94` | [MIT](https://github.com/sasaken1102r/frame-perf-overlay/blob/066a5c87b4cc57a54ce60fbaea69e9fa39ae3a94/LICENSE), Copyright (c) 2026 sasaken1102r and contributors | The Frame sysfs paths, through steam-frame-harness, which names it as their source | No code from this file was copied directly; credited because the paths originate there |
 
 ### HUD geometric prediction
 
 | Source | Licence | Taken | Changed |
 | --- | --- | --- | --- |
-| [DeeJanuz/vr-recorder `vr-mask.cpp`](https://github.com/DeeJanuz/vr-recorder/blob/78ab97e0700b6668978722111770b4657ec2ec92/vr-mask.cpp#L917-L977) at `78ab97e0700b6668978722111770b4657ec2ec92`, L917-L977 | [MIT](https://github.com/DeeJanuz/vr-recorder/blob/78ab97e0700b6668978722111770b4657ec2ec92/LICENSE), Copyright (c) 2026 DeeJanuz (the file has no header, so the LICENSE text is carried) | `Project()` (Sutherland-Hodgman clip against a near plane and widened side planes, then pinhole projection) and `Hull()` (monotone-chain convex hull) | Ported to Python in [framejacker/hud/geometry.py](framejacker/hud/geometry.py), which carries the LICENSE text: the pinhole uses the four `GetProjectionRaw` tangents, points arrive in eye space, and the upstream clamp at four times the larger frame dimension (L949-L952) is replaced by a check that raises |
+| [DeeJanuz/vr-recorder `vr-mask.cpp`](https://github.com/DeeJanuz/vr-recorder/blob/78ab97e0700b6668978722111770b4657ec2ec92/vr-mask.cpp#L917-L977) at `78ab97e0700b6668978722111770b4657ec2ec92`, L917-L977 | [MIT](https://github.com/DeeJanuz/vr-recorder/blob/78ab97e0700b6668978722111770b4657ec2ec92/LICENSE), Copyright (c) 2026 DeeJanuz (the file has no header, so the LICENSE text is carried) | `Project()` (Sutherland-Hodgman clip against a near plane and widened side planes, then pinhole projection) and `Hull()` (monotone-chain convex hull) | Ported to Python in [sightcircuit/hud/geometry.py](sightcircuit/hud/geometry.py), which carries the LICENSE text: the pinhole uses the four `GetProjectionRaw` tangents, points arrive in eye space, and the upstream clamp at four times the larger frame dimension (L949-L952) is replaced by a check that raises |
 
 The bridge's read-only `--headset-view-record` mode follows the list of
 `IVRHeadsetView` and `IVRSystem` getters read in the same file at L1381-L1393;
@@ -199,7 +199,7 @@ and binaries have not been vendored. Consult their licenses and preserve attribu
 integrating any implementation.
 
 The 2026-11-04 documentation pass cites further sources as third-party claims,
-kept apart from Framejacker evidence; no code or text was copied from them:
+kept apart from SightCircuit evidence; no code or text was copied from them:
 danthedaniel/roommate-radar `docs/arcturus-av1.md` at
 `d6e8a8cbdb6c1197514e382662951231fd641941` (AGPL-3.0; facts restated in our own
 words in the [camera guide](docs/steam-frame-camera.md#third-party-camera-claims-2026-11-04)),

@@ -12,7 +12,7 @@ index 7a0ab4f..14ac520 100644
 -#define CHECK(x) do { VkResult r_ = (x); if (r_ != VK_SUCCESS) { fprintf(stderr, "%s:%d %s -> %d\n", __FILE__, __LINE__, #x, r_); exit(1); } } while (0)
 +#define CHECK(x) do { VkResult r_ = (x); if (r_ != VK_SUCCESS) { fprintf(stderr, "%s:%d %s -> %d\n", __FILE__, __LINE__, #x, r_); throw std::runtime_error("Vulkan_operation_failed"); } } while (0)
  
- using Buf = framejacker::transport::Record;
+ using Buf = sightcircuit::transport::Record;
  
 @@ -94,7 +96,7 @@ struct Gpu {
          for (uint32_t i = 0; i < mp.memoryTypeCount; i++)
@@ -81,7 +81,7 @@ index 7a0ab4f..14ac520 100644
  // of the id-sorted buffer list (XRService allocates each camera's ring together).
 -static int stream(Gpu &g, std::vector<CamImage> &ims, int maxFps, uint32_t outSize) {
 +static int stream(Gpu &g, std::vector<CamImage> &ims, int maxFps, uint32_t outSize,
-+                  framejacker::publication::RunLimit &limit) {
++                  sightcircuit::publication::RunLimit &limit) {
      std::sort(ims.begin(), ims.end(), [](const CamImage &a, const CamImage &b) { return a.info.id < b.info.id; });
      const uint32_t W = ims[0].info.width, H = ims[0].info.height;
      const uint32_t S0 = H / 2 - 8, SR = 16;   // probe strip
@@ -102,8 +102,8 @@ index 7a0ab4f..14ac520 100644
 -    hdr->cams = 2;
 -    uint8_t *slots = base + sizeof(MrhandPtHeader);
 -    printf("streaming %zu buffers (%ux%u -> %ux%u) -> %s\n", ims.size(), W, H, OW, OH, shmPath.c_str());
-+    const std::string shmPath = framejacker::publication::runtime_source();
-+    framejacker::publication::Publisher publisher(shmPath, OW, OH, 2);
++    const std::string shmPath = sightcircuit::publication::runtime_source();
++    sightcircuit::publication::Publisher publisher(shmPath, OW, OH, 2);
 +    uint64_t publications = 0;
 +    printf("{\"event\":\"publication_ready\",\"physical_camera_identity\":\"unverified\"}\n");
      fflush(stdout);
@@ -181,7 +181,7 @@ index 7a0ab4f..14ac520 100644
 -        (!strcmp(argv[1], "identify") && argc < 3)) {
 -        fprintf(stderr, "usage: ptgrab identify OUTDIR | ptgrab stream [maxfps] [outsize=640]\n");
 -        return 2;
-+    using namespace framejacker::publication;
++    using namespace sightcircuit::publication;
 +    RunOptions options;
 +    try { options = parse_options(argc, argv); }
 +    catch (...) { fprintf(stderr, "invalid_arguments\n"); return 64; }

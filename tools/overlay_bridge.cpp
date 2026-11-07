@@ -26,9 +26,9 @@
 #include <vector>
 
 namespace {
-namespace contract = framejacker_contract;
-namespace lifecycle = framejacker_lifecycle;
-using framejacker_overlay::read_u32;
+namespace contract = sightcircuit_contract;
+namespace lifecycle = sightcircuit_lifecycle;
+using sightcircuit_overlay::read_u32;
 using Clock = std::chrono::steady_clock;
 constexpr std::uint32_t kMaxPayload =
     contract::kExpiringFramePrefixBytes + contract::kMaxSide*contract::kMaxSide*contract::kRgbaBytes;
@@ -38,13 +38,13 @@ constexpr bool kCalibrationVisibleInDashboard = true;
 volatile std::sig_atomic_t stopping = 0;
 void stop_signal(int) { stopping = 1; }
 struct Stopped {};
-// Watchdog budgets beside framejacker/runtime/guard.py, which still owns
+// Watchdog budgets beside sightcircuit/runtime/guard.py, which still owns
 // escalation. The connect budget is below OverlayClient's 8 s ready wait.
 constexpr unsigned kWatchdogConnectSeconds = 6;
 constexpr unsigned kWatchdogStallSeconds = 5;  // any one loop step, re-armed per step
 constexpr unsigned kWatchdogCleanupSeconds = 5;
 void emit(Json::Value value) {
-    value["report_kind"] = "framejacker_overlay_bridge";
+    value["report_kind"] = "sightcircuit_overlay_bridge";
     value["schema_version"] = 1;
     // Only the saved real stdout carries the protocol; fd 1 points at stderr.
     lifecycle::write_protocol(Json::FastWriter().write(value));
@@ -58,7 +58,7 @@ void watchdog(const std::string& mode, const char* phase, unsigned seconds) {
     value["cleanup_ok"] = false; value["cleanup_skipped_by_watchdog"] = true;
     value["runtime_initialized"] = Json::Value();
     value["physical_display_recovery_verified"] = false;
-    value["report_kind"] = "framejacker_overlay_bridge";
+    value["report_kind"] = "sightcircuit_overlay_bridge";
     value["schema_version"] = 1;
     if (!lifecycle::set_watchdog(Json::FastWriter().write(value), seconds))
         throw std::runtime_error("watchdog_arm_failed");
@@ -110,7 +110,7 @@ public:
     vr::VROverlayHandle_t handle = vr::k_ulOverlayHandleInvalid;
     bool active = false, probe_active = false, has_image = false;
     bool retirement_attempted = false, shutdown_returned = false;
-    framejacker_overlay::Retirement retirement;
+    sightcircuit_overlay::Retirement retirement;
     bool overlay_shown_event_seen = false, overlay_hidden_event_seen = false;
     std::uint64_t calibration_show_deadline_ns = 0;
     Settings config;
@@ -166,8 +166,8 @@ public:
         if (!api) throw std::runtime_error("IVROverlay_028_unavailable");
         if (!system->IsTrackedDeviceConnected(vr::k_unTrackedDeviceIndex_Hmd))
             throw std::runtime_error("headset_not_connected");
-        const auto key = std::string(calibration ? "framejacker.calibration." : "framejacker.replay.")+std::to_string(getpid());
-        check(api->CreateOverlay(key.c_str(), calibration ? "Framejacker calibration marker" : "Framejacker replay", &handle), "CreateOverlay");
+        const auto key = std::string(calibration ? "sightcircuit.calibration." : "sightcircuit.replay.")+std::to_string(getpid());
+        check(api->CreateOverlay(key.c_str(), calibration ? "SightCircuit calibration marker" : "SightCircuit replay", &handle), "CreateOverlay");
         check(api->SetOverlayInputMethod(handle, vr::VROverlayInputMethod_None), "SetOverlayInputMethod");
         check(api->SetOverlayTextureColorSpace(handle, vr::ColorSpace_Gamma), "SetOverlayTextureColorSpace");
         if (calibration)
@@ -191,7 +191,7 @@ public:
         auto* view = vr::VRHeadsetView();
         if (!view) throw std::runtime_error("IVRHeadsetView_001_unavailable");
         const auto number = [](float value) { return std::isfinite(value) ? Json::Value(value) : Json::Value(); };
-        record["report_kind"] = "framejacker_headset_view_record";
+        record["report_kind"] = "sightcircuit_headset_view_record";
         record["schema_version"] = 1;
         record["scope"] = "read_only_runtime_query_not_mapping_evidence";
         record["interface"] = vr::IVRHeadsetView_Version;
@@ -288,7 +288,7 @@ public:
         bool ok = true;
         if (api && handle != vr::k_ulOverlayHandleInvalid) {
             retirement_attempted = true;
-            retirement = framejacker_overlay::retire_overlay(
+            retirement = sightcircuit_overlay::retire_overlay(
                 [&] { return api->HideOverlay(handle) == vr::VROverlayError_None; },
                 [&] { return api->ClearOverlayTexture(handle) == vr::VROverlayError_None; },
                 [&] { return api->DestroyOverlay(handle) == vr::VROverlayError_None; });
@@ -378,12 +378,12 @@ void stream(Overlay& overlay, bool validate, Json::Value& report) {
             if (!validate) overlay.configure(s);
             report["settings_received"] = report["settings_received"].asUInt()+1;
         } else {
-            const auto frame = framejacker_overlay::decode_frame(kind, payload);
+            const auto frame = sightcircuit_overlay::decode_frame(kind, payload);
             const auto w = frame.width, h = frame.height;
             const auto requested_expiry = frame.expiry;
             if (kind == contract::kOpcodeExpiringFrame) {
                 const auto now = monotonic_ns();
-                const bool current_deadline = framejacker_overlay::deadline_current(frame, now);
+                const bool current_deadline = sightcircuit_overlay::deadline_current(frame, now);
                 report["expiring_frames_received"] = report["expiring_frames_received"].asUInt()+1;
                 if (!current_deadline) {
                     report["stale_frames_dropped"] = report["stale_frames_dropped"].asUInt()+1;
@@ -393,7 +393,7 @@ void stream(Overlay& overlay, bool validate, Json::Value& report) {
             expiry = requested_expiry;
             current = true;
             report["frames_received"] = report["frames_received"].asUInt()+1;
-            if (!validate) framejacker_overlay::dispatch_frame(overlay, frame);
+            if (!validate) sightcircuit_overlay::dispatch_frame(overlay, frame);
             if (!validate) report["frames_submitted"] = report["frames_received"];
             if (report["frames_received"].asUInt() == 1) {
                 Json::Value first;
@@ -428,7 +428,7 @@ std::vector<std::uint8_t> pattern() {
 
 std::vector<std::uint8_t> calibration_marker(Json::Value& description, const Settings& applied) {
     // Every size, position, gray level and corner id comes from the generated
-    // contract, which framejacker.hud.observation.marker_template also uses.
+    // contract, which sightcircuit.hud.observation.marker_template also uses.
     constexpr unsigned w=contract::kHudWidthPx, h=contract::kHudHeightPx;
     constexpr unsigned border=contract::kMarkerBorderPx, size=contract::kMarkerTagSizePx;
     constexpr unsigned inset=contract::kMarkerTagInsetPx, outline=contract::kMarkerTagOutlinePx;
@@ -525,14 +525,14 @@ int main(int argc, char* argv[]) {
         const auto marker_seconds=std::to_string(contract::kMarkerMinSeconds)+".."+
                                   std::to_string(contract::kMarkerMaxSeconds);
         std::ostringstream usage;
-        usage << "Usage: framejacker-overlay-bridge --test-panel [--seconds 1..30]\n"
-                     "       framejacker-overlay-bridge --stdin\n"
-                     "       framejacker-overlay-bridge --validate-stdin (no OpenVR calls)\n"
-                     "       framejacker-overlay-bridge --validate-calibration-marker --seconds " << marker_seconds << "\n"
-                     "       framejacker-overlay-bridge --calibration-marker --seconds " << marker_seconds <<
+        usage << "Usage: sightcircuit-overlay-bridge --test-panel [--seconds 1..30]\n"
+                     "       sightcircuit-overlay-bridge --stdin\n"
+                     "       sightcircuit-overlay-bridge --validate-stdin (no OpenVR calls)\n"
+                     "       sightcircuit-overlay-bridge --validate-calibration-marker --seconds " << marker_seconds << "\n"
+                     "       sightcircuit-overlay-bridge --calibration-marker --seconds " << marker_seconds <<
                      " --allow-calibration-output\n"
-                     "       framejacker-overlay-bridge --render-calibration-marker NEW_RGBA_FILE (no OpenVR calls)\n"
-                     "       framejacker-overlay-bridge --headset-view-record --allow-runtime-query (read-only, Background only)\n"
+                     "       sightcircuit-overlay-bridge --render-calibration-marker NEW_RGBA_FILE (no OpenVR calls)\n"
+                     "       sightcircuit-overlay-bridge --headset-view-record --allow-runtime-query (read-only, Background only)\n"
                      "Runtime modes join an already running SteamVR only: a Background probe comes first and\n"
                      "never starts a vrserver. A SIGALRM watchdog ends a stalled step with one JSON error.\n"
                      "A runtime mode may end with --connect-as overlay (default) or --connect-as background,\n"

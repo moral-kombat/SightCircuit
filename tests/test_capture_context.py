@@ -3,9 +3,9 @@ import importlib.util
 import time
 import unittest
 
-from framejacker.context import (FORMAT_CHANGED, FORMAT_METADATA_KEYS, SESSION_METADATA_KEYS, SOURCE_CHANGED,
+from sightcircuit.context import (FORMAT_CHANGED, FORMAT_METADATA_KEYS, SESSION_METADATA_KEYS, SOURCE_CHANGED,
                                  SOURCE_FIELDS, CaptureContext)
-from framejacker.frame import Frame
+from sightcircuit.frame import Frame
 
 
 def frame(number=1, *, source="fixture", pixel_format="TEST", width=4, height=2, stride=12, metadata=None):
@@ -99,11 +99,11 @@ class ValidatedFrameAndHudBindingTests(unittest.TestCase):
         return Frame.owned_bgr(np.zeros((height, width, 3), np.uint8), sequence, time.monotonic_ns(), source)
 
     def calibration(self):
-        from framejacker.runtime.synthetic import synthetic_hud_calibration
+        from sightcircuit.runtime.synthetic import synthetic_hud_calibration
         return synthetic_hud_calibration()
 
     def source(self, **changes):
-        from framejacker.runtime.synthetic import SyntheticSession
+        from sightcircuit.runtime.synthetic import SyntheticSession
         attributes = dict(kind="synthetic", source_id="synthetic:generated", capture_layout="mono")
         attributes.update(changes)
         return type("Source", (SyntheticSession,), attributes)()
@@ -115,7 +115,7 @@ class ValidatedFrameAndHudBindingTests(unittest.TestCase):
             context.admit(self.owned(2, width=48))
 
     def test_hud_binding_checks_calibration_at_creation_and_every_frame(self):
-        from framejacker.hud import HudMask
+        from sightcircuit.hud import HudMask
         mask = HudMask(self.calibration(), source_kind="synthetic")
         for changes, reason in ((dict(source_id="synthetic:other"), "hud_source_changed"),
                                 (dict(capture_layout="stereo_sbs"), "hud_capture_layout_changed")):

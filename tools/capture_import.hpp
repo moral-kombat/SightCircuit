@@ -1,10 +1,10 @@
-// Original Framejacker import validation/ownership. No loader or device creation.
+// Original SightCircuit import validation/ownership. No loader or device creation.
 #pragma once
 #include "capture_transport.hpp"
 #include <vulkan/vulkan.h>
 #include <limits>
 
-namespace framejacker::capture_import {
+namespace sightcircuit::capture_import {
 using transport::Error;
 constexpr uint64_t camera_modifier = 0x0500000000000001ULL;
 constexpr VkFormat camera_format = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
@@ -237,4 +237,4 @@ inline Image import_image(const Context &context, const MrhandBufInfo &info, int
     check(context.api.bind_image(context.device, result.image_, result.memory_, 0), "import_bind_image_failed");
     return result;
 }
-} // namespace framejacker::capture_import
+} // namespace sightcircuit::capture_import

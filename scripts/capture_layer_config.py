@@ -16,8 +16,8 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "artifacts/capture-provider-reference/reference-libVkLayer_mrhand.so"
-LIBRARY = ".local/share/framejacker/capture/libframejacker_capture.so"
-MANIFEST = ".local/share/vulkan/implicit_layer.d/framejacker_capture.json"
+LIBRARY = ".local/share/sightcircuit/capture/libsightcircuit_capture.so"
+MANIFEST = ".local/share/vulkan/implicit_layer.d/sightcircuit_capture.json"
 TARGETS = (LIBRARY, MANIFEST)
 MAX_BYTES = 32 * 1024 * 1024
 
@@ -97,7 +97,7 @@ def payload(entry):
 def write_entry(home, relative, entry):
     parent = directory(home, str(Path(relative).parent), create=entry is not None)
     name = Path(relative).name
-    temporary = ".framejacker-" + uuid.uuid4().hex
+    temporary = ".sightcircuit-" + uuid.uuid4().hex
     try:
         if entry is None:
             os.unlink(name, dir_fd=parent)
@@ -132,11 +132,11 @@ def prepare(home, source, destination):
         raise ValueError("provider_library_not_built")
     before = {name: read_entry(home, name) for name in TARGETS}
     manifest = {"file_format_version": "1.2.0", "layer": {
-        "name": "VK_LAYER_FRAMEJACKER_capture", "type": "GLOBAL", "api_version": "1.3.0",
-        "implementation_version": "3", "description": "Framejacker metadata-only camera buffer registry",
+        "name": "VK_LAYER_SIGHTCIRCUIT_capture", "type": "GLOBAL", "api_version": "1.3.0",
+        "implementation_version": "3", "description": "SightCircuit metadata-only camera buffer registry",
         "library_path": str(home / LIBRARY),
-        "enable_environment": {"FRAMEJACKER_CAPTURE_LAYER": "1"},
-        "disable_environment": {"FRAMEJACKER_DISABLE_CAPTURE_LAYER": "1"},
+        "enable_environment": {"SIGHTCIRCUIT_CAPTURE_LAYER": "1"},
+        "disable_environment": {"SIGHTCIRCUIT_DISABLE_CAPTURE_LAYER": "1"},
         "functions": {"vkGetInstanceProcAddr": "mrhand_GetInstanceProcAddr",
                       "vkGetDeviceProcAddr": "mrhand_GetDeviceProcAddr",
                       "vkNegotiateLoaderLayerInterfaceVersion": "mrhand_NegotiateLoaderLayerInterfaceVersion"}}}
@@ -149,8 +149,8 @@ def prepare(home, source, destination):
     destination = Path(destination)
     destination.mkdir(mode=0o700)  # Exclusive: retain every previous bundle.
     for name, data in (("plan.json", (json.dumps(plan, indent=2) + "\n").encode()),
-                       ("framejacker_capture.json", payload(after[MANIFEST])),
-                       ("libframejacker_capture.so", payload(after[LIBRARY]))):
+                       ("sightcircuit_capture.json", payload(after[MANIFEST])),
+                       ("libsightcircuit_capture.so", payload(after[LIBRARY]))):
         fd = os.open(destination / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
         with os.fdopen(fd, "wb") as stream:
             stream.write(data)
@@ -197,7 +197,7 @@ def restore(bundle, *, expected_home=None, before_change=None):
 
 def recover_provider(runtime):
     """Remove a crashed provider's recorded socket only; never terminate a process."""
-    parent = Path(runtime) / "framejacker-camera-provider"
+    parent = Path(runtime) / "sightcircuit-camera-provider"
     directory_fd = private_directory(parent)
     lease = None
     try:

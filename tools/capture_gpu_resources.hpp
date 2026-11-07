@@ -1,9 +1,9 @@
-// Original Framejacker GPU ownership. Injected dispatch; no loader or camera access.
+// Original SightCircuit GPU ownership. Injected dispatch; no loader or camera access.
 #pragma once
 #include "capture_import.hpp"
 #include <memory>
 
-namespace framejacker::gpu {
+namespace sightcircuit::gpu {
 namespace ci = capture_import;
 using transport::Error;
 using ci::check;
@@ -268,7 +268,7 @@ public:
         auto s = std::make_shared<State>(api);
         uint32_t version = 0; check(api.instance_version(&version), "gpu_loader_version_failed");
         if (version < VK_API_VERSION_1_3) throw Error("gpu_vulkan_1_3_required");
-        VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO}; app.pApplicationName = "framejacker-capture";
+        VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO}; app.pApplicationName = "sightcircuit-capture";
         app.apiVersion = VK_API_VERSION_1_3;
         VkInstanceCreateInfo instance_info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO}; instance_info.pApplicationInfo = &app;
         VkInstance instance = VK_NULL_HANDLE;
@@ -408,4 +408,4 @@ inline Api system_api() {
     return api;
 }
 #endif
-} // namespace framejacker::gpu
+} // namespace sightcircuit::gpu

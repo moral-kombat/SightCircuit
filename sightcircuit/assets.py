@@ -7,7 +7,7 @@ import tempfile
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
-ASSETS = ROOT / ".cache/framejacker/assets"
+ASSETS = ROOT / ".cache/sightcircuit/assets"
 MANIFEST = ROOT / "scripts/smoke-assets.json"
 
 
