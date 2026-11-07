@@ -26,6 +26,7 @@ those features do not establish an application frame-access contract.
 | [spyjacob investigation][hand-findings] and [capture implementation][hand-capture] | Experimental Arcturus buffer access through a Vulkan layer | Third-party result; missing producer synchronization |
 | [Frame Passthrough Shortcuts][source-switch] | RGB/monochrome source switching through private interfaces | Source selection does not supply frames or a stable public ABI |
 | [Arcturus apps][arcturus-apps], [Splat Workshop][splat-workshop] and [Spirula][spirula] | Recording, transfer, conversion and reconstruction | File workflows, separate from live detection |
+| [Arcturus developer page][arcturus-developers] (read 2026-11-07) | Passthrough *behind* an app through the OpenXR environment blend mode, with Unity and native samples | States that no direct camera access API is available; output-side only, not frame access |
 
 ## Project device results
 
@@ -177,6 +178,53 @@ read the format, modifier and plane layout from the buffer it is handed.
 above, describes a producer fence for these buffers. Consumer-side fences do
 not order reads against the camera producer.
 
+## Arcturus developer page (2026-11-07)
+
+Read by the coordinator on 2026-11-07 at the owner's request. The page is the
+vendor's statement, not a project result, and nothing from it has been run.
+
+**Camera data access.** The page states: "A direct camera access API is not
+yet available. We're taking developer inquiries about your use case." That
+confirms, from the vendor, what this reference already concludes: there is no
+supported public frame-access contract for the Arcturus camera, and the
+dedicated-capture track stays paused for that reason. The page invites
+inquiries through the vendor's support address and Discord; whether to send one
+is the owner's decision ([vendor interface questions](live-capture.md#vendor-interface-questions)
+list what a usable answer must cover).
+
+**Passthrough in an application.** What the page documents is the other
+direction: the headset's passthrough shown behind an application's rendering.
+Three routes use one mechanism, the standard OpenXR environment blend mode:
+Unity through the OpenXR plug-in with a small feature script that requests
+alpha blending when the session starts; Unreal Engine 5.8 through Valve's
+Android route; and native OpenXR, which chooses a swapchain format with an alpha
+channel, sets `XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND` in `XrFrameEndInfo` before
+`xrEndFrame`, checks support with `xrEnumerateEnvironmentBlendModes`, and sets
+`XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT` when the content is not
+premultiplied. Two samples are offered, dated 14 September 2026 and marked as a
+development build: a Unity project and a minimal C++ and Vulkan cube, both MIT
+for the original sample code, with checksum files. The page states the
+constraint "Local VR only": passthrough blending works for apps running on the
+Steam Frame, not for PC apps using streamed VR.
+
+**What this means for SightCircuit.**
+
+- It is not an input. No frames reach an application by this route, so it does
+  not change the [accepted input strategy](poc-scope.md#architecture-decisions-2026-11-07)
+  (decision D2) and it is not a route around the feedback problem: the mirror
+  composites what the compositor shows, so a HUD drawn by an alpha-blended
+  OpenXR application would appear in the mirror exactly as the overlay does.
+- It is a documented, vendor-supported alternative presentation path for later.
+  The HUD today is an OpenVR overlay through the native bridge; an alpha-blended
+  native OpenXR application on the Frame would be an application session rather
+  than an overlay, with its own lifecycle, and would replace the bridge rather
+  than fix anything in it. The [planned structure](architecture.md#planned-structure-2026-11-07)
+  splits the bridge before any new presentation path; this route is recorded
+  here as the alternative to evaluate if the overlay path proves unreliable.
+  Adopting either sample would mean pinning its archive and checksums and
+  recording its license in [third-party attribution](../THIRD_PARTY.md).
+- The "local VR only" constraint matches the project's on-device approach.
+
 ## Community references selected for follow-up (2026-10-16)
 
 These are research leads. The [original scan](history/2026-11-07-camera-research.md#community-references-selected-for-follow-up-2026-10-16)
@@ -246,4 +294,5 @@ change the POC scope or establish new headset evidence.
 [spirula]: https://github.com/arcturus-vision/spirula-studio/blob/069fb5e489fb81c4c8d04b515330851ab88c7965/README.md
 [spirula-manifest]: https://github.com/arcturus-vision/spirula-studio/blob/069fb5e489fb81c4c8d04b515330851ab88c7965/src/sfm/README.md#L300
 [arcturus-apps]: https://arcturus.vision/apps
+[arcturus-developers]: https://arcturus.vision/developers
 [arcturus-camera]: https://store.steampowered.com/app/4103250
