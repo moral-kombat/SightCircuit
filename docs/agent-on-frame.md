@@ -7,9 +7,11 @@ device report whose raw output is not in PR #16 or E77; E77 notes it but does
 not record it as evidence. On 2026-11-03 the owner decided: "Approved: install
 the guarded setup following `docs/agent-on-frame.md` Phase 0"
 ([owner decisions](poc-scope.md#owner-decisions-2026-11-03)). The
-[2026-11-03 handoff](execution-prompt.md#coder-handoff-2026-11-03) asks for the
+[2026-11-03 handoff](execution-prompt.md#coder-handoff-2026-11-03) asked for the
 review's cycle-3 follow-ups ([E77](evidence/e077.md)) to be fixed before the
-guard is installed. This plan
+guard is installed; they are fixed and cloud-checked
+([offline item 4](execution-prompt.md#offline-work-that-is-ready-to-pick-up))
+and have not run on Frame. This plan
 authorizes no device execution; each phase below needs its own approval, and
 its results are recorded in [status](status.md) like any other device result.
 
@@ -150,9 +152,12 @@ runner's `result.json`, task output and lock are not agent-writable, and
 `report latest` considers only runner-named run directories. Claude Code trims
 a path and expands a leading `~` before using it, so the hook refuses paths
 with surrounding white space or a leading `~`, and `Glob` patterns containing
-`..`, instead of resolving them differently. Web tools are blocked. The runner
-and the hook are deliberately redundant for Bash; either alone should be
-enough.
+`..`, instead of resolving them differently. It also refuses `Glob` patterns
+with a backslash (an escape to Claude Code) or a trailing `/` (Claude Code then
+searches the parent directory), so it never checks a different directory than
+the one searched; give the directory as the `path` instead. Web tools are
+blocked. The runner and the hook are deliberately redundant for Bash; either
+alone should be enough.
 
 ### 4. Operating limits
 
@@ -162,9 +167,16 @@ enough.
   fetch, and it must contain the runner and a guard at least as strict as the
   running one (`GUARD_VERSION`), so the agent cannot roll itself back to a
   weaker guard or to a revision without the runner. A git command that fails
-  or times out (the fetch after 3 minutes) refuses the update, and git and its
-  transport are stopped. Unmerged branches and older revisions are checked out
-  by a person.
+  or times out (the fetch after 3 minutes) refuses the update, also one that
+  records the checkout after the switch: the checkout has then moved, and the
+  refusal says "switched to <commit>, but recording the checkout failed". A
+  timed-out git is stopped with its transport; SIGINT, SIGTERM or SIGHUP
+  during the update stops the running git the same way before the lock is
+  released (exit 128 + signal number). git gets SIGTERM, so that it removes
+  its lock files, and SIGKILL 5 seconds later. A `.git/index.lock` left after
+  a timed-out or interrupted git, or after a failed checkout record, is
+  reported for a person, never deleted. Unmerged branches and older revisions
+  are checked out by a person.
 - One run at a time (lock file); per-task timeout plus a whole-run budget.
   A timed-out task's whole process group is terminated, including members
   that ignore SIGTERM; a task that exits but leaves processes running is
@@ -232,10 +244,17 @@ Prerequisites already established: developer mode and
 runs it, `s` skips it, `q` stops). It stops at the known aarch64 abort, never
 uses sudo, and writes `summary.md`, `commands.log` and `doctor.txt` to
 `~/claude-phase0/<time>/`. An optional `signature` stage checks the installed
-binary against Anthropic's signed release manifest using a throwaway keyring
-(removed afterwards, also when the stage is interrupted), and accepts the
-manifest only when gpg reports a good signature by the pinned release key or
-one of its signing subkeys: a signature by a revoked or expired key fails. It
+binary against Anthropic's signed release manifest using a throwaway keyring.
+From the downloads on, every way out of the stage, an interrupted stage
+included, asks the keyring's agent to stop and removes the keyring with its
+temporary directory; the cleanup runs once, and `gpgconf` runs only for the
+throwaway keyring. Each `gpgconf` call in it is bounded by `timeout`: the
+cleanup keeps INT, TERM and HUP ignored so that no second signal can cut it
+short, which `gpgconf` inherits, so `timeout`'s SIGTERM at 20 seconds does not
+end a hung call and its SIGKILL 5 seconds later does. Such a cut-off is not
+reported, and the agent may then outlive the stage. The stage accepts the manifest only when gpg reports a good signature
+by the pinned release key or one of its signing subkeys: a signature by a
+revoked or expired key fails. It
 checks `~/.local/share/claude/versions/<version>` and records which `claude`
 is on `PATH`; a launcher you made yourself is not covered.
 The `path`, `verify`, `signature`, `smoke` and `record` stages are tested in

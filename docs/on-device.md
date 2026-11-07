@@ -777,7 +777,10 @@ terminated), `failed_to_start` (the command could not be executed),
 interruption). Exit codes: 0 all passed, 1 otherwise, 2 refused, 3 another run
 holds the lock, 128 + signal number when SIGINT, SIGTERM or SIGHUP (for
 example a dropped SSH connection) interrupted the run; the running task's
-group is terminated before the lock is released. Run `run-tier` inside `tmux`
+group is terminated before the lock is released. A signal while the run
+records the checkout, before its first task, ends that git as `update` does
+(below), and `result.json` then has no revision, clean flag or branch; a run
+does not check for a leftover `.git/index.lock`. Run `run-tier` inside `tmux`
 when the connection may drop (`nohup` also works: a signal the runner was
 started with ignored stays ignored).
 
@@ -815,11 +818,28 @@ SightCircuit's own rule, beside that advice: no runner task touches
 `update <full commit>` detaches a clean checkout at a commit already on
 `origin/main` whose agent guard is at least as strict as the current one; it
 refuses older revisions, which a person checks out, and refuses (exit 2) when a
-git command fails or times out; git never prompts for credentials there. It
-leaves the checkout on a detached `HEAD`, so before the manual procedures in
-this guide or `scripts/frame_session.sh` (whose setup stage runs
-`git pull --ff-only`) run `git switch main`, or start the session with
-`SKIP_UPDATE=1`.
+git command fails or times out (the fetch after 3 minutes). That includes the
+git commands that record the checkout after the switch: if one fails or times
+out, `update` refuses with "switched to <commit>, but recording the checkout
+failed" instead of reporting `updated`. git runs with
+`GIT_TERMINAL_PROMPT=0`, stdin from `/dev/null` and in its own session without
+a controlling terminal, so it cannot prompt on the terminal; a configured
+credential helper or askpass program can still run, bounded by the fetch
+timeout. A timed-out git, or the running one when SIGINT, SIGTERM or SIGHUP
+interrupts `update` (exit 128 + signal number), is ended with its transport
+before the lock is released: SIGTERM first, on which git removes its lock
+files, and SIGKILL 5 seconds later; ending git takes at most 25 seconds. An
+interrupted `update`, like one refused after the switch, may already have
+switched the checkout, so check it (`git status`) before using it. A
+`.git/index.lock` still there after a timed-out or interrupted git, or after a
+failed checkout record, is named in the refusal (or the interruption report)
+and never deleted: check that no git command is running before removing it.
+Only the index lock is checked: another lock file a killed git leaves, such as
+a ref lock from the fetch, makes the next git command that needs it fail, and
+`update` then refuses with git's error. `update` leaves the checkout on a
+detached `HEAD`, so before the manual procedures in this guide or
+`scripts/frame_session.sh` (whose setup stage runs `git pull --ff-only`) run
+`git switch main`, or start the session with `SKIP_UPDATE=1`.
 
 To let Claude Code use it, install the guarded settings once, in the Frame
 checkout only:

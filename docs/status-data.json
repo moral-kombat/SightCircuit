@@ -135,7 +135,7 @@
     {
       "capability": "Guarded on-device agent runner",
       "state": "Cloud-tested only; no recorded Frame run",
-      "evidence": "Fixed Tier A task runner, fail-closed PreToolUse guard and settings template tested in the cloud only; the Phase 0 installer's path, verify, signature, smoke and record stages tested in the cloud with a fake `claude` (the signature stage with locally generated keys and a fake download; precheck, install and the interactive login untested); none of the runner, guard, settings or installer has a recorded Frame run, and the review's cycle-3 follow-ups are open; [E77](#e77-claude-code-on-frame-runner-guard-and-installer-cloud-checks)"
+      "evidence": "Fixed Tier A task runner, fail-closed PreToolUse guard and settings template tested in the cloud only; the Phase 0 installer's path, verify, signature, smoke and record stages tested in the cloud with a fake `claude` (the signature stage with locally generated keys and a fake download; precheck, install and the interactive login untested); none of the runner, guard, settings or installer has a recorded Frame run; the review's cycle-3 follow-ups are fixed and cloud-checked, evidence record pending ([handoff item 4](execution-prompt.md#offline-work-that-is-ready-to-pick-up)); [E77](#e77-claude-code-on-frame-runner-guard-and-installer-cloud-checks)"
     },
     {
       "capability": "Dedicated Arcturus Vulkan capture",

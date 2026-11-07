@@ -266,7 +266,7 @@ and keeps its number.
 
 ### Offline work that is ready to pick up
 
-These need no device. Each one gets its own PR. Items 1 and 2 are done and
+These need no device. Each one gets its own PR. Items 1, 2 and 4 are done and
 keep their numbers.
 
 1. **Evidence record for I, J and #16.** Done: [E77](evidence/e077.md) for
@@ -285,17 +285,26 @@ keep their numbers.
    - Test it only through fake dispatch (`tests/fixtures/overlay_dispatch_fixture.cpp`).
      Validation mode must stay runtime-free.
    - It needs its own review. Its device check is a separate approval.
-4. **#16 cycle-3 follow-ups.** None blocks the code, but fix them before the
-   guard is installed on Frame.
-   - `check_glob` picks a different search directory for a pattern that ends
-     in `/` or has a backslash before its first glob character.
-   - A hangup during `update` can release the lock while git runs, and a
-     SIGKILL can leave `.git/index.lock` behind.
-   - In the installer, a signal during `drop_keyring` re-enters the trap after
-     `GNUPGHOME` is unset, and an interrupt during download leaves a temp dir.
-   - The `GIT_TERMINAL_PROMPT=0` wording in the docs overclaims.
-   - In the tests: the socket-dir cleanup order, and a 0.5 s second-signal
-     assumption.
+4. **#16 cycle-3 follow-ups.** Done (cloud checks; these fixes have not run
+   on Frame):
+   - The guard refuses a `Glob` pattern with a backslash or a trailing `/`
+     instead of guessing its search directory (`GUARD_VERSION` 4).
+   - `update` handles SIGINT, SIGTERM and SIGHUP like a run: git's group gets
+     SIGTERM, then SIGKILL after 5 s, before the lock is released (exit 128 +
+     signal number), also after the switch. A run's checkout record, the git
+     it starts before its first task, is ended the same way. If recording the
+     checkout after the switch fails or times out, `update` refuses (exit 2)
+     instead of reporting `updated`. `update` names a `.git/index.lock` left
+     after a timed-out or interrupted git, or after a failed checkout record,
+     and never deletes it.
+   - The installer's signature stage sets its traps right after `mktemp -d`.
+     Its cleanup runs once, a second signal cannot cut it short, each
+     `gpgconf` call is bounded by `timeout` and runs only for the throwaway
+     keyring, and a signal after the cleanup is not lost.
+   - [On-device](on-device.md) says what `GIT_TERMINAL_PROMPT=0` does and
+     does not prevent.
+   - The test keyring's cleanup order is fixed and checked. The second-signal
+     test waits for a marker, not 0.5 s.
 5. **Small items.**
    - `docs/evidence/e008.md` links to `scripts/mirror_capture.py`, which was
      removed in #14. This predates #16–#18.
