@@ -203,10 +203,11 @@ SIGKILL and reaped, the runner being the subreaper of its tasks for the run.
 A task is a command, not a supervised report worker, so it has no arm
 handshake: a signal to the runner ends the task's group at once, and a task
 that has not yet installed a handler ends by the default disposition. Where
-a task is itself a guarded command (`live_pipeline.py`, the marker check), the
-guard inside it waits up to one second (`Grace.arm`) for its worker to arm
-before SIGTERM; a worker whose start-up takes longer under load is still
-force-ended and reported as such. The group that an exited task leaves behind
+a task is itself a guarded command (`tier-a/marker-validate`, which runs
+`hud_marker_check.py --validate` under the guard), the guard inside it waits
+up to one second (`Grace.arm`) for its worker to arm before SIGTERM; a worker
+whose start-up takes longer under load is still force-ended and reported as
+such. The group that an exited task leaves behind
 has half a second (`LEFTOVER_GRACE`) to follow it before the task counts as
 failed and the group is terminated.
 
