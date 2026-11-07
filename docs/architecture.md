@@ -162,9 +162,11 @@ condition holds or a valid scope permits that gate. The diagnostic tier's mask
 is the union of every observed marker copy plus the margin, so eye identity is
 not required for the acceptance run; the capture layout must still be declared.
 Two record changes come first: the calibration record must carry the mirror's
-native format metadata, which today makes every real mirror frame
-unrepresentable, and the candidate conversion needs the tracking tokens the
-reporter supplies. This is a design; no diagnostic command exists.
+native format metadata, which until record version 2 made every real mirror
+frame unrepresentable (implemented on 2026-11-07, item A6;
+[record versions](reference/hud-candidates.md#record-versions)), and the
+candidate conversion needs the tracking tokens the reporter supplies. The
+rest is a design; no diagnostic command exists.
 
 ### Commands and packaging
 

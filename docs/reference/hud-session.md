@@ -310,7 +310,8 @@ record yet; its implementation is distinct from the session-provider evidence in
     (`hud_observer_context_declares_session_tokens`).
 
   The record's `context` is the declared fields plus the observed tokens,
-  and it must still pass the version 1 schema. The candidate stays at best
+  and it must still pass the record schema
+  ([version 2 since 2026-11-07](hud-candidates.md#record-versions)). The candidate stays at best
   `candidate_valid_unqualified` with exit 2, and the evidence kind rules are
   unchanged. Observed tokens identify the run; they qualify nothing, and no
   gate changes.

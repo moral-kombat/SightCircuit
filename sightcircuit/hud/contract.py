@@ -170,8 +170,28 @@ def config_digest(config):
                                      allow_nan=False).encode()).hexdigest()
 
 
+NATIVE_FORMAT_FIELDS = ("width", "height", "fourcc", "stride_bytes", "buffer_bytes", "minimum_buffer_bytes")
+# Candidate record versions (docs/reference/hud-candidates.md). Version 1 carries the six native-format
+# fields only; version 2 (2026-11-07) adds ``native_format.metadata``, the source's other format metadata,
+# so a mirror format is representable and compared exactly. Both are read; new records are version 2.
+CANDIDATE_SCHEMA_VERSIONS = (1, 2)
+CANDIDATE_SCHEMA_VERSION = 2
+NATIVE_FORMAT_METADATA_FIELD = "metadata"
+
+
 @dataclass(frozen=True)
 class CaptureFormat:
+    """One acquisition layout: the six native-format fields and the source's other format metadata.
+
+    ``metadata`` holds every further key the source reports with its format
+    (the mirror's V4L2 ``field``, ``colorspace_code``, ``format_flags``,
+    ``ycbcr_encoding_code``, ``quantization_code`` and
+    ``transfer_function_code``), as sorted ``(key, value)`` pairs, so two
+    formats are equal only when every field and every metadata value agrees.
+    ``from_mapping`` reads a source's flat format (extra keys beside the six)
+    or a record's ``native_format`` (the six keys plus a ``metadata`` object,
+    the version 2 record form); ``record()`` writes the record form.
+    """
     width: int
     height: int
     fourcc: str
@@ -183,8 +203,20 @@ class CaptureFormat:
     @classmethod
     def from_mapping(cls, fmt):
         keys = tuple(key for key in cls.__dataclass_fields__ if key != "metadata")
-        metadata = tuple(sorted((key, value) for key, value in fmt.items() if key not in keys))
+        extra = {key: value for key, value in fmt.items() if key not in keys}
+        if NATIVE_FORMAT_METADATA_FIELD in extra:
+            # The record form: the metadata object carries every extra key, none sits beside it.
+            nested = extra.pop(NATIVE_FORMAT_METADATA_FIELD)
+            if type(nested) is not dict or extra or any(type(key) is not str for key in nested):
+                raise ValueError("hud_capture_metadata_invalid")
+            extra = nested
+        metadata = tuple(sorted(extra.items()))
         return cls(*(fmt[key] for key in keys), metadata=metadata)
+
+    def record(self):
+        """The version 2 ``native_format`` record form: the six fields plus the ``metadata`` object."""
+        return {**{name: getattr(self, name) for name in NATIVE_FORMAT_FIELDS},
+                NATIVE_FORMAT_METADATA_FIELD: dict(self.metadata)}
 
     @classmethod
     def bgr(cls, image):
@@ -224,7 +256,6 @@ SESSION_TOKENS = ("session_id", "runtime_id", "timebase_id", "tracking_origin", 
 # View fields a calibration also pins. A source may declare, or a frame report, each of them; undeclared
 # means the calibration's own full, upright frame and HUD configuration.
 VIEW_FIELDS = ("crop_xyxy", "orientation_degrees", "hud_config_sha256")
-NATIVE_FORMAT_FIELDS = ("width", "height", "fourcc", "stride_bytes", "buffer_bytes", "minimum_buffer_bytes")
 
 
 @dataclass(frozen=True, init=False)
@@ -297,12 +328,13 @@ class Calibration:
             raise ValueError("hud_calibration_lifetime_invalid")
 
     def context(self):
-        """The version 1 candidate ``context`` this calibration describes; format metadata has no field there."""
-        fmt = self.capture_format
-        if fmt.metadata:
-            raise ValueError("hud_capture_metadata_unrepresentable")
+        """The version 2 candidate ``context`` this calibration describes, format metadata included.
+
+        A version 1 record's calibration has no metadata, so its context is the
+        record's with an empty ``native_format.metadata`` object.
+        """
         return {"source_id": self.source_id, **{name: getattr(self, name) for name in SESSION_TOKENS},
-                "native_format": {name: getattr(fmt, name) for name in NATIVE_FORMAT_FIELDS},
+                "native_format": self.capture_format.record(),
                 "crop_xyxy": list(self.crop_xyxy), "orientation_degrees": self.orientation_degrees,
                 "capture_layout": self.capture_layout, "hud_config_sha256": self.hud_config_sha256}
 

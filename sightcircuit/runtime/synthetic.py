@@ -18,7 +18,7 @@ import time
 from ..frame import DetectionResult, Frame
 from ..gates import HARDWARE_MAPPING, claims
 from ..hud import HUD_CONFIG, Calibration, CaptureFormat, Footprint, MappingCandidate, config_digest
-from ..hud.contract import MAX_MAPPING_LIFETIME_NS, SESSION_TOKENS, SYNTHETIC_PROVENANCE
+from ..hud.contract import CANDIDATE_SCHEMA_VERSION, MAX_MAPPING_LIFETIME_NS, SESSION_TOKENS, SYNTHETIC_PROVENANCE
 from ..hud.qualification import COPY_ERROR_TERMS, OPERATING_LIMIT_FIELDS, UNKNOWN_TERMS
 
 FIXTURE_UNKNOWN_REASON = "Synthetic fixture: the footprint is declared for generated frames; nothing was observed"
@@ -116,7 +116,7 @@ def synthetic_hud_calibration(lifetime_ns=MAX_MAPPING_LIFETIME_NS):
 
 
 def fixture_candidate(calibration):
-    """The version 1 candidate record of a synthetic-fixture calibration, for a synthetic run's ledger.
+    """The version 2 candidate record of a synthetic-fixture calibration, for a synthetic run's ledger.
 
     Its context, lifetime and copies are the calibration's. Every term an
     observation would establish is an explicit unknown (null, never 0), and its
@@ -132,7 +132,7 @@ def fixture_candidate(calibration):
                 "expires_ns": calibration.expires_ns, "copies": copies}
     digest = hashlib.sha256(json.dumps(declared, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return MappingCandidate.from_mapping({
-        "schema_version": 1, "status": "observed_unqualified", **claims(HARDWARE_MAPPING),
+        "schema_version": CANDIDATE_SCHEMA_VERSION, "status": "observed_unqualified", **claims(HARDWARE_MAPPING),
         "mapping_id": f"synthetic-fixture-{digest[:16]}", **declared,
         "operating_limits": dict.fromkeys(OPERATING_LIMIT_FIELDS),
         "evidence": [{"role": "observer", "artifact_id": "synthetic:fixture-calibration", "sha256": digest,
