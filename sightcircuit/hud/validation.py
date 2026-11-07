@@ -18,7 +18,7 @@ import time
 
 from ..frame import native_format
 from .contract import SESSION_TOKENS, VIEW_FIELDS, config_digest
-from .qualification import ValidationLedger
+from .qualification import ValidationLedger, native_format_record
 
 G5_SOFTWARE_COUNTS = ("frames_checked", "native_mask_zeroing_failures", "hud_footprint_detections",
                       "mask_and_eye_boundary_rejections", "context_invalidations", "frame_result_identity_failures")
@@ -38,7 +38,11 @@ def _view(source, reported, name, default):
 
 
 def observed_context(source, frame_format, config, reported=None):
-    """The version 1 context a run observes: the source's declared identity, a native format and the stage config.
+    """The version 2 context a run observes: the source's declared identity, a native format and the stage config.
+
+    ``frame_format`` is a frame's format as its source reports it or a record's
+    ``native_format``; the context carries it in the record form, so the
+    mirror's format metadata is compared exactly against the candidate's.
 
     Session tokens and view fields a frame reports (``reported``) take
     precedence over the source's declarations, which ``CaptureContext``
@@ -51,7 +55,7 @@ def observed_context(source, frame_format, config, reported=None):
     crop = _view(source, reported, "crop_xyxy", [0, 0, frame_format.get("width"), frame_format.get("height")])
     return {"source_id": getattr(source, "source_id", None),
             **{name: reported.get(name, getattr(source, name, None)) for name in SESSION_TOKENS},
-            "native_format": dict(frame_format),
+            "native_format": native_format_record(frame_format),
             "crop_xyxy": list(crop) if isinstance(crop, (list, tuple)) else crop,
             "orientation_degrees": _view(source, reported, "orientation_degrees", 0),
             "capture_layout": getattr(source, "capture_layout", None),

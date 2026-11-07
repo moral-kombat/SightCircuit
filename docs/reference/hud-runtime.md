@@ -30,16 +30,27 @@ records, not Frame evidence.
   `recenter_epoch`, the native format (dimensions, fourcc, stride and buffer
   sizes), `crop_xyxy`, `orientation_degrees`, `capture_layout`,
   `hud_config_sha256`, `observed_ns` and `expires_ns`. `context()` returns the
-  version 1 record context, so a candidate's calibration reproduces its
-  record's context exactly. Construction checks the tokens, the configuration
+  version 2 record context, so a candidate's calibration reproduces its
+  record's context exactly (a version 1 record's, with an empty metadata
+  object). Construction checks the tokens, the configuration
   digest, a lifetime of at most 300 seconds, a full-frame crop and
   orientation 0.
-- **Native format metadata.** The version 1 record has six native-format
-  fields and no V4L2 metadata such as `colorspace_code`, so a candidate's
-  calibration carries none. A frame whose format reports extra metadata does
-  not equal it, and the mask rejects that frame as
-  `hud_capture_format_changed`. Recording the metadata needs a schema change;
-  until then the mask fails closed.
+- **Native format metadata (version 2, 2026-11-07).** `CaptureFormat` holds
+  the six native-format fields and, as sorted pairs, every other key the
+  source reports with its format: for the SteamVR mirror the V4L2 `field`,
+  `colorspace_code`, `format_flags`, `ycbcr_encoding_code`,
+  `quantization_code` and `transfer_function_code`. A version 2 candidate
+  record carries them as `native_format.metadata`, so a candidate's
+  calibration carries them too, and `HudMask.check_context` compares a frame's
+  format with the calibration's exactly: the same six fields and the same
+  metadata values, or `hud_capture_format_changed`. A version 1 record carries
+  no metadata, so its calibration matches a frame without metadata only, and
+  a real mirror frame fails it precisely. `Calibration.context()` no longer
+  raises `hud_capture_metadata_unrepresentable`; the record form is written by
+  `CaptureFormat.record()`. See
+  [record versions](hud-candidates.md#record-versions). This changes no gate:
+  the mask accepts synthetic fixtures only, and `HARDWARE_MAPPING` refuses
+  every non-synthetic calibration whether or not it carries metadata.
 - **Expiry.** The mask requires `observed_ns <= time.monotonic_ns() <
   expires_ns` every time it validates: when it is built, at every
   capture-context admission (when capture publishes a frame, before

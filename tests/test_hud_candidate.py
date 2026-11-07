@@ -199,7 +199,10 @@ class ObserverCandidateTests(unittest.TestCase):
         samples = self.report["samples"]
         self.assertEqual(record["observed_ns"], samples[-1][1])
         self.assertEqual(record["expires_ns"], samples[0][1] + 60 * 1_000_000_000)
-        self.assertEqual(record["context"], dict(declared_context(), **observed_tokens(self.report)))
+        # A version 2 record: the declared six-field format is kept in the record form, with no metadata here.
+        self.assertEqual(record["schema_version"], 2)
+        self.assertEqual(record["context"], dict(declared_context(), **observed_tokens(self.report),
+                                                 native_format=dict(NATIVE_FORMAT, metadata={})))
         self.assertEqual([copy["declared_eye"] for copy in record["copies"]], [0, 1])
         # The record round-trips through the schema, and nothing it yields lifts a gate.
         self.assertEqual(MappingCandidate.from_mapping(record).as_dict(), record)
@@ -211,6 +214,41 @@ class ObserverCandidateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "hardware_mapping_not_approved"):
             candidate.require_production_qualification()
         self.assertFalse(any(claims().values()))
+
+    def test_mirror_format_metadata_is_carried_into_the_record_and_must_be_declared_exactly(self):
+        """A6 (2026-11-07): a mirror capture format's V4L2 metadata reaches the version 2 record."""
+        metadata = {"field": 1, "colorspace_code": 8, "format_flags": 0, "ycbcr_encoding_code": 0,
+                    "quantization_code": 0, "transfer_function_code": 0}
+        report = deepcopy(self.report)
+        report["capture"]["format"] = dict(NATIVE_FORMAT, **metadata)  # As sources.mirror_device reports it.
+        expected = dict(NATIVE_FORMAT, metadata=metadata)
+        # The declared native format may be written as the source reports it, or in the record form.
+        for declared in (dict(NATIVE_FORMAT, **metadata), expected):
+            with self.subTest(declared=sorted(declared)):
+                record = convert(report, declared_context(native_format=declared)).as_dict()
+                self.assertEqual(record["schema_version"], 2)
+                self.assertEqual(record["context"]["native_format"], expected)
+                candidate = MappingCandidate.from_mapping(record)
+                self.assertEqual(candidate.calibration().capture_format.metadata, tuple(sorted(metadata.items())))
+                self.assertEqual(candidate.calibration().context(), record["context"])
+        # Six fields alone, a changed value or an extra key no longer describe the observed format.
+        for declared, reason in ((dict(NATIVE_FORMAT), "format_context_mismatch"),
+                                 ({**NATIVE_FORMAT, **metadata, "colorspace_code": 1}, "format_context_mismatch"),
+                                 (dict(NATIVE_FORMAT, metadata=dict(metadata, extra=1)), "format_context_mismatch"),
+                                 (dict(NATIVE_FORMAT, metadata=metadata, colorspace_code=8), "native_format_fields_invalid"),
+                                 (dict(NATIVE_FORMAT, metadata=[]), "native_format_fields_invalid")):
+            with self.subTest(declared=sorted(declared), reason=reason), self.assertRaisesRegex(ValueError, reason):
+                convert(report, declared_context(native_format=declared))
+        # The command accepts the written record and the current context in the flat form.
+        with tempfile.TemporaryDirectory() as directory:
+            record = convert(report, declared_context(native_format=expected)).as_dict()
+            paths = {name: Path(directory) / f"{name}.json" for name in ("candidate", "context")}
+            paths["candidate"].write_text(json.dumps(record))
+            paths["context"].write_text(json.dumps(dict(record["context"], native_format=dict(NATIVE_FORMAT, **metadata))))
+            code, summary = run_cli(["--check-candidate", paths["candidate"], "--current-context", paths["context"],
+                                     "--now-ns", record["observed_ns"] + 1])
+            self.assertEqual((code, summary["status"], summary["record_schema_version"]),
+                             (2, "candidate_valid_unqualified", 2))
 
     def test_no_unknown_is_silently_zero(self):
         record = convert(self.report).as_dict()
