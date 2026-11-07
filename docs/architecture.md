@@ -177,12 +177,14 @@ rest is a design; no diagnostic command exists.
 
 ### Commands and packaging
 
-Scripts import the checkout without installation and no active script imports
-another. The plan moves the bodies of the active commands into the package,
-keeps each script as a thin wrapper that re-exports `main`, declares console
-entry points, and adds one hashed lock per requirement set. Commands that
-re-spawn themselves by file path, validators imported by dotted name and the
-checkpoint manifest's script pins move with the bodies.
+Implemented on 2026-11-07 (P1, P2): one hashed lock per requirement set,
+installed by the setup scripts; the bodies of the ten active commands in
+`sightcircuit/commands/`, each `scripts/<name>.py` a thin wrapper that is the
+body module when imported and runs it when executed, and a `sightcircuit-<name>`
+console entry point per command. The two commands that re-spawn a worker do so
+by their own file path, the validators keep resolving by dotted name under
+`sightcircuit`, and the checkpoint manifest pins the wrappers by name and the
+bodies as package modules ([details](development.md#commands-and-entry-points-2026-11-07)).
 
 ### Operations tooling
 
