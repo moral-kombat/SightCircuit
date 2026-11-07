@@ -30,7 +30,7 @@ development; exact tested pins remain in the `requirements-*.txt` files.
 | `sightcircuit/sources/` | `ReplaySource` (PyAV); `standin` (the synthetic realtime-replay [stand-in clip](development-checks.md#continuous-integration)); `mirror_device` (read-only V4L2 SteamVR mirror discovery and reads); `mirror` (bounded acquisition loop `capture`, `MirrorSource` (its optional `session` declares the HUD session tokens and stamps each frame), and `launch`, the one launcher of both mirror commands: candidate selection, output reservation, the bounded worker and all-or-nothing publication); `recording` (one MP4 box-header decoder for finished-file inspection and the growing-file scan used by `recording_growth_check`; newest recording); `PolledSource` (adapter for `open`/`read`/`close` sources); `session` (read-only [session-token providers](../hud-qualification.md#session-tokens-for-the-mirror-source-2026-11-03) for a mirror run: `HostClock`, `RuntimeProcess`, `TrackingObserver` and `MirrorSession`). Adapters forward the wrapped source's declared identity |
 | `sightcircuit/overlay.py` | Overlay bridge client and `OverlaySink`, the one panel sink: with a caller-owned client (replay's interactive panel) it only submits images; otherwise it owns a validation-only client through `open`/`clear`/`close`, optionally with the frozen HUD placement and payload contract |
 | `sightcircuit/hud/` | Fixed edge HUD contract, shared eye/rectangle geometry (and the [geometric prediction cross-check](../hud-qualification.md#geometric-prediction-cross-check-2026-11-04), which never feeds qualification), the one margin rule, synthetic-only native mask (calibrations from two factories only, with expiry, session tokens and view fields; zeroed regions refilled from their surround by `fill_regions`), tile rendering, the `HudStage` engine stage (and `HudPipelineAdapter`, the stage bound to its sink's fixed output contract, used by `live_pipeline.py`), offline mapping qualification, the calibration marker client, `observation` (empirical marker-copy location in native pixels and the observer report contract, used by `hud_marker_observer.py`), `candidate` (an observer report to an unqualified mapping candidate, used by `hud_validation_report.py --from-observer`) and `validation` (the synthetic HUD run's ledger feed and G5 software counts) |
-| `sightcircuit/runtime/` | `process` (bounded spawned workers, parent-death signalling), `guard` (owned process-group supervision with the Linux parent-loss guardian, and the one stop-on-signal convention: `sigterm_cancels` and `cancelled` for launchers, `stop_on_signals` for workers), `output` (reserve, write, publish all or none, withdraw and discard explicit image outputs; `publish_new` for finished bytes), `live` (`run_report`, the one report runner on `Pipeline`, used by `run_pipeline`, the gated synthetic run, whose HUD run also feeds the validation ledger, and by `run_recognition`, the mirror recognizer), `synthetic` (the generated source and its declared `SyntheticSession`, the fixture calibration factory and its candidate record, `FixtureDetector` and `HeadlessSink`) `manifest` (the [checkpoint artifact manifest](hud-development.md#checkpoint-artifact-manifest): software identity written and verified on Frame) and `sensors` (the read-only [run-context sensor sidecar](#run-context-sensor-sidecar)) |
+| `sightcircuit/runtime/` | `supervision` (the one [supervision primitive](#the-supervision-primitive): an owned worker session with an arm handshake, deadline-based cleanup, group termination with reaping, both signal policies and progress streaming, in one report block), `process` (bounded spawned workers, parent-death signalling; retires once the mirror launcher adopts the primitive), `guard` (the primitive under the guard's policy, the Linux parent-loss guardian, and the one stop-on-signal convention: `sigterm_cancels` and `cancelled` for launchers, `stop_on_signals` for workers), `output` (reserve, write, publish all or none, withdraw and discard explicit image outputs; `publish_new` for finished bytes), `live` (`run_report`, the one report runner on `Pipeline`, used by `run_pipeline`, the gated synthetic run, whose HUD run also feeds the validation ledger, and by `run_recognition`, the mirror recognizer), `synthetic` (the generated source and its declared `SyntheticSession`, the fixture calibration factory and its candidate record, `FixtureDetector` and `HeadlessSink`) `manifest` (the [checkpoint artifact manifest](hud-development.md#checkpoint-artifact-manifest): software identity written and verified on Frame) and `sensors` (the read-only [run-context sensor sidecar](#run-context-sensor-sidecar)) |
 | `sightcircuit/agent/` | On-device agent support: the fixed task table, the `frame_agent_run.py` runner (timeouts, lock, run budget, `result.json`), the PreToolUse guard and the Frame-only Claude Code settings template; standard library only ([plan](../agent-on-frame.md)) |
 
 `scripts/hud_view_prediction.py` turns a saved headset view record into the
@@ -180,14 +180,61 @@ own module-level `validate_worker_report` (and options such as
 from this checkout's `scripts/` or `sightcircuit/` only, so it holds no table of
 commands.
 
-Two supervision policies remain, each with one implementation:
-`sightcircuit/runtime/guard.py` (command workers in an owned process group under
-the Linux guardian, used by the live pipeline, HUD marker/observer, recording
-growth check and replay decode check) and `sightcircuit/runtime/process.py`
-(spawned Python workers that stream progress, with parent-death signalling and
-terminate/kill escalation, used by `sources.mirror.launch` for `mirror_check.py`
-and `mirror_recognize.py`). The paused capture track's `capture_supervisor.py`
-and its diagnostics keep their own copies while that track is frozen.
+### The supervision primitive
+
+`sightcircuit/runtime/supervision.py` is the one supervisor of a bounded child
+([decision D4](../poc-scope.md#architecture-decisions-2026-11-07)), seeded from
+the guard's owned-session supervisor. The guard uses it through
+`supervise_owned` for both of its levels (the guardian, and the worker under
+the guardian); the agent runner, the mirror launcher (`runtime/process.py`,
+which still streams progress with `multiprocessing` for `mirror_check.py` and
+`mirror_recognize.py`) and the paused capture supervisor adopt it in later
+work-order items, and until then keep their own copies. The primitive offers:
+
+- **Owned-session spawning** with the caller's descriptors, plus two things the
+  worker inherits: `SIGHTCIRCUIT_ARMED_FD`, a descriptor it writes once its
+  handlers are installed (`stop_on_signals()` does this through
+  `report_armed()`), and `SIGHTCIRCUIT_COOPERATIVE_GRACE`, the seconds it has
+  after SIGTERM, from which `guard.cleanup_budget(default)` derives a worker's
+  own cleanup joins (the synthetic run's capture-thread join: the grace less a
+  one-second reserve, so four seconds under the guard, half a second alone).
+- **Hold-and-arm around process start.** The supervisor's handler is held
+  across `Popen` and across the cleanup; in `raise` mode a signal noted while
+  held is raised once the process exists, so there is always a process to end.
+- **Group-wide termination with reaping**, `killpg` TERM then KILL with every
+  owned member reaped, and containment of a group a killed guardian reported.
+- **Deadline-based cleanup verdicts.** A cancellation (or parent loss) first
+  waits up to the arm grace for a worker that has not armed yet, so a signal
+  that arrives while the worker is still importing is answered by its handler
+  and not by the default disposition, which would kill it and leave a forced
+  termination in the report. SIGTERM then goes to the leader, and its exit and
+  the end of its report are awaited together until one cooperative deadline.
+  The fixed sub-second joins of the earlier supervisors are gone; a report
+  reserve after the tree is gone covers an orphaned pipe end and is not the
+  verdict. Every budget is a `Grace` field and a tunable, not a guarantee.
+- **Both signal modes, with the inherited-ignore policy as a parameter.**
+  `RECORD_AND_POLL` is the guard's: the first signal is recorded and polled,
+  and a signal the process was started with ignored is taken over anyway, so a
+  launcher can always be cancelled. `RAISE_ON_SIGNAL` is the agent runner's:
+  the first signal raises `Cancelled` (which carries the finished report after
+  the cleanup), and an inherited ignore stays ignored, as `nohup` intends.
+- **Progress streaming** on the report stream: a line
+  `{"event": "progress", "report": {...}}` reaches the caller's `progress`
+  callback on the supervising thread, `{"event": "result", "report": {...}}`
+  or a bare JSON report is the final report, and the guardian forwards events
+  unchanged. A pending line and the report text are each bounded by the
+  report byte limit; events are dispatched, not kept.
+- **One report block**: `status`, `exit_code`, `cleanup_ok`, `reason`,
+  `worker_pid`, `worker_armed`, `worker_reaped`, `worker_exit_code`,
+  `worker_tree_reaped`, `report_reader_stopped`, `worker_forced_termination`,
+  `worker_termination_requested` and `supervisor_elapsed_seconds`; the guard
+  adds its guardian fields (`guardian_armed` among them) as before. Every
+  field that existed before keeps its meaning.
+
+`tests/test_supervision.py` covers the policies, the hold, the stream, the
+budgets and the handshake; `tests/test_bounded_worker.py` covers the guard on
+it with real subprocess chains, including a cancellation that arrives before
+the worker has armed and a worker that never arms.
 
 Signals follow one convention, in `guard.py`. A launcher runs inside
 `sigterm_cancels()`, where SIGTERM raises `StopRequested` as Ctrl+C raises
@@ -197,15 +244,19 @@ so SIGINT and SIGTERM set its stop event and its own cleanup runs. The live
 pipeline, HUD marker check and observer and recording growth workers use it.
 `shm_capture_check.py` keeps its own copy of the launcher side.
 
-On cancellation/timeout/parent loss the guardian permits five seconds for cooperative
-worker cleanup, then one second for group termination and one for kill/reaping,
-plus 0.2 seconds for its report reader. This is additional to the normal worker
-deadline (pipeline: 15 seconds startup + requested duration + five seconds
-normal teardown; growth: selection wait + observation + five seconds overhead).
-The outer supervisor allows a further eight seconds for guardian startup/teardown.
-If the guardian itself is unresponsive, the outer supervisor gives it eight
-seconds to stop, then one second for termination, one for kill/reaping and 0.2
-seconds for report-reader shutdown. Reports distinguish worker and guardian
+On cancellation or parent loss the guardian first waits up to one second for a
+worker that has not armed its handlers yet, then permits five seconds for
+cooperative worker cleanup (the leader's exit with its report complete), then
+one second for group termination and one for kill/reaping, plus a one-second
+reserve for its report reader after the tree is gone; a timeout skips the arm
+wait. This is additional to the normal worker deadline (pipeline: 15 seconds
+startup + requested duration + five seconds normal teardown; growth: selection
+wait + observation + five seconds overhead). The outer supervisor allows a
+further eight seconds for guardian startup/teardown. If the guardian itself is
+unresponsive, the outer supervisor gives it ten seconds to stop (the longest
+cleanup the worker's budgets allow it, nine seconds, plus one), then one second
+for termination, one for kill/reaping and one for report-reader shutdown
+(`Grace.for_supervisor_of`). Reports distinguish worker and guardian
 reaping/forced termination, and overall supervision time from inner worker time.
 Forced termination never establishes clean API/resource shutdown. A reaped
 worker with a still-running acquisition thread also cannot claim source cleanup.

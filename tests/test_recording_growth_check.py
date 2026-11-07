@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from sightcircuit.runtime import guard as bounded_worker
+from sightcircuit.runtime import supervision
 from sightcircuit.sources import recording as mp4
 from scripts import recording_growth_check as growth
 
@@ -264,11 +265,13 @@ class RecordingGrowthTests(unittest.TestCase):
                     self.assertEqual(report["status"], "no_new_recording")
 
     def test_cli_forwarding_and_guardian_budgets_are_derived_without_real_waits(self):
-        cases = (([], 35, 43, 53.2), (["--wait-for-new", "1"], 21, 29, 39.2),
-                 (["--wait-for-new", "30"], 50, 58, 68.2),
-                 (["--wait-for-new", "31"], 51, 59, 69.2),
-                 (["--wait-for-new", "120"], 140, 148, 158.2),
-                 (["--wait-for-new", "120", "--seconds", "30"], 155, 163, 173.2))
+        # Emergency budget: the outer deadline, then the guardian's cooperative grace (the longest cleanup
+        # the worker's budgets allow it, 9 s, plus 1), killpg TERM 1 s, KILL 1 s and the report reserve 1 s.
+        cases = (([], 35, 43, 56.0), (["--wait-for-new", "1"], 21, 29, 42.0),
+                 (["--wait-for-new", "30"], 50, 58, 71.0),
+                 (["--wait-for-new", "31"], 51, 59, 72.0),
+                 (["--wait-for-new", "120"], 140, 148, 161.0),
+                 (["--wait-for-new", "120", "--seconds", "30"], 155, 163, 176.0))
         for extra, worker_budget, outer_budget, emergency_budget in cases:
             with self.subTest(extra=extra):
                 guarded = {"result": growth.new_report(), "cleanup_ok": True}
@@ -287,8 +290,8 @@ class RecordingGrowthTests(unittest.TestCase):
                                  "30" if "--seconds" in extra else "15")
                 # Run the actual emergency path against a non-exiting fake
                 # process and virtual clock. No signals, subprocess or wall wait.
-                self.assertAlmostEqual(self.emergency_elapsed(outer_budget, call.kwargs["cleanup_grace"]),
-                                       emergency_budget)
+                self.assertEqual(call.kwargs["grace"], bounded_worker.GRACE.for_supervisor_of())
+                self.assertAlmostEqual(self.emergency_elapsed(outer_budget, call.kwargs["grace"]), emergency_budget)
 
     def test_selection_near_wait_deadline_gets_full_separate_observation(self):
         for wait in (30, 120):
@@ -321,30 +324,24 @@ class RecordingGrowthTests(unittest.TestCase):
             self.now = round(self.now + seconds, 6)
         process = MagicMock(pid=12345, returncode=None)
         process.poll.return_value = None
-        def wait(*, timeout):
-            tick(timeout)
-            raise bounded_worker.subprocess.TimeoutExpired("local-fake-worker", timeout)
-        process.wait.side_effect = wait
-        reader = MagicMock()
-        reader.is_alive.return_value = True
-        reader.join.side_effect = lambda *, timeout: tick(timeout)
-        done = MagicMock()
-        done.is_set.return_value = False
-        done.wait.side_effect = tick
+        stream = MagicMock(errors=[], events=[], result=None)
+        stream.done.is_set.return_value = False
+        stream.done.wait.side_effect = tick
+        stream.thread.is_alive.return_value = True
+        stream.thread.join.side_effect = lambda *, timeout: tick(timeout)
+        stream.candidate.side_effect = ValueError("no report")
         with contextlib.ExitStack() as stack:
             for target, name, value in (
-                (bounded_worker, "cancellation", lambda: contextlib.nullcontext([])),
-                (bounded_worker, "child_reaper", contextlib.nullcontext),
-                (bounded_worker.time, "monotonic", lambda: self.now),
-                (bounded_worker.time, "sleep", tick),
-                (bounded_worker.subprocess, "Popen", lambda *a, **k: process),
-                (bounded_worker.threading, "Thread", lambda **k: reader),
-                (bounded_worker.threading, "Event", lambda: done),
+                (supervision, "child_reaper", contextlib.nullcontext),
+                (supervision.time, "monotonic", lambda: self.now),
+                (supervision.time, "sleep", tick),
+                (supervision.subprocess, "Popen", lambda *a, **k: process),
+                (supervision, "ReportStream", lambda _stdout: stream),
             ):
                 stack.enter_context(patch.object(target, name, value))
-            stack.enter_context(patch.object(bounded_worker.os, "killpg", create=True))
+            stack.enter_context(patch.object(supervision.os, "killpg", create=True))
             report = bounded_worker._supervise_owned(["local-fake-worker"], growth.new_report(),
-                timeout, growth.validate_worker_report, cleanup_grace=grace)
+                timeout, growth.validate_worker_report, grace=grace)
         self.assertEqual(report["status"], "timed_out")
         self.assertFalse(report["cleanup_ok"])
         self.assertFalse(report["worker_reaped"])
