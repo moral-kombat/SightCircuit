@@ -260,9 +260,27 @@ directory) or `..` anywhere, so it never checks a different directory than the
 one searched; give the directory as the `path` instead (`GUARD_VERSION` 4).
 Remove the file to return the checkout to normal interactive use.
 
+Precondition the operator checks before the Phase 2 enforcement test: Claude
+Code applies the checkout's `permissions.allow` entries only once the
+workspace is trusted. [E86](../evidence/e086.md) recorded `claude doctor` on
+Frame saying "Ignoring 3 permissions.allow entries from
+.claude/settings.local.json: this workspace has not been trusted". Until the
+workspace trust dialog has been accepted interactively for the checkout, or
+the trust is recorded in `~/.claude.json`, the allow entries are ignored, so
+an enforcement test would observe prompts or refusals that come from the
+missing trust and not from the guard. Check `claude doctor` for that line
+before the test; this guide records the condition and does not instruct a
+change to the device.
+
 `scripts/frame_claude_install.sh` runs the Phase 0 stages with a status line
 and a breakpoint before each stage; the procedure is preserved in the
 [Phase 0 procedure](../history/agent-on-frame-2026-11-01.md#phase-0-install-and-verify-manual-owner).
+Its summary names the channel the install stage was asked for (`CHANNEL`,
+default `stable`) as the requested install channel, and the installed
+auto-update channel only as `claude doctor` reports it in the `record` stage,
+or `unknown` when doctor did not report one; the two are not the same setting
+([E86](../evidence/e086.md) found "latest" installed where the summary had
+said "stable").
 Its optional `signature` stage checks the installed binary against the signed
 release manifest with a throwaway keyring. From the downloads on, every way out
 of the stage, an interrupted stage included, asks the keyring's agent to stop

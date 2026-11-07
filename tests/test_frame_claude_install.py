@@ -29,6 +29,14 @@ case "$1" in
   *) exit 3 ;;
 esac
 """
+FAKE_DOCTOR_CHANNEL = """#!/usr/bin/env bash
+case "$1" in
+  --version) echo "9.9.9 (Claude Code)" ;;
+  doctor) printf 'Install: healthy\\n  Auto-update channel: latest\\n' ;;
+  -p) printf 'aarch64\\nframe\\n' ;;
+  *) exit 3 ;;
+esac
+"""
 FAKE_ABORT = """#!/usr/bin/env bash
 echo Aborted >&2
 kill -ABRT $$
@@ -171,6 +179,22 @@ class FrameClaudeInstallTests(ScriptHarness, unittest.TestCase):
                          "claude: 9.9.9 (Claude Code)", "0 failure(s)"):
             self.assertIn(expected, summary)
         self.assertEqual((self.home / "out/doctor.txt").read_text(), "Install: healthy\n")
+        # The summary never passes the script's own CHANNEL default off as the installed setting (E86).
+        self.assertIn("requested install channel: stable", summary)
+        self.assertIn("installed auto-update channel: unknown (claude doctor did not report one in this run)", summary)
+        self.assertNotIn("(channel: stable)", summary)
+
+    def test_the_summary_reports_the_auto_update_channel_doctor_reports(self):
+        result, summary = self.run_script(FAKE_DOCTOR_CHANNEL, "verify", "record", CHANNEL="stable")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("requested install channel: stable", summary)
+        self.assertIn("installed auto-update channel, as claude doctor reports it: Auto-update channel: latest", summary)
+        self.assertNotIn("unknown (claude doctor", summary)
+
+    def test_record_alone_reports_the_channel_as_unknown(self):
+        result, summary = self.run_script(FAKE_OK, "record")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("installed auto-update channel: unknown", summary)
 
     def test_abort_at_start_stops_with_the_known_issue(self):
         result, summary = self.run_script(FAKE_ABORT, "verify", "smoke")
