@@ -21,7 +21,12 @@ launcher runs inside ``sigterm_cancels()``, where SIGTERM raises
 ``CANCELLATION``), and ``cancelled(report, error)`` records either as a
 ``cancelled`` report with exit 128 + signal. A worker calls
 ``stop_on_signals()`` once: SIGINT and SIGTERM then set its stop event, so its
-own cleanup runs.
+own cleanup runs, and the supervisor is told the worker has armed.
+
+The supervision itself is ``sightcircuit.runtime.supervision``, the one
+primitive; this module applies the guard's policy to it (record the first
+signal and poll it, override an inherited ignore, the ``GRACE`` budgets) at
+both of its levels, and adds the guardian, the lifeline and the validators.
 """
 import contextlib
 import importlib
