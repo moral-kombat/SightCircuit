@@ -616,6 +616,13 @@
       "file": "e088.md",
       "kind": "device_report",
       "reconstructed": false
+    },
+    {
+      "id": "E89",
+      "title": "A4 marker-observer attempt on Frame, the marker appeared and its tags did not decode at the mirror's scale",
+      "file": "e089.md",
+      "kind": "device_report",
+      "reconstructed": false
     }
   ]
 }

@@ -21,7 +21,7 @@ Dedicated camera capture, world-locked labels, depth and splats remain deferred.
 | Preprocessing audit (WP1) | Original E61 still found, digest verified and miss reproduced file-only on Frame; [E80](evidence/e080.md) | Explain the miss or attribute it to the image/model with evidence. The audit variants produce identical model inputs on this still, so the re-run does not distinguish a cause |
 | Detector evaluation (WP2) | Five unboxed Frame stills captured and evaluated; both detectors found the chair and missed the bottle; [E81](evidence/e081.md) | Inspected boxes and more representative stills before choosing a detector default. The owner chose chair for the POC; five presence-only stills do not close WP2 |
 | Lifecycle acceptance (WP10 / G2) | G2 closed on November 3 after log analysis and an owner-rehearsed recovery procedure; [E75](evidence/e075.md), [E79](evidence/e079.md) | None for G2. The green-input cause remains unknown; any green input still aborts a run |
-| HUD mapping (WP9 / G3–G4) | The November 3 observer attempt stopped at the contour budget before any marker appeared, with clean cleanup; [E83](evidence/e083.md). Scene statistics are implemented offline, and the file-only analysis of the chair still on Frame predicts that the O3 precondition passes ([E88](evidence/e088.md)), which is not an observation | Reviewed scene-precondition change and a new run approval, then accepted observation, eye/composition and all-copy evidence, bounded motion/filter uncertainty, and reviewed mapping |
+| HUD mapping (WP9 / G3–G4) | The November 3 observer attempt stopped at the contour budget before any marker appeared, with clean cleanup; [E83](evidence/e083.md). Scene statistics are implemented offline, and the file-only analysis of the chair still on Frame predicts that the O3 precondition passes ([E88](evidence/e088.md)). The November 7 attempt showed the marker tile in the mirror for the first time and matched its whole pattern; the corner tags did not decode at the tile's mirror size, about 0.86 of native, so the frame was rejected and the attempt counts; [E89](evidence/e089.md) | Reviewed scene-precondition change and a new run approval, then accepted observation, eye/composition and all-copy evidence, bounded motion/filter uncertainty, and reviewed mapping |
 | Feedback and expiry (WP11 / G5) | Native masking, neutral fill, exclusion counters and report design tested offline; [E74](evidence/e074.md), [E78](evidence/e078.md) | Separately reviewed diagnostic, qualified mapping, physical feedback exclusion and expiry evidence |
 | Combined live HUD (WP12 / G6) | Shared bounded synthetic pipeline and latency reporting; production gates closed | G2–G5 and the 60-second headset acceptance run |
 
@@ -181,8 +181,13 @@ turned out to be none: guard version 4 became active with the pull to
 under Python 3.14 at `544cf34` ([E87](evidence/e087.md)) and A2 ran on the
 chair still: the O3 precondition is predicted to pass on all five limits, with
 about a tenth of the frame near saturation under the lamps
-([E88](evidence/e088.md)). Open: A4 (next device step, needs its own approval),
-A5, A7 to A11, B4 to B8, C3b (in progress), C5 to C8, P1, P2, E1. The council's hypothesis for the
+([E88](evidence/e088.md)). A4 ran on `6f44260` with the lamps off: the marker
+tile appeared in the mirror for the first time, its whole pattern matched, and
+the corner tags did not decode at about 0.86 of native size, so the attempt
+was rejected and counts as the first of two ([E89](evidence/e089.md)). Also
+merged since: B4 (#19), B7 (#18), B8 (#17), P1 (#15), A11 (#16). Open: A5 (now
+a reviewed marker or decode change for the mirror's scale, then the last
+budgeted attempt), A7 to A10, A3b, B5, B6, C3b (in progress), C5 to C8, P2, E1. The council's hypothesis for the
 cancellation race was wrong; the recorded cause is the readiness probe firing
 on the worker before it had exec'd ([checks reference](reference/development-checks.md)).
 
@@ -195,12 +200,13 @@ on the worker before it had exec'd ([checks reference](reference/development-che
   constant changes by a reviewed edit.
 - The scope of the Phase 2 guard-enforcement test for the agent runner, which
   also needs a decision on the workspace trust dialog ([E86](evidence/e086.md)).
-- Device approvals, each separate: A4, the marker-observation attempt, now
-  that A3's review is merged and A2 passed ([E88](evidence/e088.md)); its
-  preparation includes the pull to `e4019a4` or later, mirror discovery, the
-  bridge rebuild, a new manifest and the validation-only check, and the owner
-  should consider a darker background around the HUD's lower-right region
-  given E88's saturation; then the evaluation session C5 with C6.
+- Whether the one reviewed change the D2 budget allows before the last attempt
+  may be a change to the marker or its tag decode for the mirror's scale,
+  rather than the scene-limit revision the decision named, since the November 7
+  attempt failed at the tag decode and not at the precondition
+  ([E89](evidence/e089.md)).
+- Device approvals, each separate: the last budgeted G3 attempt after that
+  reviewed change; then the evaluation session C5 with C6.
 - The Frame rebooted into SteamOS 0.5.8 ([E85](evidence/e085.md)); a Frame
   manager session exists and the "Frame update check" scheduled task was
   rebound to it on 2026-11-07, with the old task left disabled as a record.
@@ -215,7 +221,7 @@ recorded; investigate it before proposing a changed run.
 | --- | --- | --- |
 | G1. synthetic mask and expiry | Native full-footprint masking, margins/eye union, changed-context rejection and independent stale expiry | Passes offline; [E69](evidence/e069.md), [E74](evidence/e074.md), [E78](evidence/e078.md) |
 | G2. lifecycle and cleanup | Explained software termination, truthful cleanup reports, and physical recovery evidence; the accepted alternative permits an owner-rehearsed recovery procedure when the cause remains unknown | **Closed November 3, 2026**, on the owner’s confirmation after rehearsal; [E79](evidence/e079.md). The green-input cause remains unknown, and the clean rehearsal does not prove the procedure cures green input |
-| G3. mapping observed on Frame | Bounded marker/observer report ending `observed_unqualified`, with clean cleanup and normal passthrough confirmed | Open. V4 was rejected; the November 3 attempt stopped at `observer_contour_budget` before any marker was shown; [E83](evidence/e083.md). Review a changed precondition offline before a new approval |
+| G3. mapping observed on Frame | Bounded marker/observer report ending `observed_unqualified`, with clean cleanup and normal passthrough confirmed | Open. V4 was rejected; the November 3 attempt stopped at `observer_contour_budget` before any marker was shown ([E83](evidence/e083.md)); the November 7 attempt passed the precondition, showed the marker and matched its whole pattern, then rejected on the tag decode at the mirror's scale ([E89](evidence/e089.md)). One budgeted attempt remains; it needs a reviewed marker or decode change and a new approval |
 | G4. mapping qualified | Reviewed evidence for eye composition, all HUD copies, conservative margins, operating limits and exact context | Proposed method; device qualification pending |
 | G5. feedback exclusion and physical expiry | HUD visible during head motion with no detections from its footprint; independently observed expiry within the declared bound | Not run in committed evidence |
 | G6. combined live HUD | The [60-second POC acceptance](poc-scope.md#acceptance), with the report fields below | Not run. The POC object is chair; the 400-frame replay panel continued updating on the tested device/runtime, but that is not combined live acceptance; [E81](evidence/e081.md) |

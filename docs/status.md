@@ -21,7 +21,7 @@ kinds of evidence. Unknown dates, revisions and runtime versions stay unknown.
 | Capability | State | Evidence and limits |
 | --- | --- | --- |
 | Continuous live input in the Qt/VR application | Offline fixed edge HUD only; production closed | Mirror includes our panel; the fixed edge HUD requires qualified full-footprint native masking plus feedback/expiry acceptance; [E18](#e18-vr-panel-included-in-mirror-input), [E69](#e69-offline-edge-hud-and-native-mask-validation) |
-| Fixed edge HUD, marker and offline live pipeline | Offline validation passed; G2 closed; G3 open | The owner accepted rehearsed recovery; the green-input cause is unknown ([E79](#e79-g2-green-input-log-analysis-and-recovery-rehearsal-on-frame)). G3 stopped before any marker ([E83](#e83-g3-marker-observer-attempt-stopped-at-the-observer-scene-precondition)); the file-only analysis of the chair still on Frame predicts that the O3 precondition passes ([E88](#e88-a2-file-only-still-analysis-on-frame-the-chair-still-passes-the-o3-precondition)), which is not an observation. Production gates stay closed; [implementation and limits](evidence/capability-notes.md#fixed-edge-hud-marker-and-offline-live-pipeline). |
+| Fixed edge HUD, marker and offline live pipeline | Offline validation passed; G2 closed; G3 open | The owner accepted rehearsed recovery; the green-input cause is unknown ([E79](#e79-g2-green-input-log-analysis-and-recovery-rehearsal-on-frame)). G3 stopped before any marker ([E83](#e83-g3-marker-observer-attempt-stopped-at-the-observer-scene-precondition)); the file-only analysis of the chair still on Frame predicts that the O3 precondition passes ([E88](#e88-a2-file-only-still-analysis-on-frame-the-chair-still-passes-the-o3-precondition)). On November 7 the marker tile appeared in the mirror for the first time and its whole pattern matched, but the corner tags did not decode at the tile's size in the mirror, so the attempt was rejected; one budgeted attempt remains ([E89](#e89-a4-marker-observer-attempt-on-frame-the-marker-appeared-and-its-tags-did-not-decode-at-the-mirrors-scale)). Production gates stay closed; [implementation and limits](evidence/capability-notes.md#fixed-edge-hud-marker-and-offline-live-pipeline). |
 | Bounded mirror recognition | Rewritten path re-run on Frame; broader accuracy open | The November 3 rerun had labels matching the owner’s view ([E81](#e81-catch-up-session-on-frame-regressions-400-frame-panel-run-mirror-and-wp2-stills)). [Earlier measurements, still export and limits](evidence/capability-notes.md#bounded-mirror-recognition). |
 | Existing-mirror diagnostic | Frame capture confirmed; VR panel included in input | Physical-room preview and bounded inference work, but this composited view includes our overlay; physical camera identity/timing remain unknown; [E14](#e14-physical-room-visible-in-the-mirror-preview), [E18](#e18-vr-panel-included-in-mirror-input) |
 | Recognition on the saved room still | Frame execution confirmed; false positive | One image processed and annotated; user identifies the `sofa`-labeled item as a rug; [E15](#e15-saved-room-recognition-and-rug-false-positive) |
@@ -428,6 +428,10 @@ provenance and original uncertainty.
 ### E88: A2 file-only still analysis on Frame, the chair still passes the O3 precondition
 
 [Full evidence](evidence/e088.md). Device report.
+
+### E89: A4 marker-observer attempt on Frame, the marker appeared and its tags did not decode at the mirror's scale
+
+[Full evidence](evidence/e089.md). Device report.
 
 ## Maintaining the evidence
 
