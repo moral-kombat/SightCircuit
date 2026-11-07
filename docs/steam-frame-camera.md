@@ -1,53 +1,47 @@
 # Steam Frame and Arcturus camera integration
 
-Initial research snapshot: 2026-10-15; the
-[source review and stream strategy](capture-reference-review.md) adds
-implementation findings checked on 2026-10-16. Sources were inspected on GitHub
-and the official Arcturus website. This cloud environment has no headset,
-physical camera, display server, or GPU. Project device results below are reports from the user
-running commands and apps on their Frame; community results are attributed to
-their authors. Cloud validation covers native builds and controlled
-missing-runtime behavior, not working camera capture.
+Reference for developers comparing **composited mirror input** with **dedicated
+camera input**. The mirror contains what SteamVR displays, including our panel;
+a dedicated camera interface would provide camera frames under a separate
+buffer contract. They are different inputs with different limits.
+
+Use [status](status.md) for reviewed project results, [on-device procedures](on-device.md)
+for commands, and the [current work plan](live-capture.md#current-work-order)
+for priorities. Dedicated capture is deferred. The original research from
+October 15–16 and the November 4 additions are preserved in the
+[research snapshot](history/2026-11-07-camera-research.md); source dates and pins
+below do not imply validation on a newer runtime.
 
 ## What the available sources establish
 
-Valve publishes a general application camera interface, `IVRTrackedCamera_006`,
-in the [OpenVR SDK][openvr-api]. It does not establish that the Steam Frame
-runtime exposes the Arcturus RGB camera through that interface. No public,
-stable Steam Frame/Arcturus-specific live capture SDK or electrical connector
-pinout was found in the sources reviewed. The official [Arcturus apps page][arcturus-apps]
-documents Camera recording/viewing, recording transfer/conversion and Gaussian
-XR workflows; these capabilities do not establish a public live-frame API.
+The reviewed sources do not establish a supported public Steam Frame/Arcturus
+live-camera API for SightCircuit. Valve's general OpenVR camera interface is
+an application contract, not proof of support on this headset. Arcturus's
+[official apps][arcturus-apps] document recording, viewing and reconstruction;
+those features do not establish an application frame-access contract.
 
-The most relevant Frame-specific live-capture source found is the community
-[steam-frame-hand-tracking project][hand-report]. Its investigation reports that
-the public API fails to deliver frames on its tested runtime, while an
-experimental Vulkan capture path delivers the Arcturus passthrough pair.
-Treat this as evidence for an implementation experiment, not a vendor support
-contract or a result for every firmware version.
-
-| Source | Information useful to SightCircuit | Evidence and limits |
+| Source | What it provides | Limit |
 | --- | --- | --- |
-| [Valve OpenVR camera interface][openvr-api] | Discovery, shared streaming, CPU RGBA frames, GL textures, intrinsics and projection | Official SDK contract; Arcturus support must be probed on-device |
-| [Valve tracked-camera sample][openvr-sample] | Buffer allocation, sequence checking, frame copy and cleanup | Official general example; not a Steam Frame compatibility test |
-| [Valve OpenCV sandbox][openvr-geometry] | Per-camera intrinsics and camera-to-head transforms | Official geometry example; properties may be unavailable on Frame |
-| [Community camera investigation][hand-findings] | Failed public API probes, XRService ownership, recording/calibration findings | Author-reported hardware results from October 2026 |
-| [Community capture implementation][hand-capture] | Vulkan DMA-BUF import, GPU luma extraction and shared-memory output | Experimental integration inside `vrcompositor`; not a public camera SDK |
-| [Frame Passthrough Shortcuts][source-switch] | Arcturus presence detection and RGB/monochrome switching | Uses private interfaces; source selection does not provide image frames |
+| [OpenVR header][openvr-api], [sample][openvr-sample] and [geometry example][openvr-geometry] | General camera acquisition, frames and calibration interfaces | SightCircuit's public probe returned no frames and interrupted passthrough |
+| [spyjacob investigation][hand-findings] and [capture implementation][hand-capture] | Experimental Arcturus buffer access through a Vulkan layer | Third-party result; missing producer synchronization |
+| [Frame Passthrough Shortcuts][source-switch] | RGB/monochrome source switching through private interfaces | Source selection does not supply frames or a stable public ABI |
+| [Arcturus apps][arcturus-apps], [Splat Workshop][splat-workshop] and [Spirula][spirula] | Recording, transfer, conversion and reconstruction | File workflows, separate from live detection |
 
 ## Project device results
 
-Detailed project results live in [status and evidence](status.md). The vendor
-app works according to the user, while our public probe returned no frames and
-interrupted passthrough. [E3](status.md#e3-public-camera-probe) records the API
-errors and their limits; [E4–E6](status.md#e4-recordings-and-container-metadata)
-record the file-decoding and presentation results.
+- **Mirror input works for bounded recognition.** [E48](evidence/e048.md)
+  records capture, inference and a matching saved preview. The mirror includes
+  our VR panel ([E18](evidence/e018.md)), so live output needs qualified masking
+  and feedback/expiry acceptance.
+- **The public camera probe failed.** It returned no frames and interrupted
+  passthrough ([E3](evidence/e003.md)). Do not repeat it unchanged; the
+  [device guide](on-device.md#then-verify-camera-access) owns any future procedure.
+- **Metadata-only provider activation was tested.** [E65](evidence/e065.md)
+  records provider loading and restoration across platform sessions, with an
+  unsettled full registry. That result does not establish synchronized image
+  access, physical camera identity or a working dedicated capture backend.
 
-Do not repeat the unchanged public probe. Its explicit interruption guard and
-future-retest procedure remain in the
-[on-device guide](on-device.md#then-verify-camera-access). This reference records
-public contracts and upstream research; those sources do not establish a
-working SightCircuit live backend.
+These are brief pointers to evidence, not a second compatibility table.
 
 ## Valve's documented application interface
 
@@ -93,75 +87,48 @@ Important details from the header:
 
 ## Steam Frame observations from community code
 
-These findings apply to the cited projects and tested runtimes. Runtime updates
-may change them; any future probe must account for the passthrough interruption
-observed on our user's device.
+The following findings apply to the pinned upstream sources and their reported
+runtimes. Project observations are recorded separately above.
 
 ### Public API and camera ownership
 
-The [hand-tracking investigation][hand-findings] reports:
+The [hand-tracking investigation][hand-findings] reports successful camera
+presence/handle calls but failed frame-size queries and unavailable calibration.
+A handle alone therefore does not prove usable capture. It identifies
+`/dev/video99` as a composited mirror, physical camera nodes as owned by
+XRService, and XRService's investigated IPC as single-session. Resolve a device
+by identity; a node number does not establish a safe camera interface.
 
-- `HasCamera=1` and successful streaming-handle acquisition, but
-  `GetCameraFrameSize` fails for all frame types and calibration properties are
-  unavailable. Acquiring a handle therefore does not demonstrate usable capture.
-- `/dev/video99` is a composited headset mirror, not raw stereo input.
-  It may still be useful for a first 2D recognition demo if it includes live
-  passthrough on our runtime. That content and output-panel feedback must be
-  checked; the mirror has not been captured by this project.
-- Physical camera nodes are owned by XRService. Their existence does not make
-  `cv2.VideoCapture(0)` a valid Arcturus capture method.
-- The investigated XRService IPC path is single-session and already used by
-  the tracking driver. It is not established as a supported second-client API.
-
-The [source-switching implementation][source-switch] discovers sensor nodes by
-the `arcimx616 ` name prefix and uses a private connection query. It switches
-passthrough sources with `IVRCameraPassthroughInternal_001`, using private vtable
-slots verified by that author on one firmware build. This is useful evidence
-about source control, but supplies no capture buffer and no stable public ABI.
-Do not confuse these sensor nodes with proof of USB UVC compatibility.
+The [source-switching implementation][source-switch] uses the `arcimx616 `
+sensor-name prefix and `IVRCameraPassthroughInternal_001` private vtable slots.
+Those are author-tested source controls, not frame access or USB UVC support.
 
 ### Experimental live capture
 
-The [community report][hand-report] describes this path:
+The [upstream prototype][hand-capture] follows this path:
 
 ```text
-Arcturus passthrough pair → XRService → vrcompositor
-                                         ↓ passive Vulkan layer shares DMA-BUFs
-                               separate Vulkan process (ptgrab)
-                                         ↓ GPU extraction/downscale
-                               shared-memory luma frames → inference
+Arcturus → XRService → vrcompositor → Vulkan layer shares buffer descriptors
+                                  → ptgrab imports buffers → shared-memory luma
 ```
 
-The author reports 2464 × 2464 NV12 camera images at 60 fps, with Qualcomm UBWC
-compression. These are observed values, not dimensions or performance to hardcode.
-The Vulkan importer needs image format, plane offsets/row pitches and DRM
-modifier metadata; the compressed buffers cannot be treated as ordinary linear
-NV12 byte arrays.
+The author [reports][hand-report] 2464 × 2464 NV12 images at 60 fps with Qualcomm
+UBWC compression. These are reported values, not defaults to hardcode. The
+importer needs the actual format, modifier, plane offsets and row pitches;
+compressed buffers cannot be read as ordinary linear NV12.
 
-The [actual capture implementation][hand-capture] publishes downscaled **luma**
-frames, commonly 640 × 640 per camera, to `/dev/shm/mrhand-pt`. Its
-[shared-memory contract][hand-protocol] includes dimensions, camera slots,
-seqlocks, observation times and local frame counters. It does not provide a
-ready-made color RGB stream for our detector.
+The prototype publishes downscaled grayscale (luma) frames, commonly 640 × 640
+per slot, to `/dev/shm/mrhand-pt`. Its [protocol][hand-protocol] includes sequence
+locks, observation times and counters. It does not provide a ready-made RGB
+stream. It sorts buffer IDs into camera slots and infers readiness from pixel-strip
+changes; neither mechanism establishes camera identity or producer completion.
 
-Code review confirms that `ptgrab` filters for 2464 × 2464 images, assigns two
-camera slots by sorted buffer IDs and uses pixel-strip changes to infer frame
-readiness. The author's report says built-in-camera-sized buffers stayed empty.
-The current implementation therefore establishes an Arcturus-specific lead,
-not a general built-in-camera backend. The [source review](capture-reference-review.md)
-details lifecycle, descriptor and synchronization work needed for adaptation.
-
-The author's [timestamp description][hand-timebase] and
-[capture caveats][hand-timing] are material: producer frame sequence and producer
-synchronization fences are unavailable through this path. Capture timestamps are
-observation-time estimates, not exposure timestamps, and some frames are missed.
-Consumer-side Vulkan fences do not establish synchronization with the camera
-producer. Avoid presenting these estimates as exact exposure times or guaranteed
-stereo synchronization.
-
-This layer changes compositor startup. Keep it as a separately evaluated,
-optional backend, with the upstream rollback process available. It has not been
-installed in the cloud environment or on a headset as part of this project.
+The reported timestamps are [observation estimates][hand-timebase], not exposure
+times. Consumer-side fences do not synchronize reads with XRService writes;
+[producer fences and sequences remain missing][hand-timing]. The
+[dated source review](capture-reference-review.md) preserves detailed ownership,
+lifetime and publication findings. SightCircuit's adaptation remains metadata-only;
+its loading result is separate from the upstream image-access claim.
 
 ## Third-party camera claims (2026-11-04)
 
@@ -210,100 +177,52 @@ not order reads against the camera producer.
 
 ## Community references selected for follow-up (2026-10-16)
 
-These are references 1 and 3 from the community scan, rechecked against upstream
-documentation/source. They are research leads, not SightCircuit hardware
-validation, a supported SDK, or authorization to install anything. The existing
-capture-only reader plan and pinned producer remain unchanged.
+These are research leads. The [original scan](history/2026-11-07-camera-research.md#community-references-selected-for-follow-up-2026-10-16)
+retains its broader links and context. Re-pin any moving source before adopting
+code, and record its license in [third-party attribution](../THIRD_PARTY.md).
 
 ### 1. spyjacob: Arcturus live capture and hand tracking
 
-- [Project](https://github.com/spyjacob/steam-frame-hand-tracking),
-  [measurements and limitations](https://github.com/spyjacob/steam-frame-hand-tracking/blob/main/REPORT.md),
-  [Vulkan layer](https://github.com/spyjacob/steam-frame-hand-tracking/blob/main/capture/handcam_layer.cpp),
-  and [ptgrab consumer](https://github.com/spyjacob/steam-frame-hand-tracking/blob/main/capture/ptgrab.cpp).
-- Already cited above at a pinned revision. The layer shares imported camera
-  DMA-BUFs; a separate Vulkan process extracts downscaled luma for shared-memory
-  readers. The author reports live Arcturus capture, not built-in tracking-camera
-  capture through this route.
-- Useful next review: buffer layout, consumer synchronization and shutdown.
-  Preserve the report's estimated observation timestamps, missed-frame and
-  producer-fence limitations. Luma is not a color stream.
-- The report describes CPU contention and passthrough artifacts during inference.
-  Evaluate capture separately from inference, then measure compositor impact.
+The [report][hand-report] and [capture source][hand-capture] are pinned to
+`ff6a2b29bc50c9497d66fd7ff07e00b61f9eb082`. The relevant findings are summarized
+under [experimental capture](#experimental-live-capture). The author also
+reports inference contention and passthrough artifacts, which require separate
+capture and inference measurements on any future implementation.
 
 ### 3. Frametop: built-in camera research and related leads
 
-- [Frametop hands documentation](https://github.com/Frametop/frametop/blob/main/hands/README.md)
-  describes `ft-camd` borrowing XRService DMA-BUFs and publishing four IR
-  tracking-camera streams in a shared-memory ring, using dequeue tracepoints
-  for timing. This is a different route from spyjacob's compositor layer.
-- Upstream labels hand tracking experimental/deferred because of CPU cost.
-  The broker setup requires elevated capabilities
-  (`CAP_SYS_PTRACE`, `CAP_PERFMON`, `CAP_DAC_READ_SEARCH`); do not treat it as
-  an unprivileged drop-in reader.
-- Its known issues include unusable color frames while the headset is worn,
-  unsettled color calibration mapping, and wake-related camera failures.
-  Those are author-reported constraints, not results from our Frame.
-- Next question: could a separately audited provider supply complete, correctly
-  identified mono frames without disrupting XRService? Keep source identity,
-  timestamps, privilege requirements and restoration checks explicit.
+[Frametop's hands documentation](https://github.com/Frametop/frametop/blob/adebd7d6cfc938477bf8e42a8bcb1c41a32a6f9c/hands/README.md)
+describes a separate `ft-camd` route that borrows XRService buffers and publishes
+four IR tracking-camera streams. Its broker requires `CAP_SYS_PTRACE`,
+`CAP_PERFMON` and `CAP_DAC_READ_SEARCH`. Reported color, calibration and wake
+problems make it a research lead, not a qualified replacement input.
 
-Related leads from reference 3:
-
-- [“That's how the Frame sees the world” community post](https://www.reddit.com/r/SteamFrame/comments/1x58r7b/thats_how_the_frame_sees_the_world/)
-  is visual/community context, not a documented capture API. No direct
-  implementation relationship to Frametop was established by this review.
-- [NotZoeyDev/QuestLHSync, steam-frame branch](https://github.com/NotZoeyDev/QuestLHSync/tree/steam-frame/frame)
-  contains a Frame-specific camera/driver path for Lighthouse alignment.
-  Its [README](https://github.com/NotZoeyDev/QuestLHSync/blob/steam-frame/README.md)
-  describes transmitting bright-spot positions rather than images.
-  Investigate it as a source-access/calibration lead, not an RGB frame API
-  already suitable for SightCircuit. Installation changes SteamVR services/drivers
-  and is outside this documentation update.
-
-The links in this section follow moving upstream branches; re-pin an audited
-revision before implementation. Nothing here changes the project's current
-status: recorded replay works; live camera capture is still unimplemented.
+The [historical related leads](history/2026-11-07-camera-research.md#3-frametop-built-in-camera-research-and-related-leads)
+include QuestLHSync's bright-spot driver and a community visualization. Neither
+establishes a supported RGB frame provider for SightCircuit.
 
 ## Calibration, spatial labels and Gaussian splats
 
-For 3D labels, retain camera intrinsics/distortion, per-camera extrinsics, the
-camera-to-head transform, frame timebase and the matching headset pose. Detecting
-an object in 2D does not determine its 3D location; add measured/estimated depth
-and transform it into the chosen tracking space. Use calibration from the actual
-camera/headset, rather than copying another author's numerical parameters.
+These are deferred, separate capabilities. A 2D detection alone does not locate
+an object in 3D. Spatial labels would need actual camera intrinsics/distortion,
+extrinsics, camera-to-head transform, image timebase, matching headset pose and
+measured or estimated depth.
 
-The community [dataset recorder findings][hand-recorder] describe factory rig
-calibration and beginning/end stereo RGB snapshots. Its continuous video was
-**one SLAM camera**, not continuous Arcturus stereo color video. This diagnostic
-recording is distinct from the Arcturus camera app's stereo recordings.
-
-[Splat Workshop][splat-workshop] documents the latter as `*_stereo.mp4` with two
-video tracks plus calibration/pose metadata. Its workflow is recorded capture →
-vendor AV1-to-3DGS scripts → Arcturus's [Spirula Studio fork][spirula] on a GPU
-computer → scene conversion/viewing in Gaussian XR on Frame. Spirula supports a
-Vulkan backend; this path does not inherently require an NVIDIA/CUDA-only setup.
-The vendor fork also documents [calibrated-camera manifests][spirula-manifest].
-
-Keep reconstruction separate from live detection. Start splat experiments with
-mostly static scenes; the community recording guide reports smearing from moving
-people and pets. Preserve original camera recordings and metadata for
-reconstruction; our generated MJPEG environment fixture does not reproduce that
-recording format. The CPU-only cloud environment has not validated splat training
-or headset splat rendering.
+The [community recorder findings][hand-recorder] describe continuous video from
+one SLAM camera plus stereo RGB snapshots. This differs from Arcturus app
+`*_stereo.mp4` recordings, which [Splat Workshop][splat-workshop] describes as two
+video tracks with calibration/pose metadata. Its reconstruction workflow uses
+[Spirula][spirula] and [calibrated-camera manifests][spirula-manifest], then a
+viewer on Frame. Preserve original recordings and metadata for that work;
+generated replay fixtures do not reproduce the recording format or validate
+reconstruction and headset rendering.
 
 ## Implementation sequence and remaining checks
 
-The [active live-capture plan](live-capture.md#current-work-order) owns the
-current work order, deliverables and device acceptance checks. The
-[dated source review](capture-reference-review.md) records the implementation
-evidence and reasoning behind that plan.
-
-Use [status](status.md) for project compatibility and observed results, and the
-[on-device guide](on-device.md) for runnable procedures. Keep official SDK
-contracts, user device observations, upstream reports and cloud tests distinct.
-No live capture SDK or experimental Vulkan layer has been installed by this
-project.
+Follow the [current work plan](live-capture.md#current-work-order) and its
+[acceptance gates](live-capture.md#edge-hud-acceptance-gates). This reference
+supplies interface facts and research limits; it does not activate a provider,
+change the POC scope or establish new headset evidence.
 
 [openvr-api]: https://github.com/ValveSoftware/openvr/blob/0924064316de3effbcd1acf1e309182a2deb1c05/headers/openvr.h#L4919
 [openvr-sample]: https://github.com/ValveSoftware/openvr/blob/0924064316de3effbcd1acf1e309182a2deb1c05/samples/tracked_camera_openvr_sample/tracked_camera_openvr_sample.cpp#L349

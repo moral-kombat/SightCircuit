@@ -2,11 +2,12 @@
 
 Start with the [documentation index](docs/README.md),
 [current status](docs/status.md) and [architecture](docs/architecture.md).
-The [development guide](docs/development.md) owns full setup/build instructions;
+The [development guide](docs/development.md) owns prerequisites and setup/build instructions;
 [on-device procedures](docs/on-device.md) apply to the headset.
 
 ## Development checks
 
+Follow the [Linux prerequisites](docs/development.md) before setup.
 Use the existing checkout. Codex cloud tasks already have an isolated workspace;
 a separate Git worktree is only needed if explicitly requested.
 
@@ -25,7 +26,7 @@ tests, install the window dependencies and build the bridge:
 bash scripts/setup_window.sh
 bash scripts/build_overlay_bridge.sh
 bash scripts/build_shm_reader.sh
-.venv-replay/bin/python -m unittest discover -s tests -v
+QT_QPA_PLATFORM=offscreen .venv-replay/bin/python -m unittest discover -s tests -v
 ```
 
 These tests run without a camera or SteamVR. Native transport tests use the
@@ -62,22 +63,43 @@ with checksums instead of committing generated environments or model binaries.
 
 ## Documentation maintenance
 
-Update the owning document with the component change; the
-[documentation plan](docs/documentation-plan.md) assigns each topic a home.
-Put full validation evidence in a [per-entry record](docs/evidence/README.md),
-including procedure, date, revision, runtime, result and limits; explicitly mark
-unknown fields. The coordinator allocates its ID, adds it to the evidence index
-and updates reviewed capability rows in `docs/status-data.json`. Regenerate
-[status](docs/status.md) and the marked architecture summary with
-`python3 scripts/generate_status.py`; verify freshness with `--check`.
-Keep cloud checks, CI runs, user device reports and upstream claims distinct.
+Update the document that owns the topic in the same change as its implementation.
+The [ownership table and writing rules](docs/documentation-plan.md) identify that
+home. Keep procedures in task guides, contracts in references, and dated accounts
+in history. [Current work and acceptance](docs/live-capture.md) is the only current
+work order; [scope](docs/poc-scope.md) records accepted decisions.
 
-Maintain the current capture backlog in [live capture](docs/live-capture.md);
-dated reviews retain their source pins and decision context. Do not advertise
-planned diagnostics as available commands. Preserve existing paths and linked
-headings, and check local links, heading anchors, command paths/options and
-`git diff --check` before publishing. Keep operating warnings beside affected
-commands even when the detailed evidence moves.
+Full validation evidence belongs in a [per-entry record](docs/evidence/README.md).
+Include execution date, platform/runtime, revision, procedure, result, and limits;
+mark unavailable fields unknown. The coordinator allocates IDs after checking
+pending records, adds the entry to the evidence index, and updates reviewed
+capabilities in `docs/status-data.json`. Local E78 is not an instruction to reuse
+IDs already reserved in the older repository's open PR #23.
+
+Regenerate the status page, architecture summary, and evidence catalog, then
+validate them:
+
+```bash
+python3 scripts/generate_status.py
+python3 scripts/generate_status.py --check
+python3 scripts/check_docs.py
+python3 -m unittest discover -s tests -p 'test_generate_status.py'
+python3 -m unittest discover -s tests -p 'test_check_docs.py'
+git diff --check
+```
+
+Keep cloud checks, CI, device reports, and upstream claims distinct. Updating a
+document or a review date supplies no new headset evidence. Preserve historical
+paths, heading anchors, source pins, and unknown fields. When moving a procedure,
+leave a forwarding section and update its command-contract tests to read the
+canonical location; do not remove their assertions. The offline link checker
+also protects the original anchors recorded in `docs/legacy-anchors.json`.
+
+Verify commands against their parsers and source. Do not advertise planned tools
+as runnable, or run a headset experiment merely to validate documentation. Keep
+operating restrictions beside the affected command. Changes to HUD procedures
+also require the existing checkpoint and observer tests described in the
+[development guide](docs/development.md).
 
 ## License
 

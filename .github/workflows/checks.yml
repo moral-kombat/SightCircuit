@@ -10,6 +10,21 @@ permissions:
   contents: read
 
 jobs:
+  documentation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check local links, preserved anchors and generated documentation
+        run: |
+          python scripts/check_docs.py
+          python scripts/generate_status.py --check
+          python -m unittest discover -s tests -p test_check_docs.py -v
+          python -m unittest discover -s tests -p test_generate_status.py -v
+
   lint:
     runs-on: ubuntu-24.04
     timeout-minutes: 5

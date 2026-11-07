@@ -766,7 +766,7 @@ class ObserverLifecycleTests(ObserverFixture, unittest.TestCase):
 def documented_observer_commands():
     """``(document, logical line, arguments)`` of each observer command in the docs' bash blocks."""
     commands = []
-    for name in ("docs/hud-qualification.md", "docs/on-device.md", "docs/development.md"):
+    for name in ("docs/guides/hud-checkpoint.md", "docs/reference/hud-development.md"):
         for block in re.findall(r"```bash\n(.*?)```", (ROOT / name).read_text(encoding="utf-8"), re.S):
             for line in block.replace("\\\n", " ").splitlines():
                 if "scripts/hud_marker_observer.py" not in line:
@@ -1163,7 +1163,7 @@ class ObserverSessionTokenTests(ObserverFixture, unittest.TestCase):
 
     def test_documented_observer_commands_parse_and_record_no_session_tokens(self):
         commands = documented_observer_commands()
-        self.assertGreaterEqual(len([command for command in commands if "--analyze-still" not in command[2]]), 2)
+        self.assertEqual(len([command for command in commands if "--analyze-still" not in command[2]]), 1)
         for document, line, arguments in commands:
             with self.subTest(document=document, line=line), patch.object(observer, "discover", return_value={}), \
                     patch.object(observer, "select_candidate", return_value={"node": "verified-fixture"}), \

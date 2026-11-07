@@ -38,7 +38,7 @@ records match across three snapshots, but full-registry checks still fail and
 continuous candidate stability/image ownership are unproven. Do not repeat v2
 unchanged; the saved comparison is complete. The current minimum LIVE POC
 target was October 26, 2026 (America/New_York) and was not met. Follow
-[the critical path](../../docs/live-capture.md#minimum-live-poc-and-october-26-target).
+[the current work order](../../docs/live-capture.md#current-work-order).
 This guide grants no new device operations: no deployments, headset tests or
 restarts, source switching, provider activation, private-image transfer or server
 exposure. Follow the active user request for offline changes and PR delivery;

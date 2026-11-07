@@ -2,9 +2,10 @@
 
 Object recognition for Steam Frame. Start with [docs/README.md](docs/README.md),
 [docs/status.md](docs/status.md) (evidence) and the
-[next steps](docs/design-review.md#next-steps). Device work follows
+[current work and acceptance](docs/live-capture.md#current-work-order). Device work follows
 [docs/on-device.md](docs/on-device.md); keep cloud checks, CI results and
-user-reported headset results distinct, and record evidence in status.
+user-reported headset results distinct. Record evidence in `docs/evidence/`
+and regenerate status; do not edit generated summaries by hand.
 
 ## Layout
 
@@ -41,6 +42,8 @@ has been run; CI builds all of them.
 
 ```bash
 QT_QPA_PLATFORM=offscreen .venv-replay/bin/python -m unittest discover -s tests
+python3 scripts/check_docs.py
+python3 scripts/generate_status.py --check
 uvx ruff@0.14.2 check .
 .venv/bin/python scripts/smoke_check.py
 .venv-replay/bin/python scripts/evaluate_detectors.py --fetch --expect evaluation/seed-expected.json   # seed pin, as CI
@@ -50,3 +53,14 @@ git diff --check
 CI runs the same jobs on x86_64 (`checks.yml`) and ARM64 (`arm64.yml`) through
 `check-jobs.yml`; ARM64 also replays the synthetic stand-in and uploads
 runner-CPU latency reports (not Frame results).
+
+## Documentation navigation
+
+[Development setup](docs/development.md) owns environment and check instructions.
+[Device access](docs/on-device.md) routes to focused [task guides](docs/README.md#use-steam-frame).
+[Scope](docs/poc-scope.md) owns accepted decisions; only
+[current work](docs/live-capture.md) owns the next work order and gate state.
+Historical reviews and archived handoffs explain earlier decisions, not current
+assignments. Keep pending reports from Framejacker PR #23 separate from the
+merged evidence in this checkout; do not allocate IDs from the local maximum.
+See [documentation ownership](docs/documentation-plan.md) before moving content.

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "review_date": "2026-11-03",
+  "review_date": "2026-11-07",
   "capabilities": [
     {
       "capability": "Linux development setup and smoke check",
@@ -49,18 +49,18 @@
     },
     {
       "capability": "Bounded mirror recognition",
-      "state": "Frame POC execution and sampled preview localization confirmed",
-      "evidence": "Latest run: 100 captured / 51 processed reads, 4.993 processed fps, 40.065 ms mean inference, clean shutdown; user confirms matching preview labels/boxes and normal passthrough/tracking during/after; broader accuracy and continuous display remain separate; `--detector`/`--still` with pinned still digests restored offline for WP2 stills, [E76](#e76-offline-work-packages-ah-cloud-checks); [E48](#e48-live-mirror-recognition-poc-and-matching-preview)"
+      "state": "Frame demonstration confirmed; broader accuracy open",
+      "evidence": "Bounded capture, matching preview labels and normal passthrough were reported in [E48](#e48-live-mirror-recognition-poc-and-matching-preview). Still export was restored offline in E76; [measurements and limits](evidence/capability-notes.md#bounded-mirror-recognition)."
     },
     {
       "capability": "Real-time recorded replay",
-      "state": "Cloud-tested on a synthetic stand-in; Frame measurement pending",
-      "evidence": "Keyframe catch-up and newest-frame inference reach a 0.94 real-time ratio where the previous version reproduced Frame's 0.97 processed fps; [E53](#e53-unattended-replay-regression-and-pacing-rerun), [E62](#e62-keyframe-catch-up-realtime-replay-cloud-checks); latency percentiles, processed-media fraction and an ARM64 runner-CPU stand-in job added offline, [E76](#e76-offline-work-packages-ah-cloud-checks)"
+      "state": "Synthetic cloud check passed; Frame measurement pending",
+      "evidence": "Keyframe catch-up and newest-frame inference improve the synthetic replay. [Measurements and later latency tooling](evidence/capability-notes.md#real-time-recorded-replay); [E62](#e62-keyframe-catch-up-realtime-replay-cloud-checks)."
     },
     {
       "capability": "Candidate detector and evaluation harness",
-      "state": "Preprocessing audit verified offline; E61 reproduction and Frame selection blocked",
-      "evidence": "Corrected demonstrated SSD channel normalization and per-axis scoring; pinned audit variants and factual annotation coverage; original still/digest absent; detector-owned preprocessing, mirror-preview variant, per-label diagnostics and a CI seed pin added offline ([E76](#e76-offline-work-packages-ah-cloud-checks)); no default change; [E73](#e73-reproducible-preprocessing-audit-and-ssd-channel-correction), [E61](#e61-file-only-detector-comparison-on-the-evening-grayscale-still)"
+      "state": "Offline audit passed; Frame model choice blocked",
+      "evidence": "SSD preprocessing is corrected; the original E61 still and digest remain absent. No default changed. [Audit and evaluation details](evidence/capability-notes.md#candidate-detector-and-evaluation-harness); [E73](#e73-reproducible-preprocessing-audit-and-ssd-channel-correction)."
     },
     {
       "capability": "Existing-mirror diagnostic",
@@ -109,13 +109,13 @@
     },
     {
       "capability": "Capture watchdog, provider/layer lifecycle and exact recovery",
-      "state": "Earlier v2 milestone passed all 28 generated-data tests on Frame ARM64",
-      "evidence": "Bounded worker, metadata/GPU provenance, registry changes, owned endpoint and conditional restoration; no real driver/layer execution or device restoration; [E35](#e35-watchdog-provider-and-recovery-tests-on-frame). Two supervisor cancellation races fixed on 2026-11-04 with cloud checks (the publication race was also reproduced on a CI runner) and no Frame result ([details](development.md#worker-containment-and-publication-recovery))"
+      "state": "Earlier synthetic Frame checks passed; later fixes cloud-only",
+      "evidence": "The v2 milestone passed 28 generated-data tests on Frame. Driver execution and physical recovery remain unverified. [Lifecycle and November 4 fix details](evidence/capability-notes.md#capture-watchdog-providerlayer-lifecycle-and-exact-recovery)."
     },
     {
       "capability": "Metadata-only provider and producer synchronization review",
-      "state": "v3 ARM64 build and all 24 generated-data tests passed on Frame",
-      "evidence": "E36/E37 cover generated metadata-only checks, with no layer activation in those checks; later real metadata load/restoration is recorded separately in E65. Layer retains/exports no image FDs, live image access stays blocked and the provider track remains frozen; [E36](#e36-metadata-only-provider-and-synchronization-review), [E37](#e37-metadata-only-provider-and-diagnostic-on-frame), [E65](#e65-v2-recovered-candidate-snapshots-compared-and-visual-check-passed)"
+      "state": "Metadata-only checks passed; image access blocked",
+      "evidence": "The v3 build and 24 generated-data tests passed on Frame. E65 separately records actual metadata loading/restoration. [Scope and limits](evidence/capability-notes.md#metadata-only-provider-and-producer-synchronization-review)."
     },
     {
       "capability": "Inactive v3 bundle and SteamVR service preflight",
@@ -124,18 +124,18 @@
     },
     {
       "capability": "Bounded metadata-layer trial and post-exit recovery",
-      "state": "Metadata-only provider loaded and restored on Frame through platform session cycles; registry inspection unstable; image access blocked",
-      "evidence": "Bare SteamVR stop refused after the session coupling was found ([E63](#e63-service-only-rehearsal-and-graphical-session-dependency)); platform session test passed with a normal headset ([E64](#e64-platform-session-test-completed-and-headset-confirmed)); two metadata trials loaded the provider and restored normal startup, with eight stable candidate records but no settled full registry ([E65](#e65-v2-recovered-candidate-snapshots-compared-and-visual-check-passed)); earlier runtime baseline [E46](#e46-read-only-runtime-baseline-on-frame)"
+      "state": "Metadata loading/restoration reported; inspection unstable",
+      "evidence": "Two trials found eight stable candidate records, but the full registry did not settle. Image access stays blocked. [Session sequence and evidence](evidence/capability-notes.md#bounded-metadata-layer-trial-and-post-exit-recovery)."
     },
     {
       "capability": "Fixed edge HUD, marker and offline live pipeline",
-      "state": "Shared runtime verified offline; historical V4 observation rejected; production closed",
-      "evidence": "Native masking, original-frame expiry and qualification schema verified offline; recovered V4 report/source explain the software stop; cooperative marker stop, guardian-loss containment, one generated HUD contract, observer-to-candidate conversion, factory-only calibrations and exclusion counters verified offline ([E76](#e76-offline-work-packages-ah-cloud-checks)); mirror session tokens from read-only providers (the mirror recognizer passes no session; tracking tokens wait for a native reporter) and a neutral mask fill that passes the strict synthetic run with the default detector, verified offline ([E78](#e78-mirror-session-tokens-and-neutral-hud-mask-fill-cloud-checks)); the marker observer's off-by-default `--record-session-tokens` and the `--from-observer` conversion that takes session tokens only from the observer record are cloud-checked, evidence record pending ([observed session tokens](hud-qualification.md#observed-session-tokens-for-the-candidate-2026-11-03)); green physical outcome and G2 remain open; [E72](#e72-shared-hud-runtime-and-independent-lifecycle-fixes), [E74](#e74-evidence-generation-and-offline-mapping-qualification-support), [E75](#e75-recovered-v4-evidence-and-software-termination-analysis)"
+      "state": "Offline validation passed; device acceptance open",
+      "evidence": "V4 was rejected; G2 remains open and production gates stay closed in committed evidence. [Runtime, mask and token details](evidence/capability-notes.md#fixed-edge-hud-marker-and-offline-live-pipeline); [E75](#e75-recovered-v4-evidence-and-software-termination-analysis), [E78](#e78-mirror-session-tokens-and-neutral-hud-mask-fill-cloud-checks)."
     },
     {
       "capability": "Guarded on-device agent runner",
-      "state": "Cloud-tested only; no recorded Frame run",
-      "evidence": "Fixed Tier A task runner, fail-closed PreToolUse guard and settings template tested in the cloud only; the Phase 0 installer's path, verify, signature, smoke and record stages tested in the cloud with a fake `claude` (the signature stage with locally generated keys and a fake download; precheck, install and the interactive login untested); none of the runner, guard, settings or installer has a recorded Frame run, and the review's cycle-3 follow-ups are open; [E77](#e77-claude-code-on-frame-runner-guard-and-installer-cloud-checks)"
+      "state": "Cloud-tested; no Frame run in committed evidence",
+      "evidence": "Runner, guard, settings and selected installer stages were tested offline. [Coverage and outstanding follow-ups](evidence/capability-notes.md#guarded-on-device-agent-runner); [E77](#e77-claude-code-on-frame-runner-guard-and-installer-cloud-checks)."
     },
     {
       "capability": "Dedicated Arcturus Vulkan capture",
@@ -165,5 +165,58 @@
     "Fixed edge HUD, marker and offline live pipeline",
     "Stereo depth and world-space labels",
     "Gaussian splat reconstruction and viewing"
+  ],
+  "capability_groups": [
+    {
+      "title": "Active POC",
+      "capabilities": [
+        "Continuous live input in the Qt/VR application",
+        "Fixed edge HUD, marker and offline live pipeline",
+        "Bounded mirror recognition",
+        "Existing-mirror diagnostic",
+        "Recognition on the saved room still",
+        "Candidate detector and evaluation harness"
+      ]
+    },
+    {
+      "title": "Replay and development",
+      "capabilities": [
+        "Annotated Qt replay window",
+        "Native head-relative VR replay panel",
+        "Selected-track HEVC decoding and RGB conversion",
+        "Real-time recorded replay",
+        "Linux development setup and smoke check",
+        "Read-only device and recording inspection",
+        "Vendor Arcturus app live preview and recording",
+        "Guarded on-device agent runner"
+      ]
+    },
+    {
+      "title": "Paused provider research",
+      "capabilities": [
+        "Public OpenVR tracked-camera probe",
+        "Dedicated-camera shared-memory reader",
+        "Native capture prerequisite report",
+        "Pinned capture reference build",
+        "Descriptor transport adaptation",
+        "Provider publication and loop controls",
+        "Bounded Vulkan capability query",
+        "Image import validation and ownership",
+        "Device and remaining GPU resource ownership",
+        "Capture watchdog, provider/layer lifecycle and exact recovery",
+        "Metadata-only provider and producer synchronization review",
+        "Inactive v3 bundle and SteamVR service preflight",
+        "Bounded metadata-layer trial and post-exit recovery",
+        "Dedicated Arcturus Vulkan capture",
+        "Built-in passthrough camera input"
+      ]
+    },
+    {
+      "title": "Deferred",
+      "capabilities": [
+        "Stereo depth and world-space labels",
+        "Gaussian splat reconstruction and viewing"
+      ]
+    }
   ]
 }
