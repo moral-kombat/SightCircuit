@@ -171,9 +171,8 @@ and the [operator table](guides/hud-checkpoint.md) carry the full list.
 #### Progress (2026-11-07, evening)
 
 Merged on main, cloud-checked only, none run on the Frame: A1 (#5), A3 (#10),
-A6 (#11), B1 and B2 (#9), C1 to C4 (#8), P0 (#7); B3 (#12) is in the ship
-pass, merging once CI on its merge commit is green, with its ARM64 run on
-main owed afterwards. Evidence E85 (the SteamOS 0.5.8 update and the Python 3.12
+A6 (#11), B1 and B2 (#9), B3 (#12; its ARM64 run on main is owed), C1 to C4
+(#8), P0 (#7). Evidence E85 (the SteamOS 0.5.8 update and the Python 3.12
 removal) and E86 (the installer run and the guard version 4 disclosure) are
 recorded. The installer step that the plan listed as a separate approval
 turned out to be none: guard version 4 became active with the pull to
