@@ -155,6 +155,55 @@ print(json.dumps(report))
                         process.kill()
                     process.communicate(timeout=2)
 
+    def test_two_signals_pending_together_and_a_default_disposition_still_end_with_a_reaped_worker(self):
+        # The November 6 review's two gaps: a SIGINT and a SIGTERM delivered together during cleanup, and a
+        # caller with SIG_DFL (no handler at all), each ended the supervisor without reaping. Now a signal is
+        # only recorded, so both runs end cancelled with the first signal, the worker reaped, the session gone.
+        body = """
+import json, signal, sys
+from pathlib import Path
+from scripts.capture_supervisor import supervise, StopRequested
+if sys.argv[3] == 'handlers':
+    def stop(number, frame): raise StopRequested(number)
+    signal.signal(signal.SIGINT, stop)
+    signal.signal(signal.SIGTERM, stop)
+else:
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+try:
+    report = supervise(worker=Path(sys.argv[1]), runtime=sys.argv[2], worker_arguments=['hang_copy'], timeout=5, grace=0.05)
+finally:
+    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
+print(json.dumps(report))
+"""
+        for caller, numbers in (("handlers", (signal.SIGINT, signal.SIGTERM)), ("default", (signal.SIGTERM,)),
+                                ("default", (signal.SIGTERM, signal.SIGINT))):
+            with self.subTest(caller=caller, numbers=numbers), tempfile.TemporaryDirectory(dir=self.root) as runtime:
+                process = subprocess.Popen([sys.executable, "-c", body, str(self.worker), runtime, caller],
+                                           cwd=capture.ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                try:
+                    deadline = time.monotonic() + 3
+                    while not list(Path(runtime).glob("*/frames.shm")) and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    self.assertTrue(list(Path(runtime).glob("*/frames.shm")))
+                    for number in numbers:  # Back to back: pending together as far as the supervisor can tell.
+                        process.send_signal(number)
+                    out, err = process.communicate(timeout=5)
+                    self.assertEqual(process.returncode, 0, err)  # The supervisor returned; nothing ended it.
+                    report = json.loads(out)
+                    self.assertEqual((report["status"], report["reason"]), ("cancelled", "signal"), report)
+                    self.assertIn(report["signal"], numbers)
+                    self.assertEqual(report["exit_code"], 128 + report["signal"])
+                    self.assertTrue(report["worker_reaped"], report)
+                    self.assertTrue(report["publication_recovery_confirmed"], report)
+                    self.assertFalse(Path(report["session_path"]).exists())
+                    with self.assertRaises(ProcessLookupError):
+                        os.kill(report["worker_pid"], 0)
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                    process.communicate(timeout=2)
+
     def test_a_graceful_cancellation_still_collects_the_final_event(self):
         # The worker retires on SIGTERM. A cancellation that replaces no error leaves the unread
         # output in the pipe for the drain, so the worker's capture_closed event is still
@@ -293,13 +342,17 @@ import json, signal, subprocess, sys, time
 from pathlib import Path
 from scripts.capture_supervisor import supervise, StopRequested
 delivered = []
-def stop(number, frame):
-    # Read the lease as the recorded cancellation is delivered, before anything else can save it.
-    leases = Path(sys.argv[2]).glob('sightcircuit-capture-*/lease.json')
-    delivered.extend(json.loads(path.read_text()) for path in leases)
-    raise StopRequested(number)
+def stop(number, frame): raise StopRequested(number)
 signal.signal(signal.SIGINT, stop)
 signal.signal(signal.SIGTERM, stop)
+from scripts.capture_session import Session
+original_cleanup = Session.cleanup
+def cleanup(self):
+    # Read the lease as the recorded cancellation is acted on, before the session removes it.
+    leases = Path(sys.argv[2]).glob('sightcircuit-capture-*/lease.json')
+    delivered.extend(json.loads(path.read_text()) for path in leases)
+    return original_cleanup(self)
+Session.cleanup = cleanup
 original = subprocess.Popen
 def held(*args, **kwargs):
     process = original(*args, **kwargs)
@@ -342,8 +395,8 @@ print(json.dumps(dict(report, delivered=delivered)))
                     self.assertTrue(report["publication_recovery_confirmed"], report)
                     self.assertNotIn("superseded_error", report)
                     self.assertFalse(Path(report["session_path"]).exists())
-                    # The lease named the worker when the recorded cancellation was delivered, so a
-                    # caller whose SIG_DFL ends the process still leaves it for --recover-session.
+                    # The lease named the worker when the recorded cancellation was acted on, so it is
+                    # there for --recover-session whatever happens to the supervisor afterwards.
                     self.assertEqual([lease["worker_pid"] for lease in report["delivered"]], [report["worker_pid"]])
                     self.assertIsNotNone(report["delivered"][0]["worker_start"], report)
                     with self.assertRaises(ProcessLookupError):
@@ -560,8 +613,8 @@ supervise(worker=Path(sys.argv[1]), runtime=sys.argv[2], worker_arguments=['hang
             libc.prctl(36, old.value, 0, 0, 0)
 
 
-class RecordedSignalsTests(unittest.TestCase):
-    """The handler swap used while the worker starts; it needs no native boundary."""
+class StartFailureTests(unittest.TestCase):
+    """A spawn that fails, with and without a cancellation recorded meanwhile; it needs no native boundary."""
 
     def setUp(self):
         keep_another_thread(self)
@@ -573,102 +626,6 @@ class RecordedSignalsTests(unittest.TestCase):
     def tearDown(self):
         for number, handler in self.saved.items():
             signal.signal(number, handler)
-
-    def test_a_signal_during_the_block_reaches_the_previous_handler_only_afterwards(self):
-        handlers = {number: signal.getsignal(number) for number in self.saved}
-        for number in (signal.SIGINT, signal.SIGTERM):
-            self.calls.clear()
-            with capture.recorded_signals():
-                signal.raise_signal(number)  # Runs the recording handler, not the previous one.
-                inside = list(self.calls)
-            self.assertEqual(inside, [])
-            self.assertEqual(self.calls, [number])
-            self.assertEqual({n: signal.getsignal(n) for n in self.saved}, handlers)
-
-    def test_each_distinct_signal_is_delivered_once_in_arrival_order(self):
-        with capture.recorded_signals():
-            for number in (signal.SIGTERM, signal.SIGINT, signal.SIGTERM):
-                signal.raise_signal(number)
-        self.assertEqual(self.calls, [signal.SIGTERM, signal.SIGINT])
-
-    def test_a_raising_handler_ends_delivery(self):
-        def stop(number, frame):
-            self.calls.append(number)
-            raise capture.StopRequested(number)
-        signal.signal(signal.SIGTERM, stop)
-        with self.assertRaises(capture.StopRequested) as caught:
-            with capture.recorded_signals():
-                for number in (signal.SIGTERM, signal.SIGINT):
-                    signal.raise_signal(number)
-        self.assertEqual(caught.exception.number, signal.SIGTERM)
-        self.assertEqual(self.calls, [signal.SIGTERM])
-
-    def test_an_ignored_signal_does_not_hide_a_later_cancellation(self):
-        def stop(number, frame):
-            raise capture.StopRequested(number)
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
-        signal.signal(signal.SIGTERM, stop)
-        with self.assertRaises(capture.StopRequested) as caught:
-            with capture.recorded_signals():
-                inside = signal.getsignal(signal.SIGINT)  # Not swapped: the worker inherits it.
-                for number in (signal.SIGINT, signal.SIGTERM):
-                    signal.raise_signal(number)
-        self.assertIs(inside, signal.SIG_IGN)
-        self.assertEqual(caught.exception.number, signal.SIGTERM)
-        self.assertIs(signal.getsignal(signal.SIGINT), signal.SIG_IGN)
-
-    def test_handlers_are_restored_before_a_raising_handler_runs(self):
-        def stop(number, frame):
-            raise capture.StopRequested(number)
-        signal.signal(signal.SIGTERM, stop)
-        handlers = {number: signal.getsignal(number) for number in self.saved}
-        with self.assertRaises(capture.StopRequested):
-            with capture.recorded_signals():
-                signal.raise_signal(signal.SIGTERM)
-        self.assertEqual({number: signal.getsignal(number) for number in self.saved}, handlers)
-
-    def test_a_signal_between_the_two_restores_leaves_neither_recording(self):
-        def stop(number, frame):
-            raise capture.StopRequested(number)
-        for number in self.saved:
-            signal.signal(number, stop)
-        install, sent = signal.signal, []
-
-        def restore_then_cancel(number, handler):
-            old = install(number, handler)
-            if not sent and handler is stop:
-                # The first restore, whichever signal it is: the signal lands before the second.
-                # It is sent to this thread only, which holds it: os.kill would let another
-                # thread take it and run the handler on this one at any later point.
-                sent.append(number)
-                signal.raise_signal(number)
-            return old
-        with self.assertRaises(capture.StopRequested) as caught:
-            with mock.patch.object(capture.signal, "signal", restore_then_cancel), capture.recorded_signals():
-                pass
-        self.assertEqual([caught.exception.number], sent)
-        self.assertEqual({number: signal.getsignal(number) for number in self.saved}, dict.fromkeys(self.saved, stop))
-
-    def test_handlers_are_restored_when_the_block_raises(self):
-        handlers = {number: signal.getsignal(number) for number in self.saved}
-        with self.assertRaisesRegex(OSError, "synthetic spawn failure"):
-            with capture.recorded_signals():
-                raise OSError("synthetic spawn failure")
-        self.assertEqual({n: signal.getsignal(n) for n in self.saved}, handlers)
-        self.assertEqual(self.calls, [])
-
-    def test_a_signal_recorded_before_the_block_raises_is_still_delivered(self):
-        def stop(number, frame):
-            raise capture.StopRequested(number)
-        signal.signal(signal.SIGTERM, stop)
-        handlers = {number: signal.getsignal(number) for number in self.saved}
-        with self.assertRaises(capture.StopRequested) as caught:
-            with capture.recorded_signals():
-                signal.raise_signal(signal.SIGTERM)  # Recorded; the block then fails as a spawn would.
-                raise OSError("synthetic spawn failure")
-        self.assertEqual(caught.exception.number, signal.SIGTERM)
-        self.assertIsInstance(caught.exception.__context__, OSError)
-        self.assertEqual({number: signal.getsignal(number) for number in self.saved}, handlers)
 
     def supervise_with_a_failing_spawn(self, cancel):
         # supervise() itself, with a spawn that fails, after sending SIGTERM to this thread if
@@ -711,147 +668,24 @@ class RecordedSignalsTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
         self.assertEqual({number: signal.getsignal(number) for number in self.saved}, handlers)
 
-    def test_an_ignored_signal_stays_ignored(self):
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        with capture.recorded_signals():
-            signal.raise_signal(signal.SIGTERM)
-        self.assertIs(signal.getsignal(signal.SIGTERM), signal.SIG_IGN)
-        self.assertEqual(self.calls, [])
-
-    def test_a_default_handler_still_ends_the_process_after_the_block(self):
-        body = """
-import signal
-from scripts.capture_supervisor import recorded_signals
-signal.signal(signal.SIGTERM, signal.SIG_DFL)
-with recorded_signals():
-    signal.raise_signal(signal.SIGTERM)
-    print("inside", flush=True)
-print("after", flush=True)
-"""
-        result = subprocess.run([sys.executable, "-c", body], cwd=capture.ROOT, capture_output=True, text=True,
-                                timeout=30)
-        self.assertEqual(result.returncode, -signal.SIGTERM, result.stderr)
-        self.assertEqual(result.stdout, "inside\n")
-
-    def test_a_handler_not_installed_from_python_is_left_alone(self):
+    def test_the_supervisor_records_the_run_signals_as_the_primitive_does_and_restores_the_callers_handlers(self):
+        from sightcircuit.runtime import supervision
+        policy = supervision.SignalPolicy("record", "override", numbers=(signal.SIGINT, signal.SIGTERM))
+        self.assertEqual(capture.CAPTURE_SIGNALS, {"mode": policy.mode, "inherited_ignore": policy.inherited_ignore,
+                                                   "numbers": policy.numbers})
+        for name in ("recorded_signals", "deferred_signals", "cleanup_signals"):
+            self.assertFalse(hasattr(capture, name), f"{name} should be gone")
         handlers = {number: signal.getsignal(number) for number in self.saved}
-        reported = {**handlers, signal.SIGTERM: None}
-        real_getsignal = signal.getsignal
-        with mock.patch.object(capture.signal, "getsignal",
-                               side_effect=lambda number: reported.get(number, real_getsignal(number))):
-            with capture.recorded_signals():
-                signal.raise_signal(signal.SIGINT)  # Nothing was swapped, so the caller's handler runs.
-                inside = list(self.calls)
-        self.assertEqual(inside, [signal.SIGINT])
-        self.assertEqual(self.calls, [signal.SIGINT])
+        with capture.recording_signals() as recording:
+            self.assertFalse(recording.received)
+            signal.raise_signal(signal.SIGTERM)  # Recorded, not delivered to the caller's handler.
+            signal.raise_signal(signal.SIGINT)
+            self.assertEqual((recording.number, recording.recorded, self.calls),
+                             (signal.SIGTERM, [signal.SIGTERM, signal.SIGINT], []))
         self.assertEqual({number: signal.getsignal(number) for number in self.saved}, handlers)
-
-    def test_off_the_main_thread_nothing_changes(self):
-        seen = {}
-
-        def run():
-            with capture.recorded_signals():
-                seen.update({number: signal.getsignal(number) for number in self.saved})
-        handlers = {number: signal.getsignal(number) for number in self.saved}
-        thread = threading.Thread(target=run)
-        thread.start()
-        thread.join(10)
-        self.assertEqual(seen, handlers)
-
-
-class SignalDeferralTests(unittest.TestCase):
-    """The deferral used while a worker's output is recorded; it needs no native boundary."""
-    HELD = frozenset((signal.SIGINT, signal.SIGTERM))
-
-    def setUp(self):
-        keep_another_thread(self)
-
-    @staticmethod
-    def mask():
-        return signal.pthread_sigmask(signal.SIG_BLOCK, ())
-
-    def test_mask_is_restored_when_recording_fails(self):
-        before = self.mask()
-        inside = None
-        with self.assertRaisesRegex(ValueError, "invalid_publication_identity"):
-            with capture.deferred_signals():
-                inside = self.mask()
-                raise ValueError("invalid_publication_identity")
-        self.assertLessEqual(self.HELD, inside)
-        self.assertEqual(self.mask(), before)
-
-    def test_mask_is_restored_when_the_block_call_itself_is_cancelled(self):
-        # CPython's pthread_sigmask changes the mask and then runs pending handlers, so a
-        # cancellation that tripped just before entry raises from the call that holds the
-        # signals, after the mask has already changed.
-        real = signal.pthread_sigmask
-        before = self.mask()
-        self.addCleanup(real, signal.SIG_SETMASK, before)
-
-        def hold_then_cancel(how, mask):
-            previous = real(how, mask)
-            if how == signal.SIG_BLOCK and set(mask):
-                raise capture.StopRequested(signal.SIGTERM)
-            return previous
-        with mock.patch.object(capture.signal, "pthread_sigmask", hold_then_cancel):
-            with self.assertRaises(capture.StopRequested):
-                with capture.deferred_signals():
-                    self.fail("the block must not run")
-        self.assertEqual(self.mask(), before)
-
-    def test_previous_mask_is_restored_rather_than_cleared(self):
-        before = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
-        try:
-            with capture.deferred_signals():
-                pass
-            self.assertEqual(self.mask(), before | {signal.SIGTERM})
-        finally:
-            signal.pthread_sigmask(signal.SIG_SETMASK, before)
-        self.assertEqual(self.mask(), before)
-
-    def test_held_signal_is_delivered_when_the_block_ends(self):
-        for number in sorted(self.HELD):
-            with self.subTest(number=number):
-                received, observed = [], None
-
-                def stop(signum, _frame):
-                    received.append(signum)
-                    raise capture.StopRequested(signum)
-                previous = signal.signal(number, stop)
-                try:
-                    with self.assertRaises(capture.StopRequested) as caught:
-                        with capture.deferred_signals():
-                            signal.raise_signal(number)  # This thread only, so it stays held here.
-                            observed = (number in signal.sigpending(), list(received))
-                    # Observations are checked outside: a failure inside would be replaced by the stop.
-                    self.assertEqual(observed, (True, []))
-                    self.assertEqual(caught.exception.number, number)
-                    self.assertEqual(received, [number])
-                finally:
-                    signal.signal(number, previous)
-
-    def test_only_the_calling_thread_holds_signals(self):
-        # pthread_sigmask is per thread. Python runs handlers on the main thread only, so a
-        # supervisor running elsewhere cannot be interrupted there and the main thread is untouched.
-        entered, release, seen = threading.Event(), threading.Event(), {}
-
-        def run():
-            seen["before"] = self.mask()
-            with capture.deferred_signals():
-                seen["inside"] = self.mask()
-                entered.set()
-                release.wait(10)
-            seen["after"] = self.mask()
-        main_before = self.mask()
-        thread = threading.Thread(target=run)
-        thread.start()
-        try:
-            self.assertTrue(entered.wait(10))
-            main_during = self.mask()
-        finally:
-            release.set()
-            thread.join(10)
-        self.assertFalse(thread.is_alive())
-        self.assertLessEqual(self.HELD, seen["inside"])
-        self.assertEqual(seen["after"], seen["before"])
-        self.assertEqual(main_during, main_before)
+        self.assertEqual(self.calls, [])
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)  # An inherited ignore is taken over, as the primitive's policy says.
+        with capture.recording_signals() as recording:
+            signal.raise_signal(signal.SIGTERM)
+            self.assertEqual(recording.number, signal.SIGTERM)
+        self.assertIs(signal.getsignal(signal.SIGTERM), signal.SIG_IGN)

@@ -1,4 +1,20 @@
-"""Bound an explicitly prepared capture worker. Default never starts capture."""
+"""Bound an explicitly prepared capture worker. Default never starts capture.
+
+Signals (since 2026-11-07, work-order item B6): ``supervise()`` records SIGINT
+and SIGTERM for its whole run and polls them, the supervision primitive's
+record-and-poll policy with an inherited ignore overridden
+(``sightcircuit.runtime.supervision.RECORD_AND_POLL``). A signal that arrives
+while the worker starts, while its output is read or while it is cleaned up is
+noted, never raised, so the run always reaches its cleanup with a handle on the
+worker, ends ``cancelled`` with exit 128 + the first signal, and the caller's
+own handlers (restored afterwards) are not invoked for it. Two signals pending
+together, or a caller whose disposition is ``SIG_DFL``, no longer end the
+supervisor without reaping; the earlier ``recorded_signals``,
+``deferred_signals`` and ``cleanup_signals`` are gone. The frozen capture track
+imports only the standard library and itself (``tests/test_scripts_boundary.py``),
+so the policy is applied by ``RecordedSignals`` here rather than by importing
+the primitive's ``Signals``; the two have the same contract.
+"""
 import argparse
 import contextlib
 import json
@@ -22,6 +38,9 @@ LAUNCHER = ROOT / "artifacts/capture-supervisor/sightcircuit-capture-worker-exec
 WORKER = ROOT / "artifacts/capture-provider-reference/reference-ptgrab"
 MAX_OUTPUT = 256 * 1024
 MAX_LINE = 8192
+# The supervisor's signal policy, the primitive's RECORD_AND_POLL for SIGINT and SIGTERM: record the first signal
+# and poll it, count the rest, take over an inherited ignore so the run can always be cancelled.
+CAPTURE_SIGNALS = {"mode": "record", "inherited_ignore": "override", "numbers": (signal.SIGINT, signal.SIGTERM)}
 
 
 class StopRequested(BaseException):
@@ -29,77 +48,45 @@ class StopRequested(BaseException):
         self.number = number
 
 
-@contextlib.contextmanager
-def cleanup_signals():
-    # Repeated cancellation must not interrupt kill/reap/file-recovery work.
-    previous = {}
-    if threading.current_thread() is threading.main_thread():
-        for number in (signal.SIGINT, signal.SIGTERM):
-            previous[number] = signal.signal(number, signal.SIG_IGN)
-    try:
-        yield
-    finally:
-        for number, handler in previous.items():
+class RecordedSignals:
+    """The run's handlers for ``CAPTURE_SIGNALS``: ``number`` is the first signal seen, ``recorded`` every one.
+
+    The same contract as the primitive's ``Signals`` in record mode (the
+    frozen track cannot import it): a handler records and never raises, so
+    nothing interrupts the start, the reads or the cleanup; the caller's
+    handlers are restored on exit and are not invoked for a recorded signal.
+    """
+
+    def __init__(self):
+        self.number = None
+        self.recorded = []
+        self.previous = {}
+
+    @property
+    def received(self):
+        return self.number is not None
+
+    def handle(self, number, _frame):
+        self.recorded.append(number)
+        if self.number is None:
+            self.number = number
+
+    def __enter__(self):
+        for number in CAPTURE_SIGNALS["numbers"]:
+            self.previous[number] = signal.signal(number, self.handle)
+        return self
+
+    def __exit__(self, *_):
+        for number, handler in self.previous.items():
             signal.signal(number, handler)
+        self.previous = {}
 
 
-@contextlib.contextmanager
-def deferred_signals():
-    """Hold SIGINT/SIGTERM for the block; a held one is delivered as it ends.
-
-    The caller's previous mask is restored, also on error, including a cancellation raised by
-    the call that holds the signals: CPython changes the mask and then runs pending handlers,
-    so that call sits inside the try. pthread_sigmask covers only the calling thread, so this
-    holds only while no other thread in the process leaves either signal unblocked. The
-    supervisor starts no thread; a caller process with other threads, such as a test process
-    with BLAS threads, must block both signals in them. Python runs handlers on the main thread
-    only, so a signal another thread took would still interrupt the block.
-    """
-    previous = signal.pthread_sigmask(signal.SIG_BLOCK, ())  # Read only: nothing to undo yet.
-    try:
-        signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
-        yield
-    finally:
-        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
-
-
-@contextlib.contextmanager
-def recorded_signals():
-    """Record SIGINT/SIGTERM for the block; deliver each one to its handler afterwards.
-
-    Used while the worker starts. A handler that raises inside subprocess.Popen after the
-    child exists leaves no handle on it, so cleanup could neither stop nor reap it. While the
-    block runs only the Python handlers change, never the signal mask: a child inherits the
-    mask, while exec resets caught signals. An ignored signal is not swapped, so the kernel
-    keeps discarding it and the worker still inherits SIG_IGN. Afterwards each distinct
-    recorded signal is delivered once, in arrival order, until a handler raises or SIG_DFL
-    ends the process. Off the main thread, or while a handler was not installed from Python,
-    this changes nothing.
-    """
-    previous = {number: signal.getsignal(number) for number in (signal.SIGINT, signal.SIGTERM)}
-    if threading.current_thread() is not threading.main_thread() or None in previous.values():
-        yield
-        return
-    numbers = [number for number, handler in previous.items() if handler != signal.SIG_IGN]
-    pending = []
-    try:
-        for number in numbers:
-            signal.signal(number, lambda received, frame: pending.append(received))
-        yield
-    finally:
-        # The block has ended, so no child inherits the mask now. It holds both signals while
-        # the handlers go back, so, under the thread condition of deferred_signals(), one landing
-        # between the two restores cannot leave the other recording; a held signal reaches its
-        # restored handler as the mask is lifted.
-        with deferred_signals():
-            for number in numbers:
-                signal.signal(number, previous[number])
-        for number in dict.fromkeys(pending):
-            handler = previous[number]
-            if handler == signal.SIG_DFL:
-                signal.raise_signal(number)
-            elif callable(handler):
-                handler(number, None)
+def recording_signals():
+    """The run's recording handlers; off the main thread (where none can be installed) a null context."""
+    if threading.current_thread() is threading.main_thread():
+        return RecordedSignals()
+    return contextlib.nullcontext(None)
 
 
 def new_report():
@@ -160,65 +147,72 @@ def supervise(*, worker=WORKER, launcher=LAUNCHER, runtime=None, seconds=10, max
             replaced = str(error)
             raise
 
-    try:
-        owned_fd = os.open(worker, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
-        info = os.fstat(owned_fd)
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or
-                info.st_nlink != 1 or info.st_mode & 0o6022 or not info.st_mode & 0o100):
-            raise ValueError("worker_not_prepared_executable")
-        session = Session(runtime or os.environ.get("XDG_RUNTIME_DIR", ""))
-        report["session_path"] = str(session.path)
-        environment = dict(os.environ, SIGHTCIRCUIT_CAPTURE_OUTPUT=str(session.path / "frames.shm"),
-                           SIGHTCIRCUIT_CAPTURE_SUPERVISOR_PID=str(os.getpid()))
-        arguments = worker_arguments if worker_arguments is not None else [
-            "--allow-experimental-capture", "--seconds", str(seconds), "--max-fps", str(max_fps)]
-        # A cancellation while the worker starts is recorded (not masked: the worker would
-        # inherit the mask) and delivered once its pid is in the report and lease, so cleanup
-        # can stop and reap it.
-        with recorded_signals(), noted_error():
-            process = subprocess.Popen([str(launcher), str(os.getpid()), str(owned_fd), str(worker), *arguments],
-                                       pass_fds=(owned_fd,), env=environment, stdin=subprocess.DEVNULL,
-                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
-            report.update(worker_started=True, worker_pid=process.pid, publication_recovery_confirmed=False)
-            session.worker(process.pid)
-        with selectors.DefaultSelector() as selector:
-            for stream, target in ((process.stdout, output), (process.stderr, diagnostics)):
-                os.set_blocking(stream.fileno(), False)
-                selector.register(stream, selectors.EVENT_READ, target)
-            while selector.get_map() or process.poll() is None:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    report.update(status="timed_out", reason="capture_deadline")
-                    forced = True
-                    break
-                for key, _ in selector.select(min(remaining, 0.05)):
-                    # Bytes taken from the pipe are recorded before a cancellation lands, so an
-                    # announced publication identity is never lost; unread bytes stay for the drain.
-                    with deferred_signals(), noted_error():
-                        try:
-                            data = os.read(key.fd, 16384)
-                        except BlockingIOError:
-                            continue
-                        if not data:
-                            selector.unregister(key.fileobj)
-                            continue
-                        consume(data, key.data)
-    except (KeyboardInterrupt, StopRequested) as error:
-        number = error.number if isinstance(error, StopRequested) else signal.SIGINT
-        report.update(status="cancelled", reason="signal", signal=number, exit_code=128 + number)
-        forced = process is not None
-        if replaced is not None:
-            # A held or recorded cancellation delivered while a spawn or recording error was
-            # raised replaces it; keep the error, and do not validate output already known to be
-            # invalid.
-            report["superseded_error"] = replaced
+    with recording_signals() as handlers:
+        try:
+            owned_fd = os.open(worker, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+            info = os.fstat(owned_fd)
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or
+                    info.st_nlink != 1 or info.st_mode & 0o6022 or not info.st_mode & 0o100):
+                raise ValueError("worker_not_prepared_executable")
+            session = Session(runtime or os.environ.get("XDG_RUNTIME_DIR", ""))
+            report["session_path"] = str(session.path)
+            environment = dict(os.environ, SIGHTCIRCUIT_CAPTURE_OUTPUT=str(session.path / "frames.shm"),
+                               SIGHTCIRCUIT_CAPTURE_SUPERVISOR_PID=str(os.getpid()))
+            arguments = worker_arguments if worker_arguments is not None else [
+                "--allow-experimental-capture", "--seconds", str(seconds), "--max-fps", str(max_fps)]
+            # A cancellation while the worker starts is only recorded (handlers, never a mask the
+            # worker would inherit) and acted on once its pid is in the report and lease, so cleanup
+            # can stop and reap it.
+            with noted_error():
+                process = subprocess.Popen([str(launcher), str(os.getpid()), str(owned_fd), str(worker), *arguments],
+                                           pass_fds=(owned_fd,), env=environment, stdin=subprocess.DEVNULL,
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+                report.update(worker_started=True, worker_pid=process.pid, publication_recovery_confirmed=False)
+                session.worker(process.pid)
+            with selectors.DefaultSelector() as selector:
+                for stream, target in ((process.stdout, output), (process.stderr, diagnostics)):
+                    os.set_blocking(stream.fileno(), False)
+                    selector.register(stream, selectors.EVENT_READ, target)
+                while selector.get_map() or process.poll() is None:
+                    if handlers is not None and handlers.received:
+                        break  # Cancelled: the cleanup below stops the worker and drains what it wrote.
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        report.update(status="timed_out", reason="capture_deadline")
+                        forced = True
+                        break
+                    for key, _ in selector.select(min(remaining, 0.05)):
+                        # A signal is only recorded, so bytes taken from the pipe are always recorded too
+                        # and an announced publication identity is never lost; unread bytes stay for the drain.
+                        with noted_error():
+                            try:
+                                data = os.read(key.fd, 16384)
+                            except BlockingIOError:
+                                continue
+                            if not data:
+                                selector.unregister(key.fileobj)
+                                continue
+                            consume(data, key.data)
+        except (KeyboardInterrupt, StopRequested) as error:
+            # A caller's handler that ran at the boundary of the recording block.
+            number = error.number if isinstance(error, StopRequested) else signal.SIGINT
+            report.update(status="cancelled", reason="signal", signal=number, exit_code=128 + number)
+            forced = process is not None
+        except (OSError, ValueError, TypeError) as error:
+            report.update(reason=str(error))
             invalid_output = True
-    except (OSError, ValueError, TypeError) as error:
-        report.update(reason=str(error))
-        invalid_output = True
-        forced = process is not None
-    finally:
-        with cleanup_signals():
+            forced = process is not None
+        finally:
+            if handlers is not None and handlers.received and report["status"] != "cancelled":
+                number = handlers.number
+                report.update(status="cancelled", reason="signal", signal=number, exit_code=128 + number)
+                forced = process is not None
+            if report["status"] == "cancelled" and replaced is not None:
+                # A cancellation recorded while a spawn or recording error was raised replaces it; keep
+                # the error, and do not validate output already known to be invalid.
+                report["superseded_error"] = replaced
+                invalid_output = True
+            # Repeated cancellation cannot interrupt the kill/reap/file-recovery work: a signal is only counted.
             if owned_fd is not None:
                 os.close(owned_fd)
             if process is not None:
