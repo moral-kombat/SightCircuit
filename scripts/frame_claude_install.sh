@@ -332,6 +332,12 @@ stage_record() {
     echo "  - recorded: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "  - kernel: $(uname -srm)"
   } >> "$summary"
+  # The installed auto-update channel is whatever claude doctor reported in the verify stage, never this
+  # script's CHANNEL default (E86: doctor said "latest" where the summary had said "stable").
+  local reported=""
+  [ -f "$out/doctor.txt" ] && reported="$(grep -i 'channel' "$out/doctor.txt" | head -1 | sed 's/^[[:space:]]*//')"
+  if [ -n "$reported" ]; then note "  - installed auto-update channel, as claude doctor reports it: $reported"
+  else note "  - installed auto-update channel: unknown (claude doctor did not report one in this run)"; fi
   local claude_bin
   if claude_bin="$(find_claude)"; then
     if capture version "$claude_bin" --version; then note "  - claude: $(printf '%s\n' "$captured" | head -1)"
@@ -343,7 +349,8 @@ stage_record() {
 {
   echo "# Claude Code Phase 0 on Frame, $stamp"
   echo
-  echo "User-run device report from scripts/frame_claude_install.sh (channel: $channel)."
+  echo "User-run device report from scripts/frame_claude_install.sh (requested install channel: $channel;"
+  echo "the installed auto-update channel is what claude doctor reports, see the record stage)."
   echo "Command output: commands.log. Not a cloud check; sign-in is user-reported."
   echo
 } > "$summary"
