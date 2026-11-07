@@ -116,6 +116,42 @@ The chair decision below was added on November 4.
 | Unobserved session token (handoff item 2) | Answered on 2026-11-03, in the coder session that recorded E77 and E78. A session token that the marker observer did not observe rejects the observer-to-candidate conversion (`hud_validation_report.py --from-observer`). There is no declared fallback, behind a flag or otherwise; `--declared-context` keeps only the non-token context fields, and its `native_format` must equal the observer's capture format. |
 | Observer /proc reads (handoff item 2) | Answered on 2026-11-03, in the coder session that recorded E77 and E78. The marker observer reads session tokens from the real /proc only behind an explicit flag, `--record-session-tokens`, which is off by default, so the approved G3 run is unchanged. Using the flag on Frame is a separate approval. |
 
+## Architecture decisions (2026-11-07)
+
+The owner accepted these eight decisions on 2026-11-07 from a decision memo,
+and three independent code reviews then checked them against revision
+`45771fe`. The [dated council record](history/2026-11-07-architecture-council.md)
+preserves the memo, the reviews and the reasoning. The decisions change no
+gate, add no evidence and grant no device permission. The
+[planned structure](architecture.md#planned-structure-2026-11-07) describes the
+resulting design; the
+[work order](live-capture.md#architecture-plan-work-order-2026-11-07) owns the
+sequence and its state.
+
+| Topic | Decision |
+| --- | --- |
+| D1. End state of this phase | The fixed edge HUD is the product of this phase. Pose logging and projection stay out of the plan. The native tracking reporter is a diagnostic behind its explicit flag, integrated only because mapping qualification needs its tracking tokens; it ranks below the HUD path. |
+| D2. Input strategy and exit rule | The SteamVR mirror with a full-footprint mask stays the input. Further marker observation (G3) attempts have a budget: a file-only still analysis of the planned view first; one attempt on a checkout containing package O3; if that stops at the scene precondition, one statistics-led limit revision and at most one more attempt. If G3 is still open after the budget, the project switches to the fallback design (time-multiplexed exclusion: the HUD is hidden during each capture window) instead of tuning further. The fallback is drafted and costed now and built only then. |
+| D3. Qualification depth | Two tiers, each a reviewed change to `sightcircuit/gates.py` and its call sites, never a flag or configuration value. A **diagnostic tier** governs the 60-second acceptance run: one pinned runtime and session, fixed HUD geometry, no recenter, monitored motion and display states, a mask that is the union of every observed marker copy plus the error-budget margin (so eye identity is not required), a one-run scope bound to digests and an absolute deadline, and a bounded duration. Full G4, as written in the [qualification method](hud-qualification.md#proposed-g4-method), remains the requirement for any production use beyond that run. |
+| D4. Lifecycle and process topology | One supervision primitive in `sightcircuit/runtime`, adopted in order: the agent runner (its own review), the live pipeline and mirror launcher, then the paused capture supervisor. The Python side owns escalation and the cleanup verdict; the bridge may end itself on its watchdog or parent death but supervises nothing else. The bridge source is split into lifecycle, rendering, reporting and sensing units before the tracking reporter is integrated. |
+| D5. Packaging and entry points (item 5) | Hashed lock files generated from the existing pins, one per requirement set; console entry points for the active commands, with the script files kept as thin wrappers so documented commands keep working; the paused capture-provider scripts stay quarantined in place. |
+| D6. Detector default and evaluation set | No model change before the representative set exists: at least twenty boxed native stills on the Frame covering the chair at several distances and lighting, annotated and scored file-only on the device, with only JSON results and digests leaving it. The default-detector rule is chair recall at the POC threshold with Frame inference time inside the live budget. WP1 closes by attribution after this evaluation if no cause is found, and the record says so. |
+| D7. The agent runner's place | `sightcircuit/agent` stays in the package as operations tooling outside the production gates, documented as such, with its own evidence path and its own group in the checkpoint manifest. |
+| D8. Tests and CI | The current CI layout stays. The load-dependent cancellation test is root-caused inside the D4 consolidation and never skipped, suppressed or quarantined. The suite gets a documented time budget. |
+
+Coordinator's calls made under these decisions, after the council:
+
+| Topic | Call |
+| --- | --- |
+| Signal policy | The primitive offers both signal modes (raise on signal, and record-and-poll) and takes the inherited-ignore policy as a parameter. The runner keeps honouring an inherited ignore; the suite entry normalises SIGINT for its children. |
+| Progress streaming | Part of the primitive. `runtime/process.py` retires only after it exists; until then the mirror launcher keeps its supervisor. |
+| Tracking tokens | They stay required, as decided on 2026-11-03, so the reporter integration precedes the diagnostic run and follows the bridge split. |
+| Recall and budget | Chair recall is per-box at IoU 0.5 on the boxed set. The live budget is the inference p95 from a `mirror_recognize` run. Both become one named constant each in code; the budget's number is the owner's. |
+| Locks | One hashed lock per requirement set, carrying both architectures' hashes, verified on the Frame when its setup next runs. |
+| Active entry points | The eight named commands plus `mirror_check` and `frame_session_manifest`. |
+| Attempt budget counting | An attempt counts when it reaches the observer's scene precondition or later. A stop for a missing bridge build, a missing headset or a failed manifest check is a preparation failure and does not count. |
+| Race fixed | Fifty consecutive green runs of the cancellation test under CPU stress on the cloud runner, then one green ARM64 run on main. |
+
 ## Upstream reuse plan (2026-10-31)
 
 The [dated upstream review](history/poc-scope-2026-11-07.md#upstream-reuse-plan-2026-10-31)

@@ -113,6 +113,16 @@ default off and distinct from the production CLI. This is a design, not an
 implemented device command. It needs its own review, pinned build and one-run
 authorization before use; the current production rejection paths stay intact.
 
+The [architecture decisions of 2026-11-07](poc-scope.md#architecture-decisions-2026-11-07)
+adopt this diagnostic as a planned **diagnostic tier**: a second, equally
+closed gate table whose scope record binds the checkpoint manifest, mapping
+record and model digests to an absolute deadline, and whose mask is the union
+of every observed marker copy plus the margin, so the 60-second acceptance run
+does not require eye identity. Full G4 as written here stays the requirement
+for production use. The [planned structure](architecture.md#approval-tiers)
+describes the design; nothing of it is implemented and the gate table is
+unchanged.
+
 The proposed diagnostic consumes only the reviewed G4 mapping and exact
 context. It has no generic frame-file/stdin output mode and cannot be enabled
 by changing a mapping JSON flag. A one-run scope binds the diagnostic version,

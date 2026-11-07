@@ -15,6 +15,7 @@ For today's work, use [current work and acceptance](../live-capture.md),
 | Failed marker run and cleanup analysis | [Lifecycle-review summary](../lifecycle-review.md) | [Full recovered analysis](2026-11-07-lifecycle-review.md) |
 | Experimental capture source review | [Capture-review summary](../capture-reference-review.md) | [Full pinned source analysis](2026-11-07-capture-reference-review.md) |
 | Camera interfaces and community research | [Maintained camera reference](../steam-frame-camera.md) | [Original research and later additions](2026-11-07-camera-research.md) |
+| Architecture council and decision memo | [Accepted decisions](../poc-scope.md#architecture-decisions-2026-11-07) | [Dated memo, three code reviews and resolutions](2026-11-07-architecture-council.md) |
 
 ## Earlier plans and handoffs
 
