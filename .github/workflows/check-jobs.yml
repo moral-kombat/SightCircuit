@@ -214,8 +214,10 @@ jobs:
             tests/test_mirror_session.py tests/test_hud_fill.py tests/test_mask_fill_evaluation.py \
             tests/test_run_context_sensors.py tests/test_hud_prediction.py \
             tests/test_seed_pin.py tests/test_observer_scene_seed.py
-      - name: Verify generated evidence and capability summaries are current
-        run: python scripts/generate_status.py --check
+      - name: Verify links, compatibility anchors and generated summaries
+        run: |
+          python scripts/check_docs.py
+          python scripts/generate_status.py --check
       - name: Install the smoke setup tool
         if: inputs.smoke
         run: python -m pip install uv==0.12.23

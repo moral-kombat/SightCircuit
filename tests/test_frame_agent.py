@@ -998,11 +998,11 @@ class UpdateInterruptionTests(unittest.TestCase):
         self.assertTrue((root / ".git/index.lock").exists(), "the runner deleted git's lock file")
 
     def test_the_documented_grace_and_bound_match_the_code(self):
-        # docs/on-device.md gives both numbers, docs/agent-on-frame.md the grace.
+        # docs/guides/frame-sessions.md gives both numbers: the update's git bound and the installer's gpgconf bound.
         self.assertEqual((runner.GIT_TERM_GRACE, runner.GIT_TERM_GRACE + 2 * runner.KILL_GRACE), (5, 25))
-        on_device = " ".join((ROOT / "docs/on-device.md").read_text().split())
-        self.assertIn("SIGKILL 5 seconds later; ending git takes at most 25 seconds", on_device)
-        self.assertIn("SIGKILL 5 seconds later", " ".join((ROOT / "docs/agent-on-frame.md").read_text().split()))
+        guide = " ".join((ROOT / "docs/guides/frame-sessions.md").read_text().split())
+        self.assertIn("SIGKILL 5 seconds later; ending git takes at most 25 seconds", guide)
+        self.assertIn("SIGTERM at 20 seconds does not end a hung call and its SIGKILL 5 seconds later", guide)
 
     def test_a_git_directory_that_cannot_be_read_is_reported_as_unknown(self):
         root = self.base / "unreadable"

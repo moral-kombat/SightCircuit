@@ -62,12 +62,16 @@ the same MIT attribution. Earlier non-executable modes preserve the historical
 inspection code; they are not live-capture alternatives.
 
 Both capture binaries remain non-executable inspection artifacts. Actual GPU
-execution, original producer synchronization/FOREIGN ownership, physical camera
-identity and on-device load/restoration remain unvalidated. The watchdog and
-provider/recovery prerequisites passed their earlier 28-test v2 milestone on
-Frame ARM64. The earlier v3 build and its 24 provider/diagnostic tests also passed
-on Frame ARM64. The later device-creation gate enforces opt-in even after legacy
-loader fallback; those changes and the systemd trial/recovery runner remain
-cloud-tested. Real layer activation remains untested. Follow the
+image access, original producer synchronization/FOREIGN ownership, and physical
+camera identity remain unvalidated. The watchdog and provider/recovery
+prerequisites passed their earlier 28-test v2 milestone on Frame ARM64; the v3
+build and its 24 generated-data provider/diagnostic tests also passed there.
+The later device-creation gate enforces opt-in even after legacy loader fallback;
+its initial checks and the systemd trial/recovery runner were cloud-tested.
+
+Later metadata-only provider loading and restoration were reported separately
+in [E65](../../docs/evidence/e065.md). The full registry remained unstable, and
+those trials did not establish synchronized image ownership. The provider track
+stays paused and live image access remains blocked. Follow the
 [active capture plan](../../docs/live-capture.md#current-work-order) and
-[provider development procedure](../../docs/development.md#capture-watchdog-provider-lifecycle-and-restoration-preparation).
+[provider development reference](../../docs/reference/capture-provider.md).

@@ -7,7 +7,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 # The paused capture-provider track is quarantined in place while it is frozen
-# (docs/development.md#paused-capture-provider-track). Shrink these sets when
+# (docs/reference/capture-provider.md#paused-capture-provider-track). Shrink these sets when
 # the track resumes and moves.
 FROZEN_CAPTURE_TRACK = frozenset((
     "capture_layer_config", "capture_layer_trial", "capture_provider_check", "capture_service_lifecycle",
@@ -103,7 +103,7 @@ class CaptureTrackQuarantineTests(unittest.TestCase):
                 self.assertIn(filename[:-3], FROZEN_CAPTURE_TRACK)
 
     def test_development_guide_lists_every_cluster_module_and_test(self):
-        guide = (ROOT / "docs/development.md").read_text()
+        guide = (ROOT / "docs/reference/capture-provider.md").read_text()
         section = guide.split("## Paused capture-provider track", 1)[1].split("\n## ", 1)[0]
         for name in sorted(FROZEN_CAPTURE_TRACK | FROZEN_CAPTURE_TESTS):
             with self.subTest(name=name):

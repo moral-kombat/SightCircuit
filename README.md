@@ -1,5 +1,13 @@
 # SightCircuit
 
+SightCircuit recognizes objects in Steam Frame recordings and short captures of
+its SteamVR mirror. The goal is to show object names and approximate direction
+arrows in a fixed strip at the edge of the headset view.
+
+**This is an experimental project.** Recorded replay and bounded mirror
+recognition have run on Frame. The continuous heads-up display (HUD) is still
+being qualified; it is not ready for live use.
+
 ```text
    .        *            .       +            .          *        .
 
@@ -34,40 +42,50 @@ __________________/___________________|__________________\__________________
                /                      |                     \
 ```
 
-Object recognition for Steam Frame: recorded-video replay and bounded SteamVR
-mirror recognition work on Frame. The active POC is a fixed head-relative edge
-HUD with names and approximate direction arrows. Native masking and expiry have
-offline tests; mapping, feedback exclusion and live headset acceptance remain open.
-
 ## Project status
 
-[Capabilities and evidence](docs/status.md) · [Documentation](docs/README.md) ·
-[Active work and gates](docs/live-capture.md#edge-hud-acceptance-gates).
-Dedicated camera capture, world-locked labels, depth and splats are deferred.
+- **Works on the tested headset:** annotated recorded replay, a replay VR panel,
+  and bounded mirror recognition with a preview inspected after capture.
+- **Verified offline:** the shared processing pipeline, HUD masking, stale-result
+  expiry, and failure-handling checks using synthetic input.
+- **Still open:** accepted HUD mapping, feedback exclusion,
+  physical display expiry, and combined live headset acceptance. Lifecycle
+  acceptance is recorded in E79; the green-input cause remains unknown.
+- **Deferred:** dedicated camera capture, world-locked labels, depth, and splats.
+
+Read [capabilities and evidence](docs/status.md) for the limits behind these
+statements, or [current work and acceptance](docs/live-capture.md) for next steps.
 
 ## Quick start
 
 ### On Steam Frame: recorded-video replay
 
-Use the [device setup and replay procedure](docs/on-device.md#open-the-annotated-replay-window).
-New device operations need their own scoped authorization. The unchanged
-[public camera probe interrupted passthrough](docs/on-device.md#confirmed-public-probe-result).
+Start with [device access and inventory](docs/on-device.md), then follow the
+[recorded replay guide](docs/guides/replay.md). The [VR panel guide](docs/vr-overlay.md)
+explains placement and shutdown. Device procedures retain their specific
+operating restrictions; the public camera probe previously interrupted passthrough.
 
 ### In the cloud or on Linux x86_64: development smoke check
+
+Install Python 3.12, [uv](https://docs.astral.sh/uv/getting-started/installation/),
+and the Linux libraries listed in [development setup](docs/development.md).
+From the repository root:
 
 ```bash
 bash scripts/setup.sh
 .venv/bin/python scripts/smoke_check.py
 ```
 
-Python 3.12 and [uv](https://docs.astral.sh/uv/getting-started/installation/) are
-required. [Development setup](docs/development.md) owns builds and checks.
+A successful run reports `"status": "passed"` after decoding 12 generated frames,
+running CPU inference, and rendering offscreen. It does not require a headset.
 
 ## Design and next steps
 
-See [POC scope](docs/poc-scope.md), [architecture](docs/architecture.md) and the
-[current work order](docs/live-capture.md#current-work-order). Detailed historical
-results and links moved to [README history](docs/project-history.md).
+Start at the [documentation index](docs/README.md). Read [architecture](docs/architecture.md)
+for the data flow, [POC scope](docs/poc-scope.md) for the intended result, and
+[current work](docs/live-capture.md#current-work-order) to choose a task.
+[Contributing](CONTRIBUTING.md) explains checks and review expectations.
+The [historical README](docs/project-history.md) retains earlier project context.
 
 ## License
 
