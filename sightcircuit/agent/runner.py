@@ -8,15 +8,22 @@ Commands (see ``scripts/frame_agent_run.py``):
   whole run within a budget.
 - ``update REVISION``: detach a clean checkout at a full commit already on
   ``origin/main`` whose agent guard is at least as strict as this one. A git
-  command that fails or times out refuses the update (exit 2).
+  command that fails or times out refuses the update (exit 2), also one that
+  records the checkout after the switch: the checkout has then moved, and the
+  refusal says "switched to REVISION, but recording the checkout failed". A
+  timed-out or interrupted git gets SIGTERM, so that it removes its lock files,
+  and SIGKILL ``GIT_TERM_GRACE`` seconds later. A ``.git/index.lock`` still
+  there after a timed-out or interrupted git, or after a failed checkout
+  record, is named for a person to check, never deleted.
 - ``report latest``: print the newest run's ``result.json``.
 
 Exit codes: 0 every task passed, 1 a task failed, timed out or was skipped,
 2 refused (unknown/disabled task or bad argument), 3 another run holds the lock,
-128 + signal number when SIGINT, SIGTERM or SIGHUP interrupted the run (the
-running task's process group is terminated first and ``result.json`` records
-the interruption). A signal the runner was started with ignored, as ``nohup``
-ignores SIGHUP, stays ignored.
+128 + signal number when SIGINT, SIGTERM or SIGHUP interrupted the run or the
+update (the running task's or git's process group is terminated before the
+lock is released; ``result.json``, or for ``update`` a JSON line on stderr,
+records the interruption). A signal the runner was started with ignored, as
+``nohup`` ignores SIGHUP, stays ignored.
 """
 import argparse
 import contextlib
@@ -40,6 +47,8 @@ from sightcircuit.agent.tasks import TASKS, TASKS_BY_ID, TIER_A, VENV_PYTHON
 RUNS = Path("artifacts/agent-runs")
 DEFAULT_BUDGET = 5400
 KILL_GRACE = 10
+# Seconds git's group has after SIGTERM before SIGKILL; ending git then takes at most GIT_TERM_GRACE + 2 * KILL_GRACE.
+GIT_TERM_GRACE = 5
 FETCH_TIMEOUT = 180
 REVISION = re.compile(r"^[0-9a-f]{40}$")
 RUN_DIR = re.compile(r"^\d{8}T\d{6}Z-")
@@ -55,7 +64,7 @@ class Refused(Exception):
 
 
 class Interrupted(BaseException):
-    """SIGINT, SIGTERM or SIGHUP reached the runner during a run."""
+    """SIGINT, SIGTERM or SIGHUP reached the runner during a run or an update."""
 
     def __init__(self, number):
         super().__init__(number)
@@ -65,9 +74,11 @@ class Interrupted(BaseException):
 class Interruption:
     """Turns the first interrupting signal into ``Interrupted`` while armed; later signals are only noted.
 
-    A task runs in its own session, so a signal to the runner (or a terminal
-    hangup) does not reach it. Raising lets the runner terminate the task's
-    group, write ``result.json`` and release the lock instead of dying at once.
+    A task, like git, runs in its own session, so a signal to the runner (or a
+    terminal hangup) does not reach it. Raising lets the runner terminate the
+    task's or git's group, record the interruption (``result.json``, or for
+    ``update`` a JSON line on stderr) and release the lock instead of dying at
+    once.
     """
 
     def __init__(self):
@@ -110,34 +121,98 @@ def utc_now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def git(root, *args, timeout=30):
-    """Run git in its own session without prompts; a timeout (or any error) ends git and every helper it started.
+def git(root, *args, timeout=30, interruption=None):
+    """Run git in its own session, with no terminal to prompt on; a timeout or an interruption ends git's whole group.
 
-    Raises ``subprocess.TimeoutExpired`` and ``OSError`` to the caller.
+    The group (git and the transport it started: ssh, git-remote-https,
+    upload-pack) gets SIGTERM, on which git removes its lock files, then SIGKILL
+    after ``GIT_TERM_GRACE``. As in ``run_task``, ``interruption`` only notes a
+    signal while git starts and while it is being ended, and raises it after.
+    Raises ``subprocess.TimeoutExpired``, ``OSError`` and ``Interrupted``.
     """
-    process = subprocess.Popen(["git", *args], cwd=root, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                               stderr=subprocess.PIPE, text=True, start_new_session=True,
-                               env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
+    armed = interruption.hold() if interruption else False
     try:
-        out, err = process.communicate(timeout=timeout)
-    except BaseException:  # The transport (ssh, git-remote-https, upload-pack) is in git's group.
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(process.pid, signal.SIGKILL)
-        with contextlib.suppress(subprocess.TimeoutExpired):
-            process.communicate(timeout=KILL_GRACE)
+        process = subprocess.Popen(["git", *args], cwd=root, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, text=True, start_new_session=True,
+                                   env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
+    except BaseException:
+        if interruption:
+            interruption.resume(armed)
+        raise
+    ending = False
+    try:
+        try:
+            if interruption:
+                interruption.resume(armed)  # A signal that came while git started is raised here.
+            out, err = process.communicate(timeout=timeout)
+        except BaseException:
+            armed = interruption.hold() if interruption else False
+            ending = True
+            end_git(process)
+            if interruption:
+                interruption.resume(armed)  # A signal while git was ended replaces a timeout.
+            raise
+    except Interrupted:
+        # A signal after communicate() gave up but before hold() took effect is raised inside hold(): end git all
+        # the same. Only the first signal raises, so nothing interrupts this.
+        if not ending:
+            end_git(process)
         raise
     return process.returncode, out.strip(), err.strip()
 
 
-def checkout_state(root):
+def end_git(process):
+    kill_group(process, GIT_TERM_GRACE)
+    for stream in (process.stdout, process.stderr):
+        stream.close()  # Unread output; a helper that left the group cannot keep the runner waiting on it.
+
+
+def index_lock_left(root):
+    """After git was ended or failed: why a person must look at the checkout when git's index lock is left, else ""."""
     try:
-        code, revision, _ = git(root, "rev-parse", "HEAD")
-        status_code, status, _ = git(root, "status", "--porcelain")
-        branch_code, branch, _ = git(root, "rev-parse", "--abbrev-ref", "HEAD")
-    except (OSError, subprocess.TimeoutExpired):
-        return {"revision": None, "clean": None, "branch": None}
-    return {"revision": revision if code == 0 else None, "clean": status == "" if status_code == 0 else None,
-            "branch": (branch or None) if branch_code == 0 else None}
+        git_dir = root / ".git"
+        if git_dir.is_file():  # A worktree: ".git" names the git directory.
+            text = git_dir.read_text()
+            if "gitdir:" not in text:
+                raise ValueError(".git is a file that names no gitdir")
+            git_dir = root / text.partition("gitdir:")[2].strip()
+        lock = git_dir / "index.lock"
+        if not lock.exists():
+            return ""
+    except (OSError, ValueError) as error:  # ValueError: a ".git" file that is not text.
+        return f"; whether .git/index.lock was left behind is unknown ({error}): a person must check"
+    shown = lock.relative_to(root) if lock.is_relative_to(root) else lock
+    return f"; {shown} was left behind: a person must check that no git command is running before removing it"
+
+
+def checkout_state(root, interruption=None, strict=False):
+    """The checkout's revision, clean flag and branch, from three gits; ``Interrupted`` always propagates (it is never caught).
+
+    For a run, a field whose git failed, could not run or timed out is None;
+    the fields the other gits gave are kept. ``strict`` (``update``, after the
+    switch) raises ``Refused`` naming the git instead.
+    """
+    outputs = {}
+    for field, args in (("revision", ("rev-parse", "HEAD")), ("clean", ("status", "--porcelain")),
+                        ("branch", ("rev-parse", "--abbrev-ref", "HEAD"))):
+        command = " ".join(("git", *args))
+        try:
+            code, out, err = git(root, *args, interruption=interruption)
+        except subprocess.TimeoutExpired as expired:
+            if strict:
+                raise Refused(f"{command} timed out after {expired.timeout:g}s") from None
+            outputs[field] = None
+            continue
+        except OSError as failure:
+            if strict:
+                raise Refused(f"{command} could not run: {failure}") from None
+            outputs[field] = None
+            continue
+        if code != 0 and strict:
+            raise Refused(f"{command} failed: {err[-500:]}")
+        outputs[field] = out if code == 0 else None
+    return {"revision": outputs["revision"], "clean": None if outputs["clean"] is None else outputs["clean"] == "",
+            "branch": outputs["branch"] or None}
 
 
 def host_info():
@@ -228,18 +303,20 @@ def group_gone(process, seconds):
         time.sleep(0.05)
 
 
-def kill_group(process):
-    """SIGTERM the task's whole process group, then SIGKILL whatever is still alive after the grace period.
+def kill_group(process, term_grace=None):
+    """SIGTERM the whole process group of ``process`` (a task, or git), then SIGKILL whatever is still alive after
+    ``term_grace`` (default ``KILL_GRACE``).
 
     Waits for every member, not just the leader, so a descendant that ignores
     SIGTERM or is slow to clean up cannot outlive the task.
     """
-    for number in (signal.SIGTERM, signal.SIGKILL):
+    for number, grace in ((signal.SIGTERM, KILL_GRACE if term_grace is None else term_grace),
+                          (signal.SIGKILL, KILL_GRACE)):
         try:
             os.killpg(process.pid, number)
         except ProcessLookupError:
             break
-        if group_gone(process, KILL_GRACE):
+        if group_gone(process, grace):
             break
     with contextlib.suppress(subprocess.TimeoutExpired):
         process.wait(timeout=KILL_GRACE)
@@ -306,12 +383,13 @@ def execute(root, tasks, label, budget=DEFAULT_BUDGET, clock=time.monotonic):
     """
     run_dir = new_run_dir(root, label)
     result = {"schema": "sightcircuit.agent-run.v1", "provenance": PROVENANCE, "label": label,
-              "started_at": utc_now(), "host": host_info(), "checkout": checkout_state(root),
-              "budget_s": budget, "tasks": []}
-    deadline = clock() + budget
+              "started_at": utc_now(), "host": host_info(),
+              "checkout": {"revision": None, "clean": None, "branch": None}, "budget_s": budget, "tasks": []}
     stop_reason = None
     with Interruption().installed() as interruption:
         try:
+            result["checkout"] = checkout_state(root, interruption)  # A signal here ends git's group, as in update.
+            deadline = clock() + budget
             for task in tasks:
                 task_dir = run_dir / task.id.replace("/", "--")
                 task_dir.mkdir()
@@ -353,15 +431,15 @@ def write_json(path, value):
     temporary.replace(path)
 
 
-def update(root, revision):
+def update(root, revision, interruption=None):
     if not REVISION.match(revision or ""):
         raise Refused("revision must be a full 40-character lowercase commit hash")
 
     def run(*args, timeout=30):  # Every git failure, including a timeout, refuses the update.
         try:
-            return git(root, *args, timeout=timeout)
+            return git(root, *args, timeout=timeout, interruption=interruption)
         except subprocess.TimeoutExpired:
-            raise Refused(f"git {args[0]} timed out after {timeout}s") from None
+            raise Refused(f"git {args[0]} timed out after {timeout}s{index_lock_left(root)}") from None
         except OSError as error:
             raise Refused(f"git {args[0]} could not run: {error}") from None
 
@@ -387,7 +465,12 @@ def update(root, revision):
     code, _, error = run("switch", "--quiet", "--detach", revision)
     if code != 0:
         raise Refused(f"git switch failed: {error[-500:]}")
-    return {"status": "updated", "revision": revision, "checkout": checkout_state(root)}
+    try:
+        checkout = checkout_state(root, interruption, strict=True)
+    except Refused as failure:  # The checkout has moved, so this is not "updated": a person must look at it.
+        raise Refused(f"switched to {revision}, but recording the checkout failed: {failure}; check the checkout "
+                      f"(git status) before using it{index_lock_left(root)}") from None
+    return {"status": "updated", "revision": revision, "checkout": checkout}
 
 
 def latest_result(root):
@@ -435,8 +518,11 @@ def main(argv=None, root=None, tasks_by_id=None, tier_a=None, budget=DEFAULT_BUD
             print(latest_result(root).read_text(), end="")
             return 0
         if args.command == "update":
-            with RunLock(root):
-                print(json.dumps(update(root, args.revision), indent=2))
+            # As for a run: a signal ends git's group first (git() does), then the lock is released.
+            with Interruption().installed() as interruption, RunLock(root):
+                outcome = update(root, args.revision, interruption)
+                interruption.hold()  # The update is complete: a signal while the lock is released is only noted.
+            print(json.dumps(outcome, indent=2))
             return 0
         if args.command == "run-tier":
             tasks, label = list(tier_a), args.tier
@@ -458,3 +544,10 @@ def main(argv=None, root=None, tasks_by_id=None, tier_a=None, budget=DEFAULT_BUD
     except BlockingIOError:
         print(json.dumps({"status": "locked", "reason": "another agent run is in progress"}), file=sys.stderr)
         return 3
+    except Interrupted as error:  # update; execute records a run's interruption itself once its handler is set.
+        name = signal.Signals(error.number).name
+        reason = (f"{args.command} interrupted by {name}; any running git was ended before the lock was released. "
+                  f"Check the checkout (git status) before using it{index_lock_left(root)}")
+        with contextlib.suppress(OSError):  # After a hangup there may be no terminal to print to.
+            print(json.dumps({"status": "interrupted", "signal": name, "reason": reason}), file=sys.stderr)
+        return 128 + error.number

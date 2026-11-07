@@ -23,7 +23,9 @@ Policy, deliberately narrower than the permission rules it backs up:
   the runner's own ``result.json``, task output and lock are not agent-writable.
 - Paths are refused, not reinterpreted, when Claude Code would resolve them
   differently from a plain path: leading or trailing white space (it trims),
-  a leading ``~`` (it expands ``~`` and ``~/``) and, in a Glob pattern, ``..``.
+  a leading ``~`` (it expands ``~`` and ``~/``) and, in a Glob pattern, ``..``,
+  a backslash (an escape to Claude Code) or a trailing ``/`` (it searches the
+  parent), so the guard never checks another directory than the one searched.
 - WebFetch/WebSearch: blocked.
 - Other tools are not routed here (permission rules decide them).
 """
@@ -36,7 +38,7 @@ import sys
 
 # Raised whenever the policy gets stricter; ``frame_agent_run.py update`` refuses
 # a revision whose guard is older than the running one.
-GUARD_VERSION = 3
+GUARD_VERSION = 4
 
 RUNNER = "scripts/frame_agent_run.py"
 SHELL_SYNTAX = re.compile(r"[;&|`$<>(){}\[\]*?~!#\\\n\r'\"]")
@@ -53,6 +55,8 @@ RUN_NAME = re.compile(r"[0-9]{8}T[0-9]{6}Z-[A-Za-z0-9][A-Za-z0-9._-]*")
 AMBIGUOUS = re.compile(r"\A(~|[\s\ufeff])|[\s\ufeff]\Z")
 # Where Claude Code ends the literal part of a Glob pattern.
 GLOB_CHARS = re.compile(r"[*?\[{]")
+# Claude Code reads "\" as an escape and searches the parent of "a/b/"; the guard refuses both instead of parsing them.
+UNCLEAR_GLOB = re.compile(r"\\|/\Z")
 UNRESOLVABLE = "unresolvable path (use a plain path in the checkout: no leading '~', no surrounding spaces)"
 PRIVATE_DIRS = (Path("evaluation/local"), Path("recordings"), Path("calibration"))
 MEDIA = re.compile(r"\.(png|jpe?g|gif|webp|bmp|tiff?|heic|avif|mp4|mkv|mov|webm|avi)$", re.IGNORECASE)
@@ -136,9 +140,14 @@ def check_glob(pattern, path, root):
     """Glob searches ``path`` (default: the checkout), or the leading directories of an absolute pattern."""
     if not isinstance(pattern, str) or not pattern:
         return block("missing or malformed pattern")
-    parts = pattern.replace("\\", "/").split("/")
-    if AMBIGUOUS.search(pattern) or ".." in parts:
+    parts = pattern.split("/")
+    # ".." anywhere: a brace group such as "{..}/*" would smuggle it past a per-part check,
+    # and Claude Code expands braces before searching.
+    if AMBIGUOUS.search(pattern) or ".." in pattern:
         return block("glob patterns may not start with '~', have surrounding spaces or contain '..'")
+    if UNCLEAR_GLOB.search(pattern):
+        return block("glob patterns may not contain '\\' or end in '/' (Claude Code would search another directory "
+                     "than the guard checks); give the directory as 'path' and a plain pattern")
     leading = []
     for part in parts[:-1]:
         if GLOB_CHARS.search(part):
