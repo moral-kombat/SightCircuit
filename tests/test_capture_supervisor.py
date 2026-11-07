@@ -259,23 +259,30 @@ print(json.dumps(report))
 
     def test_cancellation_while_recording_a_publication_still_removes_it(self):
         # The wrapped step opens a window after the worker's publication_ready event has
-        # been read and stays inside it until the cancellation has arrived, delivered or
-        # held, so neither outcome depends on scheduling. "read" holds the window just after
+        # been read and stays inside it until the cancellation has arrived (recorded by the
+        # supervisor), so the outcome does not depend on scheduling. "read" holds the window just after
         # os.read has taken the line from the pipe, so a chunk already read must still be
         # recorded; "parse" holds it after the line has left the buffer; "publication" holds
         # it inside Session.publication.
         body = """
 import json, os, signal, sys, time
 from pathlib import Path
-from scripts import capture_session
+from scripts import capture_session, capture_supervisor
 from scripts.capture_supervisor import supervise, StopRequested
 def stop(number, frame): raise StopRequested(number)
 signal.signal(signal.SIGINT, stop)
 signal.signal(signal.SIGTERM, stop)
+# The supervisor records a signal instead of holding it, so its arrival is observed at the recording handler.
+arrived = []
+original_handle = capture_supervisor.RecordedSignals.handle
+def handle(self, number, frame):
+    arrived.append(number)
+    return original_handle(self, number, frame)
+capture_supervisor.RecordedSignals.handle = handle
 def hold():
     Path(sys.argv[3]).touch()
     deadline = time.monotonic() + 20
-    while not signal.sigpending() & {signal.SIGINT, signal.SIGTERM}:
+    while not arrived:
         if time.monotonic() > deadline:
             raise RuntimeError('cancellation_not_observed')
         time.sleep(0.01)
