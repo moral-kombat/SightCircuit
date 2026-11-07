@@ -23,7 +23,9 @@ and regenerate status; do not edit generated summaries by hand.
 
 ## Cloud environment setup
 
-Python 3.12 is required. If `python3` is another version, pass the interpreter:
+Python 3.12 or 3.14 is required (the tested versions; see
+[Python 3.14 on the Frame](docs/development.md#python-314-on-the-frame-2026-11-07)).
+If `python3` is another version, pass the interpreter:
 
 ```bash
 sudo apt-get install -y --no-install-recommends libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3

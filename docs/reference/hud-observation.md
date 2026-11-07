@@ -59,7 +59,7 @@ bridge source for that. The calls follow the read side of vr-recorder
 A saved record becomes a prediction with (owner decision, 2026-11-04):
 
 ```bash
-python3.12 scripts/hud_view_prediction.py VIEW_RECORD.json
+python3 scripts/hud_view_prediction.py VIEW_RECORD.json
 ```
 
 It accepts the whole bridge report or just its `view_record` object, reads

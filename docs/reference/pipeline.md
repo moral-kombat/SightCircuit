@@ -96,7 +96,7 @@ load and heat. It reads only `/proc` and `/sys`; it touches no OpenVR, camera,
 SteamVR process or service, and it is not a Tier A runner task.
 
 ```bash
-python3.12 scripts/sample_run_context.py --interval 5 --samples 720 --output NEW_CSV
+python3 scripts/sample_run_context.py --interval 5 --samples 720 --output NEW_CSV
 ```
 
 Each row takes one clock reading, written as `utc` (ISO 8601 with `+00:00`)
@@ -132,7 +132,7 @@ until a source's ownership/publication/synchronization and feedback prerequisite
 are met and the user authorizes the concrete live test. Do not disguise a real
 source as synthetic to bypass the gate.
 
-In an existing Python 3.12 replay/window development environment:
+In an existing replay/window development environment (Python 3.12 or 3.14):
 
 ```bash
 python -m unittest tests.test_recording_growth_check tests.test_live_pipeline tests.test_bounded_worker tests.test_overlay_cleanup tests.test_display_expiry -v

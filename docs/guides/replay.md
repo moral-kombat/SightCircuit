@@ -54,10 +54,11 @@ the playback observations when investigating a recording or runtime change.
 
 ## Decode one recorded video track
 
-Use the separate file-decoding environment on Frame's Python 3.12. This needs
-the standard-library `venv`/`ensurepip` modules and PyPI access. The pinned
-`av==16.1.0` release publishes CPython 3.12 Linux ARM64 and x86_64 wheels
-(glibc 2.28 or later). Installation permits binary wheels only; it does not
+Use the separate file-decoding environment on Frame's Python (3.14 since
+SteamOS 0.5.8; 3.12 before it, see [the pin review](../development.md#python-314-on-the-frame-2026-11-07)).
+This needs the standard-library `venv`/`ensurepip` modules and PyPI access. The
+pinned `av==16.1.0` release publishes CPython 3.12 and 3.14 Linux ARM64 and
+x86_64 wheels (glibc 2.28 or later). Installation permits binary wheels only; it does not
 compile FFmpeg or install system packages. If `venv` or a compatible wheel is
 unavailable, retain and share the error before choosing another setup route.
 
@@ -75,7 +76,7 @@ unavailable, retain and share the error before choosing another setup route.
 This downloads PyAV into ignored `.venv-replay/`; its wheel includes FFmpeg
 libraries, so a separate `ffmpeg` executable, OpenCV and Qt are not required.
 The existing desktop `.venv` remains separate. `SIGHTCIRCUIT_PYTHON` can select
-another Python 3.12 executable for setup.
+another Python 3.12 or 3.14 executable for setup; other versions are refused.
 
 The check reads only the selected file. It defaults to video-stream ordinal
 `0`, decodes up to three frames using two software-decoder threads, and converts
