@@ -70,10 +70,12 @@ class CheckoutCase(unittest.TestCase):
         files = {".gitignore": "/artifacts/\n/.cache/\n__pycache__/\n", "README.md": "Checkout\n",
                  "sightcircuit/__init__.py": "", "sightcircuit/gates.py": "OPEN = False\n",
                  "sightcircuit/hud/__init__.py": "", "sightcircuit/hud/contract.py": "MARKER = 1\n",
+                 "sightcircuit/agent/__init__.py": "", "sightcircuit/agent/runner.py": "KILL_GRACE = 10\n",
                  manifest.ASSET_MANIFEST: json.dumps({"assets": [{
                      "name": "model.onnx", "url": "https://example.invalid/model.onnx",
                      "sha256": hashlib.sha256(ASSET).hexdigest()}]})}
-        files.update({path: f"# {path}\n" for path in manifest.CHECKPOINT_SCRIPTS + manifest.NATIVE_SOURCES})
+        files.update({path: f"# {path}\n" for path in manifest.CHECKPOINT_SCRIPTS + manifest.NATIVE_SOURCES +
+                      manifest.AGENT_FILES})
         for path, text in files.items():
             (self.root / path).parent.mkdir(parents=True, exist_ok=True)
             (self.root / path).write_text(text)
@@ -147,7 +149,7 @@ class WriteTests(CheckoutCase):
         text = self.path.read_text()
         data = json.loads(text)
         self.assertEqual(text, json.dumps(data, sort_keys=True, indent=2) + "\n")
-        self.assertEqual((data["schema_version"], data["report_kind"]), (1, "checkpoint_artifact_manifest"))
+        self.assertEqual((data["schema_version"], data["report_kind"]), (2, "checkpoint_artifact_manifest"))
         self.assertIn("software identity only", data["scope"])
         self.assertIn("not device", data["scope"])
         self.assertEqual(data["git"], {"commit": self.git("rev-parse", "HEAD").strip(), "dirty": False})
@@ -164,6 +166,12 @@ class WriteTests(CheckoutCase):
         self.assertEqual(data["bridge"], {manifest.BRIDGE: hashlib.sha256(self.bridge.read_bytes()).hexdigest()})
         self.assertEqual(sorted(data["modules"]), ["sightcircuit/__init__.py", "sightcircuit/gates.py",
                                                    "sightcircuit/hud/__init__.py", "sightcircuit/hud/contract.py"])
+        # The agent is operations tooling outside the gates (D7): its own group, and nothing of it in modules.
+        self.assertEqual(sorted(data["agent"]), ["scripts/frame_agent_guard.py", "scripts/frame_agent_run.py",
+                                                 "sightcircuit/agent/__init__.py",
+                                                 "sightcircuit/agent/frame-settings.json",
+                                                 "sightcircuit/agent/runner.py"])
+        self.assertEqual(data["agent"]["sightcircuit/agent/runner.py"], hashlib.sha256(b"KILL_GRACE = 10\n").hexdigest())
         self.assertEqual(sorted(data["scripts"]), sorted(manifest.CHECKPOINT_SCRIPTS))
         self.assertIn("tools/hud_contract.hpp", data["native_sources"])
         self.assertEqual(data["assets"], {f"{manifest.ASSET_DIRECTORY}/model.onnx": hashlib.sha256(ASSET).hexdigest()})
@@ -273,6 +281,26 @@ class VerifyTests(CheckoutCase):
         (self.root / "sightcircuit/gates.py").write_text("OPEN = True\n")
         self.git("commit", "-q", "-am", "change a module")
         self.assertDiffers(("modules.sightcircuit/gates.py", "changed"), ("git.commit", "changed"))
+
+    def test_an_agent_change_differs_in_the_agent_group_and_leaves_the_hud_modules_unchanged(self):
+        self.write()
+        (self.root / "sightcircuit/agent/runner.py").write_text("KILL_GRACE = 20\n")
+        (self.root / "sightcircuit/agent/tasks.py").write_text("")
+        self.git("add", "sightcircuit/agent/tasks.py")
+        self.git("commit", "-q", "-am", "change the agent")
+        report = self.assertDiffers(("agent.sightcircuit/agent/runner.py", "changed"),
+                                    ("agent.sightcircuit/agent/tasks.py", "unexpected"), ("git.commit", "changed"))
+        self.assertFalse([item for item in report["differences"] if item["field"].startswith("modules.")],
+                         "an agent change altered the HUD modules group")
+
+    def test_the_real_checkout_keeps_the_agent_out_of_the_hud_modules(self):
+        current, _ = manifest.observe(ROOT)
+        self.assertFalse([path for path in current["modules"] if path.startswith(manifest.AGENT_PACKAGE + "/")])
+        self.assertTrue(all(path.startswith(manifest.AGENT_PACKAGE + "/") or path in manifest.AGENT_FILES
+                            for path in current["agent"]))
+        for path in ("sightcircuit/agent/runner.py", "sightcircuit/agent/guard.py", *manifest.AGENT_FILES):
+            self.assertIn(path, current["agent"])
+            self.assertTrue((ROOT / path).is_file(), path)
 
     def test_fails_for_an_added_or_removed_module(self):
         self.write()
@@ -410,7 +438,8 @@ class VerifyTests(CheckoutCase):
     def test_fails_for_an_edited_or_foreign_manifest(self):
         self.write()
         data = json.loads(self.path.read_text())
-        cases = {"schema": {**data, "schema_version": 2}, "kind": {**data, "report_kind": "other"},
+        cases = {"schema": {**data, "schema_version": manifest.SCHEMA_VERSION + 1},
+                 "kind": {**data, "report_kind": "other"},
                  "scope": {**data, "scope": "device evidence"}, "extra": {**data, "extra": 1},
                  "type": {**data, "git": {**data["git"], "dirty": 0}}}
         fields = {"schema": "schema_version", "kind": "report_kind", "scope": "scope", "extra": "extra",

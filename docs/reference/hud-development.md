@@ -73,9 +73,14 @@ runtime compatibility. No install, transfer or device execution is implied.
 `scripts/checkpoint_manifest.py` is the command and
 `sightcircuit/runtime/manifest.py` the library. `--write PATH` pins the git
 commit, a clean-tree check, the Python, architecture and OS identity, and
-SHA-256 values of the built bridge, every `sightcircuit/**/*.py`, the
+SHA-256 values of the built bridge, every `sightcircuit/**/*.py` outside the
+agent package (the `modules` group, the HUD software's identity), the
 checkpoint scripts, the bridge sources and the assets in
-`scripts/smoke-assets.json`. It also pins the installed package versions, all
+`scripts/smoke-assets.json`. The on-device agent (`sightcircuit/agent/`, its
+two scripts and its settings template) is operations tooling outside the
+production gates (decision D7), pinned in its own `agent` group since schema
+version 2 (2026-11-07): recorded and verified like every group, but an agent
+change no longer alters the `modules` group. It also pins the installed package versions, all
 as deterministic JSON with checkout-relative paths. It creates a new file
 (never overwriting) and refuses a dirty tree unless `--allow-dirty` records
 `dirty: true`. `--verify PATH` is read-only: it writes nothing, builds nothing
@@ -84,8 +89,8 @@ JSON. Both run on Frame after the native build; built binaries are never
 transferred. The [device checkpoint](../guides/hud-checkpoint.md)
 gives the commands, when to run them and what a failure means.
 
-`CHECKPOINT_SCRIPTS` and `CHECKPOINT_PACKAGES` in the library are the single
-lists. `tests/test_checkpoint_manifest.py` fails if a script named in a code
+`CHECKPOINT_SCRIPTS`, `CHECKPOINT_PACKAGES` and `AGENT_FILES` in the library are
+the single lists. `tests/test_checkpoint_manifest.py` fails if a script named in a code
 block of the canonical checkpoint procedure is missing from the list, if a documented
 `checkpoint_manifest.py` command does not parse with the real parser, if a
 procedure runs the marker bridge before its first `--verify`, or if the
@@ -328,11 +333,13 @@ version and build), the kernel release, the SteamVR package identity (since
 package database by file reads only, with `version` null and a reason where
 the database or the package is absent, as in the cloud), and SHA-256 values of the built
 `artifacts/overlay-bridge/sightcircuit-overlay-bridge`, every
-`sightcircuit/**/*.py`, the scripts this procedure runs, the bridge sources
+`sightcircuit/**/*.py` outside `sightcircuit/agent/` (`modules`), the agent
+package with its scripts and settings template in their own `agent` group,
+the scripts this procedure runs, the bridge sources
 including `tools/hud_contract.hpp`, and the models and fixture listed in
 `scripts/smoke-assets.json`. It also records the installed `numpy` and
 `opencv-python-headless` versions. Paths are relative to the checkout. The JSON
-is deterministic (sorted keys), with `schema_version` 1, `report_kind`
+is deterministic (sorted keys), with `schema_version` 2, `report_kind`
 `checkpoint_artifact_manifest` and a `scope` stating that it pins software
 identity only. It is not device or qualification evidence.
 `checkpoint_manifest.py --help` confirms these flags:

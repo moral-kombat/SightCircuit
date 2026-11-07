@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -11,7 +12,7 @@ from unittest import mock
 
 from sightcircuit.runtime import supervision
 from sightcircuit.runtime.supervision import (
-    GRACE, RAISE_ON_SIGNAL, RECORD_AND_POLL, Cancelled, Grace, ReportStream, SignalPolicy, Signals,
+    GRACE, RAISE_ON_SIGNAL, RECORD_AND_POLL, Cancelled, Grace, OwnedGroup, ReportStream, SignalPolicy, Signals,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,14 +41,14 @@ class SignalPolicyTests(unittest.TestCase):
     def test_an_inherited_ignore_is_honoured_or_overridden_as_the_policy_says(self):
         signal.signal(signal.SIGHUP, signal.SIG_IGN)
         with Signals(RAISE_ON_SIGNAL) as handlers:
-            self.assertNotIn(signal.SIGHUP, handlers.installed)
-            self.assertIn(signal.SIGTERM, handlers.installed)
+            self.assertNotIn(signal.SIGHUP, handlers.handled)
+            self.assertIn(signal.SIGTERM, handlers.handled)
             self.assertIs(signal.getsignal(signal.SIGHUP), signal.SIG_IGN)
             os.kill(os.getpid(), signal.SIGHUP)  # Stays ignored: nothing raises, nothing is recorded.
             time.sleep(0.05)
             self.assertFalse(handlers.received)
         with Signals(RECORD_AND_POLL) as handlers:
-            self.assertIn(signal.SIGHUP, handlers.installed)
+            self.assertIn(signal.SIGHUP, handlers.handled)
             self.assertIsNot(signal.getsignal(signal.SIGHUP), signal.SIG_IGN)
             os.kill(os.getpid(), signal.SIGHUP)
             time.sleep(0.05)
@@ -102,6 +103,24 @@ class SignalPolicyTests(unittest.TestCase):
             self.assertTrue(handlers.received)
             self.assertTrue(handlers.hold())  # hold() reports the state it found: armed...
             self.assertFalse(handlers.hold())  # ...and then held.
+
+    def test_holding_brackets_a_region_and_raises_a_noted_signal_on_exit_with_the_callers_exception(self):
+        class Stopped(Cancelled):
+            pass
+        with Signals(SignalPolicy("raise", "override"), exception=Stopped) as handlers:
+            handlers.arm()
+            with self.assertRaises(Stopped) as raised:
+                with handlers.holding():
+                    self.assertFalse(handlers.armed)
+                    os.kill(os.getpid(), signal.SIGTERM)
+                    time.sleep(0.05)
+                    self.assertEqual(handlers.number, signal.SIGTERM)  # Noted inside the block.
+            self.assertEqual(raised.exception.number, signal.SIGTERM)
+            self.assertTrue(handlers.armed)  # Resumed to what hold() found.
+        with Signals(SignalPolicy("raise", "override")) as handlers:
+            with handlers.holding():
+                pass
+            self.assertFalse(handlers.armed)  # Held before, held after.
 
     def test_handlers_require_the_main_thread(self):
         errors = []
@@ -215,6 +234,37 @@ class ReportStreamTests(unittest.TestCase):
         stream = self.stream_of(events + b'{"status": "done"}\n')
         self.assertEqual(stream.errors, [])
         self.assertEqual(len(stream.events), 400)
+
+
+@unittest.skipUnless(sys.platform.startswith("linux"), "Process groups and subreaping")
+class OwnedGroupTests(unittest.TestCase):
+    def test_alive_wait_and_terminate_cover_the_whole_group_with_reaping(self):
+        # A leader that starts a SIGTERM-ignoring child and exits at once; the child is reparented to this process.
+        with supervision.child_reaper():
+            leader = subprocess.Popen([sys.executable, "-c", (
+                "import subprocess, sys; subprocess.Popen([sys.executable, '-c', "
+                "'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)']); sys.exit(0)")],
+                start_new_session=True)
+            group = OwnedGroup(leader)
+            self.assertEqual(group.pgid, leader.pid)
+            self.assertTrue(group.alive())
+            self.assertFalse(group.wait_gone(0.3))  # The leader is reaped; its child keeps the group alive.
+            self.assertIsNotNone(leader.returncode)
+            started = time.monotonic()
+            self.assertTrue(group.terminate(Grace(terminate=0.3, kill=1.0)))
+            self.assertGreaterEqual(time.monotonic() - started, 0.3)  # SIGTERM was ignored: KILL after the grace.
+            self.assertFalse(group.alive())
+            with self.assertRaises(ProcessLookupError):
+                os.killpg(leader.pid, 0)
+
+    def test_a_group_that_exits_on_sigterm_is_gone_before_the_kill(self):
+        with supervision.child_reaper():
+            leader = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True)
+            group = OwnedGroup(leader)
+            started = time.monotonic()
+            self.assertTrue(group.terminate(Grace(terminate=5, kill=5)))
+            self.assertLess(time.monotonic() - started, 4)
+            self.assertEqual(leader.returncode, -signal.SIGTERM)
 
 
 def worker_command(body):

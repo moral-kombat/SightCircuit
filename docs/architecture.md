@@ -142,8 +142,11 @@ report block. **Implemented so far:** the primitive itself,
 [`runtime/supervision.py`](reference/pipeline.md#the-supervision-primitive),
 and the guard on it (work-order item B3), with an arm handshake that closes
 the window in which a cancellation reached a worker before its handlers were
-installed. Adoption by the agent runner, then the live pipeline and the mirror
-launcher, then the capture supervisor remains planned (B4 to B6).
+installed; the agent runner on it (B4: its raise-mode signal policy with an
+inherited ignore honoured, and the primitive's group termination with reaping,
+the runner being its tasks' subreaper), and the agent package as its own
+checkpoint-manifest group (decision D7). Adoption by the live pipeline and the
+mirror launcher, then the capture supervisor remains planned (B5, B6).
 
 ### Native bridge
 

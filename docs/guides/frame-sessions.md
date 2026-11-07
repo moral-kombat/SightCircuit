@@ -194,6 +194,22 @@ does not check for a leftover `.git/index.lock`. Run `run-tier` inside `tmux`
 when the connection may drop (`nohup` also works: a signal the runner was
 started with ignored stays ignored).
 
+The runner's signal handling and group termination are the
+[supervision primitive](../reference/pipeline.md#the-supervision-primitive)
+in its raise mode (since 2026-11-07, work-order item B4): the first signal
+raises, an inherited ignore is honoured, the handler is held while a task or
+git starts, and a task's whole process group is ended with SIGTERM then
+SIGKILL and reaped, the runner being the subreaper of its tasks for the run.
+A task is a command, not a supervised report worker, so it has no arm
+handshake: a signal to the runner ends the task's group at once, and a task
+that has not yet installed a handler ends by the default disposition. Where
+a task is itself a guarded command (`live_pipeline.py`, the marker check), the
+guard inside it waits up to one second (`Grace.arm`) for its worker to arm
+before SIGTERM; a worker whose start-up takes longer under load is still
+force-ended and reported as such. The group that an exited task leaves behind
+has half a second (`LEFTOVER_GRACE`) to follow it before the task counts as
+failed and the group is terminated.
+
 On the runtime described by the recorded service result, `run-tier tier-a` is
 expected not to report `all_passed`: by design
 `tier-a/service-preflight` exits 1 with
