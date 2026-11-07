@@ -1,0 +1,77 @@
+name: Documentation checks
+
+# The one check a documentation-only change needs: the generated status and
+# architecture summaries must match docs/evidence, index.json and
+# status-data.json. The path list is the paths-ignore list of checks.yml and
+# arm64.yml; tests/test_workflows.py keeps them identical and makes sure no
+# test module reads a path on it (those documents stay on the full run).
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/evidence/**'
+      - 'docs/status.md'
+      - 'docs/status-data.json'
+      - 'docs/architecture.md'
+      - 'docs/README.md'
+      - 'docs/agent-on-frame.md'
+      - 'docs/capture-reference-review.md'
+      - 'docs/design-review.md'
+      - 'docs/documentation-plan.md'
+      - 'docs/execution-prompt.md'
+      - 'docs/lifecycle-review.md'
+      - 'docs/morning-checklist.md'
+      - 'docs/poc-scope.md'
+      - 'docs/project-history.md'
+      - 'docs/steam-frame-camera.md'
+      - 'docs/vr-overlay.md'
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
+      - 'CONTRIBUTING.md'
+      - 'LICENSE'
+      - 'README.md'
+      - 'THIRD_PARTY.md'
+      - '.github/instructions/**'
+  pull_request:
+    paths:
+      - 'docs/evidence/**'
+      - 'docs/status.md'
+      - 'docs/status-data.json'
+      - 'docs/architecture.md'
+      - 'docs/README.md'
+      - 'docs/agent-on-frame.md'
+      - 'docs/capture-reference-review.md'
+      - 'docs/design-review.md'
+      - 'docs/documentation-plan.md'
+      - 'docs/execution-prompt.md'
+      - 'docs/lifecycle-review.md'
+      - 'docs/morning-checklist.md'
+      - 'docs/poc-scope.md'
+      - 'docs/project-history.md'
+      - 'docs/steam-frame-camera.md'
+      - 'docs/vr-overlay.md'
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
+      - 'CONTRIBUTING.md'
+      - 'LICENSE'
+      - 'README.md'
+      - 'THIRD_PARTY.md'
+      - '.github/instructions/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify generated evidence and capability summaries are current
+        run: python3 scripts/generate_status.py --check
+      - name: Verify the status generator's own tests
+        run: python3 -m unittest discover -s tests -p test_generate_status.py -v

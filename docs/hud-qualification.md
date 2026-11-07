@@ -1316,3 +1316,13 @@ exit code, the artifact manifest with its `--verify` report, and wearer
 observations; Ctrl-C or independent SSH SIGTERM aborts both tools. Reaping is reported separately from wearer
 confirmation of normal passthrough/tracking during and for 30 seconds after.
 No G4/G5 command exists yet; that missing diagnostic is explicit.
+
+Attempt of 2026-11-03 ([E83](evidence/e083.md)): with the manifest verified
+and the validation check passed, both observer runs stopped in under half a
+second with `observer_contour_budget`, before the bridge initialized and
+before any marker was shown. The precondition thresholds the grey frame at 180
+and rejects above 2,048 contours of any size; it was tuned on synthetic frames,
+and a passthrough image of a room exceeds it even on a dim wall. The next
+attempt waits for a precondition that measures marker-detection risk, with
+statistics in the rejection report, and for a new approval. The commands above
+are otherwise unchanged.
