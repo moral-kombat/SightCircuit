@@ -1,0 +1,768 @@
+{
+  "schema_version": 1,
+  "baseline_commit": "0496f41371b011043bed86a379b74bf253df821a",
+  "anchors": {
+    ".github/instructions/frame-service-lifecycle.instructions.md": [
+      "applyto-scriptsservicepyscriptssessionpyscriptslive_pipelinepyscriptsrecording_growth_checkpyscriptsbounded_workerpyscriptsoverlay_clientpyscriptscapture_layer_trialpytoolsoverlay_bridgecppteststest_servicepyteststest_sessionpyteststest_bounded_workerpyteststest_live_pipelinepyteststest_recording_growth_checkpyteststest_overlay_cleanuppyteststest_display_expirypydocslive-capturemd",
+      "learnings"
+    ],
+    "AGENTS.md": [
+      "checks-before-pushing",
+      "cloud-environment-setup",
+      "layout",
+      "sightcircuit-session-guide"
+    ],
+    "CLAUDE.md": [
+      "checks-before-pushing",
+      "cloud-environment-setup",
+      "layout",
+      "sightcircuit-session-guide"
+    ],
+    "CONTRIBUTING.md": [
+      "changes-and-pull-requests",
+      "contributing",
+      "development-checks",
+      "documentation-maintenance",
+      "license"
+    ],
+    "README.md": [
+      "design-and-next-steps",
+      "in-the-cloud-or-on-linux-x86_64-development-smoke-check",
+      "license",
+      "on-steam-frame-recorded-video-replay",
+      "project-status",
+      "quick-start",
+      "sightcircuit"
+    ],
+    "THIRD_PARTY.md": [
+      "adapted-mit-bsd-and-apache-sources",
+      "capture-reference-build-dependencies",
+      "development-fixtures",
+      "hud-geometric-prediction",
+      "mrhand-protocol-header",
+      "native-openvr-tools",
+      "overlay-bridge-lifecycle",
+      "python-dependencies",
+      "research-references",
+      "run-context-sensor-sampler",
+      "third-party-sources"
+    ],
+    "docs/README.md": [
+      "documentation",
+      "reading-order-for-a-new-session",
+      "start-by-task"
+    ],
+    "docs/agent-on-frame.md": [
+      "1-a-fixed-task-runner-is-the-only-command-the-agent-may-run",
+      "2-claude-code-permissions-allow-only-the-runner",
+      "3-a-pretooluse-hook-re-checks-every-bash-call",
+      "4-operating-limits",
+      "evidence-handling",
+      "goal",
+      "open-questions-and-risks",
+      "phase-0-install-and-verify-manual-owner",
+      "phase-1-runner-guard-and-settings-cloud-work",
+      "phase-2-first-agent-driven-tier-a-run-approval-needed",
+      "phase-3-on-demand-runs-from-the-app-or-cloud",
+      "phase-4-wearer-assisted-runs",
+      "phases",
+      "plan-run-claude-code-on-frame-for-automated-testing",
+      "prior-work",
+      "safety-model",
+      "test-tiers",
+      "where-claude-code-runs"
+    ],
+    "docs/architecture.md": [
+      "architecture-and-roadmap",
+      "camera-backend-boundary",
+      "candidate-models",
+      "fixed-edge-hud-decision",
+      "frame-processing",
+      "milestones-and-acceptance-checks",
+      "optional-offline-gaussian-splats",
+      "presentation-and-spatial-labels",
+      "progress-summary",
+      "recognition-implementation-and-model-replacement",
+      "replacement-procedure"
+    ],
+    "docs/capture-reference-review.md": [
+      "findings-that-affect-our-implementation",
+      "how-dedicated-arcturus-capture-works",
+      "implementation-order-and-acceptance-checks",
+      "recommendation",
+      "video-stream-reference-review-and-strategy",
+      "what-the-references-actually-provide"
+    ],
+    "docs/design-review.md": [
+      "1-the-documented-pipeline-is-not-in-the-code",
+      "2-effort-is-concentrated-on-a-blocked-path",
+      "3-detector-mixes-inference-and-drawing-the-model-is-a-dead-end",
+      "4-replay-contradicts-the-latest-frame-design",
+      "5-duplicated-infrastructure",
+      "6-packaging-and-tooling",
+      "7-ci-can-pass-vacuously-and-does-not-cover-arm64",
+      "8-vr-overlay",
+      "9-documentation-weight",
+      "design-review-architecture-and-implementation",
+      "engineering-in-order",
+      "findings",
+      "needs-the-headset",
+      "next-steps",
+      "progress",
+      "proposed-work-order",
+      "remaining-from-items-13",
+      "smaller-issues",
+      "summary"
+    ],
+    "docs/development.md": [
+      "annotated-replay-window",
+      "bounded-mirror-recognition",
+      "build-and-test-descriptor-transport-changes",
+      "build-and-test-gpu-resource-ownership",
+      "build-and-test-image-import-ownership",
+      "build-and-test-owned-publication",
+      "build-and-test-the-gpu-capability-query",
+      "capture-watchdog-provider-lifecycle-and-restoration-preparation",
+      "checkpoint-artifact-manifest",
+      "compile-the-unmodified-capture-reference",
+      "continuous-integration",
+      "controlled-metadata-layer-trial-and-recovery",
+      "dedicated-capture-build-prerequisites",
+      "detector-evaluation",
+      "development-setup",
+      "edge-hud-offline-test-plan",
+      "existing-steamvr-mirror-diagnostic",
+      "file-decoding-environment",
+      "generated-evidence-summaries",
+      "generated-hud-contract-header",
+      "hud-mask-fill-evaluation",
+      "inactive-configuration-bundle",
+      "install-and-run",
+      "isolated-luma-reader-and-synthetic-producer",
+      "latency-statistics",
+      "metadata-only-provider-inspection",
+      "metadata-trial-across-platform-sessions",
+      "native-vr-panel-build-and-validation",
+      "observer-report-to-mapping-candidate",
+      "observer-scene-precondition-statistics",
+      "offline-foundation-for-the-minimum-live-poc",
+      "paused-capture-provider-track",
+      "pinned-seed-counts",
+      "platform-managed-session-rehearsal",
+      "provider-protocol-and-layer-ownership",
+      "python-package-and-pipeline",
+      "recorded-mp4-inspection",
+      "run-context-sensor-sidecar",
+      "service-only-recovery-rehearsal",
+      "synthetic-hud-validation-counts",
+      "tests-that-need-downloaded-assets",
+      "what-validation-demonstrates",
+      "window-rendering-and-hardware",
+      "worker-containment-and-publication-recovery"
+    ],
+    "docs/documentation-plan.md": [
+      "authoritative-homes",
+      "consolidation-checklist",
+      "content-rules",
+      "documentation-plan-and-ownership",
+      "evidence-migration-wp7",
+      "verification-and-continuing-maintenance"
+    ],
+    "docs/evidence/README.md": [
+      "evidence-records"
+    ],
+    "docs/evidence/e001.md": [
+      "e1-frame-inventory"
+    ],
+    "docs/evidence/e002.md": [
+      "e2-vendor-app"
+    ],
+    "docs/evidence/e003.md": [
+      "e3-public-camera-probe"
+    ],
+    "docs/evidence/e004.md": [
+      "e4-recordings-and-container-metadata"
+    ],
+    "docs/evidence/e005.md": [
+      "e5-selected-track-decode"
+    ],
+    "docs/evidence/e006.md": [
+      "e6-window-and-vr-panel"
+    ],
+    "docs/evidence/e007.md": [
+      "e7-cloud-validation"
+    ],
+    "docs/evidence/e008.md": [
+      "e8-mirror-diagnostic-cloud-checks"
+    ],
+    "docs/evidence/e009.md": [
+      "e9-shared-memory-reader-cloud-checks"
+    ],
+    "docs/evidence/e010.md": [
+      "e10-mirror-discovery-on-frame"
+    ],
+    "docs/evidence/e011.md": [
+      "e11-first-mirror-acquisition-trial"
+    ],
+    "docs/evidence/e012.md": [
+      "e12-successful-mirror-frame-delivery"
+    ],
+    "docs/evidence/e013.md": [
+      "e13-mirror-preview-publication-on-frame"
+    ],
+    "docs/evidence/e014.md": [
+      "e14-physical-room-visible-in-the-mirror-preview"
+    ],
+    "docs/evidence/e015.md": [
+      "e15-saved-room-recognition-and-rug-false-positive"
+    ],
+    "docs/evidence/e016.md": [
+      "e16-bounded-mirror-recognition-cloud-checks"
+    ],
+    "docs/evidence/e017.md": [
+      "e17-bounded-mirror-recognition-on-frame"
+    ],
+    "docs/evidence/e018.md": [
+      "e18-vr-panel-included-in-mirror-input"
+    ],
+    "docs/evidence/e019.md": [
+      "e19-arcturus-connection-confirmed-source-selection-unknown"
+    ],
+    "docs/evidence/e020.md": [
+      "e20-capture-prerequisite-report-cloud-checks"
+    ],
+    "docs/evidence/e021.md": [
+      "e21-capture-prerequisites-on-frame"
+    ],
+    "docs/evidence/e022.md": [
+      "e22-capture-reference-build-cloud-checks"
+    ],
+    "docs/evidence/e023.md": [
+      "e23-reference-build-and-controlled-reader-on-frame"
+    ],
+    "docs/evidence/e024.md": [
+      "e24-descriptor-transport-adaptation-cloud-checks"
+    ],
+    "docs/evidence/e025.md": [
+      "e25-descriptor-transport-on-frame"
+    ],
+    "docs/evidence/e026.md": [
+      "e26-publication-and-loop-controls-cloud-checks"
+    ],
+    "docs/evidence/e027.md": [
+      "e27-publication-and-loop-controls-on-frame"
+    ],
+    "docs/evidence/e028.md": [
+      "e28-vulkan-capability-query-cloud-checks"
+    ],
+    "docs/evidence/e029.md": [
+      "e29-validated-import-and-ownership-cloud-checks"
+    ],
+    "docs/evidence/e030.md": [
+      "e30-vulkan-capabilities-on-frame"
+    ],
+    "docs/evidence/e031.md": [
+      "e31-import-build-and-synthetic-tests-on-frame"
+    ],
+    "docs/evidence/e032.md": [
+      "e32-two-plane-import-fixture-cloud-checks"
+    ],
+    "docs/evidence/e033.md": [
+      "e33-gpu-resource-ownership-cloud-checks"
+    ],
+    "docs/evidence/e034.md": [
+      "e34-capture-watchdog-provider-lifecycle-and-recovery-cloud-checks"
+    ],
+    "docs/evidence/e035.md": [
+      "e35-watchdog-provider-and-recovery-tests-on-frame"
+    ],
+    "docs/evidence/e036.md": [
+      "e36-metadata-only-provider-and-synchronization-review"
+    ],
+    "docs/evidence/e037.md": [
+      "e37-metadata-only-provider-and-diagnostic-on-frame"
+    ],
+    "docs/evidence/e038.md": [
+      "e38-inactive-bundle-and-steamvr-service-on-frame"
+    ],
+    "docs/evidence/e039.md": [
+      "e39-controlled-metadata-trial-and-loader-fallback-cloud-checks"
+    ],
+    "docs/evidence/e040.md": [
+      "e40-restart-and-console-access-loss-reported"
+    ],
+    "docs/evidence/e041.md": [
+      "e41-frame-trial-report-and-service-control-failures"
+    ],
+    "docs/evidence/e042.md": [
+      "e42-focused-service-window-and-restart-policy-on-frame"
+    ],
+    "docs/evidence/e043.md": [
+      "e43-steamvr-session-relationships-and-platform-hooks"
+    ],
+    "docs/evidence/e044.md": [
+      "e44-platform-launcher-source-and-repeated-hook-diagnostic-fix"
+    ],
+    "docs/evidence/e045.md": [
+      "e45-offline-platform-lifecycle-and-guarded-recovery"
+    ],
+    "docs/evidence/e046.md": [
+      "e46-read-only-runtime-baseline-on-frame"
+    ],
+    "docs/evidence/e047.md": [
+      "e47-recorded-recognition-and-vr-panel-poc-on-frame"
+    ],
+    "docs/evidence/e048.md": [
+      "e48-live-mirror-recognition-poc-and-matching-preview"
+    ],
+    "docs/evidence/e049.md": [
+      "e49-shared-pipeline-and-package-refactor-cloud-checks"
+    ],
+    "docs/evidence/e050.md": [
+      "e50-candidate-detector-and-evaluation-harness-cloud-checks"
+    ],
+    "docs/evidence/e051.md": [
+      "e51-media-time-replay-pacing-unit-tested-only"
+    ],
+    "docs/evidence/e052.md": [
+      "e52-bounded-mirror-stage-via-ssh"
+    ],
+    "docs/evidence/e053.md": [
+      "e53-unattended-replay-regression-and-pacing-rerun"
+    ],
+    "docs/evidence/e054.md": [
+      "e54-bounded-mirror-capture-on-merged-main"
+    ],
+    "docs/evidence/e055.md": [
+      "e55-annotated-replay-overlay-command-on-frame"
+    ],
+    "docs/evidence/e056.md": [
+      "e56-desktop-window-mirror-capture-attempt"
+    ],
+    "docs/evidence/e057.md": [
+      "e57-follow-up-overlay-and-mirror-runs"
+    ],
+    "docs/evidence/e058.md": [
+      "e58-user-observations-for-the-2026-10-26-runs"
+    ],
+    "docs/evidence/e059.md": [
+      "e59-arcturus-green-input-recurrence-and-operator-recovery"
+    ],
+    "docs/evidence/e060.md": [
+      "e60-evening-source-only-mirror-capture-and-scene-correspondence"
+    ],
+    "docs/evidence/e061.md": [
+      "e61-file-only-detector-comparison-on-the-evening-grayscale-still"
+    ],
+    "docs/evidence/e062.md": [
+      "e62-keyframe-catch-up-realtime-replay-cloud-checks"
+    ],
+    "docs/evidence/e063.md": [
+      "e63-service-only-rehearsal-and-graphical-session-dependency"
+    ],
+    "docs/evidence/e064.md": [
+      "e64-platform-session-test-completed-and-headset-confirmed"
+    ],
+    "docs/evidence/e065.md": [
+      "e65-v2-recovered-candidate-snapshots-compared-and-visual-check-passed"
+    ],
+    "docs/evidence/e066.md": [
+      "e66-offline-live-pipeline-and-headers-only-input-probe"
+    ],
+    "docs/evidence/e067.md": [
+      "e67-offline-cancellation-and-cleanup-audit"
+    ],
+    "docs/evidence/e068.md": [
+      "e68-independent-expiry-and-supervisor-loss-containment"
+    ],
+    "docs/evidence/e069.md": [
+      "e69-offline-edge-hud-and-native-mask-validation"
+    ],
+    "docs/evidence/e070.md": [
+      "e70-offline-marker-only-harness"
+    ],
+    "docs/evidence/e071.md": [
+      "e71-offline-arm64-build-and-empirical-marker-observer"
+    ],
+    "docs/evidence/e072.md": [
+      "e72-shared-hud-runtime-and-independent-lifecycle-fixes"
+    ],
+    "docs/evidence/e073.md": [
+      "e73-reproducible-preprocessing-audit-and-ssd-channel-correction"
+    ],
+    "docs/evidence/e074.md": [
+      "e74-evidence-generation-and-offline-mapping-qualification-support",
+      "integrated-checks"
+    ],
+    "docs/evidence/e075.md": [
+      "e75-recovered-v4-evidence-and-software-termination-analysis",
+      "established-software-sequence",
+      "evidence-recovered-and-verified",
+      "physical-outcome-and-remaining-g2-evidence",
+      "review-validation-and-limits"
+    ],
+    "docs/evidence/e076.md": [
+      "cloud-measurements-runner-cpu-not-frame",
+      "e76-offline-work-packages-ah-cloud-checks",
+      "findings-that-need-a-decision",
+      "integrated-checks",
+      "what-changed",
+      "what-stays-open"
+    ],
+    "docs/evidence/e077.md": [
+      "cloud-checks",
+      "e77-claude-code-on-frame-runner-guard-and-installer-cloud-checks",
+      "github-ci-check-runs-not-frame",
+      "open-decisions-owner",
+      "review",
+      "review-cycle-3-follow-ups-minor-and-nit-none-blocking",
+      "what-changed",
+      "what-stays-open"
+    ],
+    "docs/evidence/e078.md": [
+      "cloud-checks",
+      "e78-mirror-session-tokens-and-neutral-hud-mask-fill-cloud-checks",
+      "github-ci-check-runs-not-frame",
+      "package-i-session-tokens-for-the-mirror-source",
+      "package-j-neutral-fill-for-the-native-hud-mask",
+      "review",
+      "what-stays-open"
+    ],
+    "docs/evidence/e079.md": [
+      "e79-g2-green-input-log-analysis-and-recovery-rehearsal-on-frame",
+      "limits",
+      "log-analysis-read-only-on-the-saved-bundle",
+      "owner-recollections-taken-2026-11-03",
+      "recovery-procedure-and-rehearsal"
+    ],
+    "docs/evidence/e080.md": [
+      "command",
+      "e80-file-only-detector-re-run-on-the-e61-still-with-audit-variants",
+      "findings",
+      "input",
+      "limits",
+      "result"
+    ],
+    "docs/evidence/e081.md": [
+      "consequences",
+      "e81-catch-up-session-on-frame-regressions-400-frame-panel-run-mirror-and-wp2-stills",
+      "limits",
+      "procedure",
+      "results"
+    ],
+    "docs/evidence/e082.md": [
+      "e82-guarded-claude-code-setup-installed-on-frame-phase-0",
+      "limits",
+      "result"
+    ],
+    "docs/evidence/e083.md": [
+      "e83-g3-marker-observer-attempt-stopped-at-the-observer-scene-precondition",
+      "interpretation",
+      "preparation-all-passed",
+      "process-notes-from-the-frame-session",
+      "result"
+    ],
+    "docs/evidence/e084.md": [
+      "ci",
+      "e84-ship-pass-of-2026-11-06-cloud-checks-for-prs-22-24-25-26-and-27",
+      "limits",
+      "what-merged-and-what-the-review-changed"
+    ],
+    "docs/execution-prompt.md": [
+      "a-restore-still-capture-and-pin-still-digests-blocker-small",
+      "b-marker-stop-guardian-loss-and-startup-cancel-g2-software-small-to-medium",
+      "baseline",
+      "blocker-found-in-the-review",
+      "c-device-checkpoint-artifact-manifest-g3-prerequisite-small-to-medium",
+      "coder-handoff-2026-11-03",
+      "coder-handoff-2026-11-04",
+      "coder-handoff-2026-11-07-agent-runner-coder-session-closed-after-the-move",
+      "copy-ready-prompt",
+      "d-one-hud-and-marker-contract-for-python-and-c-g3g4-medium",
+      "device-steps-each-needs-the-owners-approval",
+      "device-work-these-packages-unlock-for-the-project-manager",
+      "e-wire-qualification-into-the-runtime-g4g5-offline-medium-to-large-after-d",
+      "environment-gotchas",
+      "execution-prompt-complete-the-fixed-edge-hud-work",
+      "f-one-live-report-runner-and-one-mirror-launcher-structural-medium-after-a-and-b",
+      "findings",
+      "follow-ups-found-not-started",
+      "g-detector-ownership-and-evaluator-diagnostics-medium-after-a",
+      "h-latency-statistics-for-wp12-small-to-medium-after-e3-because-both-change-pipelinestats",
+      "how-the-work-was-run",
+      "how-this-session-ran-the-work",
+      "item-3-the-native-tracking-reporter-carried-over-unfinished",
+      "lanes-and-order",
+      "merged-in-this-session",
+      "offline-handoff-2026-11-01",
+      "offline-work-that-is-ready-to-pick-up",
+      "open-decisions-for-the-owner",
+      "open-questions-for-the-owner",
+      "open-work",
+      "owner-decisions-2026-11-03",
+      "owner-decisions-taken-in-this-session-2026-11-03-and-2026-11-04",
+      "packages",
+      "rules-for-every-package",
+      "ship-pipeline-follow-ups-2026-11-06",
+      "start-here",
+      "still-open",
+      "what-is-done",
+      "what-that-session-finished"
+    ],
+    "docs/hud-qualification.md": [
+      "evidence-that-qualification-must-add",
+      "geometric-prediction-cross-check-2026-11-04",
+      "marker-stop-path",
+      "neutral-mask-fill-2026-11-03",
+      "next-device-checkpoint",
+      "observed-session-tokens-for-the-candidate-2026-11-03",
+      "observer-report-to-candidate-2026-11-01",
+      "observer-scene-precondition-2026-11-04",
+      "offline-candidate-records",
+      "one-margin-rule",
+      "proposed-g4-method",
+      "proposed-hud-mapping-qualification-and-device-validation",
+      "reports-and-g6-acceptance",
+      "runtime-calibration-and-one-margin-rule-2026-11-01",
+      "separately-scoped-device-validation",
+      "session-tokens-for-the-mirror-source-2026-11-03",
+      "synthetic-validation-counts-and-one-maximum-age-2026-11-01"
+    ],
+    "docs/lifecycle-review.md": [
+      "evidence-needed-to-advance-g2",
+      "independently-demonstrated-defects",
+      "marker-stop-and-guardian-loss-2026-11-01",
+      "offline-lifecycle-review-2026-10-31",
+      "pinned-upstream-review",
+      "recovered-v4-software-termination-chain"
+    ],
+    "docs/live-capture.md": [
+      "acceptance-evidence",
+      "choose-a-frame-provider",
+      "connect-the-working-application",
+      "critical-path",
+      "current-work-order",
+      "edge-hud-acceptance-gates",
+      "first-live-device-trial",
+      "live-capture-plan",
+      "minimum-live-poc-and-october-26-target",
+      "next-dedicated-camera-deliverable-capture-only-reader",
+      "next-deliverable-mirror-diagnostic",
+      "next-engineering-step-capture-worker-supervision",
+      "next-provider-step-query-gpu-capabilities",
+      "october-26-evening-handoff",
+      "offline-provider-work-while-the-frame-is-unavailable",
+      "offline-work-order",
+      "producer-synchronization-review-and-next-checkpoint",
+      "risks",
+      "scope-decision-2026-10-27",
+      "steamvr-service-control-acceptance",
+      "synthetic-input-and-feedback-contract-review",
+      "vendor-interface-questions"
+    ],
+    "docs/morning-checklist.md": [
+      "frame-test-checklist-after-the-overnight-cloud-work"
+    ],
+    "docs/on-device.md": [
+      "advanced-probe-only-for-a-deliberate-future-retest",
+      "approved-run",
+      "before-the-device-run",
+      "bounded-edge-hud-calibration-checkpoint",
+      "build-the-capture-reference-without-activation",
+      "check-an-existing-steamvr-mirror",
+      "check-existing-luma-shared-memory",
+      "check-native-capture-prerequisites",
+      "check-runtime-liveness-without-restarting",
+      "check-whether-the-vr-panel-appears-in-mirror-input",
+      "compare-detectors-on-frame-stills",
+      "confirm-where-commands-run",
+      "confirmed-public-probe-result",
+      "context-for-a-new-development-session",
+      "continue-development-on-steam-frame",
+      "decode-one-recorded-video-track",
+      "deployment-preflight-and-command-shape-not-authorized",
+      "inspect-the-service-relationships-without-restarting",
+      "measure-the-observers-scene-precondition-on-saved-stills",
+      "obtain-the-repository",
+      "open-the-annotated-replay-window",
+      "preflight-advice-from-another-frame-project-upstream-not-our-evidence",
+      "prepare-a-recording-for-replay",
+      "prepare-the-metadata-layer-trial",
+      "prepared-metadata-session-trial",
+      "prepared-platform-session-test",
+      "proposed-recording-growth-test",
+      "query-vulkan-capture-capabilities",
+      "read-the-platform-launcher-definitions",
+      "read-the-service-failure-window",
+      "reading-the-result",
+      "record-headset-observations-for-a-run",
+      "run-automated-checks-with-an-on-device-agent",
+      "run-bounded-recognition-from-the-mirror",
+      "run-recognition-on-the-saved-mirror-image",
+      "run-the-bounded-metadata-layer-trial",
+      "run-the-device-inventory-first",
+      "service-only-recovery-rehearsal-result",
+      "starting-with-only-a-browser",
+      "test-gpu-resource-ownership-without-capture",
+      "test-import-ownership-without-capture",
+      "test-metadata-only-inspection-without-capture",
+      "test-owned-publication-without-capture",
+      "test-the-transport-adaptation-without-capture",
+      "test-the-watchdog-and-provider-without-capture",
+      "then-verify-camera-access",
+      "verify-independent-ssh-access"
+    ],
+    "docs/poc-scope.md": [
+      "acceptance",
+      "adoption-order-and-evidence",
+      "capture-supervisor-fix-2026-11-04",
+      "constraints-that-shape-the-design",
+      "decision",
+      "deferred-work-packages",
+      "execution-checkpoint-2026-10-31",
+      "later-work-and-frozen-provider-references",
+      "offline-handoff-delivery-2026-11-02",
+      "open-questions-for-planners",
+      "owner-decisions-2026-11-03",
+      "poc-scope-fixed-edge-hud-on-live-mirror-input",
+      "priorities-for-the-current-poc",
+      "reviewed-source-revisions",
+      "rules-kept-and-changed",
+      "upstream-reuse-plan-2026-10-31",
+      "work-packages"
+    ],
+    "docs/project-history.md": [
+      "design-and-next-steps",
+      "in-the-cloud-or-on-linux-x86_64-development-smoke-check",
+      "license",
+      "on-steam-frame-recorded-video-replay",
+      "project-status",
+      "quick-start",
+      "readme-history-before-the-evidence-migration",
+      "sightcircuit"
+    ],
+    "docs/status.md": [
+      "capability-matrix",
+      "e1-frame-inventory",
+      "e10-mirror-discovery-on-frame",
+      "e11-first-mirror-acquisition-trial",
+      "e12-successful-mirror-frame-delivery",
+      "e13-mirror-preview-publication-on-frame",
+      "e14-physical-room-visible-in-the-mirror-preview",
+      "e15-saved-room-recognition-and-rug-false-positive",
+      "e16-bounded-mirror-recognition-cloud-checks",
+      "e17-bounded-mirror-recognition-on-frame",
+      "e18-vr-panel-included-in-mirror-input",
+      "e19-arcturus-connection-confirmed-source-selection-unknown",
+      "e2-vendor-app",
+      "e20-capture-prerequisite-report-cloud-checks",
+      "e21-capture-prerequisites-on-frame",
+      "e22-capture-reference-build-cloud-checks",
+      "e23-reference-build-and-controlled-reader-on-frame",
+      "e24-descriptor-transport-adaptation-cloud-checks",
+      "e25-descriptor-transport-on-frame",
+      "e26-publication-and-loop-controls-cloud-checks",
+      "e27-publication-and-loop-controls-on-frame",
+      "e28-vulkan-capability-query-cloud-checks",
+      "e29-validated-import-and-ownership-cloud-checks",
+      "e3-public-camera-probe",
+      "e30-vulkan-capabilities-on-frame",
+      "e31-import-build-and-synthetic-tests-on-frame",
+      "e32-two-plane-import-fixture-cloud-checks",
+      "e33-gpu-resource-ownership-cloud-checks",
+      "e34-capture-watchdog-provider-lifecycle-and-recovery-cloud-checks",
+      "e35-watchdog-provider-and-recovery-tests-on-frame",
+      "e36-metadata-only-provider-and-synchronization-review",
+      "e37-metadata-only-provider-and-diagnostic-on-frame",
+      "e38-inactive-bundle-and-steamvr-service-on-frame",
+      "e39-controlled-metadata-trial-and-loader-fallback-cloud-checks",
+      "e4-recordings-and-container-metadata",
+      "e40-restart-and-console-access-loss-reported",
+      "e41-frame-trial-report-and-service-control-failures",
+      "e42-focused-service-window-and-restart-policy-on-frame",
+      "e43-steamvr-session-relationships-and-platform-hooks",
+      "e44-platform-launcher-source-and-repeated-hook-diagnostic-fix",
+      "e45-offline-platform-lifecycle-and-guarded-recovery",
+      "e46-read-only-runtime-baseline-on-frame",
+      "e47-recorded-recognition-and-vr-panel-poc-on-frame",
+      "e48-live-mirror-recognition-poc-and-matching-preview",
+      "e49-shared-pipeline-and-package-refactor-cloud-checks",
+      "e5-selected-track-decode",
+      "e50-candidate-detector-and-evaluation-harness-cloud-checks",
+      "e51-media-time-replay-pacing-unit-tested-only",
+      "e52-bounded-mirror-stage-via-ssh",
+      "e53-unattended-replay-regression-and-pacing-rerun",
+      "e54-bounded-mirror-capture-on-merged-main",
+      "e55-annotated-replay-overlay-command-on-frame",
+      "e56-desktop-window-mirror-capture-attempt",
+      "e57-follow-up-overlay-and-mirror-runs",
+      "e58-user-observations-for-the-2026-10-26-runs",
+      "e59-arcturus-green-input-recurrence-and-operator-recovery",
+      "e6-window-and-vr-panel",
+      "e60-evening-source-only-mirror-capture-and-scene-correspondence",
+      "e61-file-only-detector-comparison-on-the-evening-grayscale-still",
+      "e62-keyframe-catch-up-realtime-replay-cloud-checks",
+      "e63-service-only-rehearsal-and-graphical-session-dependency",
+      "e64-platform-session-test-completed-and-headset-confirmed",
+      "e65-v2-recovered-candidate-snapshots-compared-and-visual-check-passed",
+      "e66-offline-live-pipeline-and-headers-only-input-probe",
+      "e67-offline-cancellation-and-cleanup-audit",
+      "e68-independent-expiry-and-supervisor-loss-containment",
+      "e69-offline-edge-hud-and-native-mask-validation",
+      "e7-cloud-validation",
+      "e70-offline-marker-only-harness",
+      "e71-offline-arm64-build-and-empirical-marker-observer",
+      "e72-shared-hud-runtime-and-independent-lifecycle-fixes",
+      "e73-reproducible-preprocessing-audit-and-ssd-channel-correction",
+      "e74-evidence-generation-and-offline-mapping-qualification-support",
+      "e75-recovered-v4-evidence-and-software-termination-analysis",
+      "e76-offline-work-packages-ah-cloud-checks",
+      "e77-claude-code-on-frame-runner-guard-and-installer-cloud-checks",
+      "e78-mirror-session-tokens-and-neutral-hud-mask-fill-cloud-checks",
+      "e79-g2-green-input-log-analysis-and-recovery-rehearsal-on-frame",
+      "e8-mirror-diagnostic-cloud-checks",
+      "e80-file-only-detector-re-run-on-the-e61-still-with-audit-variants",
+      "e81-catch-up-session-on-frame-regressions-400-frame-panel-run-mirror-and-wp2-stills",
+      "e82-guarded-claude-code-setup-installed-on-frame-phase-0",
+      "e83-g3-marker-observer-attempt-stopped-at-the-observer-scene-precondition",
+      "e84-ship-pass-of-2026-11-06-cloud-checks-for-prs-22-24-25-26-and-27",
+      "e9-shared-memory-reader-cloud-checks",
+      "evidence-record",
+      "maintaining-the-evidence",
+      "project-status-and-evidence"
+    ],
+    "docs/steam-frame-camera.md": [
+      "1-spyjacob-arcturus-live-capture-and-hand-tracking",
+      "3-frametop-built-in-camera-research-and-related-leads",
+      "calibration-spatial-labels-and-gaussian-splats",
+      "community-references-selected-for-follow-up-2026-10-16",
+      "experimental-live-capture",
+      "implementation-sequence-and-remaining-checks",
+      "project-device-results",
+      "public-api-and-camera-ownership",
+      "steam-frame-and-arcturus-camera-integration",
+      "steam-frame-observations-from-community-code",
+      "third-party-camera-claims-2026-11-04",
+      "valves-documented-application-interface",
+      "what-the-available-sources-establish"
+    ],
+    "docs/vr-overlay.md": [
+      "annotated-replay-after-the-panel-test-passes",
+      "connect-order-output-and-watchdog-package-k-2026-11-04",
+      "first-device-test-a-timed-panel",
+      "planned-edge-hud",
+      "shutdown-and-reports",
+      "transport-and-cloud-verification",
+      "vr-replay-panel-prototype"
+    ],
+    "patches/mrhand/README.md": [
+      "capture-transport-adaptation"
+    ],
+    "third_party/mrhand/README.md": [
+      "mrhand-protocol-reference"
+    ]
+  },
+  "additional_baseline_commits": [
+    "a46c3d38549e0b245d66bb965b123fbeb73ad28f"
+  ]
+}

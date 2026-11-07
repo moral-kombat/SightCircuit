@@ -3,14 +3,15 @@
 checks.yml (x86_64) runs on every pull request and main push; arm64.yml on
 main pushes and on demand only; a newer push cancels a pull request's
 superseded run. A documentation-only change skips both and runs docs.yml,
-which checks the generated summaries. The three workflows must agree on what
+which checks links, compatibility anchors and generated summaries. The three workflows must agree on what
 "documentation-only" means, and no path on that list may be an input to a test
-module (other than the status generator's tests, which docs.yml runs), or a
+module (other than the documentation validators' tests, which docs.yml runs), or a
 documentation change could break a test that CI never ran. The no-skip lists
 in check-jobs.yml must name modules that exist, or a renamed module would
 leave its gate vacuous.
 """
 from pathlib import Path
+from fnmatch import fnmatchcase
 import re
 import unittest
 
@@ -18,6 +19,14 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github/workflows"
 # Fixture strings in these modules name a documentation path without reading the document.
 FIXTURE_MENTIONS = {("test_frame_agent.py", "docs/status.md")}
+# These exercise temporary documentation fixtures and run on the documentation
+# route as well as in the full suite; mentioning a docs path cannot bypass them.
+DOCUMENTATION_TESTS = {"test_generate_status.py", "test_check_docs.py"}
+CANONICAL_COMMAND_INPUTS = {
+    "docs/guides/hud-checkpoint.md", "docs/reference/capture-provider.md",
+    "docs/reference/hud-development.md", "docs/reference/hud-candidates.md",
+    "docs/reference/pipeline.md",
+}
 
 
 def quoted_lists(text, key):
@@ -65,7 +74,7 @@ class DocumentationOnlyPaths(unittest.TestCase):
     def test_no_test_module_reads_a_documentation_only_path(self):
         entries = [entry.removesuffix("/**") for entry in self.reference if entry.startswith("docs/")]
         for module in sorted(ROOT.glob("tests/test_*.py")):
-            if module.name in ("test_generate_status.py", Path(__file__).name):
+            if module.name in DOCUMENTATION_TESTS | {Path(__file__).name}:
                 continue
             text = module.read_text()
             for entry in entries:
@@ -73,6 +82,31 @@ class DocumentationOnlyPaths(unittest.TestCase):
                     continue
                 with self.subTest(module=module.name, path=entry):
                     self.assertNotIn(entry, text, f"{module.name} names {entry}, which CI treats as documentation-only")
+                    if entry.endswith(".md") and 'ROOT / "docs"' in text:
+                        self.assertNotIn(f'"{entry.removeprefix("docs/")}"', text,
+                                         f"{module.name} reads {entry} relative to the docs directory")
+
+    def test_canonical_command_documents_keep_the_full_suite(self):
+        for path in CANONICAL_COMMAND_INPUTS:
+            with self.subTest(path=path):
+                self.assertTrue((ROOT / path).is_file())
+                self.assertFalse(any(fnmatchcase(path, pattern) for pattern in self.reference),
+                                 f"{path} must run its application command-contract tests")
+
+    def test_both_routes_run_the_documentation_validators(self):
+        shared = (WORKFLOWS / "check-jobs.yml").read_text()
+        for workflow in (self.docs, shared):
+            self.assertRegex(workflow, r"python3? scripts/check_docs\.py(?:\n|$)")
+            self.assertRegex(workflow, r"python3? scripts/generate_status\.py --check(?:\n|$)")
+        for module in DOCUMENTATION_TESTS:
+            self.assertIn(f"-p {module} -v", self.docs)
+
+    def test_new_history_and_reader_guides_use_the_documentation_route(self):
+        for path in ("docs/history/README.md", "docs/glossary.md", "docs/legacy-anchors.json",
+                     "docs/guides/replay.md", "docs/guides/mirror-recognition.md",
+                     "docs/guides/frame-sessions.md", "docs/reference/overlay.md"):
+            with self.subTest(path=path):
+                self.assertTrue(any(fnmatchcase(path, pattern) for pattern in self.reference))
 
 
 class Triggers(unittest.TestCase):
@@ -103,6 +137,10 @@ class Triggers(unittest.TestCase):
 
 
 class NoSkipLists(unittest.TestCase):
+    def test_shared_jobs_keep_the_three_job_layout(self):
+        text = (WORKFLOWS / "check-jobs.yml").read_text().split("\njobs:\n", 1)[1]
+        self.assertEqual(re.findall(r"(?m)^  ([\w-]+):$", text), ["native", "replay", "replay-pacing"])
+
     def test_every_pinned_module_exists(self):
         text = (WORKFLOWS / "check-jobs.yml").read_text()
         pinned = sorted(set(re.findall(r"tests/test_[a-z0-9_]+\.py", text)))

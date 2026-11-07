@@ -1,100 +1,139 @@
 # Documentation plan and ownership
 
-This plan organizes project documentation around navigation, operating
-procedures, evidence, design and current work. Existing file paths and heading
-anchors are preserved. [The index](README.md) is the starting point.
+SightCircuit documentation is written for a contributor joining the project for
+the first time. Start at the [documentation index](README.md). It separates
+learning, development, device operation, technical reference, and history.
+
+The overhaul changes how information is explained and found. It does not change
+the POC, implementation priorities, acceptance evidence, or device permissions.
+The [current work page](live-capture.md) remains the work-order authority.
 
 ## Authoritative homes
 
-| Document | Owns | Update when |
+| Topic | Home | Maintenance rule |
 | --- | --- | --- |
-| [Root README](../README.md) | Overview, brief status, Frame/cloud entry points | Project scope or entry points change |
-| [Documentation index](README.md) | Task-based navigation and reading order | A guide is added or its role changes |
-| [Status](status.md) | Generated capability matrix and stable historical evidence anchors | Regenerate after reviewed evidence/source changes |
-| [Evidence records](evidence/README.md) | Per-entry procedure, result, provenance and unknowns; `index.json` owns identities | A coordinator records a new result |
-| `status-data.json` | Reviewed capability summaries consumed by `scripts/generate_status.py` | The evidence justifies a capability change |
-| [On-device guide](on-device.md) | Frame access, inventory, recording/replay procedures and session handoff | Device commands or operating procedures change |
-| [Agent on Frame](agent-on-frame.md) | Proposed plan, tiers and guards for running Claude Code on Frame for automated tests | The plan changes or a phase is completed |
-| [VR overlay](vr-overlay.md) | Panel launch, UI controls, shutdown and native transport reference | Panel behavior, options or protocol change |
-| [Development](development.md) | Cloud/desktop setup, dependency environments, builds, tests and CI | Setup, dependencies or checks change |
-| [Architecture](architecture.md) | Components, frame flow, concurrency, interfaces and long-term acceptance criteria | A design or interface changes |
-| [Live capture](live-capture.md) | Current capture work order, dependencies and acceptance checks | A task is completed or the chosen path changes |
-| [POC scope](poc-scope.md) | Active/deferred work packages, completion criteria and upstream reuse priorities | Scope or work-package state changes |
-| [Execution prompt](execution-prompt.md) | Dated copy-ready handoff for completing unblocked implementation work | A new implementation handoff is prepared; refresh current sources before using it |
-| [Camera reference](steam-frame-camera.md) | Camera interfaces, compatibility research and pinned references | A source/runtime review produces new findings |
-| [Capture review](capture-reference-review.md) | Dated code analysis and the reasoning for the reviewed strategy | A factual correction is needed; later decisions belong in the active plan |
-| [Design review](design-review.md) | Dated architecture/implementation review, its work order and current next steps | A factual correction is needed; record progress in the owning documents |
-| [CLAUDE.md](../CLAUDE.md) | Short orientation, cloud setup and checks for a new agent session | Setup, layout or checks change |
-| [Contributing](../CONTRIBUTING.md) | Contribution and documentation maintenance workflow | Review conventions change |
-| [Third-party sources](../THIRD_PARTY.md) | Dependency, fixture and reused-code attribution | Dependencies, fixtures or external code change |
-| This document | Ownership, organization and consolidation checklist | Documentation structure or maintenance rules change |
+| Project purpose and entry points | [Root README](../README.md) | Briefly describe the goal, current maturity, and where to start. |
+| Navigation and terminology | [Index](README.md), [glossary](glossary.md) | Group by reader task; introduce terms before IDs. |
+| Verified capabilities | [Generated status](status.md) | Edit reviewed `status-data.json`, then regenerate. |
+| Observations and provenance | [Evidence records and catalog](evidence/README.md) | Preserve IDs and history; the coordinator registers new evidence. |
+| Current work, blockers, and gates | [Current work and acceptance](live-capture.md) | Update completion and next actions here, rather than in several handoffs. |
+| Scope and accepted decisions | [POC scope](poc-scope.md) | Keep durable decisions and completion criteria; link current progress. |
+| Contributor setup and checks | [Development](development.md), [Contributing](../CONTRIBUTING.md) | Put prerequisites before commands; link detailed subsystem references. |
+| Frame access and task selection | [On-device entry point](on-device.md) | Explain execution location, access, and inventory. |
+| Device procedures | [Replay](guides/replay.md), [mirror recognition](guides/mirror-recognition.md), [Frame sessions](guides/frame-sessions.md), [HUD checkpoint](guides/hud-checkpoint.md), [VR panel](vr-overlay.md) | Keep one canonical runnable procedure per task, including output and shutdown. |
+| Design and contracts | [Architecture](architecture.md), [HUD qualification](hud-qualification.md), [camera reference](steam-frame-camera.md), subsystem references linked from development | Separate implemented paths, proposed methods, and paused work. |
+| Agent operation and design | [Frame sessions](guides/frame-sessions.md), [agent design](agent-on-frame.md) | Keep supported operation separate from the proposal and historical installation claims. |
+| Session orientation | [Execution handoff](execution-prompt.md), [AGENTS](../AGENTS.md), [CLAUDE](../CLAUDE.md) | Link current owners; do not accumulate dated work orders. |
+| Historical context | [History index](history/README.md), [previous README](project-history.md) | Label snapshots and direct readers to maintained guidance. |
+| Licenses and provenance | [Third-party sources](../THIRD_PARTY.md) | Preserve notices, source revisions, and original repository URLs. |
+| Documentation conventions | This document | Update when ownership, structure, or validation changes. |
 
-The author changing a component updates its owning documents in the same
-change. The maintainer recording a device result adds its evidence record, regenerates status and checks any
-brief summaries.
+The author changing a component updates its owning documentation in the same
+change. A reviewer checks that any brief summaries still agree with that home.
 
 ## Content rules
 
-- Record full evidence once under `docs/evidence/`; the coordinator adds its
-  identity/provenance to `index.json`. Update reviewed capability rows in
-  `docs/status-data.json` and run `python3 scripts/generate_status.py`. Status
-  preserves every historical heading as a link. Check generated output with
-  `python3 scripts/generate_status.py --check`; do not hand-edit the status
-  matrix or the marked architecture progress summary. Other pages may retain a
-  short linked summary; keep operating warnings next to the affected command.
-- Keep the current capture backlog in live capture. Research snapshots explain
-  earlier reasoning and point to the active plan for current tasks.
-- Describe a procedure's execution location, prerequisites, commands, expected
-  results, output behavior and shutdown. Mark planned tools as unimplemented;
-  do not provide a command that does not exist.
-- Distinguish planned, implemented, cloud-tested and device-confirmed behavior.
-  Label failures, upstream reports and unverified compatibility explicitly.
-- Record source pins, review dates and evidence limits. A documentation edit
-  date is not a device-test date. Do not infer missing versions or dates from
-  filenames or the current Git commit.
-- Keep complete operating procedures in the device/overlay guides and build
-  procedures in development. A short README quick start may repeat a canonical
-  command block, with a link and corresponding updates when behavior changes.
-- Keep exact fields, types, limits and timebases consistent with implementation
-  sources. Document a future capture interface alongside its implementation,
-  rather than creating empty reference pages now.
-- Preserve existing paths and heading anchors. If content moves, leave a short
-  linked summary under the original heading and check inbound links.
+### Write for someone new
+
+- Lead with the task or concept in plain language. Expand abbreviations on first
+  use and link the [glossary](glossary.md) for recurring terminology.
+- Start a guide with purpose, prerequisites, execution environment, and expected
+  outcome. Follow with commands, output interpretation, troubleshooting, and
+  shutdown. Keep operating restrictions beside the affected command.
+- Prefer short sections and descriptive link labels. Keep chronological accounts
+  and long technical tables out of onboarding. Use a diagram when it clarifies
+  a real data flow; distinguish implemented and future paths.
+- Say “lifecycle acceptance (G2)” or “recovered marker evidence (E75)” before
+  relying on an identifier. A reader should not need to memorize work packages.
+
+### Keep facts in their proper context
+
+- Record full evidence once. Distinguish implementation, offline tests, CI,
+  headset reports, and upstream claims. A successful process exit cannot certify
+  physical recovery, and a documentation review date is not a device-test date.
+- Preserve measurements, failed outcomes, source pins, reconstructed provenance,
+  and unknown fields. Add later context outside a historical narrative rather
+  than rewriting what was observed.
+- The overhaul baseline contained E1–E78. Evidence E79–E84 from the former
+  [Framejacker PR #23](https://github.com/moral-kombat/framejacker/pull/23)
+  is now merged through [SightCircuit PR #1](https://github.com/moral-kombat/SightCircuit/pull/1).
+  Preserve those records and the resulting reviewed status when reconciling
+  documentation. Check the current index and pending allocations before adding
+  an ID; a historical handoff is not allocation authority.
+- Keep command options and report fields consistent with source. Planned tools
+  are not runnable commands. Paused provider procedures belong in reference or
+  history, outside the normal contributor path.
+- Preserve historical GitHub links: SightCircuit and Framejacker have different
+  repository identities. Do not replace repository names inside old PR or source
+  URLs. The [commit-history mapping](history-rewrite-2026-11-07.txt) explains
+  rewritten internal revision identifiers.
+
+### Move content without breaking readers
+
+- Preserve original file paths and heading anchors. Leave a short forwarding
+  section or an explicit anchor with a descriptive link to the new home.
+- Update current navigation to point directly to the canonical page. Forwarding
+  sections provide compatibility, not another copy of the instructions.
+- Move documentation-dependent tests with the canonical procedure. Preserve
+  command parsing, script pinning, source boundaries, and verification ordering.
+- `legacy-anchors.json` freezes original compatibility anchors. Do not remove
+  entries merely to make a migration pass. New maintained links are checked too.
 
 ## Consolidation checklist
 
-- [x] Add a task-based documentation index and link it from the root README.
-- [x] Add the status matrix and evidence record with explicit unknown fields.
-- [x] Move detailed device-result history out of operating/reference guides.
-- [x] Keep device commands, output guidance and the probe-interruption warning.
-- [x] Separate Frame replay instructions from cloud development in the README.
-- [x] Make live capture the authoritative current work checklist.
-- [x] Mark the capture review as a dated snapshot and link to the active plan.
-- [x] Link architecture and overlay guides to status instead of repeating evidence.
-- [x] Add documentation maintenance rules to Contributing.
-- [x] Verify local links, heading anchors and command examples against sources.
-- [x] Verify formatting and that this change modifies documentation only.
-- [x] Commit and publish the organization update after checks pass.
+The implementation is organized into three reviewable batches:
+
+1. **Factual corrections and ownership:** fix stale instructions and capability
+   wording; give current work, scope, evidence, and history separate roles.
+2. **Guide extraction and rewriting:** shorten entry pages, add focused task
+   guides and references, and preserve old destinations with forwarding sections.
+3. **Generated navigation and automated checks:** group status, generate the
+   evidence catalog, check local links and compatibility anchors, and migrate
+   procedure tests without weakening their assertions.
+
+The result is complete when a newcomer can reach setup and its smoke check,
+find the architecture and current work, and submit a change without reading
+historical experiments. A headset operator must reach one canonical procedure
+with clear prerequisites and shutdown guidance. Every historical page must
+identify itself as historical.
 
 ## Verification and continuing maintenance
 
-Before publication, check local file targets and Markdown anchors, retain all
-existing linked headings, inspect command paths/options against their sources,
-and run `git diff --check`. Do not execute disruptive hardware procedures merely
-to check documentation. Runtime tests remain governed by their actual operating
-conditions and the [recorded probe failure](status.md#e3-public-camera-probe).
+Run from the repository root after editing documentation sources:
 
-For a session handoff, record new evidence under `docs/evidence/`, regenerate status, update completed/next work
-in live capture, and keep the short on-device continuation prompt aligned with
-those documents. Publish related documentation with the implementation or
-device-result update so the next session reads a consistent project state.
+```bash
+python3 scripts/generate_status.py
+python3 scripts/generate_status.py --check
+python3 scripts/check_docs.py
+python3 -m unittest discover -s tests -p 'test_generate_status.py'
+python3 -m unittest discover -s tests -p 'test_check_docs.py'
+git diff --check
+```
+
+The generator owns the whole status page and marked blocks in architecture and
+the evidence README. Edit its reviewed sources, not the generated output. The
+catalog's descending evidence IDs express recording order, not execution dates.
+Capability groups must include every capability exactly once.
+
+The offline documentation checker validates local files, Markdown fragments,
+and compatibility anchors. It does not fetch remote URLs or execute code
+blocks. Check changed commands against their parsers and source as well.
+
+When moving or changing procedure examples, run the documentation-dependent
+`test_scripts_boundary`, `test_checkpoint_manifest`, and
+`test_hud_marker_observer` suites in the development test environment. The
+[development guide](development.md) explains dependencies and native builds.
+Use the smoke check to validate the Linux setup path; do not execute headset
+procedures to validate a documentation edit.
+
+For a session handoff, register any reviewed evidence through its coordinator,
+regenerate summaries, and update the current work page. Link those sources from
+the short handoff instead of copying their status into another dated checklist.
 
 ## Evidence migration (WP7)
 
-E1–E71 now live in individual files; the prior root README is retained in
-[README history](project-history.md). Old README headings and status evidence
-headings remain addressable. E63–E71 retain reconstructed provenance; their
-unknown dates, revisions and unavailable original reports have not been filled
-in. The architecture's former external dashboard snapshot is now generated
-from the same reviewed capability rows as status. This documentation migration
-is an offline change and supplies no new device acceptance evidence.
+The original evidence migration placed E1–E71 in individual files and preserved
+status anchors; subsequent records extend that catalog. E63–E71 retain their
+reconstructed provenance, including unknown execution dates and revisions.
+The [previous README](project-history.md) and dated history retain earlier
+context. This documentation overhaul adds no device evidence or acceptance.
