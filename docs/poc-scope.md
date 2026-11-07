@@ -149,7 +149,7 @@ Coordinator's calls made under these decisions, after the council:
 | Recall and budget | Chair recall is per-box at IoU 0.5 on the boxed set. The live budget is the inference p95 from a `mirror_recognize` run on the Frame. Both become one named constant each in code; the budget's number is the owner's: at most 200 ms, accepted on 2026-11-07 (`POC_THRESHOLD` and `LIVE_INFERENCE_P95_BUDGET_MS` in `sightcircuit/detection.py`; [reference](reference/detection.md#poc-threshold-and-live-budget)). |
 | Locks | One hashed lock per requirement set, carrying both architectures' hashes, verified on the Frame when its setup next runs. |
 | Active entry points | The eight named commands plus `mirror_check` and `frame_session_manifest`. |
-| Attempt budget counting | An attempt counts when it reaches the observer's scene precondition or later. A stop for a missing bridge build, a missing headset or a failed manifest check is a preparation failure and does not count. |
+| Attempt budget counting | An attempt counts against the D2 budget when the observer judged the scene: a rejection at the scene precondition counts, and anything after the marker tile appears counts. A stop caused by connectivity or preparation does not count whatever its position in the run: a missing bridge build, a failed manifest verification, headset not connected, the connect watchdog, the marker ready timeout, or a vrserver session stop. Refined on 2026-11-07 after the A3 review (finding F1). |
 | Race fixed | Fifty consecutive green runs of the cancellation test under CPU stress on the cloud runner, then one green ARM64 run on main. |
 
 ## Upstream reuse plan (2026-10-31)
