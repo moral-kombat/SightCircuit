@@ -198,9 +198,13 @@ work-order items, and until then keep their own copies. The primitive offers:
   after SIGTERM, from which `guard.cleanup_budget(default)` derives a worker's
   own cleanup joins (the synthetic run's capture-thread join: the grace less a
   one-second reserve, so four seconds under the guard, half a second alone).
-- **Hold-and-arm around process start.** The supervisor's handler is held
-  across `Popen` and across the cleanup; in `raise` mode a signal noted while
-  held is raised once the process exists, so there is always a process to end.
+- **Hold-and-arm around process start.** A handler starts held and is armed
+  by its caller; `hold` and `resume` bracket a region, such as a `Popen`,
+  where there is nothing to terminate yet. The primitive keeps its own handler
+  held for the whole supervision and polls the first signal, so no window
+  around process start, the cleanup or the report block can lose a signal or
+  skip the report; in `raise` mode `Cancelled` surfaces once, after the
+  cleanup, carrying the finished report.
 - **Group-wide termination with reaping**, `killpg` TERM then KILL with every
   owned member reaped, and containment of a group a killed guardian reported.
 - **Deadline-based cleanup verdicts.** A cancellation (or parent loss) first

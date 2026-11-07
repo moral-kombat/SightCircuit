@@ -13,11 +13,15 @@ supervisor follow (architecture decision D4). It offers:
   plus ``SIGHTCIRCUIT_COOPERATIVE_GRACE``, the seconds it has to exit after
   SIGTERM, so that its own cleanup joins can share the supervisor's deadline
   (``cooperative_budget``).
-- **Hold-and-arm around process start.** In ``raise`` mode the first signal
-  raises ``Cancelled`` on the supervising thread, but only while the handler
-  is armed: it is held across ``Popen`` (there is nothing to terminate yet)
-  and across the whole cleanup, and a signal noted while held is raised once
-  the process exists. In ``record`` mode nothing raises; the loop polls.
+- **Hold-and-arm protocol around process start.** A ``Signals`` handler
+  starts held: in ``raise`` mode a signal only raises ``Cancelled`` once the
+  caller has armed it (``arm``), and ``hold``/``resume`` bracket a region,
+  such as a ``Popen``, where there is nothing to terminate yet. The primitive
+  itself keeps its handler held for the whole supervision, polls the first
+  signal (every 20 ms) like ``record`` mode, and in ``raise`` mode raises
+  ``Cancelled`` carrying the finished report after the cleanup, so no window
+  between process start, cleanup and report can lose a signal or skip the
+  report block.
 - **Group-wide termination with reaping.** SIGTERM to the leader, then
   ``killpg`` TERM and KILL, reaping every exited member the supervisor owns,
   as the guard did; a group a killed guardian reported is contained the same way.
@@ -102,16 +106,20 @@ RAISE_ON_SIGNAL = SignalPolicy(RAISE, HONOUR)
 class Signals:
     """The policy's handlers, installed on the main thread for the block; ``number`` is the first signal seen.
 
-    ``hold()`` and ``resume(armed)`` bracket a region where a signal may only
-    be noted (process start, cleanup); in ``raise`` mode ``resume`` raises a
-    signal noted meanwhile. Later signals are only counted.
+    The handler starts held: a signal is only noted until ``arm()``. In
+    ``raise`` mode an armed handler raises ``Cancelled`` on the first signal,
+    and ``hold()``/``resume(armed)`` bracket a region where a signal may only
+    be noted (a process start, a cleanup); ``resume`` and ``arm`` raise a
+    signal noted meanwhile. A signal is delivered (raised) at most once;
+    later signals are only counted.
     """
 
     def __init__(self, policy=RECORD_AND_POLL):
         self.policy = policy
         self.number = None
         self.recorded = []  # Every signal seen, first first; ``number`` is recorded[0].
-        self.armed = True
+        self.armed = False
+        self.delivered = False  # Raised once already; never again.
         self.previous = {}
         self.installed = ()
 
@@ -127,8 +135,13 @@ class Signals:
         self.recorded.append(number)
         if self.number is None:
             self.number = number
-            if self.policy.mode == RAISE and self.armed:
-                raise Cancelled(number)
+            self.deliver()
+
+    def deliver(self):
+        """In ``raise`` mode, raise the noted signal if the handler is armed and it was not raised before."""
+        if self.policy.mode == RAISE and self.armed and self.number is not None and not self.delivered:
+            self.delivered = True
+            raise Cancelled(self.number)
 
     def hold(self):
         """From now on only note a signal; returns whether the handler was armed, for ``resume``."""
@@ -138,8 +151,11 @@ class Signals:
     def resume(self, armed):
         """Re-arm (when ``hold`` found it armed); in ``raise`` mode a signal noted meanwhile is raised."""
         self.armed = armed
-        if armed and self.policy.mode == RAISE and self.number is not None:
-            raise Cancelled(self.number)
+        self.deliver()
+
+    def arm(self):
+        """Arm the handler; in ``raise`` mode a signal noted while it was held is raised now."""
+        self.resume(True)
 
     def __enter__(self):
         if threading.current_thread() is not threading.main_thread():
@@ -496,9 +512,11 @@ def supervise_owned(command, base_report, timeout, validate, *, descendants=Fals
         owned.update(orphaned_worker_group=orphan, orphaned_worker_tree_signalled=signalled,
                      orphaned_worker_tree_reaped=orphan_gone)
 
+    # The handler stays held throughout: the loop polls the first signal, and in raise mode ``Cancelled``
+    # is raised below with the finished report, so no window around Popen, the cleanup or the report
+    # block can lose a signal or leave a process behind.
     with Signals(signals) as handlers, child_reaper():
         report_armed()  # A nested supervisor (the guard's guardian) is its parent's worker: its handlers are in.
-        held = handlers.hold()  # Nothing to terminate until Popen has returned.
         try:
             if parent_lost():
                 raise ValueError("supervisor_lifeline_closed_before_start")
@@ -523,7 +541,6 @@ def supervise_owned(command, base_report, timeout, validate, *, descendants=Fals
                     os.write(group_fd, b"%d\n" % process.pid)
             stream = ReportStream(process.stdout)
             stream.start()
-            handlers.resume(held)  # A signal that came while the worker started is raised here (raise mode).
             deadline = started + timeout
             while True:
                 stream.dispatch(progress)
@@ -546,13 +563,10 @@ def supervise_owned(command, base_report, timeout, validate, *, descendants=Fals
                     failure = "worker_exited_with_open_report_pipe"
                     break
                 stream.done.wait(0.02) if not stream.done.is_set() else time.sleep(0.02)
-        except Cancelled:
-            failure = "cancelled"
         except (OSError, ValueError) as error:
             failure = "error"
             report["reason"] = str(error)[:1024]
         finally:
-            handlers.hold()  # Later signals are only noted while the cleanup runs.
             if arm_write is not None:
                 os.close(arm_write)
             if process is not None:
@@ -601,5 +615,5 @@ def supervise_owned(command, base_report, timeout, validate, *, descendants=Fals
         if not report["cleanup_ok"] and report["exit_code"] == 0:
             report.update(status="cleanup_failed", exit_code=1)
         if handlers.received and signals.mode == RAISE:
-            raise Cancelled(handlers.number, report)
+            raise Cancelled(handlers.number, report)  # The one place a raise-mode signal surfaces.
     return report

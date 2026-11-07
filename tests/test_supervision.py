@@ -64,11 +64,27 @@ class SignalPolicyTests(unittest.TestCase):
             self.assertEqual(handlers.count, 2)
             handlers.resume(handlers.hold())  # Never raises in record mode.
 
+    def test_a_freshly_entered_handler_is_held_and_a_signal_then_is_delivered_once_on_arm(self):
+        # The window between installing the handlers and the first hold() would otherwise raise with no report.
+        policy = SignalPolicy("raise", "override")
+        with Signals(policy) as handlers:
+            self.assertFalse(handlers.armed)
+            os.kill(os.getpid(), signal.SIGTERM)
+            time.sleep(0.05)
+            self.assertEqual(handlers.number, signal.SIGTERM)  # Noted, not raised.
+            with self.assertRaises(Cancelled) as raised:
+                handlers.arm()
+            self.assertEqual(raised.exception.number, signal.SIGTERM)
+            self.assertTrue(handlers.armed)
+            handlers.arm()  # Delivered once: arming again raises nothing.
+
     def test_raise_mode_raises_while_armed_only_notes_while_held_and_raises_on_resume(self):
         policy = SignalPolicy("raise", "override")
         with Signals(policy) as handlers:
+            handlers.arm()
             armed = handlers.hold()
             self.assertTrue(armed)
+            self.assertFalse(handlers.armed)
             os.kill(os.getpid(), signal.SIGTERM)
             time.sleep(0.05)
             self.assertEqual(handlers.number, signal.SIGTERM)  # Noted, not raised.
@@ -79,11 +95,13 @@ class SignalPolicyTests(unittest.TestCase):
             time.sleep(0.05)
             self.assertEqual(handlers.recorded, [signal.SIGTERM, signal.SIGINT])
         with Signals(policy) as handlers:
+            handlers.arm()
             with self.assertRaises(Cancelled):
                 os.kill(os.getpid(), signal.SIGTERM)
                 time.sleep(0.5)
             self.assertTrue(handlers.received)
-        self.assertFalse(handlers.hold() and False)  # A held handler reports it was not armed.
+            self.assertTrue(handlers.hold())  # hold() reports the state it found: armed...
+            self.assertFalse(handlers.hold())  # ...and then held.
 
     def test_handlers_require_the_main_thread(self):
         errors = []
@@ -265,6 +283,23 @@ class SupervisedOwnedTests(unittest.TestCase):
         self.assertEqual(report["status"], "cancelled")
         self.assertTrue(report["worker_reaped"] and report["worker_tree_reaped"], report)
         self.assertTrue(report["cleanup_ok"], report)
+
+    def test_a_signal_in_the_error_path_is_delivered_once_with_the_finished_report(self):
+        # Popen fails right after a signal lands: raise mode still ends with one Cancelled carrying the report.
+        def popen(*args, **kwargs):
+            os.kill(os.getpid(), signal.SIGTERM)
+            time.sleep(0.05)
+            raise OSError("fixture_popen_failed")
+        with mock.patch.object(supervision.subprocess, "Popen", side_effect=popen), self.assertRaises(Cancelled) as raised:
+            supervision.supervise_owned(worker_command(COOPERATIVE), {"report_kind": "test"}, 10, accept,
+                                        signals=RAISE_ON_SIGNAL)
+        report = raised.exception.report
+        self.assertIsNotNone(report)
+        self.assertEqual((report["status"], report["exit_code"]), ("cancelled", 128 + signal.SIGTERM))
+        self.assertEqual(report["reason"], "fixture_popen_failed")
+        self.assertFalse(report["cleanup_ok"])
+        self.assertFalse(report["worker_reaped"])
+        self.assertIs(signal.getsignal(signal.SIGTERM), self.previous[signal.SIGTERM])  # Handlers restored.
 
     def test_record_mode_returns_the_cancelled_report_and_a_never_arming_worker_is_forced_after_the_arm_wait(self):
         self.signal_self_soon(signal.SIGTERM, 0.3)
