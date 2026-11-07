@@ -1,0 +1,18 @@
+{
+  "_comment": "Suite time budget (work-order item B7): per-module wall-time ceilings in seconds, enforced by scripts/run_tests_no_skips.py --budget. Derived from the cloud runner's durations of 2026-11-07 (docs/reference/development-checks.md) with about three times margin for a loaded runner. A ceiling is never a reason to skip or shorten a test: raise it with the measurement that needs it.",
+  "default_seconds": 30,
+  "total_seconds": 900,
+  "modules": {
+    "test_frame_agent": 180,
+    "test_bounded_worker": 150,
+    "test_overlay_bridge": 60,
+    "test_hud_fill": 60,
+    "test_mask_fill_evaluation": 45,
+    "test_frame_claude_install": 45,
+    "test_hud_marker_observer": 45,
+    "test_hud_marker_check": 45,
+    "test_mirror_recognize": 40,
+    "test_report_characterization": 40,
+    "test_latency_statistics": 30
+  }
+}

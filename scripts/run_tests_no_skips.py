@@ -11,6 +11,11 @@ so a broken setup step cannot turn into a green run of skips.
     run_tests_no_skips.py --durations FILE ...
         Also record the wall time of every test module in FILE (JSON) and
         print the modules, slowest first, so a suite time budget has data.
+    run_tests_no_skips.py --budget tests/time_budget.json ...
+        Also fail when a module's wall time exceeds its ceiling in the budget
+        file (or the file's default ceiling), or the whole run exceeds the
+        total, naming each module, its time and its ceiling. A ceiling is a
+        bound on runner time, never a reason to skip or shorten a test.
 
 ``--all`` lets a job run the whole suite one time and still pin the modules
 its setup steps are supposed to satisfy completely.
@@ -90,6 +95,29 @@ class ModuleDurations:
             print(f"  {entry['seconds']:9.3f} s  {entry['tests']:4d} tests  {name}", file=stream)
 
 
+def load_budget(path):
+    """The time budget: ``default_seconds`` for unlisted modules, ``total_seconds`` for the run, ``modules`` ceilings."""
+    data = json.loads(Path(path).read_text())
+    modules = data.get("modules", {})
+    if (type(data.get("default_seconds")) not in (int, float) or type(data.get("total_seconds")) not in (int, float) or
+            not isinstance(modules, dict) or any(type(value) not in (int, float) for value in modules.values())):
+        raise ValueError(f"{path}: default_seconds, total_seconds and every module ceiling must be numbers")
+    return {"default_seconds": float(data["default_seconds"]), "total_seconds": float(data["total_seconds"]),
+            "modules": {name: float(value) for name, value in modules.items()}}
+
+
+def over_budget(report, budget):
+    """Every module over its ceiling, and the run over its total, as messages; empty when the budget holds."""
+    found = []
+    for name, entry in report["modules"].items():
+        ceiling = budget["modules"].get(name, budget["default_seconds"])
+        if entry["seconds"] > ceiling:
+            found.append(f"  {name} took {entry['seconds']:.3f} s, over its {ceiling:g} s ceiling")
+    if report["total_seconds"] > budget["total_seconds"]:
+        found.append(f"  the run took {report['total_seconds']:.3f} s, over the {budget['total_seconds']:g} s total")
+    return found
+
+
 def timed_result_class(durations):
     class TimedResult(unittest.TextTestResult):
         def stopTest(self, test):
@@ -102,13 +130,16 @@ def timed_result_class(durations):
     return TimedResult
 
 
-def run(modules, all_tests=False, tests_dir=ROOT / "tests", stream=None, durations=None):
-    """Run the suite and return the exit code: 0 only if every test passed and no pinned module skipped.
+def run(modules, all_tests=False, tests_dir=ROOT / "tests", stream=None, durations=None, budget=None):
+    """Run the suite and return the exit code: 0 only if every test passed, no pinned module skipped and the budget held.
 
     ``durations`` names a file for the per-module wall times (JSON); they are
-    also printed to the error stream.
+    also printed to the error stream. ``budget`` names a time budget file
+    (``load_budget``); a module over its ceiling or a run over the total fails
+    the run with a message naming it.
     """
     errors = stream or sys.stderr
+    ceilings = load_budget(budget) if budget is not None else None
     if normalise_sigint():
         print("SIGINT was ignored when the suite started; children now start with the default handler.",
               file=errors)
@@ -119,12 +150,18 @@ def run(modules, all_tests=False, tests_dir=ROOT / "tests", stream=None, duratio
         suite = unittest.TestSuite()
         for module in modules:
             suite.addTests(loader.discover(str(tests_dir), pattern=Path(module).name))
-    timings = ModuleDurations() if durations is not None else None
+    timings = ModuleDurations() if durations is not None or ceilings is not None else None
     runner = unittest.TextTestRunner(stream=stream, verbosity=2,
                                      resultclass=timed_result_class(timings) if timings else None)
     result = runner.run(suite)
-    if timings is not None:
+    if durations is not None:
         timings.write(durations, errors)
+    exceeded = over_budget(timings.report(), ceilings) if ceilings is not None else []
+    if exceeded:
+        print(f"{len(exceeded)} time budget violation(s) against {budget} (a ceiling bounds runner time; raise it with "
+              "the measurement that needs it, never by skipping or shortening a test):", file=errors)
+        for line in exceeded:
+            print(line, file=errors)
     pinned = {Path(module).stem for module in modules}
     disallowed = [(test, reason) for test, reason in result.skipped if module_name(test) in pinned]
     if all_tests and len(result.skipped) > len(disallowed):
@@ -133,17 +170,18 @@ def run(modules, all_tests=False, tests_dir=ROOT / "tests", stream=None, duratio
         print(f"{len(disallowed)} test(s) skipped where none are allowed:", file=errors)
         for test, reason in disallowed:
             print(f"  {test}: {reason}", file=errors)
-    return 0 if result.wasSuccessful() and not disallowed else 1
+    return 0 if result.wasSuccessful() and not disallowed and not exceeded else 1
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--all", action="store_true", help="run every test module; only the named ones may not skip")
     parser.add_argument("--durations", metavar="FILE", help="write each module's wall time (JSON) and print them")
+    parser.add_argument("--budget", metavar="FILE", help="fail when a module or the run exceeds this time budget (JSON)")
     parser.add_argument("modules", nargs="+", metavar="tests/test_x.py", help="modules in which no test may skip")
     arguments = parser.parse_args(argv)
     sys.path.insert(0, str(ROOT))
-    return run(arguments.modules, all_tests=arguments.all, durations=arguments.durations)
+    return run(arguments.modules, all_tests=arguments.all, durations=arguments.durations, budget=arguments.budget)
 
 
 if __name__ == "__main__":
