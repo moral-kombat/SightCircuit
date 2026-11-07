@@ -243,13 +243,17 @@ that the declaration runs before any frame is read.
 
 ### 4. Every stop before a marker, and what counts
 
-The [attempt budget counting rule](../poc-scope.md#architecture-decisions-2026-11-07):
-an attempt counts when it reaches the observer's scene precondition or later; a
-stop for a missing bridge build, a missing headset or a failed manifest check
-is a preparation failure and does not count. The precondition runs inside the
-matcher on every baseline read (`sightcircuit/hud/observation.py:308`, through
-`locate_copies` `:121` and `sightcircuit/hud/scene.py`), so E83's stops count.
-In run order:
+The [attempt budget counting rule](../poc-scope.md#architecture-decisions-2026-11-07),
+as the planner refined it on 2026-11-07 after this review's finding F1: an
+attempt counts against the D2 budget when the observer judged the scene. A
+rejection at the scene precondition counts, and anything after the marker tile
+appears counts. A stop caused by connectivity or preparation does not count,
+whatever its position in the code order: a missing bridge build, a failed
+manifest verification, a headset not connected, a connect watchdog expiry, a
+marker ready timeout, and the vrserver session stops. The precondition runs
+inside the matcher on every baseline read (`sightcircuit/hud/observation.py:308`,
+through `locate_copies` `:121` and `sightcircuit/hud/scene.py`), so E83's
+stops count. In run order:
 
 | Stop (`reason`) | Where (45771fe) | Counts? |
 | --- | --- | --- |
@@ -300,15 +304,20 @@ and package versions differ), which is the intended stop.
 
 Findings for the planner, outside this item's scope:
 
-- **F1, the rule's examples against the code order.** Two of the rule's three
-  named preparation failures, the bridge build and the headset, were reached
-  only after the baseline had passed the precondition on two reads. The bridge
-  build is now checked before anything opens. `headset_not_connected` and the
-  other connect stops still come after the baseline, because only the bridge's
-  `VR_Init` can detect them. This review classes them as preparation failures
-  by the rule's reasoning: the runtime, not the scene, stopped the run. That
-  reading, and whether `baseline_distinct_clear_frames_not_established` should
-  count, are the planner's to confirm in the scope document.
+- **F1, the rule's examples against the code order, resolved.** Two of the
+  rule's originally named preparation failures, the bridge build and the
+  headset, were reached only after the baseline had passed the precondition
+  on two reads. The bridge build is now checked before anything opens;
+  `headset_not_connected` and the other connect stops still come after the
+  baseline, because only the bridge's `VR_Init` can detect them. The planner's
+  call (2026-11-07, recorded in the scope document): an attempt counts when
+  the observer judged the scene, that is a rejection at the scene precondition
+  or anything after the marker tile appears; a stop caused by connectivity or
+  preparation does not count whatever its position in the code order: missing
+  bridge build, failed manifest verification, headset not connected, connect
+  watchdog expiry, marker ready timeout, and the vrserver session stops. The
+  table above and the [checkpoint guide](../guides/hud-checkpoint.md#reading-the-result)
+  follow that wording.
 - **F2, short runs.** A `--seconds` at or below the connect budget plus the
   bridge's start can end `calibration_deadline_before_marker` after a healthy
   but slow connect. The documented run is 20 s; `hud_marker_check.py --validate
