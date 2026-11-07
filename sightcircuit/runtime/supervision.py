@@ -114,14 +114,15 @@ class Signals:
     later signals are only counted.
     """
 
-    def __init__(self, policy=RECORD_AND_POLL):
+    def __init__(self, policy=RECORD_AND_POLL, exception=Cancelled):
         self.policy = policy
+        self.exception = exception  # Raised in ``raise`` mode, with the signal number; a caller's own subclass fits.
         self.number = None
         self.recorded = []  # Every signal seen, first first; ``number`` is recorded[0].
         self.armed = False
         self.delivered = False  # Raised once already; never again.
         self.previous = {}
-        self.installed = ()
+        self.handled = ()  # The signals whose handlers this block installed.
 
     @property
     def received(self):
@@ -141,7 +142,7 @@ class Signals:
         """In ``raise`` mode, raise the noted signal if the handler is armed and it was not raised before."""
         if self.policy.mode == RAISE and self.armed and self.number is not None and not self.delivered:
             self.delivered = True
-            raise Cancelled(self.number)
+            raise self.exception(self.number)
 
     def hold(self):
         """From now on only note a signal; returns whether the handler was armed, for ``resume``."""
@@ -157,6 +158,15 @@ class Signals:
         """Arm the handler; in ``raise`` mode a signal noted while it was held is raised now."""
         self.resume(True)
 
+    @contextlib.contextmanager
+    def holding(self):
+        """Hold for the block (a process start, an ending); on exit resume, raising a signal noted meanwhile."""
+        armed = self.hold()
+        try:
+            yield self
+        finally:
+            self.resume(armed)
+
     def __enter__(self):
         if threading.current_thread() is not threading.main_thread():
             raise ValueError("worker_supervisor_requires_main_thread")
@@ -166,7 +176,7 @@ class Signals:
                 continue
             self.previous[number] = signal.signal(number, self.handle)
             installed.append(number)
-        self.installed = tuple(installed)
+        self.handled = tuple(installed)
         return self
 
     def __exit__(self, *_):
@@ -320,6 +330,61 @@ def contain_orphaned_group(pgid, grace=GRACE):
     return False
 
 
+class OwnedGroup:
+    """The process group of a child started in its own session (``start_new_session``), ended and reaped by this process.
+
+    ``alive()`` reaps the leader and, under ``child_reaper``, every exited
+    member reparented to this process, then asks the kernel whether the group
+    still has a member. ``terminate(grace)`` is the one escalation: ``killpg``
+    SIGTERM, wait ``grace.terminate``, ``killpg`` SIGKILL, wait ``grace.kill``;
+    it returns whether the group is gone. A member that leaves the group
+    (``setsid``) is out of reach, as documented for every supervisor here.
+    """
+
+    def __init__(self, process):
+        self.process = process
+        self.posix = os.name == "posix"
+
+    @property
+    def pgid(self):
+        return self.process.pid
+
+    def alive(self):
+        """True while the leader or any member of its group exists."""
+        if not self.posix:
+            return self.process.poll() is None
+        # poll reaps our direct child first; only then reap adopted group members.
+        if self.process.poll() is not None and sys.platform.startswith("linux"):
+            reap_members(self.pgid)
+        return group_exists(self.pgid)
+
+    def signal(self, number):
+        try:
+            if self.posix:
+                os.killpg(self.pgid, number)
+            elif self.process.poll() is None:
+                self.process.kill()
+        except ProcessLookupError:
+            pass
+
+    def wait_gone(self, seconds):
+        """Wait until the group is gone, at most ``seconds``; True once it is."""
+        deadline = time.monotonic() + seconds
+        while self.alive():
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.01)
+        return True
+
+    def terminate(self, grace=GRACE):
+        """SIGTERM the group, then SIGKILL what is still there after ``grace.terminate``; True once the group is gone."""
+        self.signal(signal.SIGTERM)
+        if self.wait_gone(grace.terminate):
+            return True
+        self.signal(getattr(signal, "SIGKILL", signal.SIGTERM))
+        return self.wait_gone(grace.kill)
+
+
 class ReportStream:
     """Reads a worker's report stream off-thread: events are queued, everything else is the report text.
 
@@ -413,7 +478,7 @@ def supervise_owned(command, base_report, timeout, validate, *, descendants=Fals
         raise ValueError("native_helper_supervision_requires_linux")
     posix = os.name == "posix"
     report = dict(base_report, status="error", exit_code=1, cleanup_ok=False)
-    process = stream = None
+    process = stream = group = None
     owned = {}
     forced, termination_requested, tree_gone, armed = False, False, False, False
     arm_read = arm_write = None
@@ -422,31 +487,6 @@ def supervise_owned(command, base_report, timeout, validate, *, descendants=Fals
 
     def parent_lost():
         return parent_fd is not None and bool(select.select([parent_fd], [], [], 0)[0])
-
-    def group_alive():
-        if not posix:
-            return process.poll() is None
-        # poll reaps our direct child first; only then reap adopted group members.
-        if process.poll() is not None and sys.platform.startswith("linux"):
-            reap_members(process.pid)
-        return group_exists(process.pid)
-
-    def signal_group(number):
-        try:
-            if posix:
-                os.killpg(process.pid, number)
-            elif process.poll() is None:
-                process.kill()
-        except ProcessLookupError:
-            pass
-
-    def wait_tree(seconds):
-        deadline = time.monotonic() + seconds
-        while group_alive():
-            if time.monotonic() >= deadline:
-                return False
-            time.sleep(0.01)
-        return True
 
     def check_armed(seconds=0):
         """Read the arm descriptor for up to ``seconds``; True once the worker has armed."""
@@ -485,17 +525,13 @@ def supervise_owned(command, base_report, timeout, validate, *, descendants=Fals
             # One deadline for the leader's exit and the end of its report.
             deadline = time.monotonic() + grace.cooperative
             while time.monotonic() < deadline:
-                if process.poll() is not None and (stream.done.is_set() or not group_alive()):
+                if process.poll() is not None and (stream.done.is_set() or not group.alive()):
                     break
                 stream.done.wait(0.02)
-        tree_gone = not group_alive()
+        tree_gone = not group.alive()
         if not tree_gone:
             forced = True
-            signal_group(signal.SIGTERM)
-            tree_gone = wait_tree(grace.terminate)
-            if not tree_gone:
-                signal_group(getattr(signal, "SIGKILL", signal.SIGTERM))
-                tree_gone = wait_tree(grace.kill)
+            tree_gone = group.terminate(grace)
 
     def contain_orphan():
         nonlocal forced, tree_gone
@@ -531,6 +567,7 @@ def supervise_owned(command, base_report, timeout, validate, *, descendants=Fals
                 extra = {"env": env}
             process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, bufsize=0,
                                        **extra)
+            group = OwnedGroup(process)
             if arm_write is not None:
                 os.close(arm_write)
                 arm_write = None

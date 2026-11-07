@@ -186,10 +186,13 @@ commands.
 ([decision D4](../poc-scope.md#architecture-decisions-2026-11-07)), seeded from
 the guard's owned-session supervisor. The guard uses it through
 `supervise_owned` for both of its levels (the guardian, and the worker under
-the guardian); the agent runner, the mirror launcher (`runtime/process.py`,
-which still streams progress with `multiprocessing` for `mirror_check.py` and
-`mirror_recognize.py`) and the paused capture supervisor adopt it in later
-work-order items, and until then keep their own copies. The primitive offers:
+the guardian). The agent runner uses its `Signals` in raise mode and its
+`OwnedGroup` (group termination with reaping) for tasks and git, which are
+commands rather than report workers (B4). The mirror launcher
+(`runtime/process.py`, which still streams progress with `multiprocessing` for
+`mirror_check.py` and `mirror_recognize.py`) and the paused capture supervisor
+adopt it in later work-order items, and until then keep their own copies. The
+primitive offers:
 
 - **Owned-session spawning** with the caller's descriptors, plus two things the
   worker inherits: `SIGHTCIRCUIT_ARMED_FD`, a descriptor it writes once its
@@ -205,8 +208,9 @@ work-order items, and until then keep their own copies. The primitive offers:
   around process start, the cleanup or the report block can lose a signal or
   skip the report; in `raise` mode `Cancelled` surfaces once, after the
   cleanup, carrying the finished report.
-- **Group-wide termination with reaping**, `killpg` TERM then KILL with every
-  owned member reaped, and containment of a group a killed guardian reported.
+- **Group-wide termination with reaping** (`OwnedGroup`), `killpg` TERM then
+  KILL with every owned member reaped, and containment of a group a killed
+  guardian reported.
 - **Deadline-based cleanup verdicts.** A cancellation (or parent loss) first
   waits up to the arm grace for a worker that has not armed yet, so a signal
   that arrives while the worker is still importing is answered by its handler

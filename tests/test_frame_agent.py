@@ -336,6 +336,26 @@ class RunnerTests(unittest.TestCase):
         self.assertTrue(wait_dead(pid, 1), "a second signal let a task that ignores SIGTERM outlive the runner")
         self.assertEqual(json.loads(runner.latest_result(root).read_text())["interrupted"], "SIGTERM")
 
+    def test_the_runner_signals_are_the_primitive_in_its_raise_mode_and_start_armed(self):
+        from sightcircuit.runtime import supervision
+        interruption = runner.Interruption()
+        self.assertIsInstance(interruption, supervision.Signals)
+        self.assertIs(interruption.policy, supervision.RAISE_ON_SIGNAL)
+        self.assertTrue(issubclass(runner.Interrupted, supervision.Cancelled))
+        self.assertTrue(interruption.armed)
+        self.assertEqual(runner.INTERRUPTING, (signal.SIGINT, signal.SIGTERM, signal.SIGHUP))
+
+    def test_a_grandchild_that_outlives_its_task_briefly_is_reaped_not_counted_as_left_behind(self):
+        # The task starts a child and exits without waiting for it; the child ends within the leftover grace. As the
+        # run's subreaper the runner reaps it, so the exited child never counts as a live member of the group.
+        code = ("import subprocess, sys; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(0.2)']); "
+                "sys.exit(0)")
+        tasks = [fake("tier-a/orphan", code, timeout=30)]
+        self.assertEqual(self.run_main(["run", "tier-a/orphan"], tasks)[0], 0)
+        record = self.result()["tasks"][0]
+        self.assertEqual(record["status"], "passed", record)
+        self.assertNotIn("error", record)
+
     def test_a_signal_ignored_when_the_runner_starts_stays_ignored(self):
         # nohup starts the runner with SIGHUP ignored; a hangup must not abort the run.
         process, root, task_pid = self.start_driver("nohup", SLEEPER, "{pid}", "default", "1.5",

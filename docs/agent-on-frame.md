@@ -9,7 +9,10 @@ those checks do not establish device enforcement. See the
 [current plan](live-capture.md) for the active checkpoint and approval scope.
 
 Use [Frame sessions](guides/frame-sessions.md#run-automated-checks-with-an-on-device-agent)
-for supported commands and result handling. The
+for supported commands and result handling. The agent package is operations
+tooling outside the production gates (decision D7): it claims no gate, and the
+[checkpoint manifest](reference/hud-development.md#checkpoint-artifact-manifest)
+pins it in its own `agent` group, separate from the HUD checkout identity. The
 [November 1 proposal and later updates](history/agent-on-frame-2026-11-01.md)
 preserve the full research, technical design and phase procedures. This overview
 does not turn proposed phases into authorization for device execution.

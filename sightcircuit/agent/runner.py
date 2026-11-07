@@ -43,17 +43,20 @@ import time
 
 from sightcircuit.agent.guard import GUARD_VERSION
 from sightcircuit.agent.tasks import TASKS, TASKS_BY_ID, TIER_A, VENV_PYTHON
+from sightcircuit.runtime.supervision import RAISE_ON_SIGNAL, Cancelled, Grace, OwnedGroup, Signals, child_reaper
 
 RUNS = Path("artifacts/agent-runs")
 DEFAULT_BUDGET = 5400
 KILL_GRACE = 10
 # Seconds git's group has after SIGTERM before SIGKILL; ending git then takes at most GIT_TERM_GRACE + 2 * KILL_GRACE.
 GIT_TERM_GRACE = 5
+# Seconds the rest of a task's group has to follow an exited leader before it counts as left behind.
+LEFTOVER_GRACE = 0.5
 FETCH_TIMEOUT = 180
 REVISION = re.compile(r"^[0-9a-f]{40}$")
 RUN_DIR = re.compile(r"^\d{8}T\d{6}Z-")
 AGENT_FILES = ("sightcircuit/agent/guard.py", "scripts/frame_agent_guard.py", "scripts/frame_agent_run.py")
-INTERRUPTING = tuple(getattr(signal, name) for name in ("SIGINT", "SIGTERM", "SIGHUP") if hasattr(signal, name))
+INTERRUPTING = RAISE_ON_SIGNAL.numbers  # SIGINT, SIGTERM and SIGHUP
 PROVENANCE = ("frame_agent_run.py output: command exit codes and reports from the machine named in "
               "'host'. On Frame this is agent-run device evidence, not a user report or a cloud check. "
               "Exit codes do not establish headset recovery or what the wearer saw.")
@@ -63,16 +66,21 @@ class Refused(Exception):
     pass
 
 
-class Interrupted(BaseException):
+class Interrupted(Cancelled):
     """SIGINT, SIGTERM or SIGHUP reached the runner during a run or an update."""
 
     def __init__(self, number):
         super().__init__(number)
-        self.number = number
 
 
-class Interruption:
+class Interruption(Signals):
     """Turns the first interrupting signal into ``Interrupted`` while armed; later signals are only noted.
+
+    The runner's signal handling on the supervision primitive
+    (``runtime.supervision.Signals``) in its ``RAISE_ON_SIGNAL`` policy: the
+    first signal raises, an inherited ignore is honoured, and ``hold`` and
+    ``resume`` bracket a process start or an ending. It starts armed, as the
+    runner's protocol expects (``installed`` arms nothing itself).
 
     A task, like git, runs in its own session, so a signal to the runner (or a
     terminal hangup) does not reach it. Raising lets the runner terminate the
@@ -98,39 +106,18 @@ class Interruption:
     """
 
     def __init__(self):
-        self.number = None
+        super().__init__(RAISE_ON_SIGNAL, exception=Interrupted)
         self.armed = True
-
-    def handle(self, number, _frame):
-        if self.number is None:
-            self.number = number
-            if self.armed:
-                raise Interrupted(number)
-
-    def hold(self):
-        """From now on only note a signal; returns whether it was armed, for ``resume``."""
-        armed, self.armed = self.armed, False
-        return armed
-
-    def resume(self, armed):
-        """Re-arm (when ``hold`` found it armed) and raise a signal noted in the meantime."""
-        self.armed = armed
-        if armed and self.number is not None:
-            raise Interrupted(self.number)
 
     @contextlib.contextmanager
     def installed(self):
         if threading.current_thread() is not threading.main_thread():
             yield self  # Signal handlers can only be set from the main thread.
             return
-        # A signal ignored by whoever started the runner (nohup, a background job) stays ignored.
-        previous = {number: signal.signal(number, self.handle) for number in INTERRUPTING
-                    if signal.getsignal(number) != signal.SIG_IGN}
-        try:
+        # A signal ignored by whoever started the runner (nohup, a background job) stays ignored: the policy's
+        # inherited-ignore rule, honoured by Signals.__enter__.
+        with self:
             yield self
-        finally:
-            for number, handler in previous.items():
-                signal.signal(number, handler)
 
 
 def utc_now():
@@ -146,22 +133,19 @@ def git(root, *args, timeout=30, interruption=None):
     signal while git starts and while it is being ended, and raises it after.
     Raises ``subprocess.TimeoutExpired``, ``OSError`` and ``Interrupted``.
     """
-    armed = interruption.hold() if interruption else False
-    try:
-        process = subprocess.Popen(["git", *args], cwd=root, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE, text=True, start_new_session=True,
-                                   env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
-    except BaseException:
-        if interruption:
-            interruption.resume(armed)
-        raise
+    process = None
     ending = False
     try:
         try:
-            if interruption:
-                interruption.resume(armed)  # A signal that came while git started is raised here.
+            # Held while git starts; a signal noted meanwhile is raised as the block ends, with git there to end.
+            with interruption.holding() if interruption else contextlib.nullcontext():
+                process = subprocess.Popen(["git", *args], cwd=root, stdin=subprocess.DEVNULL,
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                           start_new_session=True, env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
             out, err = process.communicate(timeout=timeout)
         except BaseException:
+            if process is None:  # git never started; a signal noted meanwhile has replaced the start failure.
+                raise
             armed = interruption.hold() if interruption else False
             ending = True
             end_git(process)
@@ -171,7 +155,7 @@ def git(root, *args, timeout=30, interruption=None):
     except Interrupted:
         # A signal after communicate() gave up but before hold() took effect is raised inside hold(): end git all
         # the same. Only the first signal raises, so nothing interrupts this.
-        if not ending:
+        if process is not None and not ending:
             end_git(process)
         raise
     return process.returncode, out.strip(), err.strip()
@@ -286,7 +270,12 @@ def new_run_dir(root, label):
 
 
 def group_alive(pgid):
-    """True while process group ``pgid`` has a member that is not a zombie."""
+    """True while process group ``pgid`` has a member that is not a zombie, read from ``/proc``.
+
+    An observation for a process that is not the group's parent (the tests
+    watch git's group with it); the runner itself ends and reaps a group
+    through ``runtime.supervision.OwnedGroup``.
+    """
     proc = Path("/proc")
     if not (proc / "self" / "stat").exists():
         try:
@@ -308,32 +297,24 @@ def group_alive(pgid):
 
 
 def group_gone(process, seconds):
-    """Wait up to ``seconds`` for every member of the task's group to exit; True once none is alive."""
-    deadline = time.monotonic() + seconds
-    while True:
-        process.poll()  # Reap the leader so it no longer counts as a member.
-        if not group_alive(process.pid):
-            return True
-        if time.monotonic() >= deadline:
-            return False
-        time.sleep(0.05)
+    """Wait up to ``seconds`` for every member of the task's group to exit; True once none is alive.
+
+    The leader is reaped first, and under ``child_reaper`` (a run, an update)
+    so is every exited member the kernel handed to the runner, so a zombie
+    never counts as alive.
+    """
+    return OwnedGroup(process).wait_gone(seconds)
 
 
 def kill_group(process, term_grace=None):
     """SIGTERM the whole process group of ``process`` (a task, or git), then SIGKILL whatever is still alive after
     ``term_grace`` (default ``KILL_GRACE``).
 
-    Waits for every member, not just the leader, so a descendant that ignores
-    SIGTERM or is slow to clean up cannot outlive the task.
+    The primitive's one escalation (``OwnedGroup.terminate``): it waits for
+    every member, not just the leader, so a descendant that ignores SIGTERM or
+    is slow to clean up cannot outlive the task.
     """
-    for number, grace in ((signal.SIGTERM, KILL_GRACE if term_grace is None else term_grace),
-                          (signal.SIGKILL, KILL_GRACE)):
-        try:
-            os.killpg(process.pid, number)
-        except ProcessLookupError:
-            break
-        if group_gone(process, grace):
-            break
+    OwnedGroup(process).terminate(Grace(terminate=KILL_GRACE if term_grace is None else term_grace, kill=KILL_GRACE))
     with contextlib.suppress(subprocess.TimeoutExpired):
         process.wait(timeout=KILL_GRACE)
 
@@ -356,19 +337,14 @@ def run_task(root, task, task_dir, timeout, record=None, interruption=None):
     env = dict(os.environ, **task.env)
     started = time.monotonic()
     with open(task_dir / "stdout.txt", "wb") as out, open(task_dir / "stderr.txt", "wb") as err:
-        armed = interruption.hold() if interruption else False
-        try:
-            process = subprocess.Popen(argv, cwd=root, env=env, stdin=subprocess.DEVNULL, stdout=out,
-                                       stderr=err, start_new_session=True)
-        except OSError as error:
-            record.update(status="failed_to_start", exit_code=None, error=str(error), duration_s=0.0)
-            if interruption:
-                interruption.resume(armed)
-            return record
+        process = None
         timed_out = leftover = False
         try:
-            if interruption:
-                interruption.resume(armed)  # A signal that came while the task started is raised here.
+            # Held while the task starts; a signal noted meanwhile is raised as the block ends, with the task there
+            # to terminate.
+            with interruption.holding() if interruption else contextlib.nullcontext():
+                process = subprocess.Popen(argv, cwd=root, env=env, stdin=subprocess.DEVNULL, stdout=out,
+                                           stderr=err, start_new_session=True)
             try:
                 code = process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
@@ -376,11 +352,16 @@ def run_task(root, task, task_dir, timeout, record=None, interruption=None):
                 kill_group(process)
                 code = process.returncode
             else:
-                # The leader exited; anything still running in its group was left behind.
-                leftover = not group_gone(process, 0.5)
+                # The leader exited; anything still running in its group at the deadline was left behind.
+                leftover = not group_gone(process, LEFTOVER_GRACE)
                 if leftover:
                     kill_group(process)
-        except BaseException:  # Interrupted (or any error), possibly in the middle of kill_group: finish it.
+        except BaseException as error:  # Interrupted (or any error), possibly in the middle of kill_group: finish it.
+            if process is None:
+                if isinstance(error, OSError):  # The command could not be executed.
+                    record.update(status="failed_to_start", exit_code=None, error=str(error), duration_s=0.0)
+                    return record
+                raise  # A signal noted while the task failed to start.
             kill_group(process)
             record.update(exit_code=process.returncode, duration_s=round(time.monotonic() - started, 3))
             raise
@@ -402,7 +383,9 @@ def execute(root, tasks, label, budget=DEFAULT_BUDGET, clock=time.monotonic):
               "started_at": utc_now(), "host": host_info(),
               "checkout": {"revision": None, "clean": None, "branch": None}, "budget_s": budget, "tasks": []}
     stop_reason = None
-    with Interruption().installed() as interruption:
+    # As the subreaper of its tasks' groups, the runner reaps every member a task leaves behind, so none counts as
+    # alive once it has exited (OwnedGroup).
+    with Interruption().installed() as interruption, child_reaper():
         try:
             result["checkout"] = checkout_state(root, interruption)  # A signal here ends git's group, as in update.
             deadline = clock() + budget
@@ -535,7 +518,7 @@ def main(argv=None, root=None, tasks_by_id=None, tier_a=None, budget=DEFAULT_BUD
             return 0
         if args.command == "update":
             # As for a run: a signal ends git's group first (git() does), then the lock is released.
-            with Interruption().installed() as interruption, RunLock(root):
+            with Interruption().installed() as interruption, child_reaper(), RunLock(root):
                 outcome = update(root, args.revision, interruption)
                 interruption.hold()  # The update is complete: a signal while the lock is released is only noted.
             print(json.dumps(outcome, indent=2))

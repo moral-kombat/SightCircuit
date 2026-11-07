@@ -3,12 +3,16 @@
 It is written on Frame after the native build and verified there just before
 the run; built binaries are never transferred. It records the git commit and
 whether the tree is clean, the Python and platform identity, the SHA-256 of the
-built bridge, every ``sightcircuit`` module, the checkpoint scripts, the bridge's
-native sources and the assets in ``scripts/smoke-assets.json``, and the
-installed versions of the packages the checkpoint imports. Paths are relative
-to the checkout root. It pins software identity only: it is not device,
-physical-display or qualification evidence. ``scripts/checkpoint_manifest.py``
-is the command.
+built bridge, every ``sightcircuit`` module outside the agent package, the
+checkpoint scripts, the bridge's native sources and the assets in
+``scripts/smoke-assets.json``, and the installed versions of the packages the
+checkpoint imports. The on-device agent (``sightcircuit/agent``, its two
+scripts and its settings template) is operations tooling outside the
+production gates (decision D7), so it is pinned in its own ``agent`` group:
+recorded and verified like every group, but no longer part of the ``modules``
+group that is the HUD software's identity. Paths are relative to the checkout
+root. It pins software identity only: it is not device, physical-display or
+qualification evidence. ``scripts/checkpoint_manifest.py`` is the command.
 """
 import hashlib
 from importlib import metadata
@@ -25,7 +29,7 @@ from .. import assets
 from ..errors import SightCircuitError
 
 ROOT = Path(__file__).resolve().parents[2]
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2  # 2 (2026-11-07): the agent package left ``modules`` for its own ``agent`` group.
 REPORT_KIND = "checkpoint_artifact_manifest"
 VERIFICATION_KIND = "checkpoint_manifest_verification"
 SCOPE = ("Pins software identity only (checkout, interpreter, packages, the SteamVR package and the bridge built "
@@ -44,7 +48,10 @@ ASSET_MANIFEST = "scripts/smoke-assets.json"
 ASSET_DIRECTORY = ".cache/sightcircuit/assets"
 # Import name -> distribution of every third-party module the checkpoint scripts import (tested).
 CHECKPOINT_PACKAGES = {"cv2": "opencv-python-headless", "numpy": "numpy"}
-FILE_GROUPS = ("assets", "bridge", "modules", "native_sources", "scripts")
+# The on-device agent's own group: its package, its scripts and its settings template (decision D7).
+AGENT_PACKAGE = "sightcircuit/agent"
+AGENT_FILES = ("scripts/frame_agent_guard.py", "scripts/frame_agent_run.py", "sightcircuit/agent/frame-settings.json")
+FILE_GROUPS = ("agent", "assets", "bridge", "modules", "native_sources", "scripts")
 GIT_TIMEOUT_SECONDS = 30
 MAX_MANIFEST_BYTES = 1 << 20
 MAX_MANIFEST_DEPTH = 8  # A manifest nests three levels; anything far deeper is foreign.
@@ -194,9 +201,11 @@ def observe(root=ROOT, packages=CHECKPOINT_PACKAGES):
     """The manifest of the checkout and interpreter as they are now, plus its dirty entries; writes nothing."""
     root = Path(root)
     commit, changes = git_state(root)
-    modules = sorted(path.relative_to(root).as_posix() for path in (root / "sightcircuit").rglob("*.py"))
-    groups = {"assets": asset_paths(root), "bridge": [BRIDGE], "modules": modules,
-              "native_sources": NATIVE_SOURCES, "scripts": CHECKPOINT_SCRIPTS}
+    package = sorted(path.relative_to(root).as_posix() for path in (root / "sightcircuit").rglob("*.py"))
+    agent = [path for path in package if path.startswith(AGENT_PACKAGE + "/")]
+    modules = [path for path in package if path not in agent]
+    groups = {"agent": sorted([*agent, *AGENT_FILES]), "assets": asset_paths(root), "bridge": [BRIDGE],
+              "modules": modules, "native_sources": NATIVE_SOURCES, "scripts": CHECKPOINT_SCRIPTS}
     current = {"schema_version": SCHEMA_VERSION, "report_kind": REPORT_KIND, "scope": SCOPE,
                "git": {"commit": commit, "dirty": bool(changes)},
                "python": {"implementation": platform.python_implementation(), "version": platform.python_version()},
