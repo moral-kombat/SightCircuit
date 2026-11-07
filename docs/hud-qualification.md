@@ -191,9 +191,31 @@ Keep existing reports and source digests; do not repeat an unchanged failed run.
 The November 3 attempts passed manifest verification and the validation-only
 check, then both stopped in under half a second at `observer_contour_budget`
 before bridge initialization or marker output ([E83](evidence/e083.md)).
-A further attempt waits for a reviewed precondition based on marker-detection
-risk, diagnostics in the rejection report, and a new approval. G3 stays open.
-No G4/G5 device diagnostic command exists yet.
+Package O3 replaced that budget with the
+[O3 rule](reference/hud-observation.md#the-o3-rule-2026-11-06), cloud-checked
+only; a further attempt runs on a checkout that contains it, with its manifest
+pinning that checkout, and needs a new approval. G3 stays open. No G4/G5
+device diagnostic command exists yet.
+
+**Scene precondition (2026-11-06, package O3; cloud checks only).** The
+2026-11-03 attempt ([E83](evidence/e083.md)) stopped at the old 2,048-contour
+budget. That budget is replaced by the
+[O3 rule](reference/hud-observation.md#the-o3-rule-2026-11-06). The next attempt must run on a checkout
+that contains O3, and its manifest pins that checkout. By their contour
+totals, and if they were 1920 × 1080 reads like every recorded mirror read,
+all three E83 reads would pass the O3 speck and contour limits. No bright
+fraction or quad count was recorded for them, so whether they pass saturation
+and the quad and outline budgets is unknown. Passing the precondition does not
+mean the marker will be found. Bright structure touching a copy often defeats
+it: at every scale for a surround, half-plane, corner block or line, and up to
+scale 1.5 for a bar on its edge. So the background around the HUD should stay
+dark. Before the attempt, a person can run `--analyze-still`
+on a native still of the planned view
+([procedure](guides/hud-checkpoint.md#measure-the-observers-scene-precondition-on-saved-stills)).
+That reads only the file and predicts the precondition's outcome on that view.
+If a run is still rejected at the precondition, its report carries the frame's
+schema-2 statistics. Those counts, not this note, decide whether a limit
+needs revisiting.
 
 ## Reference sections
 

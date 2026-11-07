@@ -132,16 +132,21 @@ cloud results, not Frame evidence, and they open no device or gate.
 
 ## Observer scene precondition statistics
 
-`sightcircuit/hud/scene.py` holds the observer's scene precondition (the grey
-threshold, the bright-contour budget and the candidate-quad filter and
-budget) and `scene_statistics`, which describes one frame against it in counts
-only. `locate_copies` uses the same functions, so the statistics cannot drift
-from what the observer applies. `hud_marker_observer.py --analyze-still STILL`
-prints them for one saved still and refuses device, `/proc` and `/sys` paths,
-links and non-regular files before opening them; an observer run stopped by
-either budget carries them as `scene_statistics`. The
-[qualification design](../hud-qualification.md#observer-scene-precondition-2026-11-04)
-has the background and the seed-still reference.
+`sightcircuit/hud/scene.py` holds the observer's scene precondition and
+`scene_statistics`, which describes one frame against it in counts only. In
+order, the checks are: bright saturation, speck density, the contour budget
+(counted from connected components before anything is traced), the
+candidate-quad budget and the outline budget (before any warp). `locate_copies`
+uses the same functions, so the statistics cannot drift from what the observer
+applies. `hud_marker_observer.py --analyze-still STILL` prints them for one
+saved still and refuses device, `/proc` and `/sys` paths, links and
+non-regular files before opening them; an observer run stopped by a check
+carries them, once, as `scene_statistics` (unless computing them failed, or a
+traced contour count disagreed with the census, which rejects as
+`observer_contour_census_mismatch`). Each statistics schema has a frozen
+budget table (`SCHEMA_BUDGETS`), so stored schema-1 reports still validate. The
+[O3 rule](hud-observation.md#the-o3-rule-2026-11-06) has each limit's
+derivation, the Frame-still classification and the seed-still reference.
 
 ```bash
 .venv-replay/bin/python scripts/hud_marker_observer.py --analyze-still evaluation/local/still.png

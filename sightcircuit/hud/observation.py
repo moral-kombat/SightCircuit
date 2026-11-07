@@ -12,11 +12,14 @@ report becomes a mapping candidate (``sightcircuit.hud.candidate``). Every
 worker report carries ``session_tokens`` (``validate_session_tokens``): the
 report of the run's ``sources.session.MirrorSession`` when the observer was
 given one, otherwise why none was recorded. The tokens identify the run; they
-qualify nothing. The scene precondition (``bright_contours``,
-``candidate_quad`` and their budgets) lives in ``sightcircuit.hud.scene``; a
-frame rejected by either budget carries its ``scene_statistics`` in the match
-diagnostics, and a report rejected there carries them with their source
-(``validate_rejection_scene_statistics``).
+qualify nothing. The scene precondition (``scene_census``,
+``untraced_rejection``, ``bright_contours``, ``candidate_quads``,
+``outline_eligible`` and their limits) lives in ``sightcircuit.hud.scene``; a
+frame rejected by any of its checks carries its ``scene_statistics`` in the
+match diagnostics, and a report rejected there carries them, once, with their
+source (``validate_rejection_scene_statistics``). A failing statistics call
+leaves ``scene_statistics_error`` instead, as does a traced contour count that
+disagrees with the census (``observer_contour_census_mismatch``).
 """
 from dataclasses import dataclass
 import hashlib
@@ -30,8 +33,9 @@ from .contract import (HUD_CONFIG, MARKER, MARKER_MAX_SECONDS, MARKER_MIN_SECOND
                        margin_valid)
 from .marker import new_report as marker_report, validate_worker_report as validate_marker_report
 # The scene precondition and its budgets live in ``scene``; re-exported here for the observer's callers.
-from .scene import (MAX_CONTOURS, MAX_PIXELS, MAX_QUADS, bright_contours, candidate_quad, scene_statistics,  # noqa: F401
-                    validate_scene_statistics)
+from .scene import (MAX_CONTOURS, MAX_OUTLINES, MAX_PIXELS, MAX_QUADS, bright_contours,  # noqa: F401
+                    candidate_quads, outline_eligible, quad_edges, scene_census, scene_statistics,
+                    untraced_rejection, validate_scene_statistics)
 
 MAX_COPIES = 4
 MAX_DIAGNOSTIC_CANDIDATES = 4
@@ -139,28 +143,40 @@ def locate_copies(bgr, *, diagnostics=None):
         # They can never replace or hide it: the reason is recorded first and stays the one raised.
         details.update(status="rejected", reason=reason)
         try:
-            details["scene_statistics"] = scene_statistics(bgr, gray=gray, contours=contours)
+            details["scene_statistics"] = scene_statistics(bgr, gray=gray, census=census, contours=contours)
         except Exception as error:
             details["scene_statistics_error"] = type(error).__name__
-        reject(reason)
+        raise ValueError(reason)
 
     if (bgr.dtype != np.uint8 or bgr.ndim != 3 or bgr.shape[2] != 3 or
             bgr.shape[0] * bgr.shape[1] > MAX_PIXELS):
         reject("observer_image_invalid")
     details.update(width=bgr.shape[1], height=bgr.shape[0])
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    # The scene precondition (sightcircuit.hud.scene), in its order: saturation, speck density and the
+    # contour budget from the census before anything is traced, then the quad and outline budgets.
+    contours = None
+    census = scene_census(gray)
+    details["contour_count"] = census["contour_count"]
+    rejection = untraced_rejection(census, gray.size)
+    if rejection is not None:
+        reject_scene(rejection)
     contours = bright_contours(gray)
-    details["contour_count"] = len(contours)
-    if len(contours) > MAX_CONTOURS:
-        reject_scene("observer_contour_budget")
+    if len(contours) != census["contour_count"]:  # The census is exact; this backs it against a library change.
+        # Every check so far, and statistics built on the census, rest on that count, so none are attached.
+        details.update(contour_count=len(contours), scene_statistics_error="census_disagrees_with_trace")
+        reject("observer_contour_census_mismatch")
     quads = []
-    for contour in contours:
-        quad = candidate_quad(contour)
+    for _, quad in candidate_quads(contours):
         if quad is not None:
             quads.append(quad)
             details["quad_count"] = len(quads)
             if len(quads) > MAX_QUADS:
                 reject_scene("observer_quad_budget")
+    eligible = [outline_eligible(quad_edges(quad)) for quad in quads]
+    details["eligible_outline_count"] = sum(eligible)
+    if details["eligible_outline_count"] > MAX_OUTLINES:
+        reject_scene("observer_outline_budget")
     template = marker_template().astype(np.float32)
     width, height = HUD_CONFIG.width_px, HUD_CONFIG.height_px
     size, outline_px = MARKER.tag_size_px, MARKER.tag_outline_px
@@ -198,8 +214,8 @@ def locate_copies(bgr, *, diagnostics=None):
         return matches, best
 
     found, fragments = [], []
-    for quad in quads:
-        edges = np.linalg.norm(quad - np.roll(quad, 1, axis=0), axis=1)
+    for quad, is_outline in zip(quads, eligible):
+        edges = quad_edges(quad)
         # A white inner tag is a separate contour. Its complete code must match.
         if min(edges) >= 6 and max(edges) / min(edges) < 2.5:
             tag_image = cv2.warpPerspective(gray, cv2.getPerspectiveTransform(quad,
@@ -213,9 +229,8 @@ def locate_copies(bgr, *, diagnostics=None):
                        for bit in range(MARKER.bits))
                    for rotation in range(4) for rotated in (np.rot90(tag_image, rotation),) for tag in tags):
                 fragments.append(quad)
-        if min(edges) < 32 or max(edges) < 80:
+        if not is_outline:
             continue
-        details["eligible_outline_count"] += 1
         matches, best = evaluate_outline(quad, "raster_contour")
         refinement_shift = 0.0
         # Rasterized rotated corners can be displaced by a pixel. Refine only
@@ -502,10 +517,14 @@ SCENE_STATISTICS_PHASES = ("baseline", "marker")
 
 
 def rejection_scene_statistics(diagnostics, phase):
-    """``scene_statistics`` and its source for a report rejected at the scene precondition, else ``{}``."""
+    """``scene_statistics`` and its source for a report rejected at the scene precondition, else ``{}``.
+
+    The statistics move out of ``diagnostics``, so a report carries them once. A
+    report stored before this change may also hold the copy in its diagnostics.
+    """
     if type(diagnostics) is not dict or "scene_statistics" not in diagnostics:
         return {}
-    return {"scene_statistics": diagnostics["scene_statistics"],
+    return {"scene_statistics": diagnostics.pop("scene_statistics"),
             "scene_statistics_source": {"phase": phase, "sequence": diagnostics.get("sequence")}}
 
 
@@ -516,6 +535,7 @@ def validate_rejection_scene_statistics(report):
     statistics, source = report.get("scene_statistics"), report.get("scene_statistics_source")
     validate_scene_statistics(statistics)
     if (report["exit_code"] != 1 or report.get("status") != "rejected" or
+            statistics["precondition"]["rejection"] is None or
             report.get("reason") != statistics["precondition"]["rejection"] or
             type(source) is not dict or set(source) != {"phase", "sequence"} or
             source["phase"] not in SCENE_STATISTICS_PHASES or

@@ -177,29 +177,46 @@ or production HUD output.
 
 ## Measure the observer's scene precondition on saved stills
 
-**File only; needs the owner's approval before it runs on Frame.**
-[E83](../evidence/e083.md) records that the November 3 observer attempt and
-approved retry stopped at `observer_contour_budget` before showing a marker.
-See the [scene-precondition reference](../reference/hud-observation.md#observer-scene-precondition-2026-11-04).
-To see what real Frame scenes look like to that precondition, run the
-statistics on the private PNG stills already in `evaluation/local/` (written by
+**Cloud-tested only; file only; a person runs it on Frame (or a session the
+owner has approved for it), with the owner's approval.** The 2026-11-03 observer
+runs stopped at the old `observer_contour_budget` before showing a marker
+([why](../reference/hud-observation.md#observer-scene-precondition-2026-11-04)); package
+O3 replaced that budget with the
+[O3 rule](../reference/hud-observation.md#the-o3-rule-2026-11-06), whose Frame
+classifications are bounds from relayed aggregates. To see what real Frame
+scenes look like to the precondition, run the statistics on
+the private PNG stills already in `evaluation/local/` (written by
 `mirror_recognize.py --still`). This reads those files only: it opens no
 device, mirror or bridge and makes no VR call.
 
 ```bash
-cd "$HOME/sightcircuit"
-mkdir -p artifacts/scene-analysis
-shopt -s nullglob
-stills=(evaluation/local/*.png)
-[ ${#stills[@]} -gt 0 ] || echo "No PNG stills in evaluation/local/: nothing to analyze"
-for still in "${stills[@]}"; do
-  .venv-replay/bin/python scripts/hud_marker_observer.py --analyze-still "$still" \
-    > "artifacts/scene-analysis/$(basename "$still" .png).json"
-  echo "$still: exit $?"
-done
+(
+  set -u
+  cd "$HOME/sightcircuit"
+  out="artifacts/scene-analysis/$(date -u +%Y%m%dT%H%M%SZ)"
+  mkdir -p "$out"
+  git rev-parse HEAD > "$out/revision.txt"
+  .venv-replay/bin/python -c "import cv2, numpy; print(cv2.__version__, numpy.__version__)" > "$out/versions.txt"
+  shopt -s nullglob
+  stills=(evaluation/local/*.png)
+  [ ${#stills[@]} -gt 0 ] || echo "No PNG stills in evaluation/local/: nothing to analyze"
+  for still in "${stills[@]}"; do
+    .venv-replay/bin/python scripts/hud_marker_observer.py --analyze-still "$still" \
+      > "$out/$(basename "$still" .png).json"
+    echo "$still: exit $?"
+  done
+)
 ```
 
 Each report holds counts, the still's SHA-256 and its size, never pixels or its
 path. Exit 0 means analyzed (even when the scene would be rejected), 1 means the
-file was refused. Keep the reports with the run notes; they feed the
-replacement precondition (package O3), not any gate.
+file was refused. A report counts as a native mirror read only when its
+`source.sha256`, `source.width` and `source.height` match the still's capture
+report (`still_sha256`, `still_width` and `still_height` in the
+`still-<id>.json` that `frame_session.sh` keeps) or its `sha256` in
+`evaluation/local/frame.json`. The report itself always says
+`provenance_verified: false`: a resized or other PNG is not detected. Other
+images, such as the grey 640 × 360 scene check, are not native mirror reads.
+Send the reports, with `revision.txt` and `versions.txt`, to the evidence
+coordinator as a Frame-run file analysis, kept apart from user reports and from
+mirror or device checks. They feed the precondition's derivation, not any gate.

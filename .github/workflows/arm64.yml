@@ -37,7 +37,6 @@ on:
       - 'docs/reference/detection.md'
       - 'docs/reference/detector-evaluation.md'
       - 'docs/reference/development-checks.md'
-      - 'docs/reference/hud-observation.md'
       - 'docs/reference/hud-runtime.md'
       - 'docs/reference/hud-session.md'
       - 'docs/reference/mirror.md'

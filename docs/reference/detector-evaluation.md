@@ -132,7 +132,9 @@ margin was a clean absent label at 0.437 against the 0.5 threshold.
 
 CI's replay job runs the seed comparison with `--expect` and then the suite
 with `tests/test_seed_pin.py` pinned against skips, which checks that the committed pin
-passes and that swapping two VOC labels in the SSD label map fails it. Seed
+passes and that swapping two VOC labels in the SSD label map fails it. The
+same step runs `tests/test_observer_scene_seed.py`, which pins the observer's
+scene statistics on the six seed stills. Seed
 results remain a wiring and label-mapping regression check on the runner's
 CPU, not Frame evidence, and they do not select a detector.
 

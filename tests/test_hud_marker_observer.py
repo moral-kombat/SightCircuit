@@ -296,15 +296,19 @@ class MarkerDiagnosticTests(unittest.TestCase):
                         hud_observation.locate_copies(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR))
 
     def test_same_orphan_error_has_distinct_photometric_resolution_and_outline_evidence(self):
-        cases = ((90, 1, .4545, {"whole_pattern_error"}),
-                 (90, .4, 1, {"outline_brightness", "tag_pattern_error", "code_bit_error"}),
-                 (255, 1, 1, {"whole_pattern_error", "outline_brightness", "tag_pattern_error", "code_bit_error"}))
-        for background, scale, gamma, failed in cases:
-            with self.subTest(background=background, scale=scale, gamma=gamma):
+        # A marker on a white block (a white frame is now refused as saturated; see below).
+        cases = (("grey", 1, .4545, {"whole_pattern_error"}),
+                 ("grey", .4, 1, {"outline_brightness", "tag_pattern_error", "code_bit_error"}),
+                 ("white_block", 1, 1, {"whole_pattern_error", "outline_brightness", "tag_pattern_error",
+                                        "code_bit_error"}))
+        for surround, scale, gamma, failed in cases:
+            with self.subTest(surround=surround, scale=scale, gamma=gamma):
                 template = np.round(255*(hud_observation.marker_template().astype(np.float32)/255)**gamma).astype(np.uint8)
                 tile = cv2.resize(template, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
                 h, w = tile.shape
-                image = np.full((1080, 1920, 3), background, np.uint8)
+                image = np.full((1080, 1920, 3), 90, np.uint8)
+                if surround == "white_block":
+                    image[300:700, 600:1300] = 255
                 image[400:400+h, 700:700+w] = tile[:, :, None]
                 details = {}
                 with self.assertRaisesRegex(ValueError, "orphan_marker_tag_or_incomplete_copy"):
@@ -316,6 +320,10 @@ class MarkerDiagnosticTests(unittest.TestCase):
                 self.assertEqual((details["width"], details["height"]), (1920, 1080))
                 self.assertEqual(details["coordinate_space"], "native_capture_pixels")
                 self.assertLess(len(json.dumps(details, allow_nan=False)), 8192)
+        white = np.full((1080, 1920, 3), 255, np.uint8)
+        white[400:528, 700:1020] = hud_observation.marker_template()[:, :, None]
+        with self.assertRaisesRegex(ValueError, "^observer_bright_saturation$"):
+            hud_observation.locate_copies(white)
 
     def test_complete_copy_beside_partial_copy_is_retained_only_as_rejected_candidate(self):
         image = scene(((70, 80), (570, 270)))
@@ -368,20 +376,22 @@ class MarkerDiagnosticTests(unittest.TestCase):
             self.assertFalse(evidence["mapping_qualified"])
 
     def test_contour_budget_reject_reports_incomplete_scan_without_unbounded_metadata(self):
+        # 5000 bright 1 x 7 lines: too many contours, though none is a speck or a quad.
         image = np.full((600, 1000, 3), 90, np.uint8)
-        for y in range(5, 595, 10):
-            for x in range(5, 995, 10):
-                image[y:y+2, x:x+2] = 255
+        for index in range(5000):
+            y, x = 1 + (index // 332)*9, 1 + (index % 332)*3
+            image[y:y+7, x] = 255
         details = {}
-        with self.assertRaisesRegex(ValueError, "contour_budget"):
+        with self.assertRaisesRegex(ValueError, "^observer_contour_budget$"):
             hud_observation.locate_copies(image, diagnostics=details)
         self.assertFalse(details["scan_complete"])
+        self.assertEqual(details["contour_count"], 5000)
         self.assertGreater(details["contour_count"], hud_observation.MAX_CONTOURS)
         self.assertEqual(details["best_candidates"], [])
         # The scan metadata stays small; the frame's statistics are a fixed set of counts beside it.
         statistics = details.pop("scene_statistics")
         self.assertLess(len(json.dumps(details)), 1024)
-        self.assertLess(len(json.dumps(statistics)), 1024)
+        self.assertLess(len(json.dumps(statistics)), 2048)  # schema 2: a fixed set of counts and budgets
         self.assertEqual(statistics["contour_count"], details["contour_count"])
 
 
@@ -536,22 +546,25 @@ def speckled(height=600, width=1000, step=10, size=2, value=255):
 class SceneRejectionReportTests(ObserverFixture, unittest.TestCase):
     """A run stopped by the scene precondition reports that frame's statistics, never its pixels."""
 
-    def test_baseline_contour_budget_rejection_carries_the_frame_statistics(self):
+    def test_baseline_speck_density_rejection_carries_the_frame_statistics(self):
         noisy = speckled()
         noisy[0, 0] = 7  # Distinct from the fixture's own clear frames.
         report, state, _ = self.run_fixture(seconds=5, frame=lambda number, shown: noisy)
         self.assertEqual((report["status"], report["exit_code"], report["reason"]),
-                         ("rejected", 1, "observer_contour_budget"))
+                         ("rejected", 1, "observer_speck_density"))
         self.assertFalse(state["marker"])  # Rejected before any marker was shown.
         statistics = report["scene_statistics"]
         self.assertEqual(statistics, hud_observation.scene_statistics(noisy))
+        self.assertEqual(statistics["census"]["specks"], 59 * 99)
         self.assertEqual(statistics["contour_count"], 59 * 99)
         self.assertEqual(statistics["contour_area_bands"]["below_25"], 59 * 99)
-        self.assertEqual(statistics["precondition"]["rejection"], "observer_contour_budget")
+        self.assertEqual(statistics["precondition"]["rejection"], "observer_speck_density")
         self.assertEqual(report["scene_statistics_source"], {"phase": "baseline", "sequence": 1})
-        self.assertEqual(report["baseline_match_diagnostics"]["scene_statistics"], statistics)
+        # Written once: the statistics moved out of the phase's match diagnostics.
+        self.assertNotIn("scene_statistics", report["baseline_match_diagnostics"])
+        self.assertEqual(report["baseline_match_diagnostics"]["reason"], "observer_speck_density")
         self.assertFalse(report["images_saved"])
-        self.assertLess(len(json.dumps(statistics)), 1024)
+        self.assertLess(len(json.dumps(statistics)), 2048)
         observer.validate_worker_report(report, 1)
 
     def test_marker_phase_quad_budget_rejection_names_its_phase_and_read(self):
@@ -576,6 +589,37 @@ class SceneRejectionReportTests(ObserverFixture, unittest.TestCase):
                 self.assertNotIn("scene_statistics", report)
                 self.assertNotIn("scene_statistics_source", report)
                 observer.validate_worker_report(report, report["exit_code"])
+
+    def test_a_later_close_failure_keeps_the_statistics_out_and_the_report_valid(self):
+        # capture() replaces the budget error with the close error, so the reasons differ.
+        noisy = speckled()
+        report, _, _ = self.run_fixture(seconds=5, frame=lambda number, shown: noisy, close_failure=True)
+        self.assertEqual(report["exit_code"], 1)
+        self.assertNotEqual(report["reason"], "observer_speck_density")
+        self.assertNotIn("scene_statistics", report)
+        self.assertNotIn("scene_statistics_source", report)
+        observer.validate_worker_report(report, 1)
+
+    def test_a_stop_while_the_statistics_run_cancels_without_them(self):
+        noisy = speckled()
+        stops = []
+        original = hud_observation.scene_statistics
+        def stop_midway(*args, **kwargs):
+            statistics = original(*args, **kwargs)
+            stops[0].set()  # SIGTERM arriving while the statistics are computed
+            return statistics
+        clock = FakeClock()
+        real_fake_stop = FakeStop
+        def capturing_stop(fake_clock):
+            stop = real_fake_stop(fake_clock)
+            stops.append(stop)
+            return stop
+        with patch(f"{__name__}.FakeStop", side_effect=capturing_stop), \
+                patch.object(hud_observation, "scene_statistics", side_effect=stop_midway):
+            report, _, _ = self.run_fixture(seconds=5, clock=clock, frame=lambda number, shown: noisy)
+        self.assertEqual((report["status"], report["exit_code"]), ("cancelled", 130))
+        self.assertNotIn("scene_statistics", report)
+        observer.validate_worker_report(report, 130)
 
     def test_contract_accepts_only_a_consistent_rejection_with_statistics(self):
         noisy = speckled()
@@ -612,6 +656,14 @@ class SceneRejectionReportTests(ObserverFixture, unittest.TestCase):
                      scene_statistics_source=report["scene_statistics_source"])
         with self.assertRaises(ValueError):
             observer.validate_worker_report(clean, 2)
+        # Each clause on its own: not rejected, the wrong exit code, or statistics naming no rejection.
+        quiet = hud_observation.scene_statistics(np.full((600, 1000, 3), 90, np.uint8))
+        for edit, code in ((lambda r: r.update(status="report_budget_exceeded"), 1),
+                           (lambda r: r.update(exit_code=130), 130),
+                           (lambda r: (r.pop("reason"), r.update(scene_statistics=quiet)), 1),
+                           (lambda r: r.update(reason=None, scene_statistics=quiet), 1)):
+            with self.subTest(code=code), self.assertRaises(ValueError):
+                observer.validate_worker_report(changed(edit), code)
 
 
 class ObserverLifecycleTests(ObserverFixture, unittest.TestCase):
