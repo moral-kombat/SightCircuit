@@ -79,6 +79,22 @@ class Interruption:
     task's or git's group, record the interruption (``result.json``, or for
     ``update`` a JSON line on stderr) and release the lock instead of dying at
     once.
+
+    Inherited-ignore policy. ``installed`` takes over only the signals of
+    ``INTERRUPTING`` that are not ignored when it runs: a signal the runner was
+    started with ignored stays ignored, and ``installed`` never installs a
+    handler for it. This is deliberate. The runner is started over SSH with
+    ``nohup`` or as a background job, where whoever started it chose that a
+    hangup (or an interrupt) must not end the run; honouring that choice is
+    what makes the run survive the connection. The runtime guard's
+    ``cancellation()`` makes the opposite choice for bounded command workers,
+    overriding an inherited ignore so that a launcher can always be cancelled;
+    the two differ by design, and the planned supervision primitive takes the
+    policy as a parameter. The suite entry point
+    (``scripts/run_tests_no_skips.py``) normalises SIGINT before the tests run,
+    so a test that signals a runner it started does not depend on how the test
+    process itself was started. ``tests/test_frame_agent.py`` pins the policy
+    (a SIGHUP ignored at start stays ignored).
     """
 
     def __init__(self):

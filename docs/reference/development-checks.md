@@ -86,6 +86,54 @@ module named on the command line skips a test; dependency-specific skips in
 other modules remain allowed. Read the results rather than inferring coverage
 from a successful process exit alone.
 
+The runner is the suite's entry point and does two more things there:
+
+- `--durations FILE` writes each test module's wall time and test count as
+  JSON and prints the modules slowest first. A module's time runs from the end
+  of the previous test (or the start of the run) to the end of each of its
+  tests, so class and module fixtures count with the tests they serve; what
+  follows the last test goes to the last module. These are runner-CPU numbers
+  for the planned suite time budget, never Frame measurements.
+- Before the tests run it normalises SIGINT for the suite's children. A test
+  process started with SIGINT ignored (a background job of a shell without job
+  control) passes that ignore to every subprocess the tests signal, so the
+  subtests that send SIGINT would depend on how the suite was started. An
+  ignored SIGINT is replaced by Python's default handler, which a child does
+  not inherit, and the runner says so on its error stream. A plain
+  `python -m unittest discover` run does not normalise anything; use the
+  runner when the suite is started from such a shell. SIGHUP is left as it is:
+  the agent runner honours an inherited ignore by design (see its
+  `Interruption` class), and a suite started under `nohup` would see its
+  SIGHUP subtests fail for that reason.
+
+### Cancellation test root cause (2026-11-07)
+
+`test_bounded_worker.test_pipeline_cli_parent_cancellation` failed on loaded
+runners with `cleanup_ok` false after SIGTERM ([E84](../evidence/e084.md)).
+Reproduced on the cloud runner (x86_64, 4 cores) with
+`stress-ng --cpu 8 --cpu-method matrixprod` running throughout and a loop that
+replays the test's exact command and readiness probe: 5 red runs in 200 (3 of
+50, 0 of 50, 2 of 100), 0 of 3 unloaded. None of the three paths the
+[architecture council](../history/2026-11-07-architecture-council.md#the-cancellation-race)
+suspected was involved in any of the 200 runs: `source_cleanup_ok` (the
+worker's capture-thread join), `report_reader_stopped` (the guardian's reader
+join) and `guardian_report_reader_stopped` (the outer join) were never false.
+Every red run had the worker killed by SIGTERM's default disposition
+(`worker_exit_code` -15, forced termination, no report) 10 to 24 ms after it
+was spawned. The cause was the probe: it read the guardian's kernel children
+list and the candidate's caught signals from `/proc`, and a forked child that
+has not yet exec'd is already listed there with its parent's caught signals
+and command line (the two instrumented batches recorded the guardian's own
+`--guard` command line in both red runs). Under CPU oversubscription that
+window lasted long enough for the probe to fire, and the SIGTERM then reached
+a worker that had exec'd but not yet run `stop_on_signals()`. The guard
+reported that truthfully as a forced termination. The fix is work-order item
+B3, the supervision primitive (`sightcircuit/runtime/supervision.py`): a
+worker arms its handlers through an inherited descriptor and a cancellation
+that arrives earlier waits, bounded, for the arm; the test's probe also
+requires the exec'd worker. Its acceptance is fifty consecutive green runs of
+the test under the same stress command.
+
 The optional pacing run uses a generated 2464 × 2464 HEVC clip at 60 fps with
 seeded noise. It replays 40 processed frames at a 5 fps cap with two and four
 decoder threads, and checks the [latency statistics](pipeline.md#latency-statistics).
