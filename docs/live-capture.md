@@ -131,6 +131,7 @@ parallel coder sessions. The acceptance order of the gates is unchanged.
 | B5 | The live pipeline launcher and the mirror launcher adopt it; progress streaming lets `runtime/process.py` retire | M | B3 |
 | B6 | The capture supervisor adopts it (paused track, last) | S | B3 |
 | B7 | Suite time budget enforced in CI | S | B1 |
+| B8 | Agent documentation and installer follow-ups from [E86](evidence/e086.md): the workspace trust dialog that the Phase 2 enforcement test depends on, in `docs/guides/frame-sessions.md`; the installer summary reporting its own channel default instead of the installed setting | S | none |
 
 **Lane C, detector evaluation.**
 
@@ -140,15 +141,18 @@ parallel coder sessions. The acceptance order of the gates is unchanged.
 | C2 | A test that `evaluation/local/` stays ignored | S | none |
 | C3 | Box entry in the session manifest helper, with documentation | S | none |
 | C4 | Per-label box recall and a basename-only input path in the report | S | C3 |
+| C3b | A Qt box-annotation tool that writes the manifest's objects entries, so the owner can draw the boxes on the Frame desktop | S to M | C3 |
 | C5 | The representative evaluation session: at least twenty boxed chair stills, scored file-only, plus one `mirror_recognize` run per detector for inference p95 | M, device | C1 to C4, approval |
 | C6 | WP1: a native-resolution colour still of the E61 scene evaluated beside the grey preview | S, device | approval; shares C5's session |
 | C7 | Stale script names in E8, E67 and E69 | S | none |
+| C8 | The E80 re-run manifest records its input by the pre-move absolute path, so a repeat with `--require-input-digests` fails; make the recorded path relative and document the repeat ([E86](evidence/e086.md)) | S | none |
 
 **Lane P, packaging.**
 
 | Item | Work | Size | Depends on |
 | --- | --- | --- | --- |
-| P1 | Hashed locks for the three requirement sets; add the missing `av` pin to the dev set; setup scripts use the locks | M | none |
+| P0 | Python 3.14 on the Frame after SteamOS 0.5.8: pin review, 3.14 pins behind markers, setup scripts accept 3.12 and 3.14 (added 2026-11-07 when the update removed Python 3.12, [E85](evidence/e085.md)) | M | none |
+| P1 | Hashed locks for the three requirement sets; add the missing `av` pin to the dev set; setup scripts use the locks | M | P0 |
 | P2 | Active command bodies move into the package with thin script wrappers and console entry points; validator references and manifest pins follow | M | P1 |
 
 **Lane E, native bridge.**
@@ -158,8 +162,26 @@ parallel coder sessions. The acceptance order of the gates is unchanged.
 | E1 | Split `tools/overlay_bridge.cpp` into lifecycle, rendering, reporting and sensing units; move the source-text tests and manifest pins | L | none |
 
 Lane A's device steps consume the D2 attempt budget: A4 is the first counted
-attempt, A5 the second and last. A stop before the precondition (missing
-bridge build, headset not connected, manifest mismatch) does not count.
+attempt, A5 the second and last. An attempt counts when the observer judged the
+scene (a precondition rejection, or anything after the marker tile appears); a
+stop caused by connectivity or preparation never counts, whatever its position
+in the run. The [counting rule](poc-scope.md#architecture-decisions-2026-11-07)
+and the [operator table](guides/hud-checkpoint.md) carry the full list.
+
+#### Progress (2026-11-07, evening)
+
+Merged on main, cloud-checked only, none run on the Frame: A1 (#5), A3 (#10),
+A6 (#11), B1 and B2 (#9), B3 (#12; its ARM64 run on main, run 16 at `e4019a4`, is green, which completes the "race fixed" acceptance), C1 to C4
+(#8), P0 (#7). Evidence E85 (the SteamOS 0.5.8 update and the Python 3.12
+removal) and E86 (the installer run and the guard version 4 disclosure) are
+recorded. The installer step that the plan listed as a separate approval
+turned out to be none: guard version 4 became active with the pull to
+`45771fe`, and the installer run at `6e648c7` wrote nothing under `.claude/`
+([E86](evidence/e086.md)). Open: A2 (approved on the chair still, waiting for
+the rebuilt environment on `fe2e10f` or later), A4, A5, A7 to A11, B4 to B8,
+C3b (in progress), C5 to C8, P1, P2, E1. The council's hypothesis for the
+cancellation race was wrong; the recorded cause is the readiness probe firing
+on the worker before it had exec'd ([checks reference](reference/development-checks.md)).
 
 ### Decisions still needed from the owner
 
@@ -168,12 +190,15 @@ bridge build, headset not connected, manifest mismatch) does not count.
 - Whether the observer run, the candidate conversion and the 60-second run must
   fit one 300-second mapping lifetime under one approval, or the lifetime
   constant changes by a reviewed edit.
-- The Phase 0 approval scope for the agent runner, still open.
-- Device approvals, each separate: A2, A4, the guard version 4 install from
-  PR #2, and the evaluation session C5 with C6.
-- The Frame itself: whether it rebooted into SteamOS 0.5.8, re-serving the
-  headset folder so a new Frame manager session can exist, and re-enabling and
-  rebinding the disabled "Frame update check" scheduled task to that session.
+- The scope of the Phase 2 guard-enforcement test for the agent runner, which
+  also needs a decision on the workspace trust dialog ([E86](evidence/e086.md)).
+- Device approvals, each separate: the environment rebuild on `fe2e10f` or a
+  later main (the first run of the Python 3.14 wheels on the Frame; its result
+  is new evidence), then A2 (already approved on the chair still), A4 after A3's
+  review, and the evaluation session C5 with C6.
+- The Frame rebooted into SteamOS 0.5.8 ([E85](evidence/e085.md)); a Frame
+  manager session exists and the "Frame update check" scheduled task was
+  rebound to it on 2026-11-07, with the old task left disabled as a record.
 
 ## Edge HUD acceptance gates
 
