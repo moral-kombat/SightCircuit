@@ -51,21 +51,24 @@ show ──────► hide requested ─► hide returned ─► overlay hi
    closes, with the result's expiry on the existing clock.
 5. **Expiry.** The result's `expires_ns` is `observed_ns` plus the run's maximum
    age, capped at the shared `MAX_DISPLAY_AGE_NS` (1 s), and the bridge hides
-   the tile itself at that deadline whether or not a new result arrives.
+   the tile itself at that deadline whether or not a new result arrives. The
+   pipeline applies that cap only when a HUD stage is present
+   (`pipeline.py:244-246`), so the fallback stage must keep that condition or
+   the run relies on the sink's and the bridge's own checks alone.
 
 ## What is reused
 
 | Piece | Where (`e4019a4`) | Role in the fallback |
 | --- | --- | --- |
-| Mirror capture loop and source | `sightcircuit/sources/mirror.py:46-129` (`capture`), `:131-192` (`MirrorSource`) | Unchanged reads at up to 10 per second; each read returns the loopback's latest frame (`sightcircuit/sources/mirror_device.py:236-257`, nonblocking `read()`), so no queue of stale frames has to drain after a hide |
+| Mirror capture loop and source | `sightcircuit/sources/mirror.py:46-129` (`capture`), `:131-192` (`MirrorSource`) | Unchanged reads at up to 10 per second on the capture thread (`max_fps`, `:46-49`), each a nonblocking `read()` of the node (`sightcircuit/sources/mirror_device.py:236-257`). The design assumes each read returns the loopback's latest frame, so that no queue of stale frames has to drain after a hide; no evidence record establishes that, and the loopback-repeat measurement below tests it |
 | Per-read sample digest | `mirror.py:86-91` (`grayscale_sample`, 32 px, `blake2b`; `unchanged_sample_reads`) | Already counts identical consecutive reads; the loopback-repeat measurement reads it |
-| Latest-frame handling | `sightcircuit/latest.py` (`LatestSlot`), `sightcircuit/pipeline.py:447-509` (`_run_latest`) | One pending frame; newer frames replace older ones; the stale-input skip at `:498-501` stays |
+| Latest-frame handling | `sightcircuit/latest.py` (`LatestSlot`), `sightcircuit/pipeline.py:448-514` (`_run_latest`) | One pending frame; newer frames replace older ones; the stale-input skip at `:498-501` stays |
 | Admission checkpoint | `pipeline.py:313-318` (`_admit`), `sightcircuit/context.py:76-113` (`CaptureContext` without a mask) | Source identity is still pinned and checked at every checkpoint; the window rule is added as the caller check |
 | Expiry on the existing clock | `pipeline.py:325-345` (`_expiry_ns`, `_expired`, `_expire_presented`), `:406-429`; `sightcircuit/hud/contract.py:89` and `tools/hud_contract.hpp:69` (`MAX_DISPLAY_AGE_NS`, `kMaxDisplayAgeNs`) | The one display cap, shared with the bridge, unchanged |
 | Tile renderer | `sightcircuit/hud/render.py:4-26` (`draw_tile`), `HUD_CONFIG` | Names and view arrows only; takes no scene image |
 | Overlay settings path | `sightcircuit/overlay.py:207-226` (`set_settings`, `freeze_settings`: only visibility may change once frozen), `:335-340` (`OverlaySink.placement`), `:376-378` (`clear`) | Hide and show are visibility changes on the frozen placement |
 | Bridge show and hide | `tools/overlay_bridge.cpp:241-250` (`visibility`), `:377-381` (settings in `stream`) | `ShowOverlay` and `HideOverlay` as today |
-| Bridge expiry hide and events | `overlay_bridge.cpp:339-355` (`expire`, `frame_expired`), `:276-290` (`events`: `VREvent_OverlayShown`, `VREvent_OverlayHidden` seen as flags) | The expiry hide is reused as is; the event flags become timestamped lines (below) |
+| Bridge expiry hide and events | `overlay_bridge.cpp:339-355` (`expire`, `frame_expired`), `:274-288` (`events`: `VREvent_OverlayShown`, `VREvent_OverlayHidden` seen as flags) | The expiry hide is reused as is; the event flags become timestamped lines (below) |
 | Digest change detection | `sightcircuit/hud/observation.py:294-336` (`BaselineGate`: full-image `blake2b`, `repeated_frames`, `content_changes`) | The "differs from the last pre-hide frame" rule is this digest applied to one reference frame |
 | Lifecycle | `sightcircuit/runtime/guard.py`, the bridge watchdog, `sightcircuit/runtime/manifest.py` | Supervision, bounded termination and the checkpoint manifest apply unchanged |
 
@@ -89,7 +92,9 @@ remain useful provenance and are not part of this design.
 
 Today the bridge reports `overlay_shown_event_seen` and
 `overlay_hidden_event_seen` as two flags in its final report, set when
-`events()` polls them (`overlay_bridge.cpp:283-284`, reported at `:695-696`),
+`events()` polls them (`overlay_bridge.cpp:283-284`) and reported only in
+marker mode (`:694-696`, under `if (marker)`); the stream mode the fallback
+would use reports neither,
 and it emits JSON lines for `ready`, `frame_submitted` and `frame_expired`
 (`:339-355`, `:400-405`). The fallback needs the visibility transitions as
 timestamped lines, in the bridge's `CLOCK_MONOTONIC` nanoseconds (the clock
@@ -122,8 +127,9 @@ A window is opened per cycle from the confirmed hide:
 
 - `opens_ns = overlay_hidden.observed_ns + B`, where B is the device-measured
   hide-to-absence bound plus its margin;
-- `closes_ns = opens_ns + W`, with W at least one read period (200 ms at five
-  reads per second) so at least one read falls inside;
+- `closes_ns = opens_ns + W`, with W at least one capture read period
+  (100 ms at the capture thread's ten reads per second, `mirror.py:46-49`) so
+  at least one read falls inside;
 - `reference_digest` is the full-frame digest of the last frame read before
   `hide_requested`, taken with the `BaselineGate` digest.
 
@@ -136,15 +142,20 @@ admission check. Rejections are counted by reason: `fallback_frame_before_window
 `fallback_frame_after_window`, `fallback_frame_repeats_pre_hide` (identical
 digest), `fallback_hide_not_confirmed`, `fallback_window_without_frame`.
 
-**The loopback-repeat hazard.** The mirror node is a v4l2loopback device whose
-`read()` returns the latest buffer its writer produced. If SteamVR's mirror
+**The loopback-repeat hazard.** The mirror node is a v4l2loopback device. The
+design assumes its `read()` returns the latest buffer the writer produced; the
+one recorded read series ([E12](../evidence/e012.md)) shows only that a 32 px
+sample changed on 99 of 99 reads, so this is the assumption the loopback
+measurement tests, not an established fact. Under it, if SteamVR's mirror
 writer stalls, or produces frames more slowly than this process reads, two
 reads return the same bytes. A frame identical to the pre-hide reference is
 rejected whether the cause is a repeated buffer or a tile still composited in
 an unchanged scene; both are the fail-closed outcome. A frame that differs
 proves only that something changed, not that the tile is gone: that is why B
-is a measured bound and not inferred from content. `camera_freshness_verified`
-stays false everywhere (`mirror.py:42,124`).
+is a measured bound and not inferred from content. The capture report's
+`sample_change_proves_live_camera` stays false (`mirror.py:41-42`), and so
+does the baseline's `camera_freshness_verified` (`observation.py:302`): a
+changed frame is not a fresh camera exposure.
 
 ### Show after the window, expiry on the existing clock
 
@@ -177,26 +188,52 @@ as every device record does.
 
 ## Costs
 
-Per cycle the tile is off for `h + B + W + I + s`: the hide path `h`
-(request to confirmed hidden), the bound B, the window W, inference I and the
-show path `s`. With the pipeline's read period P the tile can be on for at
-most `P - (h + B + W + I + s)` per cycle. The terms other than W and P are
-unmeasured on Frame; the table is illustrative with `h + s = 50 ms`,
-`B = 100 ms`, `W = 200 ms` and `I = 100 ms`, to be replaced by measurements.
+Two rates are involved and must be kept apart. The capture thread reads the
+mirror at up to ten reads per second (`mirror.py:46-49`, `max_fps`); the
+pipeline paces inference at its own period `P = 1 / max_fps`
+(`pipeline.py:250`), five per second today, and one cycle of the fallback is
+one pipeline period. The window W is counted in capture reads (at least one
+capture read period, 100 ms at ten reads per second), not in pipeline periods.
 
-| Reads per second | Cycle P | Tile off per cycle | Tile on per cycle | Age of the shown result at the next hide |
-| --- | --- | --- | --- | --- |
-| 5 | 200 ms | ≥ 450 ms (longer than the cycle) | none: the tile cannot be shown between reads | not applicable |
-| 2 | 500 ms | 450 ms | 50 ms | about 550 ms |
-| 1 | 1,000 ms | 450 ms | 550 ms | about 1,050 ms, past the 1 s cap: the bridge expires it first |
+Take the hide request as time 0 and the terms: `h`, request to confirmed
+hidden; `B`, the bound; `W`, the window; `I`, inference; `s`, show request to
+shown. The worst case for age is the earliest admissible frame, observed at
+`h + B`. Inference is counted after the window closes, which is the
+conservative order (overlapping it with the window only shortens the times).
+Then, per cycle:
 
-So the fallback runs at one to two reads per second, not five, and the
-displayed result ages toward the 1 s cap before the next one arrives. At two
-reads per second the tile flickers at 2 Hz with a 10 % duty cycle; at one read
-per second it is off for about half of every second. The detector's own
-latency on Frame adds directly to the off time. Each read also costs one
-full-frame digest (about 6 MB of bytes hashed) and the bridge emits a handful
-of extra lines per cycle.
+- the tile is off from 0 to `h + B + W + I + s` and on from there to the next
+  hide request at `P`, so the on time is `P − (h + B + W + I + s)`, and a
+  cycle whose off time exceeds `P` cannot complete at that pacing;
+- the age of the result when it is shown is `W + I + s`;
+- the age of the result when the next hide request takes it down is
+  `P − (h + B)`;
+- the age of the result when the next result replaces it on the tile, after
+  being hidden in between, is `P + W + I + s`;
+- the display cap acts only if the result is still shown at
+  `observed_ns + MAX_DISPLAY_AGE_NS`, that is only when `P − (h + B)` reaches
+  1,000 ms.
+
+The terms other than W and P are unmeasured on Frame. The table is
+illustrative with `h = 25 ms`, `B = 100 ms`, `W = 200 ms`, `I = 100 ms` and
+`s = 25 ms` (off time 450 ms per cycle), to be recomputed from the
+measurements; at the capture thread's ten reads per second W could be 100 ms,
+which shortens every age below by 100 ms.
+
+| Pipeline pacing | P | On time per cycle (duty) | Age when shown | Age at the next hide | Age when replaced |
+| --- | --- | --- | --- | --- | --- |
+| 5 per second | 200 ms | cycle cannot complete (450 > 200): the stage would run at the rate the off time allows, about 2 per second | | | |
+| 3 per second | 333 ms | cycle cannot complete (450 > 333) | | | |
+| 2 per second | 500 ms | 50 ms (10 %) | 325 ms | 375 ms | 825 ms |
+| 1 per second | 1,000 ms | 550 ms (55 %) | 325 ms | 875 ms | 1,325 ms, hidden since 875 ms; the cap at 1,000 ms is not reached while shown |
+
+So the fallback runs at one to two cycles per second, not five. At two per
+second the tile flickers at 2 Hz with a 10 % duty cycle and each result is
+shown for 50 ms; at one per second the tile is off for about half of every
+second and the shown result is up to 875 ms old before it goes down. The
+detector's own latency on Frame adds directly to the off time and to every
+age. Each capture read also costs one full-frame digest (about 6 MB of bytes
+hashed) and the bridge emits a handful of extra lines per cycle.
 
 ## Risks
 
