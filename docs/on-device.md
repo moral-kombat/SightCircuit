@@ -91,7 +91,9 @@ standard library and does not require the project's virtual environment:
 python3 scripts/device_check.py
 ```
 
-The report includes architecture, selected OS/build identifiers, tools on PATH,
+The report includes architecture, selected OS/build identifiers, the version of
+the Python interpreter that ran it (3.14 since SteamOS 0.5.8; the tested
+versions are in [development setup](development.md#python-314-on-the-frame-2026-11-07)), tools on PATH,
 the result of a user-level SteamVR service query, video-device names and render
 node presence. It does not open cameras, acquire a stream, restart services,
 change settings, install packages or print credential/environment values.
