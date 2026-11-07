@@ -326,9 +326,6 @@ class SsdDecodeTests(unittest.TestCase):
         self.assertGreaterEqual(result.inference_ms, 0)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class PocContractTests(unittest.TestCase):
     """The POC threshold and the live budget are defined once and reach every command and engine default."""
@@ -379,3 +376,7 @@ class PocContractTests(unittest.TestCase):
                 repeated = [line for line in path.read_text().splitlines()
                             if pattern.search(line) and "iou" not in line.lower()]
                 self.assertEqual(repeated, [])
+
+
+if __name__ == "__main__":
+    unittest.main()
