@@ -47,6 +47,8 @@ uvx ruff@0.14.2 check .
 git diff --check
 ```
 
-CI runs the same jobs on x86_64 (`checks.yml`) and ARM64 (`arm64.yml`) through
-`check-jobs.yml`; ARM64 also replays the synthetic stand-in and uploads
-runner-CPU latency reports (not Frame results).
+CI runs `check-jobs.yml` on x86_64 (`checks.yml`) for every pull request and
+main push, and on ARM64 (`arm64.yml`) for main pushes and on demand only; the
+on-demand run can also replay the synthetic stand-in and upload runner-CPU
+latency reports (not Frame results). Documentation-only changes run `docs.yml`
+alone; `tests/test_workflows.py` pins the layout.

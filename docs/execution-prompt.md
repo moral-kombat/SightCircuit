@@ -859,3 +859,21 @@ The final report must include:
 Do not stop at the first blocked WP, request blanket hardware approval or claim the live POC
 is complete without the 60-second headset acceptance evidence.
 ```
+
+## Ship pipeline follow-ups, 2026-11-06
+
+The `/ship` pass that merged PRs #24, #22, #26, #25 and #27 reviewed each one
+and fixed what was safe to fix in place; these findings were deferred. None is
+a device step. The next coder takes them in this order unless the owner says
+otherwise.
+
+| Source | Follow-up | Why deferred |
+| --- | --- | --- |
+| #24 `scripts/capture_supervisor.py` | A SIGINT and a SIGTERM pending together during cleanup still make `supervise()` raise without reaping; `deferred_signals()` makes the pair coincide. Deliver held signals one at a time, or enter `cleanup_signals()` before the mask is restored. | Pre-existing gap the PR disclosed; the owner scoped #24 to two races on a paused track |
+| #24 | A recorded signal whose previous disposition is `SIG_DFL` is re-raised after the pid save and ends the process without unwinding, leaving the worker running; replayed handlers get `frame=None`. | Only a caller without Python handlers reaches it; `main` installs them |
+| #24 | `recorded_signals()` re-implements `sightcircuit/runtime/guard.py:cancellation()`; `deferred_signals()` plus `noted_error()` cost three mask syscalls per 16 KiB chunk. | Structural; the script is quarantined |
+| #22 `tools/overlay_bridge.cpp` | The 6 s connect budget covers up to three Background probes, three Overlay `VR_Init` attempts and the backoff; a slow but healthy SteamVR could be cut off mid-`VR_Init` where the old code ran inside the client's 8 s ready wait. | Needs the headset check #22 lists; the budget and the client's wait must move together |
+| #22 `sightcircuit/hud/geometry.py` | `clip_to_frame` duplicates the Sutherland-Hodgman loop in `project()`; `scripts/sample_run_context.py` re-validates the interval limits `sensors.run` already checks. | Simplifications |
+| #25 `sightcircuit/hud/scene.py` | Validate a report's budgets against the budgets it declares, not the module's constants; hoist the per-call imports and the repeated `contourArea`; write the statistics once per report; collapse `reject_scene`'s duplicate status write. | Folded into package O3, which is in progress with the Frame numbers |
+| #27 `sightcircuit/agent/runner.py` | `git()` and `run_task` each hand-roll the hold/Popen/resume signal sequence; one `Interruption` context manager should serve both. | Refactor of a subtle protocol; needs its own review |
+| CI | `test_bounded_worker.test_pipeline_cli_parent_cancellation` fails about one run in four on a loaded runner (`cleanup_ok` false after SIGTERM); a cancellation race in the same family as #24's. | Not touched by any merged PR; root-cause it like #24 |

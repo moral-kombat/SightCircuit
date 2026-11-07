@@ -236,8 +236,8 @@ The pin holds counts, never scores, so small floating-point differences between
 x86_64 and ARM64 cannot move it: in the pinned run the closest regression
 margin was a clean absent label at 0.437 against the 0.5 threshold.
 
-CI's replay-window job runs the seed comparison with `--expect` and then
-`tests/test_seed_pin.py` without skips, which checks that the committed pin
+CI's replay job runs the seed comparison with `--expect` and then the suite
+with `tests/test_seed_pin.py` pinned against skips, which checks that the committed pin
 passes and that swapping two VOC labels in the SSD label map fails it. Seed
 results remain a wiring and label-mapping regression check on the runner's
 CPU, not Frame evidence, and they do not select a detector.
@@ -461,30 +461,53 @@ a nonblank preview, correct track selection and input-file preservation.
 
 ## Continuous integration
 
-The [GitHub Actions workflow](../.github/workflows/checks.yml) runs ruff and the
-[shared job definitions](../.github/workflows/check-jobs.yml) on x86_64 Ubuntu,
-including the same setup and smoke check with Python 3.12. The
-[ARM64 workflow](../.github/workflows/arm64.yml) runs the same native and Python
-jobs, except the x86_64 smoke environment, on `ubuntu-24.04-arm`: the
-headset's architecture, without its drivers, SteamVR or cameras. It needs network access to
-the fixture sources. A file-decoder job installs PyAV and exercises fragmented
-HEVC replay and RGB conversion. A separate job builds the native OpenVR probe, verifies that
-default and invalid invocations stop before OpenVR initialization, and checks
-missing-runtime diagnostics with explicit opt-in. The probe has interrupted
-visible passthrough on the tested headset; do not repeat that unchanged hardware
-test. CI does not stand in for a headset test. Local execution
-of these commands is separate from a successful GitHub Actions run after push.
+The [GitHub Actions workflow](../.github/workflows/checks.yml) runs the
+[shared job definitions](../.github/workflows/check-jobs.yml) on x86_64 Ubuntu
+for every pull request and main push, with Python 3.12. The
+[ARM64 workflow](../.github/workflows/arm64.yml) runs the same jobs on
+`ubuntu-24.04-arm`, the headset's architecture without its drivers, SteamVR or
+cameras, on main pushes and on demand (Actions, "ARM64 checks", "Run
+workflow", any branch); pull requests do not start it, because GitHub-hosted
+minutes are limited (layout of 2026-11-07). Both need network access to the
+fixture sources. CI does not stand in for a headset test. Local execution of
+these commands is separate from a successful GitHub Actions run after push.
 
-The replay-window job installs the window requirements and exercises decoding,
-inference, Qt offscreen presentation and file-protection behavior end to end.
-The dependency-free mirror job exercises discovery, native Linux UAPI layout,
-read-only capture guards, pixel bounds, deadlines, cancellation and optional
-preview publication without camera hardware.
-The standalone shared-memory job builds both native helpers and checks
-cross-process publications, stale/malformed input, source mutations, native
-fault containment, deadlines and preview publication with synthetic images.
+Three jobs, because GitHub bills each job's minutes rounded up:
 
-On ARM64 only (`pacing: true` in `arm64.yml`), the replay-pacing job writes the
+- `native` needs no Python dependency. It lints (x86_64 only), checks the HUD
+  contract header, builds the overlay bridge, the capture supervisor, the GPU
+  capability query, the shared-memory tools, the camera probe and every
+  capture-reference adaptation, checks the inspection artifacts, verifies that
+  the probe's default and invalid invocations stop before OpenVR
+  initialization (the probe has interrupted visible passthrough on the tested
+  headset; do not repeat that unchanged hardware test), then runs the whole
+  suite once under the system interpreter through
+  `scripts/run_tests_no_skips.py --all`: the modules whose binaries the job
+  built may not skip, the rest skip what the bare environment cannot run.
+  Mirror discovery, the native Linux UAPI layout, read-only capture guards,
+  cross-process shared-memory publications and native fault containment all
+  run here, without camera hardware.
+- `replay` installs PyAV alone and runs the suite (fragmented HEVC replay and
+  RGB conversion with the decoder only), then installs the window
+  requirements, builds the bridge, fetches the seed images and runs the suite
+  once more with the detector, pipeline, replay, mirror-recognition, HUD,
+  agent and seed modules pinned against skips: decoding, inference, Qt
+  offscreen presentation and file-protection behavior end to end. It checks
+  the generated summaries and, on x86_64, the smoke environment
+  (`scripts/setup.sh`, `scripts/smoke_check.py`).
+- `replay-pacing` runs on ARM64 on demand (the `pacing` box of "Run
+  workflow"); see below.
+
+A change that touches only documentation no test reads (evidence records, the
+generated summaries and their inputs, planning and review documents, the root
+guides; each workflow carries the list) runs
+[docs.yml](../.github/workflows/docs.yml) instead: `generate_status.py --check`
+and the generator's tests. `tests/test_workflows.py` keeps the three lists
+identical, keeps every listed document out of the test modules' inputs and
+checks that every module pinned against skips exists. A newer push to a pull
+request cancels its superseded run.
+
+On ARM64 on demand (`pacing` in `arm64.yml`), the replay-pacing job writes the
 synthetic realtime-replay stand-in and replays it as E62 did: `--realtime`, 40
 processed frames at a 5 fps cap with MobileNet-SSD, once with 2 and once with 4
 decoder threads. It checks that each report finished and carries the
@@ -610,7 +633,7 @@ input, and its manifest entry passes `--require-input-digests`.
 `tests/test_frame_session_commands.py` parses every `scripts/*.py` command line
 in `scripts/frame_session.sh` with that script's own parser and exact option
 names, without running it; the session helper's own tests replace Python with a
-fake, so they cannot see a removed flag. Dependency-specific tests skip without OpenCV/NumPy; the replay-window
+fake, so they cannot see a removed flag. Dependency-specific tests skip without OpenCV/NumPy; the replay
 CI job installs these and exercises the complete suite. Existing supervision
 tests cover hard deadlines, abnormal worker exit and process reaping.
 
@@ -1852,8 +1875,9 @@ python -m scripts.live_pipeline --synthetic-check --validate-overlay --seconds 3
 
 These commands use generated images and native transport validation only.
 The detector/decode dependencies use the repository's existing pins; no new
-model or API credentials are required. The replay-window CI job on x86_64 and
-ARM64 includes these critical offline suites in its explicit no-skip gate.
+model or API credentials are required. The replay CI job on x86_64 (every
+pull request) and ARM64 (main pushes and on demand) includes these critical
+offline suites in its explicit no-skip gate.
 Local results and their limits are recorded in [E66](status.md#e66-offline-live-pipeline-and-headers-only-input-probe).
 
 [`recording_growth_check.py`](../scripts/recording_growth_check.py) defaults to
