@@ -187,7 +187,10 @@ terminated), `failed_to_start` (the command could not be executed),
 interruption). Exit codes: 0 all passed, 1 otherwise, 2 refused, 3 another run
 holds the lock, 128 + signal number when SIGINT, SIGTERM or SIGHUP (for
 example a dropped SSH connection) interrupted the run; the running task's
-group is terminated before the lock is released. Run `run-tier` inside `tmux`
+group is terminated before the lock is released. A signal while the run
+records the checkout, before its first task, ends that git as `update` does
+(below), and `result.json` then has no revision, clean flag or branch; a run
+does not check for a leftover `.git/index.lock`. Run `run-tier` inside `tmux`
 when the connection may drop (`nohup` also works: a signal the runner was
 started with ignored stays ignored).
 
@@ -209,7 +212,25 @@ clean checkout, a commit on that history, all required agent files and a
 older commit solely because it precedes the current checkout, and the version
 check does not prove that guard semantics are equally strict. Unmerged commits,
 missing agent files and lower guard versions are refused. A failed or timed-out
-git command also refuses the update (exit 2); git never prompts for credentials.
+git command also refuses the update (exit 2; the fetch times out after 3
+minutes). That includes the git commands that record the checkout after the
+switch: if one fails or times out, `update` refuses with "switched to
+<commit>, but recording the checkout failed" instead of reporting `updated`.
+git runs with `GIT_TERMINAL_PROMPT=0`, stdin from `/dev/null` and in its own
+session without a controlling terminal, so it cannot prompt on the terminal; a
+configured credential helper or askpass program can still run, bounded by the
+fetch timeout. A timed-out git, or the running one when SIGINT, SIGTERM or
+SIGHUP interrupts `update` (exit 128 + signal number), is ended with its
+transport before the lock is released: SIGTERM first, on which git removes its
+lock files, and SIGKILL 5 seconds later; ending git takes at most 25 seconds.
+An interrupted `update`, like one refused after the switch, may already have
+switched the checkout, so check it (`git status`) before using it. A
+`.git/index.lock` still there after a timed-out or interrupted git, or after a
+failed checkout record, is named in the refusal (or the interruption report)
+and never deleted: check that no git command is running before removing it.
+Only the index lock is checked: another lock file a killed git leaves, such as
+a ref lock from the fetch, makes the next git command that needs it fail, and
+`update` then refuses with git's error.
 
 An accepted update leaves a detached `HEAD`. Before using the shell runner's
 `setup` stage, either switch to `main` for its `git pull --ff-only`, or use
@@ -233,8 +254,24 @@ instead of prompting, permits Bash only for the runner, denies reads of
 private stills, recordings, images and credentials, and installs
 `scripts/frame_agent_guard.py` as a PreToolUse hook that blocks shell syntax,
 other commands, reads outside the checkout or of images, and every write except
-a run's `summary.md`. Remove the file to return the checkout to normal
-interactive use.
+a run's `summary.md`. The hook also refuses `Glob` patterns with a backslash (an
+escape to Claude Code), a trailing `/` (Claude Code then searches the parent
+directory) or `..` anywhere, so it never checks a different directory than the
+one searched; give the directory as the `path` instead (`GUARD_VERSION` 4).
+Remove the file to return the checkout to normal interactive use.
+
+`scripts/frame_claude_install.sh` runs the Phase 0 stages with a status line
+and a breakpoint before each stage; the procedure is preserved in the
+[Phase 0 procedure](../history/agent-on-frame-2026-11-01.md#phase-0-install-and-verify-manual-owner).
+Its optional `signature` stage checks the installed binary against the signed
+release manifest with a throwaway keyring. From the downloads on, every way out
+of the stage, an interrupted stage included, asks the keyring's agent to stop
+and removes the keyring with its temporary directory; the cleanup runs once,
+and `gpgconf` runs only for the throwaway keyring. Each `gpgconf` call is
+bounded by `timeout`: the cleanup keeps INT, TERM and HUP ignored so that no
+second signal can cut it short, which `gpgconf` inherits, so `timeout`'s
+SIGTERM at 20 seconds does not end a hung call and its SIGKILL 5 seconds later
+does; such a cut-off is not reported, and the agent may then outlive the stage.
 
 Results are agent-run device output: they are not user reports, and exit codes
 do not establish what the headset showed. Room images stay on Frame: the

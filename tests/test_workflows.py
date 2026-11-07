@@ -104,7 +104,7 @@ class DocumentationOnlyPaths(unittest.TestCase):
     def test_new_history_and_reader_guides_use_the_documentation_route(self):
         for path in ("docs/history/README.md", "docs/glossary.md", "docs/legacy-anchors.json",
                      "docs/guides/replay.md", "docs/guides/mirror-recognition.md",
-                     "docs/guides/frame-sessions.md", "docs/reference/overlay.md"):
+                     "docs/reference/overlay.md"):  # frame-sessions.md is read by a runner test
             with self.subTest(path=path):
                 self.assertTrue(any(fnmatchcase(path, pattern) for pattern in self.reference))
 

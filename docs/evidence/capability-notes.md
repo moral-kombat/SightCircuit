@@ -180,6 +180,8 @@ re-checked. Guard blocking and the Tier A runner have not been tested on Frame.
 Installing the setup does not prove automated checks work.
 
 [E84](e084.md) records review of the cycle-3 follow-ups: glob confinement,
-update outcomes, lock-file and checkout-state reporting. Its #27 entry is
-pending at that recorded checkpoint. These later records do not change
-E77's original offline provenance.
+update outcomes, lock-file and checkout-state reporting. Those follow-ups,
+with the installer's cleanup bound, are merged in SightCircuit PR #2 (the
+former #27), cloud-checked only: none has run on Frame, and the guard
+version 4 install there needs its own approval. These later records do not
+change E77's original offline provenance.

@@ -1,5 +1,6 @@
 """Frame agent runner, task table, guard hook and settings template; no device access."""
 import contextlib
+import errno
 import io
 import json
 import os
@@ -49,6 +50,14 @@ def wait_dead(pid, seconds=5):
     return True
 
 
+def wait_for(condition, seconds=60):
+    """Poll ``condition`` until it is true or a generous deadline passes (under full-suite load); its last value."""
+    deadline = time.monotonic() + seconds
+    while not condition() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    return condition()
+
+
 # Starts a child in the task's own process group, writes its pid to argv[1], then either
 # exits at once ("exit") or sleeps. The child ignores SIGTERM when argv[2] is "ignore".
 CHILD_CODE = ("import signal, subprocess, sys, time; "
@@ -66,9 +75,11 @@ DRIVER = ("import os, signal, subprocess, sys; sys.path.insert(0, sys.argv[1]); 
           "task = Task(id='tier-a/long', tier='A', description='long', timeout=100, "
           "argv=(sys.executable, '-c', sys.argv[4], *sys.argv[5:]))\n"
           "sys.exit(runner.main(['run', 'tier-a/long'], root=sys.argv[2], tasks_by_id={{task.id: task}}))")
-# A task that writes its pid to argv[1], optionally ignores SIGTERM (argv[2] == "ignore"), then sleeps argv[3] s.
+# A task that writes its pid to argv[1], then sleeps argv[3] s. With argv[2] == "ignore" it ignores SIGTERM; with
+# "note" it keeps running too, but creates argv[1] + ".term" when SIGTERM arrives.
 SLEEPER = ("import os, signal, sys, time\n"
            "if sys.argv[2] == 'ignore': signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+           "if sys.argv[2] == 'note': signal.signal(signal.SIGTERM, lambda *_: open(sys.argv[1] + '.term', 'w').close())\n"
            "open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(float(sys.argv[3]))")
 
 
@@ -285,10 +296,7 @@ class RunnerTests(unittest.TestCase):
         return process, root, task_pid
 
     def task_pid(self, path):
-        for _ in range(200):
-            if path.exists() and path.read_text():
-                break
-            time.sleep(0.05)
+        wait_for(lambda: path.exists() and path.read_text())
         pid = int(path.read_text())
         self.addCleanup(lambda: alive(pid) and os.kill(pid, 9))
         return pid
@@ -315,11 +323,13 @@ class RunnerTests(unittest.TestCase):
         self.assertIsNotNone(result["tasks"][0]["exit_code"])
 
     def test_a_second_signal_does_not_cut_short_the_termination(self):
-        process, root, task_pid = self.start_driver("twice", SLEEPER, "{pid}", "ignore", "100",
-                                                    prelude="runner.KILL_GRACE = 3")
+        process, root, task_pid = self.start_driver("twice", SLEEPER, "{pid}", "note", "100",
+                                                    prelude="runner.KILL_GRACE = 5")
         pid = self.task_pid(task_pid)
-        process.send_signal(signal.SIGTERM)  # The task ignores it, so the runner waits out the grace period ...
-        time.sleep(0.5)
+        process.send_signal(signal.SIGTERM)  # The task only notes it, so the runner waits out the grace period ...
+        # ... which has begun once the runner's SIGTERM reached the task (not after a fixed delay) ...
+        self.assertTrue(wait_for(lambda: Path(f"{task_pid}.term").exists() or process.poll() is not None))
+        self.assertTrue(alive(pid), "the task did not outlive SIGTERM, so the grace period was not tested")
         process.send_signal(signal.SIGHUP)  # ... and a second signal must not stop it before SIGKILL.
         _, err = process.communicate(timeout=60)
         self.assertEqual(process.returncode, 128 + signal.SIGTERM, err)
@@ -386,6 +396,19 @@ class RunnerTests(unittest.TestCase):
 
     def test_checkout_state_is_unknown_outside_a_git_checkout(self):
         self.assertEqual(runner.checkout_state(self.root), {"revision": None, "clean": None, "branch": None})
+
+    def test_checkout_state_keeps_the_fields_whose_git_succeeded(self):
+        def fake_git(root, *args, interruption=None):
+            if args[0] == "status":
+                raise subprocess.TimeoutExpired("git status", 30)
+            return 0, "abc123" if args == ("rev-parse", "HEAD") else "main", ""
+        with unittest.mock.patch.object(runner, "git", side_effect=fake_git):
+            state = runner.checkout_state(self.root)
+        self.assertEqual(state, {"revision": "abc123", "clean": None, "branch": "main"})
+
+    def test_a_git_file_that_names_no_gitdir_leaves_the_lock_question_unknown(self):
+        (self.root / ".git").write_text("GITDIR: elsewhere\n")
+        self.assertIn("is unknown", runner.index_lock_left(self.root))
 
 
 @unittest.skipUnless(shutil.which("git"), "git is required")
@@ -494,6 +517,516 @@ class UpdateTests(unittest.TestCase):
         while transport() and time.monotonic() < deadline:
             time.sleep(0.1)
         self.assertEqual(transport(), [], "git's transport outlived the timed-out fetch")
+
+
+# Stands in for git in "update": a clean status, then a fetch that runs until it is ended; anything else fails, so
+# update stops at merge-base. With FAKE_GIT_GUARD set, every step of update succeeds instead (show prints that
+# GUARD_VERSION) and the git that runs until it is ended is the first one after the switch, "rev-parse HEAD", which is
+# also the first git a run starts. Each call's arguments go to $FAKE_GIT_PID.calls. The blocking git's pid (which is
+# also its process group, as the runner starts git in its own session) goes to $FAKE_GIT_PID once its SIGTERM trap is
+# set. FAKE_GIT=clean behaves like git, which removes its lock files on SIGTERM; FAKE_GIT=stubborn holds
+# .git/index.lock, appends to $FAKE_GIT_PID.log on SIGTERM and keeps running; FAKE_GIT=pass exits 0 once
+# $FAKE_GIT_PID.release exists; FAKE_GIT=fail instead prints an error and exits 128 at once, taking no lock. What each
+# call could prompt with (GIT_TERMINAL_PROMPT, stdin, its pid and session id) goes to $FAKE_GIT_PID.env.
+FAKE_GIT = """#!/bin/sh
+session() { stat=$(cat /proc/$$/stat); set -- ${stat##*") "}; echo "$4"; }
+echo "prompt=${GIT_TERMINAL_PROMPT-unset} stdin=$(readlink /proc/$$/fd/0) pid=$$ sid=$(session)" >> "$FAKE_GIT_PID.env"
+echo "$*" >> "$FAKE_GIT_PID.calls"
+if [ -n "${FAKE_GIT_GUARD:-}" ]; then
+  case "$*" in
+    "rev-parse HEAD") ;;
+    "show "*) echo "GUARD_VERSION = $FAKE_GIT_GUARD"; exit 0 ;;
+    *) exit 0 ;;
+  esac
+else
+  case "$1" in
+    status) exit 0 ;;
+    fetch) ;;
+    *) exit 1 ;;
+  esac
+fi
+if [ "$FAKE_GIT" = fail ]; then echo "fatal: cannot read HEAD" >&2; exit 128; fi
+started() { echo $$ > "$FAKE_GIT_PID.tmp" && mv "$FAKE_GIT_PID.tmp" "$FAKE_GIT_PID"; }
+if [ "$FAKE_GIT" = pass ]; then
+  started
+  while [ ! -e "$FAKE_GIT_PID.release" ]; do sleep 0.1; done
+  exit 0
+fi
+: > .git/index.lock
+if [ "$FAKE_GIT" = clean ]; then trap 'rm -f .git/index.lock; exit 143' TERM
+else trap 'echo TERM >> "$FAKE_GIT_PID.log"' TERM; fi
+started
+while :; do sleep 1; done
+"""
+# Runs runner.main(["update", <a full hash>]) in its own process, so that signals reach a real runner.
+# argv: checkout, checkout root. ``{prelude}`` runs first.
+UPDATE_DRIVER = ("import os, signal, subprocess, sys; sys.path.insert(0, sys.argv[1]); "
+                 "from sightcircuit.agent import runner\n"
+                 "{prelude}\n"
+                 "sys.exit(runner.main(['update', 'a' * 40], root=sys.argv[2]))")
+
+
+class UpdateInterruptionTests(unittest.TestCase):
+    """A timed-out or interrupted git, in ``update`` or a run's checkout record, is ended with its whole group (SIGTERM,
+    then SIGKILL) before the lock is released; git has no terminal to prompt on. A checkout record that fails or times
+    out after ``update``'s switch refuses the update."""
+
+    def setUp(self):
+        self.base = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.base, ignore_errors=True)
+        (self.base / "bin").mkdir()
+        (self.base / "bin/git").write_text(FAKE_GIT)
+        (self.base / "bin/git").chmod(0o755)
+
+    def checkout(self, name, mode, switched=False):
+        """A checkout root with a .git directory, and the environment that puts the fake git first on PATH. With
+        ``switched``, update gets through the switch and git blocks in the first checkout record."""
+        root = self.base / name
+        (root / ".git").mkdir(parents=True)
+        pid_file = self.base / f"{name}.pid"
+        env = {"PATH": f"{self.base / 'bin'}:{os.environ.get('PATH', '/usr/bin:/bin')}", "FAKE_GIT": mode,
+               "FAKE_GIT_PID": str(pid_file), **({"FAKE_GIT_GUARD": str(guard.GUARD_VERSION)} if switched else {})}
+        self.addCleanup(self.end_group, pid_file)
+        return root, pid_file, env
+
+    @staticmethod
+    def end_group(pid_file):
+        with contextlib.suppress(OSError, ValueError):
+            os.killpg(int(pid_file.read_text()), signal.SIGKILL)
+
+    def git_group(self, pid_file, process=None):
+        """The fake git's process group, once it runs (and while ``process``, the driver, has not exited)."""
+        wait_for(lambda: pid_file.exists() or (process is not None and process.poll() is not None))
+        if not pid_file.exists():
+            self.fail(f"the fake git did not start: {process.communicate(timeout=30) if process else ''}")
+        return int(pid_file.read_text())
+
+    def driver(self, root, env, prelude="", stdin=None):
+        process = subprocess.Popen([sys.executable, "-c", UPDATE_DRIVER.format(prelude=prelude), str(ROOT), str(root)],
+                                   stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                   env=dict(os.environ, **env))
+        self.addCleanup(lambda: process.poll() is None and process.kill())
+        return process
+
+    def run_driver(self, root, env, task_pid, prelude=""):
+        """A run of one task, SLEEPER, which writes ``task_pid`` once it has started."""
+        process = subprocess.Popen([sys.executable, "-c", DRIVER.format(prelude=prelude), str(ROOT), str(root),
+                                    str(task_pid), SLEEPER, str(task_pid), "default", "100"],
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                   env=dict(os.environ, **env))
+        self.addCleanup(lambda: process.poll() is None and process.kill())
+        return process
+
+    def lock_waits_for(self, root, group):
+        """Take the run lock as soon as it is free: git's group must be gone by then. True if git ran while it was held."""
+        held_while_running = False
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            try:
+                with runner.RunLock(root):
+                    self.assertFalse(runner.group_alive(group), "the run lock was released while git was still running")
+                    return held_while_running
+            except BlockingIOError:
+                held_while_running = held_while_running or runner.group_alive(group)
+            time.sleep(0.02)
+        self.fail("the run lock was never released")
+
+    @staticmethod
+    def report(err):
+        return json.loads(err.strip().splitlines()[-1])
+
+    def test_a_signal_during_the_fetch_ends_git_before_the_lock_is_released(self):
+        for number in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+            with self.subTest(signal=number.name):
+                root, pid_file, env = self.checkout(number.name, "stubborn")
+                process = self.driver(root, env, prelude="runner.GIT_TERM_GRACE = 2")
+                group = self.git_group(pid_file, process)
+                process.send_signal(number)
+                self.assertTrue(self.lock_waits_for(root, group), "git ended before it could be seen holding the lock")
+                _, err = process.communicate(timeout=60)
+                self.assertEqual(process.returncode, 128 + number, err)
+                report = self.report(err)
+                self.assertEqual((report["status"], report["signal"]), ("interrupted", number.name))
+                self.assertTrue(Path(f"{pid_file}.log").exists(), "git got SIGKILL without SIGTERM first")
+                # The stubborn git was killed holding its lock: reported for a person, never deleted.
+                self.assertIn(".git/index.lock", report["reason"])
+                self.assertTrue((root / ".git/index.lock").exists())
+
+    def test_a_signal_after_the_switch_is_reported_and_ends_git_before_the_lock_is_released(self):
+        # The checkout has moved, so a signal from here on is still reported as an interruption, never as "updated".
+        for number in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+            with self.subTest(signal=number.name):
+                root, pid_file, env = self.checkout(f"switched-{number.name}", "stubborn", switched=True)
+                process = self.driver(root, env, prelude="runner.GIT_TERM_GRACE = 2")
+                group = self.git_group(pid_file, process)
+                calls = Path(f"{pid_file}.calls").read_text().splitlines()
+                self.assertEqual(calls[-2:], [f"switch --quiet --detach {'a' * 40}", "rev-parse HEAD"])
+                process.send_signal(number)
+                self.assertTrue(self.lock_waits_for(root, group), "git ended before it could be seen holding the lock")
+                out, err = process.communicate(timeout=60)
+                self.assertEqual(process.returncode, 128 + number, out + err)
+                self.assertEqual(out, "", "an interrupted update printed an outcome")
+                report = self.report(err)
+                self.assertEqual((report["status"], report["signal"]), ("interrupted", number.name))
+                self.assertIn(f"update interrupted by {number.name}; any running git was ended", report["reason"])
+                self.assertTrue(Path(f"{pid_file}.log").exists(), "git got SIGKILL without SIGTERM first")
+
+    def test_a_signal_while_a_run_records_the_checkout_ends_git_and_records_the_interruption(self):
+        # A run records the checkout with git, under the run lock, before its first task.
+        root, pid_file, env = self.checkout("run", "stubborn", switched=True)
+        task_pid = self.base / "run-task.pid"
+        process = self.run_driver(root, env, task_pid, prelude="runner.GIT_TERM_GRACE = 2")
+        group = self.git_group(pid_file, process)
+        process.send_signal(signal.SIGTERM)
+        self.assertTrue(self.lock_waits_for(root, group), "git ended before it could be seen holding the lock")
+        _, err = process.communicate(timeout=60)
+        self.assertEqual(process.returncode, 128 + signal.SIGTERM, err)
+        self.assertTrue(Path(f"{pid_file}.log").exists(), "git got SIGKILL without SIGTERM first")
+        result = json.loads(runner.latest_result(root).read_text())
+        self.assertEqual(result["interrupted"], "SIGTERM")
+        self.assertEqual(result["checkout"], {"revision": None, "clean": None, "branch": None})
+        self.assertEqual(result["tasks"], [{"id": "tier-a/long", "status": "not_started",
+                                            "reason": "run interrupted by SIGTERM"}])
+        self.assertFalse(task_pid.exists(), "the task started after the run was interrupted")
+
+    def test_a_second_signal_does_not_cut_short_ending_git(self):
+        root, pid_file, env = self.checkout("twice", "stubborn")
+        process = self.driver(root, env, prelude="runner.GIT_TERM_GRACE = 5")
+        group = self.git_group(pid_file, process)
+        process.send_signal(signal.SIGTERM)
+        # git has its SIGTERM once it noted it; the runner now waits out the grace period before SIGKILL.
+        self.assertTrue(wait_for(lambda: Path(f"{pid_file}.log").exists() or process.poll() is not None))
+        self.assertTrue(runner.group_alive(group), "git did not outlive SIGTERM, so the grace period was not tested")
+        process.send_signal(signal.SIGHUP)
+        self.lock_waits_for(root, group)
+        _, err = process.communicate(timeout=60)
+        self.assertEqual(process.returncode, 128 + signal.SIGTERM, err)
+        self.assertEqual(self.report(err)["signal"], "SIGTERM")
+
+    def test_a_signal_while_a_timed_out_git_is_ended_does_not_cut_it_short(self):
+        # The fetch timed out and git has its SIGTERM; a signal in the grace period must wait for SIGKILL, not skip it.
+        root, pid_file, env = self.checkout("timed-out", "stubborn")
+        process = self.driver(root, env, prelude="runner.FETCH_TIMEOUT = 1; runner.GIT_TERM_GRACE = 4")
+        group = self.git_group(pid_file, process)
+        self.assertTrue(wait_for(lambda: Path(f"{pid_file}.log").exists() or process.poll() is not None))
+        self.assertTrue(runner.group_alive(group), "git did not outlive SIGTERM, so the grace period was not tested")
+        process.send_signal(signal.SIGTERM)
+        self.lock_waits_for(root, group)
+        _, err = process.communicate(timeout=60)
+        self.assertEqual(process.returncode, 128 + signal.SIGTERM, err)
+        self.assertEqual(self.report(err)["status"], "interrupted")
+
+    def test_a_signal_as_the_fetch_times_out_still_ends_git(self):
+        # The signal lands after communicate() raised TimeoutExpired but before hold() took effect: the still-armed
+        # handler raises at hold()'s first line, where CPython runs signal handlers.
+        prelude = ("real = runner.Interruption.hold\n"
+                   "def hold(self):\n"
+                   "    if isinstance(sys.exc_info()[1], subprocess.TimeoutExpired) and not getattr(self, 'fired', 0):\n"
+                   "        self.fired = 1\n"
+                   "        self.handle(signal.SIGTERM, None)\n"
+                   "    return real(self)\n"
+                   "runner.Interruption.hold = hold\n"
+                   "runner.FETCH_TIMEOUT = 1\n"
+                   "runner.GIT_TERM_GRACE = 2")
+        root, pid_file, env = self.checkout("timing-out", "stubborn")
+        process = self.driver(root, env, prelude=prelude)
+        group = self.git_group(pid_file, process)
+        self.lock_waits_for(root, group)
+        _, err = process.communicate(timeout=60)
+        self.assertEqual(process.returncode, 128 + signal.SIGTERM, err)
+        self.assertFalse(runner.group_alive(group), "git kept running after a signal that came as its fetch timed out")
+        self.assertTrue(Path(f"{pid_file}.log").exists(), "git got SIGKILL without SIGTERM first")
+        self.assertEqual(self.report(err)["status"], "interrupted")
+
+    # The runner signals itself right after Popen has started the git named in $STARTING, before Popen has returned
+    # its process object; that git's pid (its process group) goes to $FAKE_GIT_PID.started.
+    STARTING = ("starting = ['git', *os.environ['STARTING'].split()]\n"
+                "real = subprocess.Popen\n"
+                "class Starting(real):\n"
+                "    def __init__(self, args, *rest, **kwargs):\n"
+                "        super().__init__(args, *rest, **kwargs)\n"
+                "        if args[:len(starting)] == starting:\n"
+                "            open(os.environ['FAKE_GIT_PID'] + '.started', 'w').write(str(self.pid))\n"
+                "            os.kill(os.getpid(), signal.SIGTERM)\n"
+                "subprocess.Popen = Starting")
+
+    def test_a_signal_while_git_starts_still_ends_it(self):
+        # The signal reaches the runner after git exists but before Popen has returned its process object: in the
+        # fetch, and in the first git after the switch.
+        for starting, switched in (("fetch", False), ("rev-parse HEAD", True)):
+            with self.subTest(git=starting):
+                root, pid_file, env = self.checkout(f"starting-{starting.split()[0]}", "clean", switched)
+                self.addCleanup(self.end_group, Path(f"{pid_file}.started"))
+                process = self.driver(root, dict(env, STARTING=starting), prelude=self.STARTING)
+                _, err = process.communicate(timeout=60)
+                group = int(Path(f"{pid_file}.started").read_text())
+                self.assertEqual(process.returncode, 128 + signal.SIGTERM, err)
+                self.assertFalse(runner.group_alive(group),
+                                 "git kept running after a signal that came while it started")
+                self.assertEqual(self.report(err)["status"], "interrupted")
+
+    def test_a_signal_while_a_runs_checkout_git_starts_still_ends_it(self):
+        # The same moment in the first git a run starts, to record the checkout: the run's handler must reach git(),
+        # which holds the signal until git's group can be ended. Without it, git keeps running after the run.
+        root, pid_file, env = self.checkout("starting-run", "clean", switched=True)
+        self.addCleanup(self.end_group, Path(f"{pid_file}.started"))
+        task_pid = self.base / "starting-run-task.pid"
+        process = self.run_driver(root, dict(env, STARTING="rev-parse HEAD"), task_pid, prelude=self.STARTING)
+        _, err = process.communicate(timeout=60)
+        group = int(Path(f"{pid_file}.started").read_text())
+        self.assertEqual(process.returncode, 128 + signal.SIGTERM, err)
+        self.assertFalse(runner.group_alive(group), "the run's git kept running after a signal that came while it started")
+        result = json.loads(runner.latest_result(root).read_text())
+        self.assertEqual(result["interrupted"], "SIGTERM")
+        self.assertEqual(result["checkout"], {"revision": None, "clean": None, "branch": None})
+        self.assertEqual(result["tasks"], [{"id": "tier-a/long", "status": "not_started",
+                                            "reason": "run interrupted by SIGTERM"}])
+        self.assertFalse(task_pid.exists(), "the task started after the run was interrupted")
+
+    def test_a_git_that_cannot_start_re_arms_the_handler(self):
+        # git() holds the handler while Popen starts git. When git cannot start (no git on PATH) it must re-arm it: a
+        # run goes on after its checkout record failed, and a held handler would only note SIGINT, SIGTERM and SIGHUP
+        # until its last task ended.
+        interruption = runner.Interruption()
+        with mock.patch.object(runner.subprocess, "Popen", side_effect=FileNotFoundError(2, "No such file", "git")):
+            with self.assertRaises(FileNotFoundError):
+                runner.git(self.base, "status", interruption=interruption)
+        self.assertTrue(interruption.armed, "git() left the handler held after git could not start")
+        self.assertIsNone(interruption.number)
+
+    def test_a_signal_while_git_fails_to_start_is_raised(self):
+        interruption = runner.Interruption()
+
+        def failing(*_args, **_kwargs):
+            interruption.handle(signal.SIGTERM, None)  # Held while git starts, so only noted.
+            raise FileNotFoundError(2, "No such file", "git")
+        with mock.patch.object(runner.subprocess, "Popen", side_effect=failing):
+            with self.assertRaises(runner.Interrupted) as raised:
+                runner.git(self.base, "status", interruption=interruption)
+        self.assertEqual(raised.exception.number, signal.SIGTERM)
+        self.assertTrue(interruption.armed)
+
+    # With no git on PATH, the runner signals itself while Popen tries to start git. signal.raise_signal runs the
+    # handler before it returns, so the signal always comes while git() holds it.
+    NO_GIT = ("real = subprocess.Popen\n"
+              "def starting(args, *rest, **kwargs):\n"
+              "    if args[0] == 'git':\n"
+              "        signal.raise_signal(signal.SIGTERM)\n"
+              "    return real(args, *rest, **kwargs)\n"
+              "subprocess.Popen = starting")
+
+    def no_git(self):
+        """An environment whose PATH has no git (the runner and its task use absolute paths)."""
+        empty = self.base / "empty"
+        empty.mkdir(exist_ok=True)
+        return {"PATH": str(empty)}
+
+    def test_a_signal_while_updates_git_cannot_start_is_reported_as_an_interruption(self):
+        # Not as the refusal "git status could not run".
+        root = self.base / "no-git-update"
+        root.mkdir()
+        process = self.driver(root, self.no_git(), prelude=self.NO_GIT)
+        _, err = process.communicate(timeout=60)
+        self.assertEqual(process.returncode, 128 + signal.SIGTERM, err)
+        report = self.report(err)
+        self.assertEqual((report["status"], report["signal"]), ("interrupted", "SIGTERM"))
+
+    def test_a_run_without_git_on_path_still_stops_on_a_signal(self):
+        # The run's checkout record cannot start git, and the run goes on: SIGTERM must still end it (and its task) at
+        # once, not be noted until the task ends.
+        root = self.base / "no-git-run"
+        task_pid = self.base / "no-git-run-task.pid"
+        process = self.run_driver(root, self.no_git(), task_pid)
+        wait_for(lambda: (task_pid.exists() and task_pid.read_text()) or process.poll() is not None)
+        if not (task_pid.exists() and task_pid.read_text()):
+            self.fail(f"the task did not start: {process.communicate(timeout=30)}")
+        pid = int(task_pid.read_text())
+        self.addCleanup(lambda: alive(pid) and os.kill(pid, signal.SIGKILL))
+        process.send_signal(signal.SIGTERM)
+        _, err = process.communicate(timeout=60)
+        self.assertEqual(process.returncode, 128 + signal.SIGTERM, err)
+        self.assertTrue(wait_dead(pid, 1), "the task kept running after the runner was signalled")
+        result = json.loads(runner.latest_result(root).read_text())
+        self.assertEqual(result["interrupted"], "SIGTERM")
+        self.assertEqual(result["checkout"], {"revision": None, "clean": None, "branch": None})
+        self.assertEqual(result["tasks"][0]["status"], "interrupted")
+
+    @staticmethod
+    def timing_out_once_running(pid_file):
+        """Popen whose "git rev-parse HEAD" times out 1 s after the fake git wrote ``pid_file``, by which time it holds
+        its lock and has set its SIGTERM trap, rather than 1 s after it was started, however loaded the machine."""
+        real = subprocess.Popen
+
+        class Running(real):
+            def communicate(self, input=None, timeout=None):
+                if self.args == ["git", "rev-parse", "HEAD"]:
+                    wait_for(lambda: pid_file.exists() or self.poll() is not None)
+                    timeout = 1
+                return super().communicate(input, timeout)
+        return mock.patch.object(subprocess, "Popen", Running)
+
+    def test_a_checkout_record_that_times_out_after_the_switch_refuses_and_names_the_lock(self):
+        # The switch has moved the checkout, so a timed-out record of it refuses (exit 2) instead of printing "updated".
+        # A git killed holding .git/index.lock leaves it, named for a person and never deleted; a git that removes its
+        # lock on SIGTERM leaves nothing to name.
+        for mode, grace in (("stubborn", 1), ("clean", 10)):
+            with self.subTest(mode=mode):
+                root, pid_file, env = self.checkout(f"record-{mode}", mode, switched=True)
+                with mock.patch.dict(os.environ, env), mock.patch.object(runner, "GIT_TERM_GRACE", grace), \
+                        self.timing_out_once_running(pid_file):
+                    code, out, err = quiet(runner.main, ["update", "a" * 40], root=root)
+                self.assertEqual(code, 2, err)
+                self.assertEqual(out, "", "a failed checkout record was reported as updated")
+                calls = Path(f"{pid_file}.calls").read_text().splitlines()
+                self.assertEqual(calls[-2:], [f"switch --quiet --detach {'a' * 40}", "rev-parse HEAD"])
+                report = self.report(err)
+                self.assertEqual(report["status"], "refused")
+                self.assertIn(f"switched to {'a' * 40}, but recording the checkout failed: git rev-parse HEAD timed "
+                              "out after 1s; check the checkout (git status) before using it", report["reason"])
+                self.assertFalse(runner.group_alive(int(pid_file.read_text())), "git outlived the timed-out record")
+                if mode == "stubborn":
+                    self.assertIn(".git/index.lock was left behind: a person must check", report["reason"])
+                    self.assertTrue((root / ".git/index.lock").exists(), "the runner deleted git's lock file")
+                else:
+                    self.assertNotIn("index.lock", report["reason"])
+                    self.assertFalse((root / ".git/index.lock").exists())
+
+    def test_a_checkout_record_that_fails_after_the_switch_refuses(self):
+        # A record git that exits nonzero or cannot start refuses too; a .git/index.lock there is named, never deleted.
+        real = subprocess.Popen
+
+        def no_rev_parse(args, *rest, **kwargs):
+            if args == ["git", "rev-parse", "HEAD"]:
+                raise FileNotFoundError(2, "No such file or directory", "git")
+            return real(args, *rest, **kwargs)
+        for case, failure, lock in (("exits nonzero", "git rev-parse HEAD failed: fatal: cannot read HEAD", False),
+                                    ("cannot start", "git rev-parse HEAD could not run: [Errno 2]", False),
+                                    ("exits nonzero with a lock", "git rev-parse HEAD failed", True)):
+            with self.subTest(case=case):
+                root, pid_file, env = self.checkout(f"record-{case.replace(' ', '-')}", "fail", switched=True)
+                if lock:
+                    (root / ".git/index.lock").touch()
+                with mock.patch.dict(os.environ, env), mock.patch.object(
+                        subprocess, "Popen", no_rev_parse if case == "cannot start" else real):
+                    code, out, err = quiet(runner.main, ["update", "a" * 40], root=root)
+                self.assertEqual(code, 2, err)
+                self.assertEqual(out, "", "a failed checkout record was reported as updated")
+                calls = Path(f"{pid_file}.calls").read_text().splitlines()
+                self.assertEqual(calls[-1], f"switch --quiet --detach {'a' * 40}" if case == "cannot start"
+                                 else "rev-parse HEAD")
+                report = self.report(err)
+                self.assertEqual(report["status"], "refused")
+                self.assertIn(f"switched to {'a' * 40}, but recording the checkout failed: {failure}",
+                              report["reason"])
+                self.assertIn("check the checkout (git status) before using it", report["reason"])
+                if lock:
+                    self.assertIn(".git/index.lock was left behind", report["reason"])
+                    self.assertTrue((root / ".git/index.lock").exists(), "the runner deleted git's lock file")
+                else:
+                    self.assertNotIn("index.lock", report["reason"])
+
+    def test_an_interruption_report_without_a_terminal_still_exits_with_the_signal(self):
+        # After a hangup there may be no terminal: a report that cannot be written must not replace the exit code.
+        root = self.base / "no-terminal"
+        root.mkdir()
+
+        class Gone(io.StringIO):
+            def write(self, _text):
+                raise OSError(errno.EIO, "Input/output error")
+        with mock.patch.object(runner, "update", side_effect=runner.Interrupted(signal.SIGHUP)), \
+                mock.patch.object(sys, "stderr", Gone()):
+            code = runner.main(["update", "a" * 40], root=root)
+        self.assertEqual(code, 128 + signal.SIGHUP)
+
+    def test_git_has_no_terminal_to_prompt_on(self):
+        # docs/on-device.md: git runs with GIT_TERMINAL_PROMPT=0, stdin from /dev/null and in its own session (so
+        # without a controlling terminal). Here the runner's own stdin is a pipe and its environment allows prompts, so
+        # git inheriting either would show.
+        root, pid_file, env = self.checkout("no-prompt", "pass")
+        Path(f"{pid_file}.release").touch()  # The fetch returns at once; update then stops at merge-base.
+        process = self.driver(root, dict(env, GIT_TERMINAL_PROMPT="1"), stdin=subprocess.PIPE)
+        _, err = process.communicate(timeout=60)
+        self.assertEqual(process.returncode, 2, err)
+        self.assertIn("not on origin/main", err)
+        calls = Path(f"{pid_file}.env").read_text().splitlines()
+        self.assertEqual(len(calls), len(Path(f"{pid_file}.calls").read_text().splitlines()))
+        self.assertGreaterEqual(len(calls), 3, calls)  # status, fetch, merge-base
+        for call in calls:
+            fields = dict(field.split("=", 1) for field in call.split())
+            self.assertEqual((fields["prompt"], fields["stdin"]), ("0", "/dev/null"), call)
+            self.assertEqual(fields["sid"], fields["pid"], f"git did not run in a session of its own: {call}")
+
+    def test_a_hangup_ignored_when_update_starts_stays_ignored(self):
+        root, pid_file, env = self.checkout("nohup", "pass")
+        process = self.driver(root, env, prelude="signal.signal(signal.SIGHUP, signal.SIG_IGN)")
+        self.git_group(pid_file, process)
+        process.send_signal(signal.SIGHUP)
+        Path(f"{pid_file}.release").touch()
+        _, err = process.communicate(timeout=60)
+        # The fetch finished and update went on: the fake git knows no merge-base, so the revision is refused.
+        self.assertEqual(process.returncode, 2, err)
+        self.assertIn("not on origin/main", err)
+
+    def update(self, env, root, timeout, grace):
+        with mock.patch.dict(os.environ, env), mock.patch.object(runner, "FETCH_TIMEOUT", timeout), \
+                mock.patch.object(runner, "GIT_TERM_GRACE", grace):
+            started = time.monotonic()
+            code, _, err = quiet(runner.main, ["update", "a" * 40], root=root)
+        return code, err, time.monotonic() - started
+
+    def test_a_timed_out_git_gets_sigterm_first_and_removes_its_lock(self):
+        root, pid_file, env = self.checkout("clean", "clean")
+        code, err, _ = self.update(env, root, timeout=1, grace=10)
+        self.assertEqual(code, 2, err)
+        self.assertIn("git fetch timed out after 1s", err)
+        self.assertFalse((root / ".git/index.lock").exists(), "git was killed before it could remove its lock")
+        self.assertNotIn("index.lock", err)
+        self.assertFalse(runner.group_alive(int(pid_file.read_text())))
+
+    def test_a_git_that_ignores_sigterm_is_killed_after_the_grace_and_its_lock_reported(self):
+        root, pid_file, env = self.checkout("stubborn", "stubborn")
+        with mock.patch.object(runner, "KILL_GRACE", 20):  # Far from GIT_TERM_GRACE, so using it instead shows.
+            code, err, elapsed = self.update(env, root, timeout=1, grace=2)
+        self.assertEqual(code, 2, err)
+        self.assertIn("git fetch timed out after 1s", err)
+        self.assertTrue(Path(f"{pid_file}.log").exists(), "git got SIGKILL without SIGTERM first")
+        self.assertGreaterEqual(elapsed, 2.9, "git got SIGKILL before the grace period was over")
+        self.assertLess(elapsed, 1 + 2 + 6, "git's SIGTERM grace was not GIT_TERM_GRACE")
+        self.assertFalse(runner.group_alive(int(pid_file.read_text())), "git outlived SIGKILL")
+        self.assertIn(".git/index.lock", self.report(err)["reason"])
+        self.assertIn("a person must check", err)
+        self.assertTrue((root / ".git/index.lock").exists(), "the runner deleted git's lock file")
+
+    def test_the_documented_grace_and_bound_match_the_code(self):
+        # docs/guides/frame-sessions.md gives both numbers: the update's git bound and the installer's gpgconf bound.
+        self.assertEqual((runner.GIT_TERM_GRACE, runner.GIT_TERM_GRACE + 2 * runner.KILL_GRACE), (5, 25))
+        guide = " ".join((ROOT / "docs/guides/frame-sessions.md").read_text().split())
+        self.assertIn("SIGKILL 5 seconds later; ending git takes at most 25 seconds", guide)
+        self.assertIn("SIGTERM at 20 seconds does not end a hung call and its SIGKILL 5 seconds later", guide)
+
+    def test_a_git_directory_that_cannot_be_read_is_reported_as_unknown(self):
+        root = self.base / "unreadable"
+        root.mkdir()
+        (root / ".git").write_bytes(b"gitdir: \xff\n")  # Not text.
+        self.assertIn("whether .git/index.lock was left behind is unknown", runner.index_lock_left(root))
+        with mock.patch.object(Path, "read_text", side_effect=PermissionError(13, "Permission denied")):
+            self.assertIn("is unknown ([Errno 13] Permission denied): a person must check",
+                          runner.index_lock_left(root))
+
+    def test_a_lock_left_in_a_worktrees_git_directory_is_reported(self):
+        # In a worktree (or with a relative gitdir), ".git" is a file that names the git directory holding index.lock.
+        for gitdir in (self.base / "gitdirs/wt", Path("gd")):
+            with self.subTest(gitdir=str(gitdir)):
+                root = self.base / f"worktree-{gitdir.name}"
+                root.mkdir()
+                (root / ".git").write_text(f"gitdir: {gitdir}\n")
+                lock = root / gitdir / "index.lock"
+                lock.parent.mkdir(parents=True)
+                self.assertEqual(runner.index_lock_left(root), "")
+                lock.touch()
+                self.assertIn(f"{lock if gitdir.is_absolute() else gitdir / 'index.lock'} was left behind",
+                              runner.index_lock_left(root))
+                self.assertTrue(lock.exists(), "the runner deleted git's lock file")
 
 
 class GuardTests(unittest.TestCase):
@@ -608,6 +1141,8 @@ class GuardTests(unittest.TestCase):
                 ("Grep", {"pattern": "key", "path": "~/.ssh"}, "unresolvable"),
                 ("Glob", {"pattern": "*", "path": " recordings"}, "unresolvable"),
                 ("Glob", {"pattern": "*", "path": "~/.claude"}, "unresolvable"),
+                ("Glob", {"pattern": "{..}/*"}, "contain '..'"),
+                ("Glob", {"pattern": "{..,docs}/*.md"}, "contain '..'"),
                 ("Read", {"file_path": "~/.ssh/id_ed25519"}, "unresolvable"),
                 ("Read", {"file_path": " evaluation/local/frame.json"}, "unresolvable"),
                 # Glob searches the leading directories of an absolute pattern; a relative pattern's leading
@@ -628,6 +1163,33 @@ class GuardTests(unittest.TestCase):
                 code, message = self.decide(tool, **tool_input)
                 self.assertEqual(code, 2)
                 self.assertIn(reason, message)
+
+    def test_ordinary_glob_patterns_are_allowed(self):
+        for pattern, path in (("**/*.json", None), ("*.py", None), ("*", None), ("**", None), ("**/*", None),
+                              ("docs/*.md", None), ("docs/**/*.md", None), ("sightcircuit/**/*.py", None),
+                              ("tests/test_frame_*.py", None), ("artifacts/agent-runs/*/result.json", None),
+                              ("*.{json,md}", None), ("{docs,scripts}/*.md", None), ("docs/[a-c]*.md", None),
+                              ("docs/?tatus.md", None), ("README.md", None), ("docs/status.md", None),
+                              (f"{self.root}/docs/*.md", None), (f"{self.root}/**/*.py", None),
+                              (f"{self.root}/docs/status.md", None), ("*.json", "artifacts/agent-runs"),
+                              ("**/*.py", "sightcircuit"), ("*.md", f"{self.root}/docs")):
+            with self.subTest(pattern=pattern, path=path):
+                self.assertEqual(self.decide("Glob", pattern=pattern, **({"path": path} if path else {})), (0, ""))
+
+    def test_glob_patterns_with_an_unclear_search_directory_are_refused(self):
+        # Claude Code reads "\" as an escape and drops a trailing "/" (it searches /srv for "/srv/sightcircuit/"), so
+        # the guard would check another directory than the one searched; it refuses them rather than parse them.
+        for pattern in ("docs/", "evaluation/", f"{self.root}/", f"{self.root}/docs/", f"{self.root}/docs/*/",
+                        "/srv/", "docs\\*.md", "docs\\status.md", "\\*.json", "docs/\\[x\\]/*.md",
+                        f"{self.root}\\docs\\*.md", f"{self.root}/evaluation/lo\\*cal/x/*", "docs/a\\/b/*"):
+            with self.subTest(pattern=pattern):
+                code, message = self.decide("Glob", pattern=pattern)
+                self.assertEqual(code, 2)
+                self.assertIn("may not contain '\\' or end in '/'", message)
+
+    def test_the_stricter_glob_check_raised_the_guard_version(self):
+        # update refuses a revision whose guard is older, so an agent cannot move back to the laxer glob check.
+        self.assertGreaterEqual(guard.GUARD_VERSION, 4)
 
     def test_monitor_commands_get_the_bash_check(self):
         self.assertEqual(self.decide("Monitor", command="python3 scripts/frame_agent_run.py list"), (0, ""))

@@ -203,27 +203,61 @@ stage_signature() {
   # installer links to this file; a launcher of your own may differ.
   note "  - checked file: $binary (claude on PATH: $claude_bin, resolving to $(readlink -f "$claude_bin"))"
   case "$(uname -m)" in aarch64) platform=linux-arm64 ;; x86_64) platform=linux-x64 ;; *) platform="" ;; esac
-  local work; work="$(mktemp -d)"
+  local work; work="$(mktemp -d)" || work=""
+  [ -d "$work" ] || { warn "could not create a temporary directory; signature check skipped"; return 0; }
+  # Every way out of this stage, from here on, goes through drop_keyring: success, failure, Ctrl-C (INT), a dropped
+  # SSH connection (HUP) and TERM. Its cleanup runs once: it asks the throwaway keyring's agent to stop (gpgconf for
+  # that keyring only, never your own GnuPG home, each call bounded by timeout; a call cut off by its timeout is not
+  # reported, and the agent may then outlive the stage) and removes $work. The cleanup is a child started while this
+  # shell ignores INT, TERM and HUP, so it ignores them from the moment it exists (a subshell resets a caught signal to
+  # its default, which would let a second signal close behind the first end it, but keeps an ignored one) and
+  # finishes. Each gpgconf in it runs under timeout, which moves itself and gpgconf to a process group of their own.
+  # timeout catches INT, TERM and HUP to pass them on to gpgconf, the child it execs. gpgconf inherits the ignored
+  # dispositions through exec, so timeout's TERM at 20 s does not end it either; only timeout's SIGKILL 5 s later
+  # does, which is the price of a cleanup that no second signal can cut short. A signal to this script's group
+  # reaches neither (so do not add --foreground). Meanwhile this shell notes
+  # a signal and waits on; the stage then stops with the first signal's code. Without a noted signal it restores the
+  # default handling before it looks for one a last time, so a signal after the cleanup is not lost either. Only a
+  # signal in the moment the cleanup is being started, before any other, is lost.
+  local dropped="" stop=""
+  drop_keyring() {
+    trap '' INT TERM HUP
+    local cleanup=""
+    if [ -z "$dropped" ]; then
+      dropped=1
+      ( if [ -d "$work/gnupg" ]; then
+          GNUPGHOME="$work/gnupg" timeout -k 5 20 gpgconf --kill all
+          GNUPGHOME="$work/gnupg" timeout -k 5 20 gpgconf --remove-socketdir
+        fi
+        rm -rf "$work" ) >/dev/null 2>&1 &
+      cleanup=$!
+    fi
+    trap 'stop=${stop:-130}' INT; trap 'stop=${stop:-143}' TERM; trap 'stop=${stop:-129}' HUP
+    if [ -n "$cleanup" ]; then
+      # A noted signal ends a wait early (status over 128) while the cleanup still runs: wait again until it is gone.
+      until wait "$cleanup"; [ "$?" -le 128 ] || ! kill -0 "$cleanup" 2>/dev/null; do :; done
+    fi
+    # A noted signal stops the stage, and later ones are still only noted. Without one, later stages get the default
+    # handling again (a signal there stops the script) before stop is read once more, so one in between is not lost.
+    if [ -z "$stop" ]; then trap - INT TERM HUP; fi
+    [ -z "$stop" ] || { note "- STOPPED: signature stage interrupted"; exit "$stop"; }
+  }
+  trap 'stop=${stop:-130}; drop_keyring' INT
+  trap 'stop=${stop:-143}; drop_keyring' TERM
+  trap 'stop=${stop:-129}; drop_keyring' HUP
   local repo=https://downloads.claude.ai/claude-code-releases
   local get=(curl -fsSL --proto =https --proto-redir =https --max-time 60)
   if ! "${get[@]}" https://downloads.claude.ai/keys/claude-code.asc -o "$work/key.asc" ||
      ! "${get[@]}" "$repo/$version/manifest.json" -o "$work/manifest.json" ||
      ! "${get[@]}" "$repo/$version/manifest.json.sig" -o "$work/manifest.json.sig"; then
-    warn "could not download the key or manifest for $version"; rm -rf "$work"; return 0
+    warn "could not download the key or manifest for $version"; drop_keyring; return 0
   fi
-  # A throwaway keyring, so your own GnuPG setup is not changed. gpg starts an agent for it;
-  # the agent, its socket directory and the keyring are removed afterwards, also when the
-  # stage is interrupted (Ctrl-C, a dropped SSH connection).
-  export GNUPGHOME="$work/gnupg"; mkdir -m 700 "$GNUPGHOME"
-  drop_keyring() {
-    gpgconf --kill all >/dev/null 2>&1; gpgconf --remove-socketdir >/dev/null 2>&1
-    unset GNUPGHOME; rm -rf "$work"; trap - INT TERM HUP
-  }
-  trap 'drop_keyring; note "- STOPPED: signature stage interrupted"; exit 130' INT
-  trap 'drop_keyring; note "- STOPPED: signature stage interrupted"; exit 143' TERM
-  trap 'drop_keyring; note "- STOPPED: signature stage interrupted"; exit 129' HUP
-  gpg --batch --quiet --import "$work/key.asc" 2>>"$log"
-  if gpg --batch --with-colons --fingerprint 2>/dev/null | grep -q "^fpr:::::::::$release_key:"; then
+  # A throwaway keyring, so your own GnuPG setup is not changed: every gpg and gpgconf call names it.
+  # gpg starts an agent for it; drop_keyring stops the agent and removes its socket directory and the keyring.
+  mkdir -m 700 "$work/gnupg"
+  GNUPGHOME="$work/gnupg" gpg --batch --quiet --import "$work/key.asc" 2>>"$log"
+  if GNUPGHOME="$work/gnupg" gpg --batch --with-colons --fingerprint 2>/dev/null |
+     grep -q "^fpr:::::::::$release_key:"; then
     pass "release key fingerprint ${release_key:0:4} ${release_key:4:4} ... ${release_key:32:4} ${release_key:36:4}"
   else
     fail "release key fingerprint does not match"; drop_keyring; return 0
@@ -234,7 +268,8 @@ stage_signature() {
   # revoked or expired key (REVKEYSIG, EXPKEYSIG), so any bad, revoked or expired signature
   # rejects the manifest.
   local status
-  status="$(gpg --batch --status-fd 1 --verify "$work/manifest.json.sig" "$work/manifest.json" 2>>"$log")"
+  status="$(GNUPGHOME="$work/gnupg" gpg --batch --status-fd 1 --verify "$work/manifest.json.sig" "$work/manifest.json" \
+             2>>"$log")"
   code=$?
   printf '%s\n[exit %s]\n' "$status" "$code" >> "$log"
   if [ "$code" = 0 ] && awk -v key="$release_key" '
