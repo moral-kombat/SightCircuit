@@ -13,6 +13,9 @@ A manifest lists images and what a correct detector should report:
 
 Labels a detector cannot produce are reported as unsupported, not as misses.
 
+Box recall is reported over all objects and per label (``totals`` and
+``label_table``), so the POC object's own recall can be read from a report.
+
 Diagnostics never change scoring: ``best_below_threshold`` reports how close
 each expected label came to the threshold, and ``label_table`` tabulates
 per-label outcomes. A count pin (``load_pin``/``check_pin``) fails when a
@@ -159,16 +162,21 @@ def score_image(entry, detections, vocabulary, scale=1.0, iou_threshold=0.5):
     if objects or entry.get("boxes_complete"):
         unmatched = sorted(range(len(found)), key=lambda index: -found[index][1])
         true_positive = false_negative = 0
+        boxes = score["box_outcomes"] = {}  # Per label: how many of its boxes matched, missed or are unsupported.
         for obj in objects:
+            row = boxes.setdefault(obj["label"], dict.fromkeys(LABEL_COLUMNS["boxes"], 0))
             if obj["label"] not in vocabulary:
                 score["unsupported"].append(obj["label"])
+                row["unsupported"] += 1
                 continue
             match = next((index for index in unmatched if found[index][0] == obj["label"]
                           and iou(found[index][2], obj["box"]) >= iou_threshold), None)
             if match is None:
                 false_negative += 1
+                row["missed"] += 1
             else:
                 true_positive += 1
+                row["matched"] += 1
                 unmatched.remove(match)
         score["confusions"] = [
             {"object": obj["label"], "detected": label, "confidence": confidence}
@@ -199,6 +207,7 @@ def totals(scores):
     result["present_recall"] = round(result["present_hits"] / expected, 4) if expected else None
     boxed = result["true_positives"] + result["false_negatives"]
     result["box_recall"] = round(result["true_positives"] / boxed, 4) if boxed else None
+    result["box_recall_by_label"] = box_recall_by_label(scores)
     complete = [score for score in scores if "false_positives" in score]
     if complete:
         result["false_positives"] = sum(score["false_positives"] for score in complete)
@@ -206,6 +215,24 @@ def totals(scores):
         predicted = matched + result["false_positives"]
         result["box_precision"] = round(matched / predicted, 4) if predicted else None
     return result
+
+
+def box_recall_by_label(scores):
+    """Per canonical label, its matched and missed boxes over ``scores`` and their recall.
+
+    A label whose boxes are all unsupported has no recall (``None``) and zero
+    counts; the counts are the ones ``totals`` sums over all labels.
+    """
+    counts = {}
+    for score in scores:
+        for label, row in score.get("box_outcomes", {}).items():
+            total = counts.setdefault(label, {"true_positives": 0, "false_negatives": 0})
+            total["true_positives"] += row["matched"]
+            total["false_negatives"] += row["missed"]
+    for total in counts.values():
+        boxed = total["true_positives"] + total["false_negatives"]
+        total["box_recall"] = round(total["true_positives"] / boxed, 4) if boxed else None
+    return dict(sorted(counts.items()))
 
 
 def best_below_threshold(entry, candidates, vocabulary, threshold):
@@ -233,7 +260,8 @@ def best_below_threshold(entry, candidates, vocabulary, threshold):
     return result
 
 
-LABEL_COLUMNS = {"present": ("hit", "miss", "unsupported"), "absent": ("clean", "violation", "unsupported")}
+LABEL_COLUMNS = {"present": ("hit", "miss", "unsupported"), "absent": ("clean", "violation", "unsupported"),
+                 "boxes": ("matched", "missed", "unsupported")}
 NEAR_OUTCOME = {"present": "miss", "absent": "clean"}  # Where a below-threshold score is informative.
 
 
@@ -244,7 +272,7 @@ def label_table(scores):
     a present label was missed, or an absent label stayed clean: how near the
     miss came to a hit, or the clean check to a violation.
     """
-    table = {"present": {}, "absent": {}}
+    table = {kind: {} for kind in LABEL_COLUMNS}
     for score in scores:
         best = score.get("best_below_threshold", {})
         for kind, outcomes in score.get("label_outcomes", {}).items():
@@ -255,6 +283,11 @@ def label_table(scores):
                 value = best.get(kind, {}).get(label)
                 if outcome == NEAR_OUTCOME[kind] and value is not None:
                     row["best_below_threshold"] = max(value, row["best_below_threshold"] or 0)
+        for label, counts in score.get("box_outcomes", {}).items():  # Boxes: counts per image, no diagnostic.
+            row = table["boxes"].setdefault(label, {**dict.fromkeys(LABEL_COLUMNS["boxes"], 0),
+                                                    "best_below_threshold": None})
+            for outcome, count in counts.items():
+                row[outcome] += count
     return {kind: dict(sorted(rows.items())) for kind, rows in table.items()}
 
 
@@ -267,17 +300,18 @@ def label_cell(kind, row):
     if not checked:
         return "unsupported"
     text = f"{row[good]}/{checked} {good}"
-    if row["best_below_threshold"] is not None:
+    if kind in NEAR_OUTCOME and row["best_below_threshold"] is not None:
         text += f" (best {NEAR_OUTCOME[kind]} {row['best_below_threshold']:.3f})"
     return text + (f", {row['unsupported']} unsupported" if row["unsupported"] else "")
 
 
 def format_label_table(tables, threshold):
     """Human-readable ``label_table`` rows with one column per detector (``{name: table}``)."""
-    rows = sorted({(kind, label) for table in tables.values() for kind in LABEL_COLUMNS for label in table[kind]},
-                  key=lambda row: (row[0] != "present", row[1]))
+    order = list(LABEL_COLUMNS)  # present, then absent, then boxes
+    rows = sorted({(kind, label) for table in tables.values() for kind in LABEL_COLUMNS
+                   for label in table.get(kind, {})}, key=lambda row: (order.index(row[0]), row[1]))
     cells = [["label", "expected", *tables]]
-    cells += [[label, kind, *(label_cell(kind, table[kind].get(label)) for table in tables.values())]
+    cells += [[label, kind, *(label_cell(kind, table.get(kind, {}).get(label)) for table in tables.values())]
               for kind, label in rows]
     widths = [max(len(row[column]) for row in cells) for column in range(len(cells[0]))]
     return [f"per-label outcomes at threshold {threshold}; (best ...) is the highest diagnostic score below it",

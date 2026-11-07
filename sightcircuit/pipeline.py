@@ -47,7 +47,7 @@ from typing import Callable, Protocol
 
 from .context import CaptureContext
 from .convert import to_bgr
-from .detection import annotate, require_result
+from .detection import POC_THRESHOLD, annotate, require_result
 from .frame import Frame, Processed
 from .hud.contract import MAX_DISPLAY_AGE_MS
 from .latest import LatestSlot
@@ -233,7 +233,7 @@ def report_fields(block, aliases):
 class Pipeline:
     timer = staticmethod(time.monotonic)  # Seconds for stage durations; tests install a stepping clock.
 
-    def __init__(self, source, detector, sinks=(), *, threshold=0.5, max_fps=5, latest_only=True,
+    def __init__(self, source, detector, sinks=(), *, threshold=POC_THRESHOLD, max_fps=5, latest_only=True,
                  max_input_age_ms=None, max_frames=0, seconds=None, join_timeout=1.0, convert=to_bgr,
                  annotator=annotate, context_validator=None, hud=None):
         if (not math.isfinite(max_fps) or max_fps <= 0 or

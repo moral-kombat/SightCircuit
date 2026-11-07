@@ -185,11 +185,14 @@ budget. Their design is in [agent-on-Frame](agent-on-frame.md).
 ### Detector evaluation
 
 The evaluation harness scores presence and, when boxes are supplied,
-per-object matches; it has no per-label box recall and the device session
-collects presence labels only. The plan adds a box-entry helper, per-label box
-recall, one named POC threshold constant and one named live-budget constant,
-and a test that the private still directory stays ignored. The representative
-set is built and scored on the Frame; only JSON leaves it.
+per-object matches, with box recall per label as well as overall; the manifest
+helper enters boxes (`--object`, `--boxes-complete`) while the device session
+script still collects presence labels only. The POC threshold and the live
+budget are one named constant each in `sightcircuit/detection.py`
+([reference](reference/detection.md#poc-threshold-and-live-budget)), a test
+checks that the private still directory stays ignored, and the evaluation
+report names inputs by basename only (implemented, work items C1 to C4). The
+representative set is built and scored on the Frame; only JSON leaves it.
 
 ### Fallback input design
 

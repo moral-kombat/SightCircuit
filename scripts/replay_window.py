@@ -13,7 +13,7 @@ import time
 
 if not __package__:  # Run as a file: import this checkout's packages without installation.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from sightcircuit.detection import DEFAULT_DETECTOR, DETECTORS, create_detector, describe
+from sightcircuit.detection import DEFAULT_DETECTOR, DETECTORS, POC_THRESHOLD, create_detector, describe
 from sightcircuit.pipeline import LatestResultSink, Pipeline, report_fields
 from sightcircuit.sources.replay import ReplaySource
 from sightcircuit.sources.recording import RecordingError, latest_recording
@@ -139,7 +139,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("path", nargs="?", help="Defaults to newest Arcturus stereo recording")
     parser.add_argument("--video-stream", type=int, default=0, help="Video-track ordinal; no left/right assumption")
-    parser.add_argument("--threshold", type=float, default=0.5)
+    parser.add_argument("--threshold", type=float, default=POC_THRESHOLD)
     parser.add_argument("--detector", choices=DETECTORS, default=DEFAULT_DETECTOR,
                         help="Model; mobilenet-ssd is the device-validated baseline, yolox-nano an 80-class candidate")
     parser.add_argument("--max-fps", type=float, default=10, help="Processing/playback cap; default 10")

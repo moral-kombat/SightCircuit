@@ -18,7 +18,7 @@ if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sightcircuit.convert import native_bgr
-from sightcircuit.detection import DEFAULT_DETECTOR, DETECTORS
+from sightcircuit.detection import DEFAULT_DETECTOR, DETECTORS, POC_THRESHOLD
 from sightcircuit.runtime import output, process
 from sightcircuit.runtime.live import new_mirror_report as new_report, run_recognition
 from sightcircuit.sources.mirror import launch
@@ -99,7 +99,7 @@ def main(argv=None):
     parser.add_argument("--device", help="Verified SteamVR virtual node; no physical fallback")
     parser.add_argument("--seconds", type=int, choices=range(1, 11), default=10, metavar="1..10")
     parser.add_argument("--max-fps", type=int, choices=range(1, 6), default=5, metavar="1..5")
-    parser.add_argument("--threshold", type=float, default=0.5)
+    parser.add_argument("--threshold", type=float, default=POC_THRESHOLD)
     parser.add_argument("--detector", choices=DETECTORS, default=DEFAULT_DETECTOR,
                         help="Model; mobilenet-ssd is the device-validated default, yolox-nano an 80-class candidate")
     parser.add_argument("--preview", type=Path, help="Explicit new annotated PNG, published only after capture/inference stops")

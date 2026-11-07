@@ -83,6 +83,60 @@ class ManifestTests(unittest.TestCase):
     def test_split_trims_and_drops_empty(self):
         self.assertEqual(manifest.split(" chair, ,dining table,"), ["chair", "dining table"])
 
+    def test_objects_are_parsed_from_label_and_source_pixel_corners(self):
+        self.assertEqual(manifest.parse_object("chair:10,20,300,400"), {"label": "chair", "box_xyxy": [10, 20, 300, 400]})
+        self.assertEqual(manifest.parse_object(" dining table : 0.5,1,2,3"),
+                         {"label": "dining table", "box_xyxy": [0.5, 1, 2, 3]})
+        for text in ("chair", "chair:1,2,3", "chair:1,2,3,4,5", ":1,2,3,4", "chair:5,5,5,9", "chair:0,9,5,5",
+                     "chair:-1,0,2,3", "chair:a,0,2,3", "chair:nan,0,2,3", "chair:inf,0,2,3"):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                manifest.parse_object(text)
+
+    def test_boxes_and_completeness_are_written_only_when_given(self):
+        chair = {"label": "chair", "box_xyxy": [10, 20, 300, 400]}
+        manifest.add_image(self.path, "presence", self.image, ["chair"], [])
+        manifest.add_image(self.path, "boxed", self.image, ["chair"], [], objects=[chair])
+        manifest.add_image(self.path, "complete", self.image, ["chair"], [], objects=[chair], boxes_complete=True)
+        manifest.add_image(self.path, "empty-complete", self.image, [], ["chair"], boxes_complete=True)
+        entries = {entry["id"]: entry for entry in json.loads(self.path.read_text())["images"]}
+        self.assertEqual(entries["presence"], {"id": "presence", "path": "room.png", "present": ["chair"], "absent": []})
+        self.assertEqual(entries["boxed"], {"id": "boxed", "path": "room.png", "present": ["chair"], "absent": [],
+                                            "objects": [chair]})
+        self.assertEqual(entries["complete"], {"id": "complete", "path": "room.png", "present": ["chair"], "absent": [],
+                                               "objects": [chair], "boxes_complete": True})
+        self.assertEqual(entries["empty-complete"], {"id": "empty-complete", "path": "room.png", "present": [],
+                                                     "absent": ["chair"], "objects": [], "boxes_complete": True})
+
+    def test_boxes_must_fit_the_still_the_report_recorded(self):
+        report = self.still_report(still_width=1280, still_height=720)
+        inside, wide, tall = ({"label": "chair", "box_xyxy": box} for box in
+                              ([0, 0, 1280, 720], [100, 100, 1281, 300], [100, 100, 300, 721]))
+        manifest.add_image(self.path, "inside", self.image, ["chair"], [], report, [inside], True)
+        entry = json.loads(self.path.read_text())["images"][0]
+        self.assertEqual((entry["objects"], entry["boxes_complete"], entry["sha256"]),
+                         ([inside], True, hashlib.sha256(b"x").hexdigest()))
+        for name, obj in (("wide", wide), ("tall", tall)):
+            with self.subTest(case=name), self.assertRaisesRegex(ValueError, "exceeds the 1280x720 still"):
+                manifest.add_image(self.path, name, self.image, [], [], report, [obj])
+        self.assertEqual(len(json.loads(self.path.read_text())["images"]), 1)
+        # A report without a recorded size (not one mirror_recognize writes) cannot check, so it does not refuse.
+        manifest.add_image(self.path, "unsized", self.image, [], [], self.still_report(), [wide])
+
+    def test_command_records_objects_and_completeness(self):
+        manifest.main(["--manifest", str(self.path), "--id", "two", "--image", str(self.image), "--present", "chair",
+                       "--object", "chair:10,20,300,400", "--object", "chair:400,20,700,400", "--boxes-complete"])
+        entry = json.loads(self.path.read_text())["images"][0]
+        self.assertEqual(entry["objects"], [{"label": "chair", "box_xyxy": [10, 20, 300, 400]},
+                                            {"label": "chair", "box_xyxy": [400, 20, 700, 400]}])
+        self.assertTrue(entry["boxes_complete"])
+        manifest.main(["--manifest", str(self.path), "--id", "plain", "--image", str(self.image), "--present", "chair"])
+        self.assertNotIn("objects", json.loads(self.path.read_text())["images"][1])
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+            manifest.main(["--manifest", str(self.path), "--id", "bad", "--image", str(self.image),
+                           "--object", "chair:10,20,5,400"])
+        self.assertNotEqual(error.exception.code, 0)
+        self.assertEqual(len(json.loads(self.path.read_text())["images"]), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

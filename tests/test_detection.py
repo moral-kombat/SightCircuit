@@ -326,5 +326,57 @@ class SsdDecodeTests(unittest.TestCase):
         self.assertGreaterEqual(result.inference_ms, 0)
 
 
+
+class PocContractTests(unittest.TestCase):
+    """The POC threshold and the live budget are defined once and reach every command and engine default."""
+
+    def test_constants_carry_the_accepted_values(self):
+        self.assertEqual(detection.POC_THRESHOLD, 0.5)
+        self.assertEqual(detection.LIVE_INFERENCE_P95_BUDGET_MS, 200)  # Owner's budget of 2026-11-07.
+
+    def test_every_command_defaults_its_threshold_to_the_constant(self):
+        import argparse
+
+        from scripts import evaluate_detectors, mirror_recognize, replay_window
+
+        class Parsed(Exception):
+            pass
+
+        def intercept(parser, args=None, namespace=None):
+            raise Parsed(parser.get_default("threshold"))
+
+        for module in (evaluate_detectors, mirror_recognize, replay_window):
+            with self.subTest(command=module.__name__), mock.patch.object(argparse.ArgumentParser, "parse_args", intercept):
+                with self.assertRaises(Parsed) as parsed:
+                    module.main([])
+                self.assertIs(parsed.exception.args[0], detection.POC_THRESHOLD)
+
+    def test_engine_and_runners_default_to_the_constant(self):
+        import inspect
+
+        from sightcircuit import mask_fill_evaluation, pipeline
+        from sightcircuit.runtime import live
+
+        for name, function in (("Pipeline", pipeline.Pipeline), ("run_pipeline", live.run_pipeline),
+                               ("run_recognition", live.run_recognition)):
+            with self.subTest(callable=name):
+                self.assertIs(inspect.signature(function).parameters["threshold"].default, detection.POC_THRESHOLD)
+        self.assertIs(mask_fill_evaluation.THRESHOLD, detection.POC_THRESHOLD)
+        report = live.new_mirror_report()
+        self.assertEqual(report["inference_p95_budget_ms"], detection.LIVE_INFERENCE_P95_BUDGET_MS)
+        self.assertIsNone(report["inference_p95_within_budget"])  # Nothing timed yet.
+
+    def test_no_command_or_module_repeats_the_threshold_literal_as_a_default(self):
+        """A new ``default=0.5``/``threshold=0.5`` must import the constant; IoU 0.5 is a different number."""
+        import re
+
+        pattern = re.compile(r"(?<![A-Za-z_])(default|threshold|THRESHOLD)\s*=\s*0\.5\b")
+        for path in sorted([*(ROOT / "scripts").glob("*.py"), *(ROOT / "sightcircuit").rglob("*.py")]):
+            with self.subTest(file=str(path.relative_to(ROOT))):
+                repeated = [line for line in path.read_text().splitlines()
+                            if pattern.search(line) and "iou" not in line.lower()]
+                self.assertEqual(repeated, [])
+
+
 if __name__ == "__main__":
     unittest.main()
