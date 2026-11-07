@@ -394,6 +394,9 @@ class BoundedWorkerTests(unittest.TestCase):
             time.sleep(0.005)
         process.send_signal(signal.SIGTERM)
         report = self.result(process)
-        self.assertEqual(report["status"], "cancelled")
-        self.assertTrue(report["cleanup_ok"])
-        self.assertFalse(report["vr_runtime_initialized"])
+        # Load-dependent failures have no stack of their own: the full report is the diagnosis
+        # (its reason, source_cleanup_ok, report_reader_stopped and the guardian fields).
+        shown = json.dumps(report, indent=2, sort_keys=True)
+        self.assertEqual(report["status"], "cancelled", shown)
+        self.assertTrue(report["cleanup_ok"], shown)
+        self.assertFalse(report["vr_runtime_initialized"], shown)

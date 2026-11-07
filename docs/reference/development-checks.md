@@ -86,6 +86,26 @@ module named on the command line skips a test; dependency-specific skips in
 other modules remain allowed. Read the results rather than inferring coverage
 from a successful process exit alone.
 
+The runner is the suite's entry point and does two more things there:
+
+- `--durations FILE` writes each test module's wall time and test count as
+  JSON and prints the modules slowest first. A module's time runs from the end
+  of the previous test (or the start of the run) to the end of each of its
+  tests, so class and module fixtures count with the tests they serve; what
+  follows the last test goes to the last module. These are runner-CPU numbers
+  for the planned suite time budget, never Frame measurements.
+- Before the tests run it normalises SIGINT for the suite's children. A test
+  process started with SIGINT ignored (a background job of a shell without job
+  control) passes that ignore to every subprocess the tests signal, so the
+  subtests that send SIGINT would depend on how the suite was started. An
+  ignored SIGINT is replaced by Python's default handler, which a child does
+  not inherit, and the runner says so on its error stream. A plain
+  `python -m unittest discover` run does not normalise anything; use the
+  runner when the suite is started from such a shell. SIGHUP is left as it is:
+  the agent runner honours an inherited ignore by design (see its
+  `Interruption` class), and a suite started under `nohup` would see its
+  SIGHUP subtests fail for that reason.
+
 The optional pacing run uses a generated 2464 × 2464 HEVC clip at 60 fps with
 seeded noise. It replays 40 processed frames at a 5 fps cap with two and four
 decoder threads, and checks the [latency statistics](pipeline.md#latency-statistics).
