@@ -13,6 +13,10 @@ process and the SHA-256 of its running binary, this process's clock, and a
 tracking observer that nothing feeds yet. Without it nothing is read under
 /proc for session tokens, and the report records that no tokens were
 requested.
+
+``--analyze-still STILL`` is a separate, file-only mode: it prints the scene
+precondition's statistics for one saved PNG or JPEG still
+(``sightcircuit.hud.scene``) and opens no device, mirror or bridge.
 """
 import argparse
 import json
@@ -233,7 +237,8 @@ def main(argv=None):
     parser.add_argument("--allow-calibration-output", action="store_true")
     parser.add_argument("--device")
     parser.add_argument("--bridge", type=Path, help="Exact reviewed native bridge; defaults to the existing bridge path")
-    parser.add_argument("--seconds", type=int, choices=range(MARKER_MIN_SECONDS, MARKER_MAX_SECONDS + 1), default=20)
+    parser.add_argument("--seconds", type=int, choices=range(MARKER_MIN_SECONDS, MARKER_MAX_SECONDS + 1),
+                        help="observation length (default 20)")
     parser.add_argument("--record-session-tokens", action="store_true",
                         help="Also record the HUD session tokens, read-only from /proc (the SteamVR server process "
                              "and the SHA-256 of its running binary, this process's clock), for "
@@ -242,18 +247,22 @@ def main(argv=None):
                              "report until a tracking reporter runs before the declaration")
     parser.add_argument("--analyze-still", type=Path, metavar="STILL",
                         help="File only: print the scene-precondition statistics of one saved PNG or JPEG still "
-                             "(contour counts by area band, bright-pixel fraction, grey percentiles, candidate "
-                             "quads, which budget rejects it). Opens no device, mirror or bridge, and refuses "
+                             "(bright pixels, the speck and contour census, contours by area band, grey "
+                             "percentiles, candidate quads and outlines, which check rejects it). Opens no device, "
+                             "mirror or bridge, and refuses "
                              "/dev, /proc and /sys paths, links and non-regular files. Exit 0 analyzed, 1 refused")
     parser.add_argument("--worker", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.analyze_still is not None:
-        if any((args.observe_calibration, args.allow_mirror_observation, args.allow_calibration_output,
-                args.device, args.bridge, args.record_session_tokens, args.worker)):
+        if (any((args.observe_calibration, args.allow_mirror_observation, args.allow_calibration_output,
+                 args.bridge, args.record_session_tokens, args.worker)) or
+                args.device is not None or args.seconds is not None):
             parser.error("--analyze-still takes no observation, device, bridge or session option")
         report = analyze_still(args.analyze_still)
         print(json.dumps(report, indent=2))
         return report["exit_code"]
+    if args.seconds is None:
+        args.seconds = 20
     if args.worker:
         options = json.loads(args.worker)
         if options.get("approved_scope") != "marker_observation_only":

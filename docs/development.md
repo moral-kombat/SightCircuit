@@ -30,7 +30,7 @@ development; exact tested pins remain in the `requirements-*.txt` files.
 | `sightcircuit/mask_fill_evaluation.py` | Offline comparison of HUD mask fills (the runtime's `hud.mask.fill_regions` and the candidates it was chosen over) on the gray sweep and the seed stills, used by `evaluate_mask_fill.py`; the runtime never imports it ([HUD mask fill evaluation](#hud-mask-fill-evaluation)) |
 | `sightcircuit/sources/` | `ReplaySource` (PyAV); `standin` (the synthetic realtime-replay [stand-in clip](#continuous-integration)); `mirror_device` (read-only V4L2 SteamVR mirror discovery and reads); `mirror` (bounded acquisition loop `capture`, `MirrorSource` (its optional `session` declares the HUD session tokens and stamps each frame), and `launch`, the one launcher of both mirror commands: candidate selection, output reservation, the bounded worker and all-or-nothing publication); `recording` (one MP4 box-header decoder for finished-file inspection and the growing-file scan used by `recording_growth_check`; newest recording); `PolledSource` (adapter for `open`/`read`/`close` sources); `session` (read-only [session-token providers](hud-qualification.md#session-tokens-for-the-mirror-source-2026-11-03) for a mirror run: `HostClock`, `RuntimeProcess`, `TrackingObserver` and `MirrorSession`). Adapters forward the wrapped source's declared identity |
 | `sightcircuit/overlay.py` | Overlay bridge client and `OverlaySink`, the one panel sink: with a caller-owned client (replay's interactive panel) it only submits images; otherwise it owns a validation-only client through `open`/`clear`/`close`, optionally with the frozen HUD placement and payload contract |
-| `sightcircuit/hud/` | Fixed edge HUD contract, shared eye/rectangle geometry (and the [geometric prediction cross-check](hud-qualification.md#geometric-prediction-cross-check-2026-11-04), which never feeds qualification), the one margin rule, synthetic-only native mask (calibrations from two factories only, with expiry, session tokens and view fields; zeroed regions refilled from their surround by `fill_regions`), tile rendering, the `HudStage` engine stage (and `HudPipelineAdapter`, the stage bound to its sink's fixed output contract, used by `live_pipeline.py`), offline mapping qualification, the calibration marker client, `observation` (empirical marker-copy location in native pixels and the observer report contract, used by `hud_marker_observer.py`), `candidate` (an observer report to an unqualified mapping candidate, used by `hud_validation_report.py --from-observer`) and `validation` (the synthetic HUD run's ledger feed and G5 software counts) |
+| `sightcircuit/hud/` | Fixed edge HUD contract, shared eye/rectangle geometry (and the [geometric prediction cross-check](hud-qualification.md#geometric-prediction-cross-check-2026-11-04), which never feeds qualification), the one margin rule, synthetic-only native mask (calibrations from two factories only, with expiry, session tokens and view fields; zeroed regions refilled from their surround by `fill_regions`), tile rendering, the `HudStage` engine stage (and `HudPipelineAdapter`, the stage bound to its sink's fixed output contract, used by `live_pipeline.py`), offline mapping qualification, the calibration marker client, `observation` (empirical marker-copy location in native pixels and the observer report contract, used by `hud_marker_observer.py`), `scene` (the observer's scene precondition and its counts-only statistics, used by `locate_copies` and `hud_marker_observer.py --analyze-still`), `candidate` (an observer report to an unqualified mapping candidate, used by `hud_validation_report.py --from-observer`) and `validation` (the synthetic HUD run's ledger feed and G5 software counts) |
 | `sightcircuit/runtime/` | `process` (bounded spawned workers, parent-death signalling), `guard` (owned process-group supervision with the Linux parent-loss guardian, and the one stop-on-signal convention: `sigterm_cancels` and `cancelled` for launchers, `stop_on_signals` for workers), `output` (reserve, write, publish all or none, withdraw and discard explicit image outputs; `publish_new` for finished bytes), `live` (`run_report`, the one report runner on `Pipeline`, used by `run_pipeline`, the gated synthetic run, whose HUD run also feeds the validation ledger, and by `run_recognition`, the mirror recognizer), `synthetic` (the generated source and its declared `SyntheticSession`, the fixture calibration factory and its candidate record, `FixtureDetector` and `HeadlessSink`) `manifest` (the [checkpoint artifact manifest](#checkpoint-artifact-manifest): software identity written and verified on Frame) and `sensors` (the read-only [run-context sensor sidecar](#run-context-sensor-sidecar)) |
 | `sightcircuit/agent/` | On-device agent support: the fixed task table, the `frame_agent_run.py` runner (timeouts, lock, run budget, `result.json`), the PreToolUse guard and the Frame-only Claude Code settings template; standard library only ([plan](agent-on-frame.md)) |
 
@@ -238,7 +238,9 @@ margin was a clean absent label at 0.437 against the 0.5 threshold.
 
 CI's replay-window job runs the seed comparison with `--expect` and then
 `tests/test_seed_pin.py` without skips, which checks that the committed pin
-passes and that swapping two VOC labels in the SSD label map fails it. Seed
+passes and that swapping two VOC labels in the SSD label map fails it. The
+same step runs `tests/test_observer_scene_seed.py`, which pins the observer's
+scene statistics on the six seed stills. Seed
 results remain a wiring and label-mapping regression check on the runner's
 CPU, not Frame evidence, and they do not select a detector.
 
@@ -1713,16 +1715,22 @@ cloud results, not Frame evidence, and they open no device or gate.
 
 ## Observer scene precondition statistics
 
-`sightcircuit/hud/scene.py` holds the observer's scene precondition (the grey
-threshold, the bright-contour budget and the candidate-quad filter and
-budget) and `scene_statistics`, which describes one frame against it in counts
-only. `locate_copies` uses the same functions, so the statistics cannot drift
-from what the observer applies. `hud_marker_observer.py --analyze-still STILL`
-prints them for one saved still and refuses device, `/proc` and `/sys` paths,
-links and non-regular files before opening them; an observer run stopped by
-either budget carries them as `scene_statistics`. The
-[qualification design](hud-qualification.md#observer-scene-precondition-2026-11-04)
-has the background and the seed-still reference.
+`sightcircuit/hud/scene.py` holds the observer's scene precondition and
+`scene_statistics`, which describes one frame against it in counts only. In
+order, the checks are: bright saturation, speck density, the contour budget
+(counted from connected components before anything is traced), the
+candidate-quad budget and the outline budget (before any warp). `locate_copies`
+uses the same functions, so the statistics cannot drift from what the observer
+applies. `hud_marker_observer.py --analyze-still STILL` prints them for one
+saved still and refuses device, `/proc` and `/sys` paths, links and
+non-regular files before opening them; an observer run stopped by a check
+carries them, once, as `scene_statistics` (unless computing them failed, or a
+traced contour count disagreed with the census, which rejects as
+`observer_contour_census_mismatch`). Each statistics schema has a frozen
+budget table (`SCHEMA_BUDGETS`), so stored schema-1 reports still validate. The
+[qualification design](hud-qualification.md#the-o3-rule-2026-11-06) has each
+limit's derivation, the Frame-still classification and the seed-still
+reference.
 
 ```bash
 .venv-replay/bin/python scripts/hud_marker_observer.py --analyze-still evaluation/local/still.png
