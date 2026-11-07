@@ -59,11 +59,13 @@ and the November 6 cloud review. Installation in [E82](evidence/e082.md) is not
 a Frame run of the task runner or a live test of the guard's enforcement.
 The old “pending PR #23” handoff no longer describes these committed records.
 
-SightCircuit PRs [#2](https://github.com/moral-kombat/SightCircuit/pull/2) and
-[#3](https://github.com/moral-kombat/SightCircuit/pull/3) remain open. Do not
-infer that their code or proposed results have merged. The native tracking
-reporter remains on `work/native-tracking-reporter-unintegrated`, awaiting
-integration and review as detailed in the
+SightCircuit PRs [#2](https://github.com/moral-kombat/SightCircuit/pull/2)
+(agent runner, guard and installer follow-ups) and
+[#3](https://github.com/moral-kombat/SightCircuit/pull/3) (package O3, the
+observer scene precondition) merged on 2026-11-07. Their code is cloud-checked
+only; none of it has run on the Frame. The native tracking reporter remains on
+`work/native-tracking-reporter-unintegrated`, awaiting integration and review as
+detailed in the
 [November 7 handoff](history/coder-handoff-2026-11-07.md#item-3-the-native-tracking-reporter-carried-over-unfinished).
 
 The native tracking reporter remains absent from this checkout. Observer
@@ -89,6 +91,91 @@ preserve exact findings and limits; [E84](evidence/e084.md) records what merged.
    own review. The former #27 is now open SightCircuit PR #2, not merged code.
 5. CI: investigate the load-dependent cancellation test failure; do not suppress
    it as a substitute for fixing the race.
+
+These five map onto the work order below: 1 to B6, 2 to A3 and E1, 3 to A3 and
+A5, 4 to B4, 5 to B1 and B3.
+
+### Architecture plan work order (2026-11-07)
+
+The [architecture decisions](poc-scope.md#architecture-decisions-2026-11-07)
+produce five lanes (A, B, C, P and E; the letter D is kept for the decisions).
+Sizes are S, M or L. "Device" marks a step that runs on the
+Frame and needs the owner's approval for that specific run; a historical
+approval does not carry over. Items without a dependency can start now, in
+parallel coder sessions. The acceptance order of the gates is unchanged.
+
+**Lane A, the HUD path (critical path).**
+
+| Item | Work | Size | Depends on |
+| --- | --- | --- | --- |
+| A1 | Record the decisions, the planned structure and this work order | S | none (this change) |
+| A2 | File-only still analysis of the planned view with `--analyze-still`, recorded as an evidence entry | S, device | approval |
+| A3 | Pre-attempt offline review of the stops before a marker: the bridge's connect budget against the marker's ready wait, the incomplete-marker tolerance, the `--record-session-tokens` choice | M | none |
+| A4 | G3 attempt on a checkout containing package O3, with a manifest pinning that checkout | S, device | A2, A3, approval |
+| A5 | Only if A4 stops at the precondition: schema-3 scene limits from the run's recorded statistics, with the documentation table and boundary tests, then at most one more attempt | S to M, then device | A4 |
+| A6 | Calibration record version 2 carrying the mirror's native format metadata | M | none |
+| A7 | Diagnostic gate table, scope record and the call-site changes, including the bridge and its generated header; merges only after an accepted G3 observation | M | A6, accepted G3 |
+| A8 | Union-of-copies footprint provenance in the contract, mask, qualification and candidate records | M | A7 |
+| A9 | Tracking reporter integration behind its flag | L | E1 |
+| A10 | Diagnostic command consuming the scope, and the 60-second procedure; G5 and G6 runs then need their own approvals | M | A7, A8, A9 |
+| A11 | Fallback design document and bridge event contract (time-multiplexed exclusion); built only if the D2 budget is exhausted | S now, L later | none |
+
+**Lane B, lifecycle and tests.**
+
+| Item | Work | Size | Depends on |
+| --- | --- | --- | --- |
+| B1 | Flake diagnostics: print the report on the cancellation assertion and add per-module durations to the no-skip runner | S | none |
+| B2 | Normalise the SIGINT disposition for the suite's children; document the runner's inherited-ignore policy | S | none |
+| B3 | The supervision primitive in `sightcircuit/runtime`, seeded from the guard, fixing the race | M | B1 |
+| B4 | The agent runner adopts it; the agent package becomes its own checkpoint-manifest group | M | B3 |
+| B5 | The live pipeline launcher and the mirror launcher adopt it; progress streaming lets `runtime/process.py` retire | M | B3 |
+| B6 | The capture supervisor adopts it (paused track, last) | S | B3 |
+| B7 | Suite time budget enforced in CI | S | B1 |
+
+**Lane C, detector evaluation.**
+
+| Item | Work | Size | Depends on |
+| --- | --- | --- | --- |
+| C1 | One named POC threshold constant and one named live-budget constant; commands import them | S | the owner's budget number |
+| C2 | A test that `evaluation/local/` stays ignored | S | none |
+| C3 | Box entry in the session manifest helper, with documentation | S | none |
+| C4 | Per-label box recall and a basename-only input path in the report | S | C3 |
+| C5 | The representative evaluation session: at least twenty boxed chair stills, scored file-only, plus one `mirror_recognize` run per detector for inference p95 | M, device | C1 to C4, approval |
+| C6 | WP1: a native-resolution colour still of the E61 scene evaluated beside the grey preview | S, device | approval; shares C5's session |
+| C7 | Stale script names in E8, E67 and E69 | S | none |
+
+**Lane P, packaging.**
+
+| Item | Work | Size | Depends on |
+| --- | --- | --- | --- |
+| P1 | Hashed locks for the three requirement sets; add the missing `av` pin to the dev set; setup scripts use the locks | M | none |
+| P2 | Active command bodies move into the package with thin script wrappers and console entry points; validator references and manifest pins follow | M | P1 |
+
+**Lane E, native bridge.**
+
+| Item | Work | Size | Depends on |
+| --- | --- | --- | --- |
+| E1 | Split `tools/overlay_bridge.cpp` into lifecycle, rendering, reporting and sensing units; move the source-text tests and manifest pins | L | none |
+
+Lane A's device steps consume the D2 attempt budget: A4 is the first counted
+attempt, A5 the second and last. A stop before the precondition (missing
+bridge build, headset not connected, manifest mismatch) does not count.
+
+### Decisions still needed from the owner
+
+- The live budget number for C1: the proposal is an inference p95 of at most
+  200 ms, which is five frames per second.
+- Who declares the capture layout for the diagnostic run, and on what evidence,
+  since arrows and eye-crossing rejection still depend on it.
+- Whether the observer run, the candidate conversion and the 60-second run must
+  fit one 300-second mapping lifetime under one approval, or the lifetime
+  constant changes by a reviewed edit.
+- The Phase 0 approval scope for the agent runner, still open.
+- Device approvals, each separate: A2, A4, the guard version 4 install from
+  PR #2, and the evaluation session C5 with C6.
+- The Frame itself: whether it rebooted into SteamOS 0.5.8, re-serving the
+  headset folder so a new Frame manager session can exist, and re-enabling and
+  rebinding the disabled "Frame update check" scheduled task to that session.
 
 ## Edge HUD acceptance gates
 

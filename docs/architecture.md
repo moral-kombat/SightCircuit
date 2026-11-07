@@ -120,6 +120,91 @@ replace object detection. Reconstruction and headset viewing remain a separate,
 unvalidated future experiment. The [camera reference](steam-frame-camera.md#calibration-spatial-labels-and-gaussian-splats)
 retains the researched recording workflow.
 
+## Planned structure (2026-11-07)
+
+The [architecture decisions of 2026-11-07](poc-scope.md#architecture-decisions-2026-11-07)
+shape the next changes. This section separates what the checkout implements
+today from what the plan adds. Nothing below is implemented unless it says so,
+and every production gate stays closed until its acceptance row passes.
+
+### Supervision and lifecycle
+
+Today, child supervision and signal handling exist in six places: the runtime
+guard (the only one that reaps a whole process group), the bounded worker in
+`runtime/process.py`, the agent runner, the paused capture supervisor, the
+overlay client and the shared-memory check. They differ in grace periods, in
+whether a signal raises or is recorded, and in how an inherited ignored signal
+is treated. The plan replaces them with one primitive in `sightcircuit/runtime`,
+seeded from the guard: owned-session spawning, a hold-and-arm protocol around
+process start, group termination with reaping, deadline-based cleanup verdicts,
+a declared policy for inherited signal dispositions, progress streaming and one
+report block. Adoption order is the agent runner, then the live pipeline and
+the mirror launcher, then the capture supervisor.
+
+### Native bridge
+
+The bridge in `tools/overlay_bridge.cpp` carries connection lifecycle, overlay
+rendering, the marker, context sensing, a watchdog and report assembly in one
+source file. It may end itself on its watchdog or on parent death; the Python
+side owns escalation and the cleanup verdict. The plan splits the source into
+lifecycle, rendering, reporting and sensing units, moving the tests and manifest
+pins that name the file, before the tracking reporter is integrated behind its
+flag. Without the flag the bridge makes no new OpenVR call.
+
+### Approval tiers
+
+The [gate table](../sightcircuit/gates.py) has three production gates, all
+closed. The plan adds a second, equally closed table for a diagnostic tier: a
+scope record issued only by a factory, bound to the checkpoint manifest, the
+mapping record and model digests, with an absolute deadline and a consumed run
+identifier. Each gated call site then permits a use when its synthetic
+condition holds or a valid scope permits that gate. The diagnostic tier's mask
+is the union of every observed marker copy plus the margin, so eye identity is
+not required for the acceptance run; the capture layout must still be declared.
+Two record changes come first: the calibration record must carry the mirror's
+native format metadata, which today makes every real mirror frame
+unrepresentable, and the candidate conversion needs the tracking tokens the
+reporter supplies. This is a design; no diagnostic command exists.
+
+### Commands and packaging
+
+Scripts import the checkout without installation and no active script imports
+another. The plan moves the bodies of the active commands into the package,
+keeps each script as a thin wrapper that re-exports `main`, declares console
+entry points, and adds one hashed lock per requirement set. Commands that
+re-spawn themselves by file path, validators imported by dotted name and the
+checkpoint manifest's script pins move with the bodies.
+
+### Operations tooling
+
+`sightcircuit/agent` (guard, runner, tasks) and the installer run tasks on the
+Frame. They are outside the production gates: no gate claim, their own group in
+the checkpoint manifest, their own evidence records and their own test timing
+budget. Their design is in [agent-on-Frame](agent-on-frame.md).
+
+### Detector evaluation
+
+The evaluation harness scores presence and, when boxes are supplied,
+per-object matches; it has no per-label box recall and the device session
+collects presence labels only. The plan adds a box-entry helper, per-label box
+recall, one named POC threshold constant and one named live-budget constant,
+and a test that the private still directory stays ignored. The representative
+set is built and scored on the Frame; only JSON leaves it.
+
+### Fallback input design
+
+If the marker-observation budget is exhausted, the plan switches to
+time-multiplexed exclusion: the bridge hides the HUD, the mirror is read only
+after a device-measured bound, the frame is admitted only if it differs from
+the last pre-hide frame, and the HUD is shown again after the window. It reuses
+the mirror source, latest-frame handling, the tile renderer and the bridge's
+show and hide, and bypasses the mask, mapping and qualification stack. It needs
+new bridge events with timestamps, an admission window in the pipeline and
+device evidence for hide-to-absence latency and loopback repeat behaviour. Its
+costs are HUD duty cycle and flicker. It is drafted in the
+[council record](history/2026-11-07-architecture-council.md#fallback-time-multiplexed-exclusion)
+and not built.
+
 ## Milestones and acceptance checks
 
 Use the [current work and gates](live-capture.md#edge-hud-acceptance-gates)

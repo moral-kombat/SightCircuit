@@ -21,6 +21,8 @@ Use this page when a guide introduces an unfamiliar term. The
 | Expiry | Removing stale displayed results using the original observation time, independently of inference or heartbeats. |
 | Calibration / qualification | A calibration describes a candidate mapping; qualification requires evidence that the mapping meets the acceptance conditions. |
 | Synthetic input | Generated test images. Passing these tests does not establish headset behavior. |
+| Diagnostic tier | A planned second gate table, as closed as the production one, whose one-run scope would govern the 60-second acceptance run with a union-of-copies mask. Not implemented. |
+| Time-multiplexed exclusion | The drafted fallback input design: hide the HUD during each capture window so the detector never sees it. Built only if the marker-observation budget is exhausted. |
 
 ## How to read identifiers
 
@@ -30,6 +32,7 @@ Use this page when a guide introduces an unfamiliar term. The
 | G1–G6 | Acceptance gates: synthetic checks; lifecycle/recovery; mapping observation; mapping qualification; feedback/expiry; end-to-end acceptance. These are separate from the three software gates. | [Acceptance table](live-capture.md#edge-hud-acceptance-gates) |
 | WP1, WP9, … | Work packages used to track parts of the POC. A numbered package is not necessarily unfinished. | [Scope](poc-scope.md#work-packages) and [current work](live-capture.md#current-work-order) |
 | V4 | A historical marker-observation attempt that was rejected. Its software termination is explained; that does not establish physical recovery. | [Recovered evidence E75](evidence/e075.md) |
+| D1–D8 | The architecture decisions of 2026-11-07: end state, input strategy, qualification depth, lifecycle, packaging, evaluation, the agent runner's place, tests and CI. | [Scope](poc-scope.md#architecture-decisions-2026-11-07) |
 
 ## Implementation terms
 

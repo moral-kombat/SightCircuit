@@ -78,8 +78,11 @@ Current merged state is reconciled [here](live-capture.md#implementation-and-evi
 
 See [current follow-ups](live-capture.md#offline-review-follow-ups) and the
 [remaining session findings](history/coder-handoff-2026-11-07.md#still-open).
-The old e008 link defect has been corrected by this documentation work; optional
-lock-file and console-entry-point work remains outside it.
+The old e008 link defect has been corrected by this documentation work. The
+lock-file and console-entry-point scope is now decided (D5 in the
+[architecture decisions](poc-scope.md#architecture-decisions-2026-11-07)) and
+scheduled as lane P of the
+[work order](live-capture.md#architecture-plan-work-order-2026-11-07).
 
 ## Historical handoffs
 
