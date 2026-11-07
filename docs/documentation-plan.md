@@ -54,12 +54,12 @@ change. A reviewer checks that any brief summaries still agree with that home.
 - Preserve measurements, failed outcomes, source pins, reconstructed provenance,
   and unknown fields. Add later context outside a historical narrative rather
   than rewriting what was observed.
-- This checkout contains evidence through E78 at the overhaul baseline. The
-  older [Framejacker PR #23](https://github.com/moral-kombat/framejacker/pull/23)
-  carries pending later evidence and decisions, now also proposed in
-  [SightCircuit PR #1](https://github.com/moral-kombat/SightCircuit/pull/1).
-  Keep those records explicitly pending;
-  do not allocate IDs from the local maximum or infer acceptance from its prose.
+- The overhaul baseline contained E1–E78. Evidence E79–E84 from the former
+  [Framejacker PR #23](https://github.com/moral-kombat/framejacker/pull/23)
+  is now merged through [SightCircuit PR #1](https://github.com/moral-kombat/SightCircuit/pull/1).
+  Preserve those records and the resulting reviewed status when reconciling
+  documentation. Check the current index and pending allocations before adding
+  an ID; a historical handoff is not allocation authority.
 - Keep command options and report fields consistent with source. Planned tools
   are not runnable commands. Paused provider procedures belong in reference or
   history, outside the normal contributor path.

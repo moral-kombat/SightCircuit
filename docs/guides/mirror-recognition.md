@@ -91,8 +91,10 @@ three channels does not recover source color.
 
 ## Run bounded recognition from the mirror
 
-After verifying that `/dev/video99` is still the SteamVR candidate, aim at a
-supported object such as a chair or TV and keep it visible through the final
+The current proof-of-concept object is **chair**, chosen by the owner after
+the [E81 session](../evidence/e081.md); this is not a detector-default decision.
+After verifying that `/dev/video99` is still the SteamVR candidate, aim at the
+chair and keep it visible through the final
 seconds. This uses the existing detector environment and shows no live output:
 
 ```bash
@@ -120,7 +122,8 @@ Expect `report_kind: steamvr_mirror_recognition`, `status: recognized`, exit 0,
 `labels_seen` covers the whole run; `last_result` and the PNG describe only its
 final processed frame. An empty final image can be valid even when earlier
 frames had labels. [E48](../evidence/e048.md) records one confirmed demonstration,
-not general class or localization accuracy.
+not general class or localization accuracy. The later [E81 mirror regression](../evidence/e081.md)
+returned exit 0 and labels matching the objects the owner reported in view.
 
 Inputs older than one second are skipped; stale final input produces no preview.
 The worker budget adds 15 seconds to capture duration for startup/completion,
@@ -131,7 +134,12 @@ the wearer's during/after passthrough and tracking observations.
 ## Compare detectors on Frame stills
 
 The default remains `mobilenet-ssd`; `yolox-nano` is an 80-class COCO candidate.
-Neither has a rug class. Update the replay environment when model dependencies
+Neither has a rug class. E81 records five unboxed, owner-labelled stills:
+both models detected the chair, missed the bottle and sofa, and passed the
+bottle-absent and rug/no-sofa checks. These few stills do not select a detector
+or establish localization accuracy; the comparison work remains open.
+
+Update the replay environment when model dependencies
 change with `bash scripts/setup_window.sh`.
 
 Capture a private unannotated still and pin its identity in an evaluation

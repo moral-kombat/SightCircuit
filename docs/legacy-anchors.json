@@ -428,6 +428,46 @@
       "review",
       "what-stays-open"
     ],
+    "docs/evidence/e079.md": [
+      "e79-g2-green-input-log-analysis-and-recovery-rehearsal-on-frame",
+      "limits",
+      "log-analysis-read-only-on-the-saved-bundle",
+      "owner-recollections-taken-2026-11-03",
+      "recovery-procedure-and-rehearsal"
+    ],
+    "docs/evidence/e080.md": [
+      "command",
+      "e80-file-only-detector-re-run-on-the-e61-still-with-audit-variants",
+      "findings",
+      "input",
+      "limits",
+      "result"
+    ],
+    "docs/evidence/e081.md": [
+      "consequences",
+      "e81-catch-up-session-on-frame-regressions-400-frame-panel-run-mirror-and-wp2-stills",
+      "limits",
+      "procedure",
+      "results"
+    ],
+    "docs/evidence/e082.md": [
+      "e82-guarded-claude-code-setup-installed-on-frame-phase-0",
+      "limits",
+      "result"
+    ],
+    "docs/evidence/e083.md": [
+      "e83-g3-marker-observer-attempt-stopped-at-the-observer-scene-precondition",
+      "interpretation",
+      "preparation-all-passed",
+      "process-notes-from-the-frame-session",
+      "result"
+    ],
+    "docs/evidence/e084.md": [
+      "ci",
+      "e84-ship-pass-of-2026-11-06-cloud-checks-for-prs-22-24-25-26-and-27",
+      "limits",
+      "what-merged-and-what-the-review-changed"
+    ],
     "docs/execution-prompt.md": [
       "a-restore-still-capture-and-pin-still-digests-blocker-small",
       "b-marker-stop-guardian-loss-and-startup-cancel-g2-software-small-to-medium",
@@ -436,6 +476,7 @@
       "c-device-checkpoint-artifact-manifest-g3-prerequisite-small-to-medium",
       "coder-handoff-2026-11-03",
       "coder-handoff-2026-11-04",
+      "coder-handoff-2026-11-07-agent-runner-coder-session-closed-after-the-move",
       "copy-ready-prompt",
       "d-one-hud-and-marker-contract-for-python-and-c-g3g4-medium",
       "device-steps-each-needs-the-owners-approval",
@@ -450,6 +491,7 @@
       "h-latency-statistics-for-wp12-small-to-medium-after-e3-because-both-change-pipelinestats",
       "how-the-work-was-run",
       "how-this-session-ran-the-work",
+      "item-3-the-native-tracking-reporter-carried-over-unfinished",
       "lanes-and-order",
       "merged-in-this-session",
       "offline-handoff-2026-11-01",
@@ -461,8 +503,11 @@
       "owner-decisions-taken-in-this-session-2026-11-03-and-2026-11-04",
       "packages",
       "rules-for-every-package",
+      "ship-pipeline-follow-ups-2026-11-06",
       "start-here",
-      "what-is-done"
+      "still-open",
+      "what-is-done",
+      "what-that-session-finished"
     ],
     "docs/hud-qualification.md": [
       "evidence-that-qualification-must-add",
@@ -674,7 +719,13 @@
       "e76-offline-work-packages-ah-cloud-checks",
       "e77-claude-code-on-frame-runner-guard-and-installer-cloud-checks",
       "e78-mirror-session-tokens-and-neutral-hud-mask-fill-cloud-checks",
+      "e79-g2-green-input-log-analysis-and-recovery-rehearsal-on-frame",
       "e8-mirror-diagnostic-cloud-checks",
+      "e80-file-only-detector-re-run-on-the-e61-still-with-audit-variants",
+      "e81-catch-up-session-on-frame-regressions-400-frame-panel-run-mirror-and-wp2-stills",
+      "e82-guarded-claude-code-setup-installed-on-frame-phase-0",
+      "e83-g3-marker-observer-attempt-stopped-at-the-observer-scene-precondition",
+      "e84-ship-pass-of-2026-11-06-cloud-checks-for-prs-22-24-25-26-and-27",
       "e9-shared-memory-reader-cloud-checks",
       "evidence-record",
       "maintaining-the-evidence",
@@ -710,5 +761,8 @@
     "third_party/mrhand/README.md": [
       "mrhand-protocol-reference"
     ]
-  }
+  },
+  "additional_baseline_commits": [
+    "a46c3d38549e0b245d66bb965b123fbeb73ad28f"
+  ]
 }

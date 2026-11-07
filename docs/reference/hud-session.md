@@ -186,8 +186,9 @@ Follow-up 3 above. The marker observer can now record the session tokens of
 its own run, and `--from-observer` takes a candidate's tokens only from them.
 These are cloud results only. Every test uses a fake /proc root and
 hand-written tracking events, and no test read the real /proc of any process.
-`--record-session-tokens` has never run on Frame. Using it there is a separate
-device approval. The observer-token addition has no separate committed evidence
+No Frame use of `--record-session-tokens` is recorded; the device attempts in
+[E83](../evidence/e083.md) omitted it. Using it there needs separate device
+approval. The observer-token addition has no separate committed evidence
 record yet; its implementation is distinct from the session-provider evidence in E78.
 
 - **Opt-in, off by default.** `hud_marker_observer.py --record-session-tokens`

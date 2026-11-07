@@ -62,7 +62,11 @@ SKIP_UPDATE=1 COUNTDOWN=15 STEP_TIMEOUT=90 \
 | `SCENES` | Semicolon-separated `id|present,labels|absent,labels` still descriptions |
 
 `COUNTDOWN` automates timing only. Aim during the countdown, inspect the preview
-and report afterward, and provide the wearer observations separately. For
+and report afterward, and provide the wearer observations separately.
+[E81](../evidence/e081.md) found terminal bells inaudible in the headset: the
+first capture attempt was invalid because prompts did not reach the owner.
+Confirm readiness with the wearer before each capture; a countdown is not an
+acknowledgment. For
 no-typing still capture set `SCENES` as well; without it the stills stage asks for
 scene IDs and labels. Use canonical COCO labels that were actually inspected,
 for example `SCENES="rug|chair|couch;tv|tv|"`. Images stay in ignored
@@ -93,9 +97,21 @@ a digest for every entry, run the evaluator explicitly:
 ```
 
 Choose a default detector only from representative inspected Frame evidence.
-The [existing session evidence](../status.md) distinguishes command execution
-from wearer confirmation; window inclusion, still evaluation and physical
-recovery are separate outcomes. Submit new reports with their revision,
+[E81](../evidence/e081.md) confirms regression/pacing, a direct 400-frame panel
+run and the mirror redo, with normal passthrough and tracking. The shell's
+`overlay` stage still uses 100 frames. Its five valid unboxed stills supported
+the owner's POC-object change to chair, not a detector default; WP2 remains
+open. The invalid initial attempt is excluded. [E80](../evidence/e080.md)
+reproduced the E61 TV miss in a file-only rerun without explaining it; WP1 also
+remains open.
+
+[E79](../evidence/e079.md) closed G2 through an owner-confirmed recovery
+rehearsal; the green-input cause remains unknown and a cure was not established.
+The later [E83 observer attempt](../evidence/e083.md) stopped at the scene
+precondition before any tile appeared, leaving G3 open. The E81 panel used the
+old connect order and cannot qualify the later lifecycle changes recorded as
+cloud work in [E84](../evidence/e084.md). The [session evidence](../status.md)
+keeps these outcomes distinct. Submit new reports with their revision,
 runtime, command and limitations through [evidence maintenance](../evidence/README.md).
 Keep command results, user-reported observations, cloud checks and CI separate.
 
@@ -140,7 +156,9 @@ the [evidence handoff](../evidence/README.md) rather than assuming the page work
 
 ## Run automated checks with an on-device agent
 
-**Cloud-tested only; no Frame result yet.** This is Phase 2 of the
+**Phase 0 installed; guard enforcement and Tier A runs remain untested on Frame.**
+[E82](../evidence/e082.md) records passing installation checks and settings
+matching the template. The commands below are Phase 2 of the
 [agent plan](../agent-on-frame.md), which needs its own approval. A Claude Code
 session on Frame may run only `scripts/frame_agent_run.py`, which executes a
 fixed task table by ID. Tier A tasks do not produce VR output, capture camera
@@ -199,8 +217,10 @@ An accepted update leaves a detached `HEAD`. Before using the shell runner's
 
 ### Guarded Claude Code settings
 
-To let Claude Code use it, install the guarded settings once, in the Frame
-checkout only:
+The Frame settings were installed and matched the template in
+[E82](../evidence/e082.md); that did not test guard enforcement. For a checkout
+being set up under the approved installation scope, install the settings once,
+in the Frame checkout only:
 
 ```bash
 cd "$HOME/sightcircuit"

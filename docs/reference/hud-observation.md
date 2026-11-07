@@ -96,25 +96,27 @@ has the details.
 
 ## Observer scene precondition
 
-**What stopped the 2026-11-03 attempt.** The planner relays, from the Frame,
-that two observer runs (`--seconds 20`, checkout `7c72a4e`) stopped in under
-0.5 s with `observer_contour_budget`, before the bridge initialized and before
-any marker was shown. Their bright-contour counts were 229, then 2,680 with a
-TV in view, then 2,720 facing a plain wall that looked dim to the wearer.
-Cleanup was clean and passthrough normal; the observer saves no images, so the
-scene content is unknown. The coordinator records this as E83 (in the
-planner's PR #23, not yet merged); this section is not that record.
+**Recorded device result.** [E83](../evidence/e083.md) records two observer
+runs on 2026-11-03 (`--seconds 20`, checkout `7c72a4e`). Both stopped in under
+0.5 s with `observer_contour_budget`, before bridge initialization or marker
+output. The first run counted 229 contours, then 2,680 with a screen in view;
+the retry counted 2,720 while facing a wall that looked dim to the wearer.
+Cleanup, passthrough and tracking were normal. The observer saved no images,
+so the rejected pixels remain unknown. G3 stays open: neither run observed a
+marker or established a mapping. Another attempt needs a reviewed precondition
+change and new approval.
 
 **Why.** Before it looks for a marker, `locate_copies` thresholds the grey
 frame at 180, finds every bright contour (`cv2.RETR_LIST`) and rejects the
 frame above `MAX_CONTOURS` = 2048. That count includes single-pixel specks:
 the 25-pixel area filter for candidate quads comes after it. The budget was
-tuned on synthetic frames and never checked against a real mirror frame.
+tuned on synthetic frames before the real-mirror rejection recorded in E83.
 
 **What this adds (packages O1 and O2; the precondition itself is unchanged).**
 The precondition now lives in `sightcircuit/hud/scene.py` (`bright_contours`,
 `candidate_quad`), which `locate_copies` calls, so its statistics describe
-exactly what the observer applies:
+exactly what the observer applies. [E84](../evidence/e084.md) records the merged
+implementation's cloud checks, separately from E83's device result:
 
 - `scene_statistics(image)`: the contour count and its split into
   `cv2.contourArea` bands (below 25, 25 to below 400, 400 to below 10,000,

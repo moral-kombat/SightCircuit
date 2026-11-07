@@ -104,9 +104,13 @@ from the detector's own `preprocessing(name)`; `--audit-variant` is repeatable. 
 keeps stretched 300 × 300 input and explicitly centers all three BGR channels;
 YOLOX keeps its letterbox transform. Rounded resize mapping uses each realized
 axis ratio. Synthetic regressions establish those implementation behaviors,
-not the cause of the private E61 TV miss. Reproducing E61 still needs the
-approved original still, verifiable digest and factual annotations. No detector
-default follows from seed or synthetic results alone.
+not the cause of the private E61 TV miss. [E80](../evidence/e080.md) now records
+a file-only rerun on the original still, whose digest matched the saved E61
+identity and passed `--require-input-digests`. Both models still missed `tv`
+at the unchanged 0.5 threshold; YOLOX-Nano's best below-threshold score was
+0.427. All audit variants fed identical bytes for this already-grey, small
+preview, so they did not explain the miss. One unboxed still is not an accuracy
+measurement; the investigation remains open and defaults are unchanged.
 
 ### Pinned seed counts
 
@@ -126,8 +130,8 @@ The pin holds counts, never scores, so small floating-point differences between
 x86_64 and ARM64 cannot move it: in the pinned run the closest regression
 margin was a clean absent label at 0.437 against the 0.5 threshold.
 
-CI's replay-window job runs the seed comparison with `--expect` and then
-`tests/test_seed_pin.py` without skips, which checks that the committed pin
+CI's replay job runs the seed comparison with `--expect` and then the suite
+with `tests/test_seed_pin.py` pinned against skips, which checks that the committed pin
 passes and that swapping two VOC labels in the SSD label map fails it. Seed
 results remain a wiring and label-mapping regression check on the runner's
 CPU, not Frame evidence, and they do not select a detector.

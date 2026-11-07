@@ -7,22 +7,28 @@ The [qualification design](../hud-qualification.md) explains what the result
 can establish; the [development reference](../reference/hud-development.md)
 covers offline checks and software identity.
 
-A historical attempt failed ([E75](../evidence/e075.md)). Do not repeat it
-unchanged. A clean new observation would still be **unqualified** and would
-not enable production HUD input or output.
+The latest approved attempt and retry stopped at the scene precondition before
+showing a marker ([E83](../evidence/e083.md)). A further attempt needs a revised
+precondition reviewed offline and new approval; do not repeat it unchanged.
+A clean new observation would still be **unqualified** and would not enable
+production HUD input or output.
 
 <a id="next-device-checkpoint"></a>
 
 ## Bounded edge HUD calibration checkpoint
 
-This is the proposed device step for WP9 in the
-[POC scope](../poc-scope.md#work-packages). Recovered [E75](../evidence/e075.md)
-establishes that a historical five-second V4 marker/observer attempt ran on
-Frame and was rejected; G3 acceptance is still pending. Do not repeat that
-unchanged attempt. Resolve G2's physical failure/recovery prerequisites and
-review a revised bounded checkpoint before seeking its own approval under the
-[current plan](../live-capture.md). This page is
-the procedure, not that approval.
+This is the operator procedure for the marker-observation checkpoint (G3).
+[E79](../evidence/e079.md) closes the recovery prerequisite (G2) under the owner
+decision: the owner rehearsed switching to grey tracking-camera passthrough
+and back, with normal tracking and passthrough afterward. The green-input
+cause remains unknown, and that clean rehearsal does not prove a cure.
+
+The later [E83](../evidence/e083.md) runs stopped with `observer_contour_budget`
+before bridge initialization or marker output. This is distinct from the
+historical V4 tag/bit rejection in [E75](../evidence/e075.md). G3 remains open.
+Review the revised scene precondition and bounded checkpoint under the
+[current plan](../live-capture.md) before obtaining approval for a new run.
+This page is the procedure, not that approval.
 
 What it does: `scripts/hud_marker_observer.py` reads the verified mirror at
 native resolution, at most 5 reads per second for up to 20 seconds. It first
@@ -55,6 +61,8 @@ On Frame, confirm all of the following:
 
 - [Independent SSH](../on-device.md#verify-independent-ssh-access) from the PC works, so the
   run can be stopped and inspected without the headset UI.
+- The revised scene precondition has passed its offline review and diagnostics;
+  the unchanged E83 attempt is not being repeated.
 - The checkout is clean at the approved revision, `.venv-replay` is set up,
   and the bridge is built on Frame with `bash scripts/build_overlay_bridge.sh`.
 - `/dev/video99` is still the verified SteamVR mirror candidate
@@ -158,8 +166,9 @@ user-reported:
 - Did the Arcturus input turn green at any point
   ([E59](../status.md#e59-arcturus-green-input-recurrence-and-operator-recovery))?
 
-If passthrough or tracking regresses, stop and keep the report. Switching to
-native passthrough and back is a recovery workaround, not a pass. Hand the
+If passthrough or tracking regresses, stop and keep the report. Follow the
+reviewed [E79 recovery procedure](../evidence/e079.md#recovery-procedure-and-rehearsal)
+within the approved run scope; recovery does not make the failed run a pass. Hand the
 saved directory and the answers to the evidence coordinator for a numbered
 entry ([evidence maintenance](../evidence/README.md#maintaining-evidence)). A clean result
 supports WP11 (feedback exclusion) planning. It does not enable live HUD input
@@ -168,11 +177,10 @@ or production HUD output.
 
 ## Measure the observer's scene precondition on saved stills
 
-**File only; needs the owner's approval before it runs on Frame.** Pending E83
-in [Framejacker PR #23](https://github.com/moral-kombat/framejacker/pull/23)
-relays that the November 3 observer runs stopped at `observer_contour_budget`
-before showing a marker. This report is not merged evidence in this checkout;
-see the [scene-precondition reference](../reference/hud-observation.md#observer-scene-precondition-2026-11-04).
+**File only; needs the owner's approval before it runs on Frame.**
+[E83](../evidence/e083.md) records that the November 3 observer attempt and
+approved retry stopped at `observer_contour_budget` before showing a marker.
+See the [scene-precondition reference](../reference/hud-observation.md#observer-scene-precondition-2026-11-04).
 To see what real Frame scenes look like to that precondition, run the
 statistics on the private PNG stills already in `evaluation/local/` (written by
 `mirror_recognize.py --still`). This reads those files only: it opens no

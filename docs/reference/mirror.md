@@ -107,7 +107,7 @@ input, and its manifest entry passes `--require-input-digests`.
 `tests/test_frame_session_commands.py` parses every `scripts/*.py` command line
 in `scripts/frame_session.sh` with that script's own parser and exact option
 names, without running it; the session helper's own tests replace Python with a
-fake, so they cannot see a removed flag. Dependency-specific tests skip without OpenCV/NumPy; the replay-window
+fake, so they cannot see a removed flag. Dependency-specific tests skip without OpenCV/NumPy; the replay
 CI job installs these and exercises the complete suite. Existing supervision
 tests cover hard deadlines, abnormal worker exit and process reaping.
 

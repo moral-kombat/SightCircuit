@@ -5,7 +5,7 @@
     {
       "capability": "Linux development setup and smoke check",
       "state": "Cloud-tested",
-      "evidence": "Linux x86_64, Python 3.12; generated repeated-image video, CPU detection and offscreen rendering; [E7](#e7-cloud-validation); current integration [E78](#e78-mirror-session-tokens-and-neutral-hud-mask-fill-cloud-checks)"
+      "evidence": "Linux x86_64, Python 3.12; generated repeated-image video, CPU detection and offscreen rendering; [E7](#e7-cloud-validation); integration through [E78](#e78-mirror-session-tokens-and-neutral-hud-mask-fill-cloud-checks)"
     },
     {
       "capability": "Read-only device and recording inspection",
@@ -25,12 +25,12 @@
     {
       "capability": "Annotated Qt replay window",
       "state": "Device-confirmed",
-      "evidence": "Latest run presents/processes 576 frames and reports four labels; label accuracy remains unevaluated; [E47](#e47-recorded-recognition-and-vr-panel-poc-on-frame)"
+      "evidence": "E47 reports 576 frames and reports four labels; label accuracy remains unevaluated; [E47](#e47-recorded-recognition-and-vr-panel-poc-on-frame)"
     },
     {
       "capability": "Native head-relative VR replay panel",
-      "state": "Device-confirmed, including latest POC",
-      "evidence": "User confirms visible panel/labels and normal passthrough; 576 images submitted with clean shutdown and no forced termination; [E47](#e47-recorded-recognition-and-vr-panel-poc-on-frame)"
+      "state": "Frame replay confirmed; newer connect path unverified",
+      "evidence": "The 400-frame run kept updating to the end with clean shutdown ([E81](#e81-catch-up-session-on-frame-regressions-400-frame-panel-run-mirror-and-wp2-stills)). [Earlier results and newer bridge limits](evidence/capability-notes.md#native-head-relative-vr-replay-panel)."
     },
     {
       "capability": "Public OpenVR tracked-camera probe",
@@ -49,18 +49,18 @@
     },
     {
       "capability": "Bounded mirror recognition",
-      "state": "Frame demonstration confirmed; broader accuracy open",
-      "evidence": "Bounded capture, matching preview labels and normal passthrough were reported in [E48](#e48-live-mirror-recognition-poc-and-matching-preview). Still export was restored offline in E76; [measurements and limits](evidence/capability-notes.md#bounded-mirror-recognition)."
+      "state": "Rewritten path re-run on Frame; broader accuracy open",
+      "evidence": "The November 3 rerun had labels matching the owner’s view ([E81](#e81-catch-up-session-on-frame-regressions-400-frame-panel-run-mirror-and-wp2-stills)). [Earlier measurements, still export and limits](evidence/capability-notes.md#bounded-mirror-recognition)."
     },
     {
       "capability": "Real-time recorded replay",
-      "state": "Synthetic cloud check passed; Frame measurement pending",
-      "evidence": "Keyframe catch-up and newest-frame inference improve the synthetic replay. [Measurements and later latency tooling](evidence/capability-notes.md#real-time-recorded-replay); [E62](#e62-keyframe-catch-up-realtime-replay-cloud-checks)."
+      "state": "Synthetic cloud checks and one Frame measurement",
+      "evidence": "Frame replay reached 8.4 processed fps on November 3; no latency percentiles were taken ([E81](#e81-catch-up-session-on-frame-regressions-400-frame-panel-run-mirror-and-wp2-stills)). [Comparison context](evidence/capability-notes.md#real-time-recorded-replay)."
     },
     {
       "capability": "Candidate detector and evaluation harness",
-      "state": "Offline audit passed; Frame model choice blocked",
-      "evidence": "SSD preprocessing is corrected; the original E61 still and digest remain absent. No default changed. [Audit and evaluation details](evidence/capability-notes.md#candidate-detector-and-evaluation-harness); [E73](#e73-reproducible-preprocessing-audit-and-ssd-channel-correction)."
+      "state": "E61 miss reproduced; Frame model choice open",
+      "evidence": "The original still and digest were verified on Frame; the miss remains unexplained ([E80](#e80-file-only-detector-re-run-on-the-e61-still-with-audit-variants)). Five unboxed stills support the chair demo, not a model default. [Evaluation details](evidence/capability-notes.md#candidate-detector-and-evaluation-harness)."
     },
     {
       "capability": "Existing-mirror diagnostic",
@@ -129,13 +129,13 @@
     },
     {
       "capability": "Fixed edge HUD, marker and offline live pipeline",
-      "state": "Offline validation passed; device acceptance open",
-      "evidence": "V4 was rejected; G2 remains open and production gates stay closed in committed evidence. [Runtime, mask and token details](evidence/capability-notes.md#fixed-edge-hud-marker-and-offline-live-pipeline); [E75](#e75-recovered-v4-evidence-and-software-termination-analysis), [E78](#e78-mirror-session-tokens-and-neutral-hud-mask-fill-cloud-checks)."
+      "state": "Offline validation passed; G2 closed; G3 open",
+      "evidence": "The owner accepted rehearsed recovery; the green-input cause is unknown ([E79](#e79-g2-green-input-log-analysis-and-recovery-rehearsal-on-frame)). G3 stopped before any marker ([E83](#e83-g3-marker-observer-attempt-stopped-at-the-observer-scene-precondition)). Production gates stay closed; [implementation and limits](evidence/capability-notes.md#fixed-edge-hud-marker-and-offline-live-pipeline)."
     },
     {
       "capability": "Guarded on-device agent runner",
-      "state": "Cloud-tested; no Frame run in committed evidence",
-      "evidence": "Runner, guard, settings and selected installer stages were tested offline. [Coverage and outstanding follow-ups](evidence/capability-notes.md#guarded-on-device-agent-runner); [E77](#e77-claude-code-on-frame-runner-guard-and-installer-cloud-checks)."
+      "state": "Phase 0 installed; runner and guard enforcement untested on Frame",
+      "evidence": "Phase 0 passed and guard settings were installed ([E82](#e82-guarded-claude-code-setup-installed-on-frame-phase-0)). Installation does not validate automated checks or blocking. [Coverage and follow-ups](evidence/capability-notes.md#guarded-on-device-agent-runner)."
     },
     {
       "capability": "Dedicated Arcturus Vulkan capture",

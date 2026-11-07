@@ -148,10 +148,13 @@ covered; skipped frames lower it while `realtime_ratio` counts them as
 progress) and the `pipeline` block's p50/p95/max latency statistics, which a
 run that fails after starting also reports (`statistics_final` is false when
 its worker had not stopped). The
-keyframe-skipping version is cloud-tested only; see
-[E62](../status.md#e62-keyframe-catch-up-realtime-replay-cloud-checks). The earlier
-frame-dropping version was decode-bound on Frame, processing about 0.97 fps
-versus 5.15 fps unpaced
+keyframe-skipping version first had cloud evidence in
+[E62](../status.md#e62-keyframe-catch-up-realtime-replay-cloud-checks). The later
+Frame regression and pacing session ([E81](../evidence/e081.md)) returned exit 0
+for each command and reported 8.4 processed fps for realtime replay. That is a
+result for that recording, build, and sitting; latency percentiles were not
+extracted. The earlier frame-dropping version had been decode-bound on Frame,
+processing about 0.97 fps versus 5.15 fps unpaced
 ([E51](../status.md#e51-media-time-replay-pacing-unit-tested-only),
 [E53](../status.md#e53-unattended-replay-regression-and-pacing-rerun)). Without
 `--realtime` every frame is processed in order, which plays this recording in

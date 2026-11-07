@@ -53,8 +53,9 @@ and frame-time alignment and a projection model, each a separate unproven link.
   directions, not calibrated bearings.
 - V4's software stop and cleanup fields are explained by recovered, verified
   evidence ([E75](evidence/e075.md)). Its green Arcturus outcome and the later
-  recurrence remain unexplained; physical recovery is still required before
-  any live output.
+  recurrence remain unexplained. G2 closed under the accepted recovery-rehearsal
+  alternative ([E79](evidence/e079.md)); this does not identify the cause or
+  prove the procedure cures green input. Any green input aborts a run.
 
 ## Work packages
 
@@ -64,7 +65,7 @@ remain unchanged; current implementation and acceptance belong in the
 
 | ID | Purpose | Completion criterion |
 | --- | --- | --- |
-| WP1 | Audit the E61 preprocessing/model miss | Reproduce from the original inspected still and digest, or apply the accepted unreproducible-input decision below |
+| WP1 | Audit the E61 preprocessing/model miss | Explain the reproduced miss or attribute it to the image/model with evidence; the original still and verified digest are available on Frame ([E80](evidence/e080.md)) |
 | WP2 | Evaluate detectors on representative Frame stills | Factual annotations and comparable evaluation before a detector-default choice |
 | WP7 | Keep documentation navigable and evidence traceable | Concise entry points, maintained ownership and reproducible generated summaries |
 | WP9 | Observe and qualify the HUD mapping | Accepted observation plus reviewed composition, all-copy, margin and operating-limit evidence |
@@ -94,22 +95,23 @@ that object, and any world position, are not claimed.
 These are the accepted decisions recorded in this checkout. Device approvals
 in the table are historical, scoped records; they are not reusable permission
 for a new run. Decisions do not supply evidence or open production gates.
-Later claims in open PR #23 remain pending, as explained in
-[current work](live-capture.md#implementation-and-evidence-reconciliation).
+The results of the recorded runs now live in E79–E83, integrated by
+[SightCircuit PR #1](https://github.com/moral-kombat/SightCircuit/pull/1).
+The chair decision below was added on November 4.
 
 | Topic | Decision |
 | --- | --- |
 | Who authorizes device runs | The owner. Each step below is approved once; repeating a step, or changing it, needs a new approval. |
 | G2 without a root cause | If the saved logs do not explain the green input, G2 may close on a written recovery procedure. The owner rehearses that procedure on the headset first, and any green input aborts the run. Unexplained physical failures remain recorded as unknown. |
-| G2 log analysis | Approved: read-only analysis of the saved green-event logs on Frame, written up as an evidence draft for the coordinator. |
-| WP9 / G3 | One bounded marker-observer run with the owner wearing the headset, approved for after G2 closes and the recovery rehearsal. It follows the [device checkpoint](hud-qualification.md#next-device-checkpoint) and a verified checkpoint manifest. |
-| Catch-up session | One session through `scripts/frame_session.sh`. It covers the E47 replay and VR-panel regression, the E48 mirror regression, the replay pacing measurement, and WP2 stills with the evaluation. The stills include the bottle in view and out of view, the rug, the sofa and a chair. |
-| WP1 | If the original E61 still exists on Frame, its digest is checked locally; nothing is uploaded. If it is gone, WP1 is retired as unreproducible and WP2's new stills take its place. |
-| POC object | **Bottle**. Both detectors have the class, and it is easy to move in and out of view for the expiry check. If the catch-up stills show weak bottle detection on Frame, chair is the fallback; switching needs a new decision. |
+| G2 log analysis | The approved read-only saved-log analysis is recorded in [E79](evidence/e079.md). It did not identify the green-input cause; the owner-rehearsed recovery procedure closed G2 |
+| WP9 / G3 | The approved November 3 attempt and owner-approved retry are recorded in [E83](evidence/e083.md). Both stopped before a marker appeared. A further attempt needs a reviewed precondition change and new approval, following the [device checkpoint](hud-qualification.md#next-device-checkpoint) |
+| Catch-up session | The completed regression, pacing, 400-frame panel, mirror and five-still evaluation session is recorded in [E81](evidence/e081.md). The invalid initial mirror/stills attempt is retained and excluded from scoring |
+| WP1 | Check the original still and digest locally without uploading. [E80](evidence/e080.md) found and verified it, so the missing-input retirement alternative does not apply. The reproduced miss remains unexplained |
+| POC object | **Chair**, changed by the owner on November 4 after the catch-up stills. Both detectors found the chair (0.98 and 0.78); neither found the clearly visible bottle above 0.05. This is an owner choice on five unboxed stills, not a detector-default decision; [E81](evidence/e081.md) |
 | Arrow tolerance | The arrow is one of eight directions, or a dot near the centre. It must point toward the side of the view where the object is. No bearing accuracy is claimed. |
 | Strip edge | Lower right (the current `HudConfig`). Choosing among several named positions comes after acceptance. Each position needs its own qualified mapping, because a mask is bound to its configuration digest. |
 | Mask fill (G5, E76) | The coder tests a neutral fill for the masked area offline. The strict overlap rule stays as it is. |
-| Frame agent (PR #16) | Approved: install the guarded setup following `docs/agent-on-frame.md` Phase 0. |
+| Frame agent (PR #16) | Guarded Phase 0 setup and guard settings were installed on Frame; [E82](evidence/e082.md). Live guard enforcement and the Tier A task runner still have no recorded Frame test |
 | Tracking-token binding (package I) | Answered later on 2026-11-03, in the coder session that recorded E77 and E78. The tokens stay bound when `MirrorSource` is declared: a first `tracking_state` must reach the `TrackingObserver` before the source is created. A state first seen later leaves `tracking_origin` and `recenter_epoch` undeclared for the run, so a bound mask rejects every frame. Late binding was not adopted. |
 | Unobserved session token (handoff item 2) | Answered on 2026-11-03, in the coder session that recorded E77 and E78. A session token that the marker observer did not observe rejects the observer-to-candidate conversion (`hud_validation_report.py --from-observer`). There is no declared fallback, behind a flag or otherwise; `--declared-context` keeps only the non-token context fields, and its `native_format` must equal the observer's capture format. |
 | Observer /proc reads (handoff item 2) | Answered on 2026-11-03, in the coder session that recorded E77 and E78. The marker observer reads session tokens from the real /proc only behind an explicit flag, `--record-session-tokens`, which is off by default, so the approved G3 run is unchanged. Using the flag on Frame is a separate approval. |

@@ -48,8 +48,9 @@ __________________/___________________|__________________\__________________
   and bounded mirror recognition with a preview inspected after capture.
 - **Verified offline:** the shared processing pipeline, HUD masking, stale-result
   expiry, and failure-handling checks using synthetic input.
-- **Still open:** physical recovery, accepted HUD mapping, feedback exclusion,
-  physical display expiry, and combined live headset acceptance.
+- **Still open:** accepted HUD mapping, feedback exclusion,
+  physical display expiry, and combined live headset acceptance. Lifecycle
+  acceptance is recorded in E79; the green-input cause remains unknown.
 - **Deferred:** dedicated camera capture, world-locked labels, depth, and splats.
 
 Read [capabilities and evidence](docs/status.md) for the limits behind these

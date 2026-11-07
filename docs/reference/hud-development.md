@@ -49,8 +49,11 @@ corners, qualify mapping or demonstrate physical expiry. The later
 [ARM64 build and empirical observer](../status.md#e71-offline-arm64-build-and-empirical-marker-observer)
 have offline evidence. Subsequently recovered [E75](../evidence/e075.md) establishes
 that the historical V4 ARM64 binary and observer ran on Frame and were rejected;
-the software stop is explained but physical recovery remains unresolved. A
-future clean observer result stays unqualified. Observer suite counts are implementation-session reports,
+the software stop is explained. The later [E79 recovery rehearsal](../evidence/e079.md)
+closed G2 on the owner's confirmation under the recorded decision, while the
+green-input cause remains unknown. [E83](../evidence/e083.md) then stopped at
+the scene precondition before any marker output, so G3 remains open. A future
+clean observer result stays unqualified. Observer suite counts are implementation-session reports,
 including a Windows symlink-privilege error, not an all-platform pass or an
 independently inspected standalone log. No device execution is authorized.
 
@@ -251,10 +254,10 @@ frames and public stills, not Frame evidence.
 and overlay builders share `scripts/build_openvr_tool.sh`; neither builder runs
 a runtime test. The camera binary's explicit opt-in guard remains in place.
 
-The overlay job checks that the generated contract header is current, strict
+The native CI job checks that the generated contract header is current, strict
 C++ syntax, packet bounds, malformed input, idle payload timeouts, signals and
 named missing-runtime diagnostics. The replay
-window job also builds the bridge so its validation-only mode can check actual
+job also builds the bridge so its validation-only mode can check actual
 RGBA forwarding and Qt control creation. This mode reports no OpenVR
 initialization and zero submitted frames. For the real hardware procedure,
 read [VR replay panel](../vr-overlay.md).

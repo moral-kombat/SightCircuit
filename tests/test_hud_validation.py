@@ -303,7 +303,7 @@ class G1RerunTests(unittest.TestCase):
 
     def test_documented_commands_parse_and_the_g1_rerun_uses_the_default_detector(self):
         commands = {document: documented_live_pipeline_commands(document)
-                    for document in ("live-capture.md", "development.md", "hud-qualification.md")}
+                    for document in ("reference/pipeline.md", "reference/hud-development.md")}
         self.assertGreaterEqual(sum(map(len, commands.values())), 4)
         for document, found in commands.items():
             for line, arguments in found:
@@ -311,7 +311,8 @@ class G1RerunTests(unittest.TestCase):
                     code, supervised = self.run_main(arguments)
                     self.assertEqual(code, 0)
                     supervised.assert_called_once()
-        for document, marker in (("live-capture.md", "G1 can be rerun"), ("development.md", "For a future justified rerun")):
+        # The duplicated live-capture example now links to one canonical G1 rerun.
+        for document, marker in (("reference/hud-development.md", "For a future justified rerun"),):
             text = (ROOT / "docs" / document).read_text(encoding="utf-8")
             block = re.search(r"```bash\n(.*?)```", text[text.index(marker):], re.S).group(1)
             hud_runs = [line for line in block.replace("\\\n", " ").splitlines() if "--synthetic-hud" in line]

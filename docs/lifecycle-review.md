@@ -7,7 +7,8 @@ lifecycle acceptance gate is **G2** in the [current work plan](live-capture.md#e
 Read the [complete investigation](history/2026-11-07-lifecycle-review.md) for
 source matching, exact timings, fix behavior and test names. [E75](evidence/e075.md)
 owns the recovered evidence; [E76](evidence/e076.md) records the subsequent
-offline work. This summary does not establish a new headset result.
+offline work. [E79](evidence/e079.md) records the later owner-rehearsed recovery
+procedure that closed G2. The green-input cause remains unknown.
 
 ## Recovered V4 software termination chain
 
@@ -46,7 +47,13 @@ software results, with limits described in the
 
 ## Evidence needed to advance G2
 
-The [current acceptance gates](live-capture.md#edge-hud-acceptance-gates) own the
-remaining evidence and next action. The [historical investigation's closing section](history/2026-11-07-lifecycle-review.md#evidence-needed-to-advance-g2)
-is preserved, but later owner decisions and reviewed evidence must be read in
-the current plan. Software cleanup alone does not prove physical recovery.
+G2 closed under the accepted recovery-procedure alternative in
+[E79](evidence/e079.md): the owner rehearsed switching to the grey tracking
+view and back to colour, with normal passthrough/tracking and no green input.
+The cause remains unknown. A rehearsal without green input does not prove
+that the procedure cures it, and software cleanup alone does not prove
+physical recovery.
+
+The [current acceptance gates](live-capture.md#edge-hud-acceptance-gates) own
+what follows. This heading and the [historical closing section](history/2026-11-07-lifecycle-review.md#evidence-needed-to-advance-g2)
+remain for earlier links; they are not a request to repeat the completed analysis.

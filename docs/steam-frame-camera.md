@@ -30,7 +30,9 @@ those features do not establish an application frame-access contract.
 ## Project device results
 
 - **Mirror input works for bounded recognition.** [E48](evidence/e048.md)
-  records capture, inference and a matching saved preview. The mirror includes
+  records capture, inference and a matching saved preview; [E81](evidence/e081.md)
+  adds the later mirror regression and a 400-frame replay-panel run without an
+  observed freeze on that build/runtime. The mirror includes
   our VR panel ([E18](evidence/e018.md)), so live output needs qualified masking
   and feedback/expiry acceptance.
 - **The public camera probe failed.** It returned no frames and interrupted

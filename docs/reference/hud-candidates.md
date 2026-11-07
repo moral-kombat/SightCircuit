@@ -68,7 +68,9 @@ candidate record from one saved `hud_marker_observer.py` report. The
 conversion is `sightcircuit/hud/candidate.py`; the command only reads files and
 writes the result. Its tests use reports from the real observer and
 observation algorithm on generated frames, run in the cloud. No Frame observer
-report has been converted, and no accepted G3 observation exists.
+report has been converted, and no accepted G3 observation exists. The later
+device attempts in [E83](../evidence/e083.md) stopped at the scene budget before
+marker output; those rejected reports cannot supply a mapping candidate.
 
 - **Accepted input.** Only a clean `observed_unqualified` report with exit 2
   converts. It must pass the observer's own worker-report contract

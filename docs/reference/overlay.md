@@ -69,10 +69,14 @@ claim, not SightCircuit evidence.
 
 Cloud checks cover the no-server refusal in every mode (with and without
 `--connect-as background`), the validation modes and scripted fakes of the
-connect order, isolation and watchdog (`tests/test_overlay_bridge.py`). Not yet checked on Frame (each needs the
-owner's approval): that the HUD, `SetOverlayRaw` and overlay events behave as
-before under the new connect order, and a `SetOverlayRaw` soak past 300 calls at
-HUD size (see [G6 risks](../live-capture.md#risks)).
+connect order, isolation and watchdog (`tests/test_overlay_bridge.py`);
+[E84](../evidence/e084.md) records the later review and cloud/CI checks.
+[E81](../evidence/e081.md) submitted 400 replay-panel frames on Frame without a
+freeze, but used the old connect order and does not qualify the changed
+lifecycle or HUD-size output. Still unverified on Frame: the HUD,
+`SetOverlayRaw` and overlay events under the new connect order, and a
+`SetOverlayRaw` soak past 300 calls at HUD size. Those device follow-ups need
+their recorded approval (see [G6 risks](../live-capture.md#risks)).
 
 ## Transport and cloud verification
 

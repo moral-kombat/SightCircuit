@@ -10,17 +10,18 @@ and accepted decisions; [architecture](architecture.md) explains the design.
 
 ## Current work order
 
-The established sequence is lifecycle acceptance → marker observation → mapping
-qualification → feedback/expiry validation → the combined live HUD run.
+Lifecycle acceptance (G2) is closed on the owner-rehearsed recovery procedure.
+The remaining sequence is marker observation → mapping qualification →
+feedback/expiry validation → the combined live HUD run.
 Image auditing and representative detector evaluation can advance alongside it.
 Dedicated camera capture, world-locked labels, depth and splats remain deferred.
 
 | Work | Implemented or recorded | Remaining acceptance |
 | --- | --- | --- |
-| Preprocessing audit (WP1) | Audit tooling and two preprocessing/scoring fixes; [E73](evidence/e073.md) | Inspect the original E61 still and digest if available. The accepted decision retires that reproduction as unreproducible if the original is gone; representative new stills then serve WP2 |
-| Detector evaluation (WP2) | Shared evaluator, factual annotation support, pinned seed comparison and native still digests; [E73](evidence/e073.md), [E76](evidence/e076.md) | Representative Frame stills and inspected labels before choosing a detector default or claiming accuracy |
-| Lifecycle acceptance (WP10 / G2) | V4 software termination explained; cooperative marker stop and guardian containment tested offline; [E75](evidence/e075.md), [E76](evidence/e076.md) | Reviewed physical recovery evidence. The accepted decision permits a written, owner-rehearsed recovery procedure if the physical cause remains unknown |
-| HUD mapping (WP9 / G3–G4) | Marker/observer, candidate validation, session tokens and offline prediction/scene tools | Accepted observation, eye/composition and all-copy evidence, bounded motion/filter uncertainty, and reviewed mapping |
+| Preprocessing audit (WP1) | Original E61 still found, digest verified and miss reproduced file-only on Frame; [E80](evidence/e080.md) | Explain the miss or attribute it to the image/model with evidence. The audit variants produce identical model inputs on this still, so the re-run does not distinguish a cause |
+| Detector evaluation (WP2) | Five unboxed Frame stills captured and evaluated; both detectors found the chair and missed the bottle; [E81](evidence/e081.md) | Inspected boxes and more representative stills before choosing a detector default. The owner chose chair for the POC; five presence-only stills do not close WP2 |
+| Lifecycle acceptance (WP10 / G2) | G2 closed on November 3 after log analysis and an owner-rehearsed recovery procedure; [E75](evidence/e075.md), [E79](evidence/e079.md) | None for G2. The green-input cause remains unknown; any green input still aborts a run |
+| HUD mapping (WP9 / G3–G4) | The November 3 observer attempt stopped at the contour budget before any marker appeared, with clean cleanup; [E83](evidence/e083.md). Scene statistics are implemented offline | Reviewed scene-precondition change and a new run approval, then accepted observation, eye/composition and all-copy evidence, bounded motion/filter uncertainty, and reviewed mapping |
 | Feedback and expiry (WP11 / G5) | Native masking, neutral fill, exclusion counters and report design tested offline; [E74](evidence/e074.md), [E78](evidence/e078.md) | Separately reviewed diagnostic, qualified mapping, physical feedback exclusion and expiry evidence |
 | Combined live HUD (WP12 / G6) | Shared bounded synthetic pipeline and latency reporting; production gates closed | G2–G5 and the 60-second headset acceptance run |
 
@@ -30,11 +31,11 @@ summaries. Its continuing maintenance is described in the
 
 ### Critical path
 
-1. Resolve lifecycle acceptance using the recorded physical evidence or the
-   accepted recovery-rehearsal alternative.
-2. Complete a bounded marker observation, then qualify the complete mapping.
+1. Review the observer scene-precondition change offline, then obtain a new
+   approval for a bounded marker observation. The previous attempts are consumed.
+2. Qualify the complete mapping after an accepted observation.
 3. Validate feedback exclusion and physical expiry with that mapping.
-4. Run the combined live HUD acceptance procedure.
+4. Run the combined live HUD acceptance procedure using the chosen chair.
 
 The [HUD checkpoint](guides/hud-checkpoint.md) owns the operator procedure.
 The [qualification design](hud-qualification.md) states what an observation
@@ -50,19 +51,44 @@ fixes (#24), and observer scene statistics/file analysis (#25). Do not redo
 those tasks from the archived handoffs. Their code being present does not
 supply device acceptance or fill missing evidence records.
 
-The historical handoff also describes pending device evidence in
-[PR #23](https://github.com/moral-kombat/framejacker/pull/23), including claimed
-G2 closure, a changed POC object and later observation attempts. That PR remains
-open; its E79–E84 work has also been carried into
-[SightCircuit PR #1](https://github.com/moral-kombat/SightCircuit/pull/1), which
-is still open. These are pending records, not committed evidence in this checkout.
-Keep the accepted state below unchanged until the coordinator reviews and
-integrates those records. Preserve unknown dates, revisions and physical causes.
+[SightCircuit PR #1](https://github.com/moral-kombat/SightCircuit/pull/1) has
+merged the E79–E84 records carried over from the former repository. They establish
+G2 closure by recovery rehearsal, the E61 file-only re-run, the catch-up session
+and chair decision, the guarded setup installation, the failed G3 precondition,
+and the November 6 cloud review. Installation in [E82](evidence/e082.md) is not
+a Frame run of the task runner or a live test of the guard's enforcement.
+The old “pending PR #23” handoff no longer describes these committed records.
+
+SightCircuit PRs [#2](https://github.com/moral-kombat/SightCircuit/pull/2) and
+[#3](https://github.com/moral-kombat/SightCircuit/pull/3) remain open. Do not
+infer that their code or proposed results have merged. The native tracking
+reporter remains on `work/native-tracking-reporter-unintegrated`, awaiting
+integration and review as detailed in the
+[November 7 handoff](history/coder-handoff-2026-11-07.md#item-3-the-native-tracking-reporter-carried-over-unfinished).
 
 The native tracking reporter remains absent from this checkout. Observer
 budget changes still require the scene evidence described in the
 [observation reference](reference/hud-observation.md#observer-scene-precondition-2026-11-04).
 These existing follow-ups do not change the acceptance order.
+
+### Offline review follow-ups
+
+The November 6 review left the following work, in its recorded order. The
+[full review notes](history/coder-handoff-2026-11-07.md#ship-pipeline-follow-ups-2026-11-06)
+preserve exact findings and limits; [E84](evidence/e084.md) records what merged.
+
+1. Capture supervisor: simultaneous pending SIGINT/SIGTERM cleanup, replay of a
+   default signal disposition, and duplicated signal/mask handling remain open
+   on the paused provider track.
+2. Bridge: the six-second connection budget needs its listed device check;
+   geometry clipping and sampler-bound checks have simplification follow-ups.
+3. Observer: review scene-budget validation, repeated contour work and reporting
+   cleanup with the pending scene-precondition work; a new device attempt needs
+   the reviewed change and a new approval.
+4. Agent runner: consolidate the signal hold/start/resume protocol through its
+   own review. The former #27 is now open SightCircuit PR #2, not merged code.
+5. CI: investigate the load-dependent cancellation test failure; do not suppress
+   it as a substitute for fixing the race.
 
 ## Edge HUD acceptance gates
 
@@ -72,12 +98,12 @@ recorded; investigate it before proposing a changed run.
 
 | Gate | Required evidence | Accepted state in this checkout |
 | --- | --- | --- |
-| G1: synthetic mask and expiry | Native full-footprint masking, margins/eye union, changed-context rejection and independent stale expiry | Passes offline; [E69](evidence/e069.md), [E74](evidence/e074.md), [E78](evidence/e078.md) |
-| G2: lifecycle and cleanup | Explained software termination, truthful cleanup reports, and physical failure/recovery evidence; a written, owner-rehearsed recovery procedure may satisfy the physical part when the cause remains unknown | Open in committed evidence; V4 software account established, physical outcome unresolved; [E75](evidence/e075.md) |
-| G3: mapping observed on Frame | Bounded marker/observer report ending `observed_unqualified`, with clean cleanup and normal passthrough confirmed | Historical V4 attempt rejected; no accepted observation in committed evidence |
-| G4: mapping qualified | Reviewed evidence for eye composition, all HUD copies, conservative margins, operating limits and exact context | Proposed method; device qualification pending |
-| G5: feedback exclusion and physical expiry | HUD visible during head motion with no detections from its footprint; independently observed expiry within the declared bound | Not run in committed evidence |
-| G6: combined live HUD | The [60-second POC acceptance](poc-scope.md#acceptance), with the report fields below | Not run in committed evidence |
+| G1. synthetic mask and expiry | Native full-footprint masking, margins/eye union, changed-context rejection and independent stale expiry | Passes offline; [E69](evidence/e069.md), [E74](evidence/e074.md), [E78](evidence/e078.md) |
+| G2. lifecycle and cleanup | Explained software termination, truthful cleanup reports, and physical recovery evidence; the accepted alternative permits an owner-rehearsed recovery procedure when the cause remains unknown | **Closed November 3, 2026**, on the owner’s confirmation after rehearsal; [E79](evidence/e079.md). The green-input cause remains unknown, and the clean rehearsal does not prove the procedure cures green input |
+| G3. mapping observed on Frame | Bounded marker/observer report ending `observed_unqualified`, with clean cleanup and normal passthrough confirmed | Open. V4 was rejected; the November 3 attempt stopped at `observer_contour_budget` before any marker was shown; [E83](evidence/e083.md). Review a changed precondition offline before a new approval |
+| G4. mapping qualified | Reviewed evidence for eye composition, all HUD copies, conservative margins, operating limits and exact context | Proposed method; device qualification pending |
+| G5. feedback exclusion and physical expiry | HUD visible during head motion with no detections from its footprint; independently observed expiry within the declared bound | Not run in committed evidence |
+| G6. combined live HUD | The [60-second POC acceptance](poc-scope.md#acceptance), with the report fields below | Not run. The POC object is chair; the 400-frame replay panel continued updating on the tested device/runtime, but that is not combined live acceptance; [E81](evidence/e081.md) |
 
 [`sightcircuit/gates.py`](../sightcircuit/gates.py) is the code's single gate
 table. Hardware mapping requires G4; production live image input requires
@@ -113,10 +139,11 @@ or preview does not establish accuracy. Physical green-input failures also
 remain unexplained in committed evidence.
 
 Third-party reports describe `SetOverlayRaw` freezing after about 200 updates.
-This is an unverified compatibility risk for a 60-second run at roughly five
-updates per second, not a SightCircuit failure finding. Retain the planned
-400-frame replay observation and evidence-led upload decision; the
-[dated risk analysis](history/live-capture-2026-11-07.md#risks) preserves source pins.
+[E81](evidence/e081.md) records a 400-frame replay-panel run that kept updating
+to the end with clean cleanup. That one device/runtime observation does not
+resolve the upstream reports or validate the future live HUD path. The
+[dated risk analysis](history/live-capture-2026-11-07.md#risks) preserves source pins;
+keep upload changes evidence-led.
 
 ## Synthetic input and feedback contract review
 

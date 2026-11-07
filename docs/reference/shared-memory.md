@@ -17,7 +17,7 @@ python3 -m unittest discover -s tests -p test_shm_capture_check.py -v
 
 No SDK download, package installation, capture-layer activation or producer
 startup occurs during the build. Native tests skip if the binaries are absent;
-the dedicated CI job builds them first. With PyAV installed, the preview test
+the native CI job builds them first. With PyAV installed, the preview test
 also decodes the actual PNG. The user reports all 14 tests passed on Frame ARM64
 in 7.204 seconds; see [E23](../status.md#e23-reference-build-and-controlled-reader-on-frame).
 

@@ -1,11 +1,12 @@
 # Plan: run Claude Code on Frame for automated testing
 
-The fixed on-device runner, guard and settings are implemented; [E77](evidence/e077.md)
-records cloud verification, not an accepted Frame agent run. The November 1
-Phase 0 report was relayed without raw output in that record. The owner approved
-guarded installation on November 3, with the recorded review follow-ups to be
-resolved before installing the guard. See the [current plan](live-capture.md)
-for the active checkpoint and approval scope.
+The fixed on-device runner, guard and settings are implemented.
+[E82](evidence/e082.md) records the November 3 Phase 0 checks on Frame and
+installed settings matching the template. Actual guard enforcement and a
+Tier A run have not been tested on Frame. [E77](evidence/e077.md) and
+[E84](evidence/e084.md) record the cloud implementation and later review work;
+those checks do not establish device enforcement. See the
+[current plan](live-capture.md) for the active checkpoint and approval scope.
 
 Use [Frame sessions](guides/frame-sessions.md#run-automated-checks-with-an-on-device-agent)
 for supported commands and result handling. The
@@ -87,7 +88,10 @@ remain addressable below so existing links still resolve.
 
 ### Phase 0: install and verify (manual, owner)
 
-The owner-approved installation and its checks are preserved in the
+Installed on Frame in [E82](evidence/e082.md): the reported Phase 0 stages
+passed with no failures or warnings, and the installed guard settings matched
+the template. The signature check covered Claude Code 2.1.316; the later
+2.1.317 update was not rechecked. The original procedure is preserved in the
 [Phase 0 procedure](history/agent-on-frame-2026-11-01.md#phase-0-install-and-verify-manual-owner).
 
 ### Phase 1: runner, guard and settings (cloud work)
@@ -98,7 +102,8 @@ Implemented and cloud-tested in [E77](evidence/e077.md); see the
 ### Phase 2: first agent-driven Tier A run (approval needed)
 
 Use the [runner guide](guides/frame-sessions.md#run-automated-checks-with-an-on-device-agent)
-within the approved scope. The proposed first-run acceptance and negative test
+within the approved scope. [E82](evidence/e082.md) records no Tier A run or
+device test of guard enforcement. The proposed first-run acceptance and negative test
 are preserved in [Phase 2](history/agent-on-frame-2026-11-01.md#phase-2-first-agent-driven-tier-a-run-approval-needed).
 
 ### Phase 3: on-demand runs from the app or cloud
@@ -114,7 +119,8 @@ considers observation-page integration and reviewed third-party tooling.
 
 ## Open questions and risks
 
-Device installation, guard behavior in a live Claude session and measurement
-contention need their own evidence. See the
+Guard behavior in a live Claude session, the first Tier A run and measurement
+contention still need device evidence; installation is recorded in
+[E82](evidence/e082.md). See the
 [recorded risks](history/agent-on-frame-2026-11-01.md#open-questions-and-risks)
 and [current plan](live-capture.md).

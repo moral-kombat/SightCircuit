@@ -73,8 +73,9 @@ Full validation evidence belongs in a [per-entry record](docs/evidence/README.md
 Include execution date, platform/runtime, revision, procedure, result, and limits;
 mark unavailable fields unknown. The coordinator allocates IDs after checking
 pending records, adds the entry to the evidence index, and updates reviewed
-capabilities in `docs/status-data.json`. Local E78 is not an instruction to reuse
-IDs already reserved in the older repository's open PR #23.
+capabilities in `docs/status-data.json`. Check the current index and pending allocations before choosing an ID.
+E79–E84 are now merged through SightCircuit PR #1; old handoffs are not
+authority to reuse an ID.
 
 Regenerate the status page, architecture summary, and evidence catalog, then
 validate them:

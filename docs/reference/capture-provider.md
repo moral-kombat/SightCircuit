@@ -111,7 +111,7 @@ publication-ordering and cleanup issues remain. These artifacts prove only
 that the reference compiles and links on the tested machine. The provider
 adaptation, configuration restoration and controlled live trial remain pending.
 
-The dedicated CI job builds these inspection artifacts and checks their hashes,
+The native CI job builds these inspection artifacts and checks their hashes,
 ELF headers and permissions without executing them. For Frame, follow
 [the combined build and reader-test procedure](capture-device-checks.md#build-the-capture-reference-without-activation).
 That procedure now passed on Frame ARM64; see [E23](../status.md#e23-reference-build-and-controlled-reader-on-frame).
@@ -224,7 +224,7 @@ four memory planes for a two-color-plane format, absent features/extensions,
 image/extent limits, oversized counts, driver errors, hangs during creation and
 destruction, crash containment, cancellation, parent death and bounded output.
 They make no GPU or camera calls. Native tests explicitly skip if the query is
-unbuilt; the dedicated CI job builds it before running them. Hosted CI results
+unbuilt; the native CI job builds it before running them. Hosted CI results
 are separate from local results. For the real Frame query, use
 [the supervised device command](capture-device-checks.md#query-vulkan-capture-capabilities).
 The first Frame query now passes on Turnip Adreno 750 with clean teardown and

@@ -25,7 +25,9 @@ copy. The historical V4 device attempt ran on Frame and was rejected; it did
 not establish an accepted G3 mapping observation. [E75](evidence/e075.md) now
 records its recovered evidence. Successful observations would still remain
 `observed_unqualified`, exit 2, including when later evidence is added beside
-their reports. Keep original reports and digests unchanged.
+their reports. Keep original reports and digests unchanged. The later
+November 3 attempt ([E83](evidence/e083.md)) stopped at the scene contour budget
+before any marker appeared; it also supplies no mapping observation.
 
 G4 requires two independent kinds of evidence. First, an inspected runtime and
 mirror composition contract must identify which eye or eyes are captured, the
@@ -46,8 +48,9 @@ stop at G3. Do not infer stereo side-by-side from image dimensions.
 
 ## Proposed G4 method
 
-1. **Pin and preflight.** Complete G2's lifecycle investigation and offline
-   checks. Obtain approval for a specifically scoped G4 trial, separate from
+1. **Pin and preflight.** Retain G2's accepted recovery procedure and the required
+   offline checks. G2 is closed by [E79](evidence/e079.md), with the physical cause
+   still unknown. Obtain approval for a specifically scoped G4 trial, separate from
    G3. Pin the checkout, bridge, Python modules and native dependencies by
    SHA-256; record SteamOS/SteamVR, source node identity, source/session identity,
    tracking origin and recenter generation. Verify independent SSH/abort and
@@ -185,6 +188,11 @@ The [canonical HUD checkpoint](guides/hud-checkpoint.md) contains prerequisites,
 artifact verification, exact bounded commands, expected reports and shutdown.
 Its current acceptance prerequisites come from the [gate table](live-capture.md#edge-hud-acceptance-gates).
 Keep existing reports and source digests; do not repeat an unchanged failed run.
+The November 3 attempts passed manifest verification and the validation-only
+check, then both stopped in under half a second at `observer_contour_budget`
+before bridge initialization or marker output ([E83](evidence/e083.md)).
+A further attempt waits for a reviewed precondition based on marker-detection
+risk, diagnostics in the rejection report, and a new approval. G3 stays open.
 No G4/G5 device diagnostic command exists yet.
 
 ## Reference sections

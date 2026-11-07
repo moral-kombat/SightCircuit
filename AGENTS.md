@@ -50,9 +50,11 @@ uvx ruff@0.14.2 check .
 git diff --check
 ```
 
-CI runs the same jobs on x86_64 (`checks.yml`) and ARM64 (`arm64.yml`) through
-`check-jobs.yml`; ARM64 also replays the synthetic stand-in and uploads
-runner-CPU latency reports (not Frame results).
+CI runs `check-jobs.yml` on x86_64 (`checks.yml`) for pull requests and main
+pushes, and on ARM64 (`arm64.yml`) for main pushes and on demand. The optional
+ARM64 pacing run reports runner-CPU latency, not Frame measurements.
+Documentation-only changes run `docs.yml`; `tests/test_workflows.py` protects
+which document inputs require the full suite.
 
 ## Documentation navigation
 
@@ -61,6 +63,7 @@ runner-CPU latency reports (not Frame results).
 [Scope](docs/poc-scope.md) owns accepted decisions; only
 [current work](docs/live-capture.md) owns the next work order and gate state.
 Historical reviews and archived handoffs explain earlier decisions, not current
-assignments. Keep pending reports from Framejacker PR #23 separate from the
-merged evidence in this checkout; do not allocate IDs from the local maximum.
+assignments. Evidence E79–E84 from the former Framejacker PR #23 is now merged
+through SightCircuit PR #1. Use the current evidence catalog and check pending
+allocations before assigning an ID; historical handoffs are not allocation authority.
 See [documentation ownership](docs/documentation-plan.md) before moving content.

@@ -24,10 +24,17 @@ Their old “wait for merge” and implementation instructions are obsolete.
 
 The native tracking reporter and other remaining follow-ups are described by
 [current work](live-capture.md#implementation-and-evidence-reconciliation).
-The E79–E84 records and claimed device decisions from the old PR #23, now also
-proposed in [SightCircuit PR #1](https://github.com/moral-kombat/SightCircuit/pull/1),
-remain pending. Do not assign
-those IDs again or update gate acceptance from a relayed claim alone.
+[SightCircuit PR #1](https://github.com/moral-kombat/SightCircuit/pull/1) merged
+E79–E84. G2 is closed by the owner-rehearsed recovery procedure; the green-input
+cause stays unknown. The original E61 still was verified and re-run, five WP2
+stills support the owner’s chair choice, and G3 stopped at the scene precondition
+before marker output. These records do not close G3–G6 or enable production.
+
+The agent-runner/guard follow-ups (SightCircuit PR #2) and SightCircuit PR #3
+remain open. The native tracking reporter is carried on
+`work/native-tracking-reporter-unintegrated`, awaiting integration and review.
+See the [current review follow-ups](live-capture.md#offline-review-follow-ups)
+and the source handoff below; do not infer a merge from former-repository status.
 
 ## Copy-ready prompt
 
@@ -42,6 +49,37 @@ offline checks, CI and headset evidence distinct. Update the owning docs with
 behavior changes and run the documented relevant checks. Record results with
 provenance; do not turn historical one-run approvals into a new device run.
 ```
+
+## Ship pipeline follow-ups, 2026-11-06
+
+[Current work](live-capture.md#offline-review-follow-ups) owns the remaining
+work order. The [full review table](history/coder-handoff-2026-11-07.md#ship-pipeline-follow-ups-2026-11-06)
+preserves findings, deferral reasons and source PRs; [E84](evidence/e084.md)
+records merged changes and validation limits.
+
+## Coder handoff, 2026-11-07 (agent-runner coder; session closed after the move)
+
+The [full November 7 handoff](history/coder-handoff-2026-11-07.md#coder-handoff-2026-11-07-agent-runner-coder-session-closed-after-the-move)
+preserves the unfinished reporter integration, source pins, completed work
+and open review findings. Its former #27 is open SightCircuit PR #2.
+
+### Item 3: the native tracking reporter, carried over unfinished
+
+See the [integration steps and binding decisions](history/coder-handoff-2026-11-07.md#item-3-the-native-tracking-reporter-carried-over-unfinished).
+The branch requires integration with the merged bridge lifecycle changes,
+remaining source-pin fixes, the SightCircuit rename, full checks and review.
+
+### What that session finished
+
+See the [recorded session outcome](history/coder-handoff-2026-11-07.md#what-that-session-finished).
+Current merged state is reconciled [here](live-capture.md#implementation-and-evidence-reconciliation).
+
+### Still open
+
+See [current follow-ups](live-capture.md#offline-review-follow-ups) and the
+[remaining session findings](history/coder-handoff-2026-11-07.md#still-open).
+The old e008 link defect has been corrected by this documentation work; optional
+lock-file and console-entry-point work remains outside it.
 
 ## Historical handoffs
 

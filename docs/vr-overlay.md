@@ -5,10 +5,14 @@ For session orchestration use [Frame sessions](guides/frame-sessions.md); for
 protocol and lifecycle details use the [overlay reference](reference/overlay.md).
 [Status and evidence](status.md#e6-window-and-vr-panel) records the user's device
 confirmations and unmeasured detection, readability, color and performance limits.
-The latest [recorded-input POC](status.md#e47-recorded-recognition-and-vr-panel-poc-on-frame)
-processed/presented 576 frames and submitted all 576 VR images, with clean
-shutdown. The user confirms visible labels and normal passthrough during/after.
-Label accuracy, measured latency/rate and live input remain separate checks.
+The [recorded-input POC](status.md#e47-recorded-recognition-and-vr-panel-poc-on-frame)
+established visible labels and normal passthrough. The later
+[E81 session](evidence/e081.md) submitted all 400 replay frames with a clean
+close; the owner saw the picture keep changing to the end, with normal
+passthrough and tracking. That bridge used the old connect order. This result
+does not qualify the changed lifecycle, HUD-size uploads or a detector default;
+[E84](evidence/e084.md) records the later cloud checks and remaining device work.
+Label accuracy, measured latency and live input remain separate checks.
 The panel presents a selected recording; live input follows the separate
 [capture plan](live-capture.md).
 
@@ -41,7 +45,12 @@ production HUD frames or qualify mapping. The
 [recovered V4 evidence](evidence/e075.md) establishes that a marker-only observer
 run did execute on Frame and failed: no valid mapping was accepted, and the
 wearer reported green Arcturus passthrough before manually switching to native
-passthrough. Physical recovery and G3/G4 acceptance remain open. A clean future
+passthrough. [E79](evidence/e079.md) subsequently closed G2 on the owner's
+confirmation of a recovery rehearsal with normal passthrough and tracking.
+The green-input cause remains unknown; a rehearsal without green input does
+not establish a cure. The later [E83 attempt](evidence/e083.md) stopped at
+`observer_contour_budget` before bridge initialization or any marker tile;
+G3 remains open and G4 remains unqualified. A clean future
 observer result would still be `observed_unqualified` (exit 2), not production
 feedback-exclusion qualification. Follow the [current plan](live-capture.md)
 and [bounded calibration checkpoint](on-device.md#bounded-edge-hud-calibration-checkpoint)

@@ -143,8 +143,9 @@ python -m scripts.live_pipeline --synthetic-check --validate-overlay --seconds 3
 
 These commands use generated images and native transport validation only.
 The detector/decode dependencies use the repository's existing pins; no new
-model or API credentials are required. The replay-window CI job on x86_64 and
-ARM64 includes these critical offline suites in its explicit no-skip gate.
+model or API credentials are required. The replay CI job on x86_64 (every
+pull request) and ARM64 (main pushes and on demand) includes these critical
+offline suites in its explicit no-skip gate.
 Local results and their limits are recorded in [E66](../status.md#e66-offline-live-pipeline-and-headers-only-input-probe).
 
 [`recording_growth_check.py`](../../scripts/recording_growth_check.py) defaults to

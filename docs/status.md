@@ -21,24 +21,24 @@ kinds of evidence. Unknown dates, revisions and runtime versions stay unknown.
 | Capability | State | Evidence and limits |
 | --- | --- | --- |
 | Continuous live input in the Qt/VR application | Offline fixed edge HUD only; production closed | Mirror includes our panel; the fixed edge HUD requires qualified full-footprint native masking plus feedback/expiry acceptance; [E18](#e18-vr-panel-included-in-mirror-input), [E69](#e69-offline-edge-hud-and-native-mask-validation) |
-| Fixed edge HUD, marker and offline live pipeline | Offline validation passed; device acceptance open | V4 was rejected; G2 remains open and production gates stay closed in committed evidence. [Runtime, mask and token details](evidence/capability-notes.md#fixed-edge-hud-marker-and-offline-live-pipeline); [E75](#e75-recovered-v4-evidence-and-software-termination-analysis), [E78](#e78-mirror-session-tokens-and-neutral-hud-mask-fill-cloud-checks). |
-| Bounded mirror recognition | Frame demonstration confirmed; broader accuracy open | Bounded capture, matching preview labels and normal passthrough were reported in [E48](#e48-live-mirror-recognition-poc-and-matching-preview). Still export was restored offline in E76; [measurements and limits](evidence/capability-notes.md#bounded-mirror-recognition). |
+| Fixed edge HUD, marker and offline live pipeline | Offline validation passed; G2 closed; G3 open | The owner accepted rehearsed recovery; the green-input cause is unknown ([E79](#e79-g2-green-input-log-analysis-and-recovery-rehearsal-on-frame)). G3 stopped before any marker ([E83](#e83-g3-marker-observer-attempt-stopped-at-the-observer-scene-precondition)). Production gates stay closed; [implementation and limits](evidence/capability-notes.md#fixed-edge-hud-marker-and-offline-live-pipeline). |
+| Bounded mirror recognition | Rewritten path re-run on Frame; broader accuracy open | The November 3 rerun had labels matching the owner’s view ([E81](#e81-catch-up-session-on-frame-regressions-400-frame-panel-run-mirror-and-wp2-stills)). [Earlier measurements, still export and limits](evidence/capability-notes.md#bounded-mirror-recognition). |
 | Existing-mirror diagnostic | Frame capture confirmed; VR panel included in input | Physical-room preview and bounded inference work, but this composited view includes our overlay; physical camera identity/timing remain unknown; [E14](#e14-physical-room-visible-in-the-mirror-preview), [E18](#e18-vr-panel-included-in-mirror-input) |
 | Recognition on the saved room still | Frame execution confirmed; false positive | One image processed and annotated; user identifies the `sofa`-labeled item as a rug; [E15](#e15-saved-room-recognition-and-rug-false-positive) |
-| Candidate detector and evaluation harness | Offline audit passed; Frame model choice blocked | SSD preprocessing is corrected; the original E61 still and digest remain absent. No default changed. [Audit and evaluation details](evidence/capability-notes.md#candidate-detector-and-evaluation-harness); [E73](#e73-reproducible-preprocessing-audit-and-ssd-channel-correction). |
+| Candidate detector and evaluation harness | E61 miss reproduced; Frame model choice open | The original still and digest were verified on Frame; the miss remains unexplained ([E80](#e80-file-only-detector-re-run-on-the-e61-still-with-audit-variants)). Five unboxed stills support the chair demo, not a model default. [Evaluation details](evidence/capability-notes.md#candidate-detector-and-evaluation-harness). |
 
 ### Replay and development
 
 | Capability | State | Evidence and limits |
 | --- | --- | --- |
-| Annotated Qt replay window | Device-confirmed | Latest run presents/processes 576 frames and reports four labels; label accuracy remains unevaluated; [E47](#e47-recorded-recognition-and-vr-panel-poc-on-frame) |
-| Native head-relative VR replay panel | Device-confirmed, including latest POC | User confirms visible panel/labels and normal passthrough; 576 images submitted with clean shutdown and no forced termination; [E47](#e47-recorded-recognition-and-vr-panel-poc-on-frame) |
+| Annotated Qt replay window | Device-confirmed | E47 reports 576 frames and reports four labels; label accuracy remains unevaluated; [E47](#e47-recorded-recognition-and-vr-panel-poc-on-frame) |
+| Native head-relative VR replay panel | Frame replay confirmed; newer connect path unverified | The 400-frame run kept updating to the end with clean shutdown ([E81](#e81-catch-up-session-on-frame-regressions-400-frame-panel-run-mirror-and-wp2-stills)). [Earlier results and newer bridge limits](evidence/capability-notes.md#native-head-relative-vr-replay-panel). |
 | Selected-track HEVC decoding and RGB conversion | Device-confirmed | Three frames decoded from video ordinal 0; not full-file or stereo validation; [E5](#e5-selected-track-decode) |
-| Real-time recorded replay | Synthetic cloud check passed; Frame measurement pending | Keyframe catch-up and newest-frame inference improve the synthetic replay. [Measurements and later latency tooling](evidence/capability-notes.md#real-time-recorded-replay); [E62](#e62-keyframe-catch-up-realtime-replay-cloud-checks). |
-| Linux development setup and smoke check | Cloud-tested | Linux x86_64, Python 3.12; generated repeated-image video, CPU detection and offscreen rendering; [E7](#e7-cloud-validation); current integration [E78](#e78-mirror-session-tokens-and-neutral-hud-mask-fill-cloud-checks) |
+| Real-time recorded replay | Synthetic cloud checks and one Frame measurement | Frame replay reached 8.4 processed fps on November 3; no latency percentiles were taken ([E81](#e81-catch-up-session-on-frame-regressions-400-frame-panel-run-mirror-and-wp2-stills)). [Comparison context](evidence/capability-notes.md#real-time-recorded-replay). |
+| Linux development setup and smoke check | Cloud-tested | Linux x86_64, Python 3.12; generated repeated-image video, CPU detection and offscreen rendering; [E7](#e7-cloud-validation); integration through [E78](#e78-mirror-session-tokens-and-neutral-hud-mask-fill-cloud-checks) |
 | Read-only device and recording inspection | Device-confirmed | Inventory and MP4 header reports supplied by the user; device presence does not prove capture; [E1](#e1-frame-inventory), [E4](#e4-recordings-and-container-metadata) |
 | Vendor Arcturus app live preview and recording | Device-confirmed | User reports the vendor app works; it does not supply frames to SightCircuit; [E2](#e2-vendor-app) |
-| Guarded on-device agent runner | Cloud-tested; no Frame run in committed evidence | Runner, guard, settings and selected installer stages were tested offline. [Coverage and outstanding follow-ups](evidence/capability-notes.md#guarded-on-device-agent-runner); [E77](#e77-claude-code-on-frame-runner-guard-and-installer-cloud-checks). |
+| Guarded on-device agent runner | Phase 0 installed; runner and guard enforcement untested on Frame | Phase 0 passed and guard settings were installed ([E82](#e82-guarded-claude-code-setup-installed-on-frame-phase-0)). Installation does not validate automated checks or blocking. [Coverage and follow-ups](evidence/capability-notes.md#guarded-on-device-agent-runner). |
 
 ### Paused provider research
 
@@ -388,6 +388,30 @@ provenance and original uncertainty.
 ### E78: Mirror session tokens and neutral HUD mask fill, cloud checks
 
 [Full evidence](evidence/e078.md). Offline record.
+
+### E79: G2 green-input log analysis and recovery rehearsal on Frame
+
+[Full evidence](evidence/e079.md). Device report.
+
+### E80: File-only detector re-run on the E61 still, with audit variants
+
+[Full evidence](evidence/e080.md). Device report.
+
+### E81: Catch-up session on Frame: regressions, 400-frame panel run, mirror and WP2 stills
+
+[Full evidence](evidence/e081.md). Device report.
+
+### E82: Guarded Claude Code setup installed on Frame (Phase 0)
+
+[Full evidence](evidence/e082.md). Device report.
+
+### E83: G3 marker-observer attempt stopped at the observer scene precondition
+
+[Full evidence](evidence/e083.md). Device report.
+
+### E84: Ship pass of 2026-11-06, cloud checks for PRs #22, #24, #25, #26 and #27
+
+[Full evidence](evidence/e084.md). Offline record.
 
 ## Maintaining the evidence
 

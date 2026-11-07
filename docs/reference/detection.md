@@ -59,6 +59,19 @@ scores are objectness × class probability after class-aware NMS at IoU 0.45.
 Detectors keep native label names in reports (`sofa` for MobileNet-SSD,
 `couch` for YOLOX); evaluation compares them through canonical COCO names.
 
+## Recorded Frame evaluation
+
+[E80](../evidence/e080.md) records a file-only rerun after the original E61
+still and its saved digest were found on Frame. Both models still missed the
+expected TV at the unchanged 0.5 threshold. All audit variants produced the
+same input bytes on that grayscale preview, so the miss remains unexplained
+and WP1 stays open.
+
+[E81](../evidence/e081.md) records five private, unboxed stills with owner-given
+presence/absence labels. Both models detected the chair and missed the bottle;
+the owner switched the POC object to chair. These results do not support a
+detector-default decision: WP2 remains open, and thresholds/defaults are unchanged.
+
 ## Candidate models
 
 MobileNet-SSD and YOLOX-Nano are implemented. The other rows are candidates
@@ -70,7 +83,7 @@ terms.
 | Candidate | Why consider it | Runtime and tradeoff |
 | --- | --- | --- |
 | Current MobileNet-SSD | Small working baseline with measured Frame execution | OpenCV DNN CPU; only 20 foreground classes and observed false positives |
-| [YOLOX-Nano](https://github.com/Megvii-BaseDetection/YOLOX) | **Implemented candidate** (`--detector yolox-nano`); standard COCO training covers 80 classes | Pinned 0.1.1rc0 ONNX export, letterbox input, grid decoding and class-aware NMS; ONNX Runtime CPU with OpenCV DNN fallback; Apache-2.0 source; Frame evaluation pending |
+| [YOLOX-Nano](https://github.com/Megvii-BaseDetection/YOLOX) | **Implemented candidate** (`--detector yolox-nano`); standard COCO training covers 80 classes | Pinned 0.1.1rc0 ONNX export, letterbox input, grid decoding and class-aware NMS; ONNX Runtime CPU with OpenCV DNN fallback; Apache-2.0 source; limited Frame evaluation recorded in E80/E81, model selection still open |
 | [YOLO11n](https://docs.ultralytics.com/models/yolo11/) | Another small 80-class COCO detector with an established export workflow | Export off-device instead of requiring the training stack on Frame; verify ONNX operators/runtime and AGPL-3.0 or applicable commercial licensing |
 | [EfficientDet-Lite0](https://ai.google.dev/edge/litert/libraries/task_library/object_detector) | A mobile-oriented alternative, including quantized deployment | Requires a LiteRT/TFLite adapter and verified ARM64 runtime; quantized accuracy and preprocessing need measurement |
 | [Grounding DINO](https://github.com/IDEA-Research/GroundingDINO) or [OWLv2](https://huggingface.co/docs/transformers/model_doc/owlv2) | Text-prompted categories such as rug/carpet without the current fixed label list | Much heavier candidates; begin with offline evaluation or an explicit companion-computer experiment before headset deployment |
