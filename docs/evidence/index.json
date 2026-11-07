@@ -528,7 +528,7 @@
     },
     {
       "id": "E76",
-      "title": "Offline work packages A\u2013H, cloud checks",
+      "title": "Offline work packages A–H, cloud checks",
       "file": "e076.md",
       "kind": "offline",
       "reconstructed": false
@@ -587,6 +587,13 @@
       "title": "Ship pass of 2026-11-06, cloud checks for PRs #22, #24, #25, #26 and #27",
       "file": "e084.md",
       "kind": "offline",
+      "reconstructed": false
+    },
+    {
+      "id": "E85",
+      "title": "SteamOS 0.5.8 update on Frame: post-reboot baseline, Python 3.12 removal and G2 log watch",
+      "file": "e085.md",
+      "kind": "device_report",
       "reconstructed": false
     }
   ]

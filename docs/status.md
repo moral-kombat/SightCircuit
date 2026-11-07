@@ -413,6 +413,10 @@ provenance and original uncertainty.
 
 [Full evidence](evidence/e084.md). Offline record.
 
+### E85: SteamOS 0.5.8 update on Frame: post-reboot baseline, Python 3.12 removal and G2 log watch
+
+[Full evidence](evidence/e085.md). Device report.
+
 ## Maintaining the evidence
 
 The coordinator checks pending allocations before assigning an evidence ID and adds its record
