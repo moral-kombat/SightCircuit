@@ -163,7 +163,7 @@ parallel coder sessions. The acceptance order of the gates is unchanged.
 
 | Item | Work | Size | Depends on |
 | --- | --- | --- | --- |
-| E1 | Split `tools/overlay_bridge.cpp` into lifecycle, rendering, reporting and sensing units; move the source-text tests and manifest pins | L | none |
+| E1 | Split `tools/overlay_bridge.cpp` into lifecycle, rendering, reporting and sensing units; move the source-text tests and manifest pins. Done (#38, 2026-11-08): one shared header and five translation units, compared offline against the single-file build; the Frame rebuilds the bridge before its next bridge step | L, done | none |
 
 **Lane F, fallback input by time-multiplexed exclusion (opened 2026-11-08).**
 
@@ -232,8 +232,9 @@ attempt; cloud-checked only, nothing run on the Frame). Lanes B and P are
 complete. The last budgeted G3 attempt ran ([E90](evidence/e090.md)): the
 decode passed and the run rejected on marker movement; the D2 exit rule is
 reached and the owner chose the fallback ([scope](poc-scope.md#architecture-decisions-2026-11-07)).
-Open: E1 then lane F (F1 to F8), B9 and B10, C5 with C6 (approved, staged on
-the Frame), A9 deferred; A7, A8 and A10 superseded. The council's
+E1 merged on 2026-11-08 (#38). Open: lane F (F1 in progress, then F2 to
+F8), B9 and B10 (in progress), C5 with C6 (approved, staged on the Frame,
+waiting for the owner's start), A9 deferred; A7, A8 and A10 superseded. The council's
 hypothesis for the cancellation race was wrong; the recorded cause is the
 readiness probe firing on the worker before it had exec'd
 ([checks reference](reference/development-checks.md)). One runner-only flake
