@@ -121,10 +121,14 @@ PACKET_HEADER_FIELDS = (("magic", "4s"), ("opcode", "I"), ("payload_bytes", "I")
 SETTINGS_FIELDS = (("width", "f"), ("distance", "f"), ("x", "f"), ("y", "f"), ("opacity", "f"), ("visible", "I"))
 FRAME_PREFIX_FIELDS = (("width", "I"), ("height", "I"))
 EXPIRING_FRAME_PREFIX_FIELDS = (("expires_ns", "Q"), ("width", "I"), ("height", "I"))
+# A show or hide request of one fallback cycle (docs/reference/hud-fallback.md#bridge-events, F1): the bridge
+# answers with timestamped lines that carry the cycle number, so the Python side can correlate them.
+VISIBILITY_FIELDS = (("cycle", "I"), ("visible", "I"))
 OPCODE_FRAME = 1
 OPCODE_SETTINGS = 2
 OPCODE_STOP = 3
 OPCODE_EXPIRING_FRAME = 4  # Validation bridge only.
+OPCODE_VISIBILITY = 5
 
 
 def layout_format(fields):
@@ -136,6 +140,21 @@ PACKET_HEADER_FORMAT = layout_format(PACKET_HEADER_FIELDS)
 SETTINGS_FORMAT = layout_format(SETTINGS_FIELDS)
 FRAME_PREFIX_FORMAT = layout_format(FRAME_PREFIX_FIELDS)
 EXPIRING_FRAME_PREFIX_FORMAT = layout_format(EXPIRING_FRAME_PREFIX_FIELDS)
+VISIBILITY_FORMAT = layout_format(VISIBILITY_FIELDS)
+
+# The bridge's lines for one visibility request, in its CLOCK_MONOTONIC nanoseconds (the clock of
+# Frame.observed_ns on the same host). The request and return lines are written for every request; the
+# event lines when the runtime's overlay event is polled while that request is pending; the missing line
+# when a hide request's hidden event has not been polled within VISIBILITY_EVENT_BOUND_NS, so a cycle
+# without a confirmed hide fails closed (no admission window). The bound is a cloud default: the bridge
+# polls runtime events on every input wait (20 ms), so it is a dozen polls, ten times the illustrative
+# 25 ms request-to-hidden term of the fallback costing and half of its fastest costed cycle (500 ms at
+# two per second), so a late event still confirms the hide within the cycle and a missing one is reported
+# before the next request at that pacing. It is unmeasured on the Frame; the hidden-event delivery
+# measurement (F3) replaces it with a device value.
+VISIBILITY_EVENT_BOUND_NS = 250_000_000
+VISIBILITY_LINES = ("hide_requested", "hide_returned", "overlay_hidden",
+                    "show_requested", "show_returned", "overlay_shown", "visibility_event_missing")
 
 
 def required_margin_px(error_terms_px=()):

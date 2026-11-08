@@ -11,7 +11,9 @@ import tempfile
 import time
 import unittest
 
-from sightcircuit.overlay import DEFAULT_BRIDGE, MAX_SIDE, PANEL_LIMITS, OverlayClient, PanelSettings, packet
+from sightcircuit.hud.contract import VISIBILITY_EVENT_BOUND_NS, VISIBILITY_LINES
+from sightcircuit.overlay import (DEFAULT_BRIDGE, MAX_SIDE, PANEL_LIMITS, OverlayClient, PanelSettings, packet,
+                                  visibility_packet)
 from sightcircuit.runtime.manifest import NATIVE_SOURCES
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -258,6 +260,118 @@ class OverlayBridgeTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "VRInitError_Init_PathRegistryNotFound"):
             client.start()
         self.assertIsNotNone(client.process.poll())
+
+
+@unittest.skipUnless(DEFAULT_BRIDGE.is_file(), "Build scripts/build_overlay_bridge.sh first")
+class VisibilityLineTests(unittest.TestCase):
+    """The fallback's visibility lines (work item F1) on the validation bridge: software timing, no runtime.
+
+    Without a runtime no overlay event can arrive, so every hide ends in
+    ``visibility_event_missing``: the fail-closed path is what these tests
+    exercise. ``overlay_hidden`` and ``overlay_shown`` need a device run.
+    """
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.env = dict(os.environ, VR_PATHREG_OVERRIDE=str(Path(self.temporary.name) / "absent.vrpath"))
+
+    def run_steps(self, steps):
+        """Write each payload, wait the given seconds, then close stdin; returns the parsed lines and the exit code."""
+        process = subprocess.Popen([str(DEFAULT_BRIDGE), "--validate-stdin"], stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=self.env)
+        try:
+            for data, wait in steps:
+                process.stdin.write(data)
+                process.stdin.flush()
+                time.sleep(wait)
+            output, _ = process.communicate(timeout=10)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=3)
+        return [json.loads(line) for line in output.splitlines()], process.returncode
+
+    @staticmethod
+    def visibility_lines(messages):
+        return [message for message in messages if message["event"] in VISIBILITY_LINES]
+
+    def test_a_hide_without_its_event_fails_closed_after_the_bound_and_a_show_does_not(self):
+        bound_seconds = VISIBILITY_EVENT_BOUND_NS / 1e9
+        frame = packet(1, struct.pack("<II", 2, 1) + bytes(8))
+        messages, code = self.run_steps([(frame, 0), (visibility_packet(7, False), bound_seconds + 0.2),
+                                         (visibility_packet(8, True), bound_seconds + 0.2), (packet(3), 0)])
+        self.assertEqual(code, 0, messages)
+        lines = self.visibility_lines(messages)
+        self.assertEqual([(line["event"], line["cycle"]) for line in lines],
+                         [("hide_requested", 7), ("hide_returned", 7), ("visibility_event_missing", 7),
+                          ("show_requested", 8), ("show_returned", 8)])
+        requested, returned, missing, show_requested, show_returned = lines
+        self.assertEqual(set(requested), {"event", "cycle", "request_ns", "validation_only", "report_kind", "schema_version"})
+        self.assertEqual(set(returned), {"event", "cycle", "returned_ns", "ok", "validation_only", "report_kind", "schema_version"})
+        self.assertEqual(set(missing), {"event", "cycle", "waited_ns", "validation_only", "report_kind", "schema_version"})
+        self.assertTrue(all(line["validation_only"] is True for line in lines))
+        self.assertIs(returned["ok"], True)
+        self.assertIs(show_returned["ok"], True)
+        self.assertLessEqual(requested["request_ns"], returned["returned_ns"])
+        self.assertLessEqual(returned["returned_ns"], show_requested["request_ns"])
+        self.assertGreaterEqual(missing["waited_ns"], VISIBILITY_EVENT_BOUND_NS)
+        self.assertLess(missing["waited_ns"], VISIBILITY_EVENT_BOUND_NS + 1_000_000_000)
+        # The bound is polled, not slept: the stdin loop went on reading, and the show after it carried the
+        # tile's presentation state while the hide had switched it off.
+        self.assertEqual(messages.index(missing), messages.index(show_requested) - 1)
+        final = messages[-1]
+        self.assertEqual((final["status"], final["frames_received"], final["visibility_requests_received"],
+                          final["visibility_events_missing"]), ("validated", 1, 2, 1))
+        self.assertIs(final["presentation_visible"], True)  # shown again, the frame still current
+        self.assertNotIn("overlay_hidden", [line["event"] for line in lines])
+        self.assertNotIn("overlay_shown", [line["event"] for line in lines])
+
+    def test_a_hide_leaves_the_tile_off_in_the_report(self):
+        frame = packet(1, struct.pack("<II", 2, 1) + bytes(8))
+        messages, code = self.run_steps([(frame + visibility_packet(3, False) + packet(3), 0)])
+        self.assertEqual(code, 0, messages)
+        final = messages[-1]
+        self.assertIs(final["content_current"], True)
+        self.assertIs(final["presentation_visible"], False)
+        # Input ended before the bound: the pending hide is still reported missing, fail closed.
+        self.assertEqual([line["event"] for line in self.visibility_lines(messages)],
+                         ["hide_requested", "hide_returned", "visibility_event_missing"])
+        self.assertLess(self.visibility_lines(messages)[-1]["waited_ns"], VISIBILITY_EVENT_BOUND_NS)
+        self.assertEqual(final["visibility_events_missing"], 1)
+
+    def test_a_new_request_settles_a_pending_hide_before_its_own_lines_and_a_pending_show_silently(self):
+        messages, code = self.run_steps([(visibility_packet(1, False), 0.05), (visibility_packet(2, False), 0.05),
+                                         (visibility_packet(3, True), 0.05), (visibility_packet(4, False), 0.05),
+                                         (packet(3), 0)])
+        self.assertEqual(code, 0, messages)
+        self.assertEqual([(line["event"], line["cycle"]) for line in self.visibility_lines(messages)],
+                         [("hide_requested", 1), ("hide_returned", 1), ("visibility_event_missing", 1),
+                          ("hide_requested", 2), ("hide_returned", 2), ("visibility_event_missing", 2),
+                          ("show_requested", 3), ("show_returned", 3),
+                          ("hide_requested", 4), ("hide_returned", 4), ("visibility_event_missing", 4)])
+        missing = [line for line in self.visibility_lines(messages) if line["event"] == "visibility_event_missing"]
+        self.assertTrue(all(line["waited_ns"] < VISIBILITY_EVENT_BOUND_NS for line in missing))
+        self.assertEqual((messages[-1]["visibility_requests_received"], messages[-1]["visibility_events_missing"]), (4, 3))
+
+    def test_marker_mode_and_the_settings_packet_are_unchanged(self):
+        result = subprocess.run([str(DEFAULT_BRIDGE), "--validate-calibration-marker", "--seconds", "1"],
+                                env=self.env, capture_output=True, timeout=5)
+        messages = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(result.returncode, 0, messages)
+        self.assertEqual([message["event"] for message in messages], ["ready", "closed"])
+        self.assertNotIn("visibility_requests_received", messages[-1])
+        self.assertNotIn("visibility_events_missing", messages[-1])
+        self.assertIn("overlay_hidden_event_seen", messages[-1])
+        # A visibility change through the settings packet is the pre-F1 path: no cycle, no lines.
+        data = PanelSettings(visible=False).encode() + PanelSettings(visible=True).encode() + packet(3)
+        result = subprocess.run([str(DEFAULT_BRIDGE), "--validate-stdin"], input=data, env=self.env,
+                                capture_output=True, timeout=5)
+        messages = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(result.returncode, 0, messages)
+        self.assertEqual(self.visibility_lines(messages), [])
+        self.assertEqual((messages[-1]["settings_received"], messages[-1]["visibility_requests_received"],
+                          messages[-1]["visibility_events_missing"]), (2, 0, 0))
 
 
 @unittest.skipUnless(os.name == "posix", "Fake bridge uses POSIX shebangs and signals")

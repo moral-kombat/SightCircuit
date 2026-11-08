@@ -63,10 +63,11 @@ class GeneratedHeaderTests(unittest.TestCase):
                  for name, record in (("HUD_CONFIG", HUD_CONFIG), ("MARKER", MARKER))
                  for field in dataclasses.fields(record)]
         for name in ("MARKER_MIN_SECONDS", "MARKER_MAX_SECONDS", "MAX_DISPLAY_AGE_NS", "MAX_SIDE", "RGBA_BYTES",
-                     "BRIDGE_CONNECT_BUDGET_SECONDS", "OPCODE_FRAME", "OPCODE_SETTINGS", "OPCODE_STOP", "OPCODE_EXPIRING_FRAME", "PACKET_MAGIC"):
+                     "BRIDGE_CONNECT_BUDGET_SECONDS", "OPCODE_FRAME", "OPCODE_SETTINGS", "OPCODE_STOP", "OPCODE_EXPIRING_FRAME",
+                     "OPCODE_VISIBILITY", "VISIBILITY_EVENT_BOUND_NS", "PACKET_MAGIC"):
             cases.append((contract, name, changed(getattr(contract, name)), name))
         for name in ("PACKET_HEADER_FIELDS", "SETTINGS_FIELDS", "FRAME_PREFIX_FIELDS",
-                     "EXPIRING_FRAME_PREFIX_FIELDS"):
+                     "EXPIRING_FRAME_PREFIX_FIELDS", "VISIBILITY_FIELDS"):
             layout = getattr(contract, name)
             cases.append((contract, name, layout[::-1], f"{name} order"))
             cases.append((contract, name, layout[:-1] + ((layout[-1][0], "Q"),), f"{name} width"))
@@ -149,6 +150,24 @@ class PythonWireFormatTests(unittest.TestCase):
                          {"expires_ns": deadline, "width": 3, "height": 2})
         self.assertEqual(self.split(packet(contract.OPCODE_STOP)), (contract.OPCODE_STOP, b""))
 
+    def test_visibility_requests_use_the_contract_layout(self):
+        # Work item F1: the show or hide request of one fallback cycle; encoding only, no client sends it yet.
+        for cycle, visible in ((7, False), (0, True), (2 ** 32 - 1, True)):
+            with self.subTest(cycle=cycle, visible=visible):
+                opcode, payload = self.split(overlay.visibility_packet(cycle, visible))
+                self.assertEqual(opcode, contract.OPCODE_VISIBILITY)
+                self.assertEqual(dict(zip((name for name, _ in contract.VISIBILITY_FIELDS),
+                                          struct.unpack(contract.VISIBILITY_FORMAT, payload))),
+                                 {"cycle": cycle, "visible": int(visible)})
+        self.assertEqual(len({contract.OPCODE_FRAME, contract.OPCODE_SETTINGS, contract.OPCODE_STOP,
+                              contract.OPCODE_EXPIRING_FRAME, contract.OPCODE_VISIBILITY}), 5)
+        for cycle, visible, reason in ((-1, True, "visibility_cycle_out_of_range"),
+                                       (2 ** 32, True, "visibility_cycle_out_of_range"),
+                                       (1.0, True, "visibility_cycle_out_of_range"), (True, True, "visibility_cycle_out_of_range"),
+                                       (1, 1, "Panel visibility must be boolean"), (1, "no", "Panel visibility must be boolean")):
+            with self.subTest(cycle=cycle, visible=visible), self.assertRaisesRegex(ValueError, reason):
+                overlay.visibility_packet(cycle, visible)
+
 
 class PythonLimitSitesTests(unittest.TestCase):
     """Each Python limit site follows the single library constant, not a copy."""
@@ -204,6 +223,39 @@ class PythonLimitSitesTests(unittest.TestCase):
         self.assertGreaterEqual(remaining, 3 / 5)
         # A healthy connect inside the budget leaves the marker displayed for most of the run.
         self.assertLess(contract.BRIDGE_CONNECT_BUDGET_SECONDS, 20 / 2)
+
+    def test_visibility_event_bound_is_a_cloud_default_the_bridge_takes_from_the_header(self):
+        """The bound on a hide request's hidden event (F1) is one pinned value, unmeasured on the Frame.
+
+        Its derivation: at least a dozen of the bridge's 20 ms event polls, ten
+        times the illustrative 25 ms request-to-hidden term of the fallback
+        costing, and at most half of the fastest costed cycle (500 ms at two
+        per second). The hidden-event delivery measurement (F3) replaces it.
+        """
+        bound = contract.VISIBILITY_EVENT_BOUND_NS
+        self.assertEqual(bound, 250_000_000)
+        self.assertGreaterEqual(bound, 12 * 20_000_000)
+        self.assertGreaterEqual(bound, 10 * 25_000_000)
+        self.assertLessEqual(bound, 500_000_000 // 2)
+        self.assertIn(f"constexpr std::uint64_t kVisibilityEventBoundNs = {bound}ULL;",
+                      (ROOT / "tools/hud_contract.hpp").read_text())
+        sensing = (ROOT / "tools/overlay_bridge_sensing.cpp").read_text()
+        self.assertIn("contract::kVisibilityEventBoundNs", sensing)
+        for path in manifest.NATIVE_SOURCES:
+            if path != "tools/hud_contract.hpp":
+                self.assertNotIn(str(bound), (ROOT / path).read_text(), path)
+        # The seven lines are named once each in the Python contract and written by the reporting unit alone.
+        self.assertEqual(len(set(contract.VISIBILITY_LINES)), 7)
+        self.assertEqual(set(contract.VISIBILITY_LINES),
+                         {"hide_requested", "hide_returned", "overlay_hidden", "show_requested", "show_returned",
+                          "overlay_shown", "visibility_event_missing"})
+        reporting = (ROOT / "tools/overlay_bridge_reporting.cpp").read_text()
+        for line in contract.VISIBILITY_LINES:
+            with self.subTest(line=line):
+                self.assertIn(f'"{line}"', reporting)
+                for path in manifest.NATIVE_SOURCES:
+                    if path != "tools/overlay_bridge_reporting.cpp":
+                        self.assertNotIn(f'"{line}"', (ROOT / path).read_text(), path)
 
     def test_marker_duration_sites(self):
         from sightcircuit.hud import marker, observation
@@ -440,17 +492,23 @@ class NativeContractTests(unittest.TestCase):
         accepted = frame(contract.MAX_SIDE, 1) + frame(1, contract.MAX_SIDE)
         for name, low, high in PANEL_LIMITS:
             accepted += settings(**{name: low}) + settings(**{name: high})
+        accepted += overlay.visibility_packet(0, True) + overlay.visibility_packet(2 ** 32 - 1, True)
         result, messages = self.run_bridge("--validate-stdin", data=accepted + packet(contract.OPCODE_STOP))
         self.assertEqual(result.returncode, 0, messages)
-        self.assertEqual((messages[-1]["frames_received"], messages[-1]["settings_received"]),
-                         (2, 2 * len(PANEL_LIMITS)))
+        self.assertEqual((messages[-1]["frames_received"], messages[-1]["settings_received"],
+                          messages[-1]["visibility_requests_received"]), (2, 2 * len(PANEL_LIMITS), 2))
         opcodes = (contract.OPCODE_FRAME, contract.OPCODE_SETTINGS, contract.OPCODE_STOP,
-                   contract.OPCODE_EXPIRING_FRAME)
+                   contract.OPCODE_EXPIRING_FRAME, contract.OPCODE_VISIBILITY)
         rejected = [(frame(contract.MAX_SIDE + 1, 1), "invalid_rgba_frame"),
                     (frame(1, contract.MAX_SIDE + 1), "invalid_rgba_frame"),
                     (packet(max(opcodes) + 1), "invalid_packet_header"), (packet(0), "invalid_packet_header"),
                     (packet(contract.OPCODE_SETTINGS, bytes(struct.calcsize(contract.SETTINGS_FORMAT) - 1)),
                      "invalid_packet_size"),
+                    (packet(contract.OPCODE_VISIBILITY, bytes(struct.calcsize(contract.VISIBILITY_FORMAT) - 1)),
+                     "invalid_packet_size"),
+                    (packet(contract.OPCODE_VISIBILITY, bytes(struct.calcsize(contract.VISIBILITY_FORMAT) + 1)),
+                     "invalid_packet_size"),
+                    (packet(contract.OPCODE_VISIBILITY, struct.pack(contract.VISIBILITY_FORMAT, 1, 2)), "invalid_visibility"),
                     (b"FJO0" + packet(contract.OPCODE_STOP)[4:], "invalid_packet_magic")]
         for name, low, high in PANEL_LIMITS:
             rejected += [(settings(**{name: low - .01}), "panel_setting_out_of_range"),

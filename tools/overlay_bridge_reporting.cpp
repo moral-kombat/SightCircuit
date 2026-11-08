@@ -112,6 +112,33 @@ void emit_first_frame(bool validate, std::uint32_t width, std::uint32_t height) 
     first["width"] = width; first["height"] = height;
     emit(first);
 }
+namespace {
+Json::Value visibility_line(const char* name, std::uint32_t cycle, bool validate) {
+    Json::Value line;
+    line["event"] = name; line["cycle"] = cycle; line["validation_only"] = validate;
+    return line;
+}
+} // namespace
+void emit_visibility_requested(bool hide, std::uint32_t cycle, std::uint64_t request_ns, bool validate) {
+    auto line = visibility_line(hide ? "hide_requested" : "show_requested", cycle, validate);
+    line["request_ns"] = Json::UInt64(request_ns);
+    emit(line);
+}
+void emit_visibility_returned(bool hide, std::uint32_t cycle, std::uint64_t returned_ns, bool ok, bool validate) {
+    auto line = visibility_line(hide ? "hide_returned" : "show_returned", cycle, validate);
+    line["returned_ns"] = Json::UInt64(returned_ns); line["ok"] = ok;
+    emit(line);
+}
+void emit_visibility_event(bool hide, std::uint32_t cycle, std::uint64_t observed_ns, bool validate) {
+    auto line = visibility_line(hide ? "overlay_hidden" : "overlay_shown", cycle, validate);
+    line["observed_ns"] = Json::UInt64(observed_ns);
+    emit(line);
+}
+void emit_visibility_event_missing(std::uint32_t cycle, std::uint64_t waited_ns, bool validate) {
+    auto line = visibility_line("visibility_event_missing", cycle, validate);
+    line["waited_ns"] = Json::UInt64(waited_ns);
+    emit(line);
+}
 void record_run_end(Json::Value& report, const Overlay& overlay, bool marker, std::uint64_t marker_deadline_ns) {
     report["runtime_initialized"]=overlay.active || overlay.probe_active;
     if (marker) {
