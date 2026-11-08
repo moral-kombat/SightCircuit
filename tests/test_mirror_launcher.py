@@ -49,7 +49,7 @@ class StopOnSignalTests(unittest.TestCase):
                 stop = guard.stop_on_signals(given)
                 self.assertIs(stop, given)
                 signal.raise_signal(number)
-                self.assertTrue(stop.is_set())
+                self.assertTrue(stop.wait(2))  # Set by the stop relay's thread, not by the handler itself.
         self.assertFalse(guard.stop_on_signals().is_set())
 
     def test_the_mirror_worker_runs_on_the_primitive_with_the_bounded_workers_budgets(self):
