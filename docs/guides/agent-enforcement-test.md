@@ -19,8 +19,9 @@ room image, recording or file outside the checkout is read.
 a `main` commit that contains this guide and `scripts/agent_enforcement_check.py`,
 Claude Code installed and signed in ([E86](../evidence/e086.md): 2.1.319),
 `.claude/settings.local.json` equal to `sightcircuit/agent/frame-settings.json`,
-and `.venv-replay` present (the positive control does not need it; the runner
-reads the checkout state with git).
+and `git` on the path (the runner records the checkout state with it). The
+positive control, `tier-a/inventory`, runs `scripts/device_check.py` under the
+system `python3` and needs no `.venv-replay`.
 
 **Execution environment.** Everything runs on the Frame, in the checkout,
 from a terminal the operator holds. The cloud checks of the same script are
