@@ -187,7 +187,14 @@ the corner tags did not decode at about 0.86 of native size, so the attempt
 was rejected and counts as the first of two ([E89](evidence/e089.md)). The
 owner accepted that evening that the marker or decode change is the one
 reviewed change the budget allows before the last attempt
-([D2 refinement](poc-scope.md#architecture-decisions-2026-11-07)). The owner
+([D2 refinement](poc-scope.md#architecture-decisions-2026-11-07)). A5 ran on
+`1889e56` late on November 8 with the lamps off: the decode worked, one
+complete copy at 0.885 of native passed every check and was accepted as the
+first marker sample on the Frame, and the next read 0.2 s later found the copy
+about 45 px to the right while the wearer turned, so the run was rejected on
+the 8 px sampled-drift limit. The marker appeared, so the attempt counts as the
+second and last of the D2 budget; the exit rule is reached
+([E90](evidence/e090.md)). The owner
 also launched the Arcturus app at 18:36 EST that evening, which the baseline
 recorded as the first run since October 26; recorded here for the G2 timeline,
 not as evidence. Also merged since: B4 (#19), B7 (#18), B8 (#17), P1 (#15), P2
@@ -199,8 +206,12 @@ box-annotation window the C5 session needs; exercised offscreen only), the C8
 follow-up (#33), and A5 (#29, main `0233b12`: the stage-two decode at the
 mirror's scale, the one reviewed change allowed before the last budgeted G3
 attempt; cloud-checked only, nothing run on the Frame). Lanes B and P are
-complete. Open: the last budgeted G3 attempt (device, owner approval; E90
-reserved), A7 to A10 after it, C5 and C6 (device, approval), E1. The council's
+complete. The last budgeted G3 attempt ran ([E90](evidence/e090.md)): the
+decode passed and the run rejected on marker movement; the D2 exit rule is
+reached. Open: the owner's decision at the D2 exit (the
+[fallback design](reference/hud-fallback.md), work F1 to F8, or a new
+decision recorded in scope), A7 to A10 (only on a path that keeps the mask),
+C5 and C6 (device, approval), E1. The council's
 hypothesis for the cancellation race was wrong; the recorded cause is the
 readiness probe firing on the worker before it had exec'd
 ([checks reference](reference/development-checks.md)). One runner-only flake
@@ -220,9 +231,15 @@ lane B item is to make it reproducible under CPU stress before any change.
   constant changes by a reviewed edit.
 - The scope of the Phase 2 guard-enforcement test for the agent runner, which
   also needs a decision on the workspace trust dialog ([E86](evidence/e086.md)).
-- Device approvals, each separate: the last budgeted G3 attempt, now ready
-  (A5 merged as `0233b12`; no bridge rebuild, a new manifest, lamps off; the
-  request is with the owner); then the evaluation session C5 with C6.
+- The D2 exit: the last budgeted G3 attempt ran and was rejected on marker
+  movement after the decode passed ([E90](evidence/e090.md)). D2 says the
+  project now switches to the time-multiplexed fallback; the owner decides
+  whether to follow it as written or to record a new decision in scope (for
+  one example, one further attempt with the head held still, which would show
+  a static mapping and would still leave the motion term of the qualification
+  method unmeasured).
+- Device approvals, each separate: the evaluation session C5 with C6; any
+  further marker attempt only under a new recorded decision.
 - The Frame rebooted into SteamOS 0.5.8 ([E85](evidence/e085.md)); a Frame
   manager session exists and the "Frame update check" scheduled task was
   rebound to it on 2026-11-07, with the old task left disabled as a record.
@@ -237,7 +254,7 @@ recorded; investigate it before proposing a changed run.
 | --- | --- | --- |
 | G1. synthetic mask and expiry | Native full-footprint masking, margins/eye union, changed-context rejection and independent stale expiry | Passes offline; [E69](evidence/e069.md), [E74](evidence/e074.md), [E78](evidence/e078.md) |
 | G2. lifecycle and cleanup | Explained software termination, truthful cleanup reports, and physical recovery evidence; the accepted alternative permits an owner-rehearsed recovery procedure when the cause remains unknown | **Closed November 3, 2026**, on the owner’s confirmation after rehearsal; [E79](evidence/e079.md). The green-input cause remains unknown, and the clean rehearsal does not prove the procedure cures green input |
-| G3. mapping observed on Frame | Bounded marker/observer report ending `observed_unqualified`, with clean cleanup and normal passthrough confirmed | Open. V4 was rejected; the November 3 attempt stopped at `observer_contour_budget` before any marker was shown ([E83](evidence/e083.md)); the November 7 attempt passed the precondition, showed the marker and matched its whole pattern, then rejected on the tag decode at the mirror's scale ([E89](evidence/e089.md)). One budgeted attempt remains; it needs a reviewed marker or decode change and a new approval |
+| G3. mapping observed on Frame | Bounded marker/observer report ending `observed_unqualified`, with clean cleanup and normal passthrough confirmed | Open. V4 was rejected; the November 3 attempt stopped at `observer_contour_budget` before any marker was shown ([E83](evidence/e083.md)); the November 7 attempt passed the precondition, showed the marker and matched its whole pattern, then rejected on the tag decode at the mirror's scale ([E89](evidence/e089.md)); the November 8 attempt, after the reviewed decode change, accepted one complete decoded copy at 0.885 of native and then rejected on marker movement of about 45 px between two reads 0.2 s apart while the wearer turned, against the 8 px sampled-drift limit ([E90](evidence/e090.md)). The D2 budget is exhausted; the exit rule is reached and the owner's decision is pending |
 | G4. mapping qualified | Reviewed evidence for eye composition, all HUD copies, conservative margins, operating limits and exact context | Proposed method; device qualification pending |
 | G5. feedback exclusion and physical expiry | HUD visible during head motion with no detections from its footprint; independently observed expiry within the declared bound | Not run in committed evidence |
 | G6. combined live HUD | The [60-second POC acceptance](poc-scope.md#acceptance), with the report fields below | Not run. The POC object is chair; the 400-frame replay panel continued updating on the tested device/runtime, but that is not combined live acceptance; [E81](evidence/e081.md) |

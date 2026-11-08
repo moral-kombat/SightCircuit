@@ -528,7 +528,7 @@
     },
     {
       "id": "E76",
-      "title": "Offline work packages A\u2013H, cloud checks",
+      "title": "Offline work packages A–H, cloud checks",
       "file": "e076.md",
       "kind": "offline",
       "reconstructed": false
@@ -621,6 +621,13 @@
       "id": "E89",
       "title": "A4 marker-observer attempt on Frame, the marker appeared and its tags did not decode at the mirror's scale",
       "file": "e089.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E90",
+      "title": "A5 marker-observer attempt on Frame, the marker decoded and the run was rejected on marker movement; the D2 budget is exhausted",
+      "file": "e090.md",
       "kind": "device_report",
       "reconstructed": false
     }
