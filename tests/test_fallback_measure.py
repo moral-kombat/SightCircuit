@@ -23,7 +23,8 @@ import numpy as np
 from sightcircuit.hud import observation as hud_observation
 from sightcircuit.hud.contract import HUD_CONFIG, VISIBILITY_EVENT_BOUND_NS
 from sightcircuit.hud.marker import MarkerClient
-from sightcircuit.overlay import DEFAULT_BRIDGE, PanelSettings, VisibilityRequest
+from sightcircuit.overlay import (BRIDGE_INPUT_POLL_NS, DEFAULT_BRIDGE, VISIBILITY_DEADLINE_MARGIN_NS,
+                                  VISIBILITY_TERMINAL_DEADLINE_NS, PanelSettings, VisibilityRequest)
 from sightcircuit.runtime import manifest
 from scripts import fallback_measure
 from tests.test_checkpoint_manifest import CheckoutCase
@@ -135,6 +136,31 @@ class TransitionBoundsTests(unittest.TestCase):
         self.assertTrue(validation["hidden_event_delivery"]["measured"])
 
 
+class PacingDerivationTests(unittest.TestCase):
+    """The margins the command keeps from the display deadline, pinned against the bridge and the F2 derivation."""
+
+    def test_the_marker_poll_keeps_the_f2_deadline_derivation_valid(self):
+        # The marker loop polls stdin every 10 ms (F3a), the stream loop every 20 ms: a missing line arrives within
+        # one marker poll of the bound, inside the stream poll the F2 deadline already allows for.
+        header = (ROOT / "tools/overlay_bridge.hpp").read_text()
+        self.assertIn(f"constexpr int kMarkerPollMs = {fallback_measure.MARKER_INPUT_POLL_NS // 1_000_000};", header)
+        self.assertLessEqual(fallback_measure.MARKER_INPUT_POLL_NS, BRIDGE_INPUT_POLL_NS)
+        self.assertLessEqual(VISIBILITY_EVENT_BOUND_NS + fallback_measure.MARKER_INPUT_POLL_NS + VISIBILITY_DEADLINE_MARGIN_NS,
+                             VISIBILITY_TERMINAL_DEADLINE_NS)
+
+    def test_the_last_request_margin_and_the_cycle_reserve_are_derived(self):
+        margin = fallback_measure.LAST_REQUEST_MARGIN_NS
+        self.assertEqual(margin, VISIBILITY_TERMINAL_DEADLINE_NS + fallback_measure.MARKER_INPUT_POLL_NS + 100_000_000)
+        self.assertEqual(margin, 430_000_000)
+        self.assertEqual(fallback_measure.CYCLE_RESERVE_NS,
+                         max(fallback_measure.PHASE_BOUND_NS, fallback_measure.REQUEST_GAP_NS) + margin)
+        # The longest run leaves room for the default cycles after the ready wait and the marker warm-up.
+        from sightcircuit.hud.contract import BRIDGE_READY_WAIT_SECONDS, MARKER_MAX_SECONDS
+        available = (MARKER_MAX_SECONDS - BRIDGE_READY_WAIT_SECONDS - fallback_measure.MARKER_WARMUP_SECONDS) * 1e9
+        self.assertGreaterEqual(available, (fallback_measure.DEFAULT_CYCLES - 1) * 2 * fallback_measure.REQUEST_GAP_NS +
+                                fallback_measure.CYCLE_RESERVE_NS)
+
+
 class ReportContractTests(unittest.TestCase):
     def good(self, **changes):
         report = dict(fallback_measure.new_report(True, cycles=1), status="measured", exit_code=0, cycles_completed=1,
@@ -157,6 +183,8 @@ class ReportContractTests(unittest.TestCase):
         self.assertEqual([report[name] for name in fallback_measure.MEASUREMENTS], [{"measured": False}] * 4)
         self.assertIn("timebase_id", report["clock"]["timebase_caveat"])
         self.assertEqual(report["pacing"]["visibility_event_bound_ns"], VISIBILITY_EVENT_BOUND_NS)
+        self.assertEqual((report["pacing"]["last_request_margin_ns"], report["pacing"]["cycle_reserve_ns"]),
+                         (fallback_measure.LAST_REQUEST_MARGIN_NS, fallback_measure.CYCLE_RESERVE_NS))
 
     def test_a_clean_validation_report_is_accepted_and_each_inconsistency_refused(self):
         fallback_measure.validate_worker_report(self.good(), 0)
@@ -561,6 +589,39 @@ emit({{"event": "closed", "status": "validated_marker" if validate else "marker_
         native = report["bridge"]["native_report"]
         self.assertEqual((native["visibility_requests_received"], native["mode"]), (4, "--calibration-marker"))
         self.assertEqual(report["capture"]["status"], "captured")
+
+    def test_cycles_stop_before_the_display_deadline_and_no_request_enters_the_margin(self):
+        # Twenty cycles cannot fit in four seconds: the run completes what fits, counts the rest, and every request
+        # the bridge logged lies at least the last-request margin before its display deadline.
+        client = MarkerClient(self.fake_bridge(), validation_only=False)
+        report = fallback_measure.measure({"node": "synthetic:fake"}, 4, fallback_measure.MAX_CYCLES, threading.Event(),
+                                          backend_factory=self.backend(), marker_client=client,
+                                          allow_calibration_output=True)
+        self.assertEqual((report["status"], report["exit_code"], report["reason"]),
+                         ("measurement_incomplete", 1, "display_timer_left_no_room_for_every_cycle"), report)
+        self.assertGreaterEqual(report["cycles_completed"], 1)
+        self.assertEqual(report["cycles_completed"] + report["cycles_not_started"], fallback_measure.MAX_CYCLES)
+        self.assertTrue(report["cleanup_ok"], report)
+        deadline = report["bridge"]["native_report"]["display_deadline_ns"]
+        requests = [phase["request_ns"] for cycle in report["cycles"] for phase in (cycle["hide"], cycle["show"])]
+        self.assertEqual(len(requests), 2 * report["cycles_completed"])
+        self.assertLessEqual(max(requests), deadline - fallback_measure.LAST_REQUEST_MARGIN_NS)
+        self.assertEqual(report["bridge"]["native_report"]["visibility_requests_received"], len(requests))
+        fallback_measure.validate_worker_report(report, 1)
+
+    def test_a_request_that_would_enter_the_margin_is_refused_not_sent(self):
+        # With the reserve disabled the driver reaches the margin; the defensive check rejects the run instead of
+        # sending a request the bridge could process inside its final poll window.
+        client = MarkerClient(self.fake_bridge(), validation_only=False)
+        with patch.object(fallback_measure, "CYCLE_RESERVE_NS", 0):
+            report = fallback_measure.measure({"node": "synthetic:fake"}, 3, fallback_measure.MAX_CYCLES,
+                                              threading.Event(), backend_factory=self.backend(), marker_client=client,
+                                              allow_calibration_output=True)
+        self.assertEqual((report["status"], report["exit_code"], report["reason"]),
+                         ("rejected", 1, "request_inside_display_deadline_margin"))
+        deadline = report["bridge"]["native_report"]["display_deadline_ns"]
+        requests = [phase["request_ns"] for cycle in report["cycles"] for phase in (cycle["hide"], cycle["show"])]
+        self.assertLessEqual(max(requests), deadline - fallback_measure.LAST_REQUEST_MARGIN_NS)
 
     def test_a_marker_that_never_reaches_the_mirror_rejects_the_run_without_cycling(self):
         self.state.write_text("0")

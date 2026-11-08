@@ -45,7 +45,8 @@ from sightcircuit.hud.contract import (  # noqa: E402
     MARKER_MAX_SECONDS, MARKER_MIN_SECONDS, VISIBILITY_EVENT_BOUND_NS, VISIBILITY_MISSING_LINE)
 from sightcircuit.hud.marker import MarkerClient, validate_visibility_evidence  # noqa: E402
 from sightcircuit.hud.observation import locate_copies, native_bgr  # noqa: E402
-from sightcircuit.overlay import VISIBILITY_TERMINAL_DEADLINE_NS, bridge_closed_cleanly  # noqa: E402
+from sightcircuit.overlay import (  # noqa: E402
+    BRIDGE_INPUT_POLL_NS, VISIBILITY_TERMINAL_DEADLINE_NS, bridge_closed_cleanly)
 from sightcircuit.runtime.guard import stop_on_signals, supervise  # noqa: E402
 from sightcircuit.runtime.manifest import verify_manifest  # noqa: E402
 from sightcircuit.sources.mirror import capture  # noqa: E402
@@ -76,9 +77,26 @@ PHASE_BOUND_NS = 2_000_000_000
 # After the bridge's ready line, how long the marker may take to appear in the mirror before the run is
 # rejected for cycling: the observer's warm-up (hud_marker_observer.MARKER_WARMUP_SECONDS), for the same path.
 MARKER_WARMUP_SECONDS = 2.0
-# A cycle starts only with this much of the marker's display left: both requests at the pacing floor, plus the
-# bridge's bound on a terminal line and a margin for the last read.
-CYCLE_RESERVE_NS = 2 * REQUEST_GAP_NS + VISIBILITY_TERMINAL_DEADLINE_NS + 200_000_000
+# The marker bridge polls stdin every 10 ms (kMarkerPollMs, F3a) where the stream loop polls every 20 ms
+# (BRIDGE_INPUT_POLL_NS): a missing line is written on the first poll at or after the bound, so it arrives within
+# 10 ms of VISIBILITY_EVENT_BOUND_NS and the F2 terminal deadline (the bound, one 20 ms stream poll and a 50 ms
+# margin) holds for the marker client with the poll difference to spare. Pinned against the bridge header and the
+# F2 derivation by tests/test_fallback_measure.py.
+MARKER_INPUT_POLL_NS = 10_000_000
+assert MARKER_INPUT_POLL_NS <= BRIDGE_INPUT_POLL_NS
+# No request may reach the bridge inside the final poll window at the display deadline: a show processed there
+# meets Overlay::visibility()'s calibration_deadline_before_show and ends the run with exit 1 instead of a
+# missing line (overlay.md, marker mode input). The last request of a run is therefore sent no later than this
+# before the deadline: the client's terminal deadline (so the await ends while the bridge still runs and its
+# missing line, if any, is still written), one marker poll (the request is decoded within it) and a 100 ms
+# margin for the pipe write, the OpenVR call and scheduling. A request that would land inside it is not sent:
+# the run is rejected request_inside_display_deadline_margin, fail closed, which CYCLE_RESERVE_NS makes
+# unreachable in a run that keeps its pacing.
+LAST_REQUEST_MARGIN_NS = VISIBILITY_TERMINAL_DEADLINE_NS + MARKER_INPUT_POLL_NS + 100_000_000
+# A cycle starts only with this much of the marker's display left: its hide phase may run to the phase bound
+# (or the pacing floor, whichever is longer) before the show request, which must still be LAST_REQUEST_MARGIN_NS
+# before the deadline; the show phase that follows makes no call and may run to the deadline.
+CYCLE_RESERVE_NS = max(PHASE_BOUND_NS, REQUEST_GAP_NS) + LAST_REQUEST_MARGIN_NS
 # The supervisor's bound is --seconds plus this margin, counted from the worker's start (as the observer's).
 SUPERVISOR_MARGIN_SECONDS = 12
 TIMEBASE_CAVEAT = ("Bridge timestamps (CLOCK_MONOTONIC) and mirror observed_ns (time.monotonic_ns) are compared "
@@ -98,7 +116,9 @@ def new_report(validation_only=False, *, cycles=DEFAULT_CYCLES):
             "pacing": {"read_rate_hz": READ_RATE_HZ, "request_gap_ns": REQUEST_GAP_NS,
                        "phase_bound_ns": PHASE_BOUND_NS, "marker_warmup_seconds": MARKER_WARMUP_SECONDS,
                        "visibility_event_bound_ns": VISIBILITY_EVENT_BOUND_NS,
-                       "terminal_deadline_ns": VISIBILITY_TERMINAL_DEADLINE_NS},
+                       "terminal_deadline_ns": VISIBILITY_TERMINAL_DEADLINE_NS,
+                       "marker_input_poll_ns": MARKER_INPUT_POLL_NS, "last_request_margin_ns": LAST_REQUEST_MARGIN_NS,
+                       "cycle_reserve_ns": CYCLE_RESERVE_NS},
             **{name: {"measured": False} for name in MEASUREMENTS}}
 
 
@@ -345,12 +365,21 @@ def measure(candidate, seconds, cycles, stop, *, backend_factory, marker_client,
 
 
 def run_phase(client, reads, cycle, visible, deadline_ns, stop, validation_only):
-    """One request of a cycle: send it, await its terminal line, then wait for the mirror and the pacing floor."""
+    """One request of a cycle: send it, await its terminal line, then wait for the mirror and the pacing floor.
+
+    A hide's phase ends early enough for the cycle's show to be sent
+    ``LAST_REQUEST_MARGIN_NS`` before the display deadline; a show's phase,
+    which makes no call, may run to the deadline. No request is sent inside the
+    margin: that is a rejected run, not a late call.
+    """
+    if time.monotonic_ns() + LAST_REQUEST_MARGIN_NS > deadline_ns:
+        raise ValueError("request_inside_display_deadline_margin")
     request = client.request_visibility(cycle, visible)
     outcome = client.await_visibility(request)
     record = {"visible": visible, "requested_monotonic_ns": request.requested_ns, **outcome_record(outcome)}
     request_ns = outcome.request_ns if outcome.request_ns is not None else request.requested_ns
-    phase_end = min(request.requested_ns + PHASE_BOUND_NS, deadline_ns)
+    latest_end = deadline_ns if visible else deadline_ns - LAST_REQUEST_MARGIN_NS
+    phase_end = min(request.requested_ns + PHASE_BOUND_NS, latest_end)
     if validation_only:
         record["mirror"] = {"measured": False, "reason": "validation_reads_no_mirror"}
         ended_by = "no_mirror"
@@ -359,10 +388,11 @@ def run_phase(client, reads, cycle, visible, deadline_ns, stop, validation_only)
             "first_present_observed_ns" if visible else "first_absent_observed_ns"] is not None, phase_end, stop)
         record["mirror"] = {"measured": True, **transition_bounds(reads.snapshot(), request_ns, visible)}
         ended_by = "transition_observed" if seen else "stopped" if stop.is_set() else \
-            "display_deadline" if phase_end == deadline_ns else "phase_bound"
+            "display_deadline" if phase_end == latest_end else "phase_bound"
     record["ended_by"] = ended_by
-    # The pacing floor between requests, however fast the mirror answered.
-    while (remaining := request.requested_ns + REQUEST_GAP_NS - time.monotonic_ns()) > 0 and not stop.is_set():
+    # The pacing floor between requests, however fast the mirror answered; never past a hide's latest end.
+    pacing_end = min(request.requested_ns + REQUEST_GAP_NS, latest_end)
+    while (remaining := pacing_end - time.monotonic_ns()) > 0 and not stop.is_set():
         stop.wait(min(remaining / 1e9, .05))
     return record
 

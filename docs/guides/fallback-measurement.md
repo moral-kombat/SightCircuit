@@ -123,10 +123,23 @@ What the command passes, and why:
 - `--seconds 20`, the maximum. The bridge's display timer starts when its
   process starts and its connect may use up to 6 s; the marker then has up to
   2 s to appear in the mirror (`marker_not_visible_in_mirror` otherwise, the
-  observer's warm-up), and a cycle starts only while about 1.5 s of display
-  remain. Five cycles at the pacing floor need about 5 s; a slow transition
-  stretches a phase to at most 2 s (`phase_bound_ns`), after which it is
-  recorded as not observed within the bound.
+  observer's warm-up). Five cycles at the pacing floor need about 5 s; a slow
+  transition stretches a phase to at most 2 s (`phase_bound_ns`), after which
+  it is recorded as not observed within the bound.
+- The deadline margins, derived and pinned by `tests/test_fallback_measure.py`.
+  A show request that the bridge processes inside its final 10 ms poll window
+  at the display deadline ends the run `calibration_deadline_before_show`
+  (exit 1) instead of a missing line, so no request is sent later than
+  `last_request_margin_ns` = 430 ms before the deadline: the client's 320 ms
+  terminal deadline, one 10 ms marker poll and a 100 ms margin for the pipe
+  write, the call and scheduling. A cycle starts only with
+  `cycle_reserve_ns` = 2.43 s of display left (the hide phase's 2 s bound plus
+  that margin), so its show is always sent in time; a request that would still
+  enter the margin is refused and the run rejected
+  `request_inside_display_deadline_margin`, never sent. The marker bridge's
+  10 ms stdin poll also means a missing line arrives within 10 ms of the 250 ms
+  bound, inside the 20 ms stream poll the F2 320 ms deadline already allows
+  for, so that deadline holds for the marker client as for the sink.
 - `--cycles 5`, the default: enough samples for a first distribution, few
   enough to complete inside the timer. `cycles_not_started` in the report
   counts the cycles the timer left no room for; a run with any is

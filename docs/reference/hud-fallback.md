@@ -203,8 +203,17 @@ bridge under the guard's supervision (`supervise`, as the observer), reads the
 mirror on the capture thread at ten reads per second, waits up to the
 observer's 2 s warm-up for the first complete copy, then runs the cycles with
 the pacing floor of 500 ms between requests and a 2 s bound on each phase's
-mirror transition; the display timer bounds the run and a cycle starts only
-with room for both requests. The report has the four sections of the
+mirror transition. The display timer bounds the run, and two derived margins
+keep every request clear of it (pinned by the tests): no request is sent later
+than `LAST_REQUEST_MARGIN_NS` = 430 ms before the deadline (the F2 terminal
+deadline of 320 ms, one 10 ms marker poll and a 100 ms margin), because a show
+the bridge processes inside its final poll window ends the run
+`calibration_deadline_before_show` instead of writing a missing line; and a
+cycle starts only with `CYCLE_RESERVE_NS` = 2.43 s left (the hide phase's bound
+plus that margin), so its show is always in time. The marker loop's 10 ms poll
+also keeps the F2 deadline derivation valid for the marker client: a missing
+line arrives within 10 ms of the bound, inside the 20 ms stream poll the
+320 ms deadline allows for. The report has the four sections of the
 [device evidence table](#device-evidence-needed) and the per-cycle records,
 counts, nanoseconds and digests only. Cloud checks (`tests/test_fallback_measure.py`):
 the `--validate` run end to end through the guard against the real validation
