@@ -7,13 +7,17 @@ Implementation and cloud-test details are distinct from [Frame evidence](../stat
 
 ## Python package and pipeline
 
-Reusable code lives in the `sightcircuit/` package; `scripts/` keeps the
-documented command-line entry points. No active script imports another, and
-`sightcircuit/` never imports `scripts/`; `tests/test_scripts_boundary.py`
-enforces both (the paused capture-provider scripts are exempt while frozen). Scripts add the checkout root to `sys.path`
-when run as files, so headset commands need no installation step.
-`pip install -e '.[window]'` (or `uv pip install -e .`) also works for desktop
-development; exact tested pins remain in the `requirements-*.txt` files.
+Reusable code lives in the `sightcircuit/` package, the active commands'
+bodies in `sightcircuit/commands/`, and `scripts/` keeps the documented
+command files: thin wrappers for the active commands, the paused
+capture-provider scripts in place, and the smaller checks and build helpers.
+No active script imports another, and `sightcircuit/` never imports
+`scripts/`; `tests/test_scripts_boundary.py` enforces both (the paused
+capture-provider scripts are exempt while frozen). Scripts add the checkout
+root to `sys.path` when run as files, so headset commands need no installation
+step. `pip install -e '.[window]'` (or `uv pip install -e .`) also exposes the
+`sightcircuit-<name>` console entry points ([commands and entry points](../development.md#commands-and-entry-points-2026-11-07));
+exact tested pins remain in the `requirements-*.txt` files and their locks.
 
 | Module | Responsibility |
 | --- | --- |
@@ -31,6 +35,7 @@ development; exact tested pins remain in the `requirements-*.txt` files.
 | `sightcircuit/overlay.py` | Overlay bridge client and `OverlaySink`, the one panel sink: with a caller-owned client (replay's interactive panel) it only submits images; otherwise it owns a validation-only client through `open`/`clear`/`close`, optionally with the frozen HUD placement and payload contract |
 | `sightcircuit/hud/` | Fixed edge HUD contract, shared eye/rectangle geometry (and the [geometric prediction cross-check](../hud-qualification.md#geometric-prediction-cross-check-2026-11-04), which never feeds qualification), the one margin rule, synthetic-only native mask (calibrations from two factories only, with expiry, session tokens and view fields; zeroed regions refilled from their surround by `fill_regions`), tile rendering, the `HudStage` engine stage (and `HudPipelineAdapter`, the stage bound to its sink's fixed output contract, used by `live_pipeline.py`), offline mapping qualification, the calibration marker client, `observation` (empirical marker-copy location in native pixels and the observer report contract, used by `hud_marker_observer.py`), `candidate` (an observer report to an unqualified mapping candidate, used by `hud_validation_report.py --from-observer`) and `validation` (the synthetic HUD run's ledger feed and G5 software counts) |
 | `sightcircuit/runtime/` | `supervision` (the one [supervision primitive](#the-supervision-primitive): an owned worker session with an arm handshake, deadline-based cleanup, group termination with reaping, both signal policies, progress streaming and the worker side's parent-death guard, in one report block), `guard` (the primitive under the guard's policy, the Linux parent-loss guardian, and the one stop-on-signal convention: `sigterm_cancels` and `cancelled` for launchers, `stop_on_signals` for workers), `output` (reserve, write, publish all or none, withdraw and discard explicit image outputs; `publish_new` for finished bytes), `live` (`run_report`, the one report runner on `Pipeline`, used by `run_pipeline`, the gated synthetic run, whose HUD run also feeds the validation ledger, and by `run_recognition`, the mirror recognizer), `synthetic` (the generated source and its declared `SyntheticSession`, the fixture calibration factory and its candidate record, `FixtureDetector` and `HeadlessSink`) `manifest` (the [checkpoint artifact manifest](hud-development.md#checkpoint-artifact-manifest): software identity written and verified on Frame) and `sensors` (the read-only [run-context sensor sidecar](#run-context-sensor-sidecar)) |
+| `sightcircuit/commands/` | The ten active commands' bodies, each with `main(argv=None)`: replay window, mirror recognition, the synthetic live pipeline, the marker check and observer, the validation report, detector evaluation, status generation, the mirror check and the session-manifest helper. `scripts/<name>.py` wraps each for the uninstalled checkout; `pyproject.toml` names the console entry points |
 | `sightcircuit/agent/` | On-device agent support: the fixed task table, the `frame_agent_run.py` runner (timeouts, lock, run budget, `result.json`), the PreToolUse guard and the Frame-only Claude Code settings template; standard library only ([plan](../agent-on-frame.md)) |
 
 `scripts/hud_view_prediction.py` turns a saved headset view record into the
