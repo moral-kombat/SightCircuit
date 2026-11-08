@@ -355,8 +355,9 @@ mkdir -p artifacts/hud-calibration
 
 The SteamVR package identity is best-effort and read-only. The writer tries
 the pacman local databases by file reads, in order: the `DBPath` of
-`/etc/pacman.conf`, the Arch default `/var/lib/pacman/local` and the path
-SteamOS 3 ships, `/usr/lib/holo/pacmandb/local`. The record names the path that
+`/etc/pacman.conf`, the Arch default `/var/lib/pacman/local` and
+`/usr/lib/holo/pacmandb/local`, the location SteamOS 3's `pacman.conf` is
+documented to use, not verified on the Frame. The record names the path that
 answered (`database`, `source: pacman_local_database`) and the status of every
 path tried (`databases`: `read`, `absent`, `permission_denied` or
 `unreadable`). Only when no database could be read does it run a read-only
@@ -367,7 +368,8 @@ exists but the user may not read it, `package_database_unavailable` when none
 exists (the cloud), or the readable database's own reason. The A4 preparation
 of 2026-11-07 found `/var/lib/pacman/local` unavailable to the steamos user
 on SteamOS 0.5.8 while `pacman -Q` answered, which this order and fallback
-address; the Frame manager reports the field on the next manifest write. An
+are expected to address, pending the next device manifest write, which the
+Frame manager reports. An
 unknown value is recorded, not a problem, and a changed value is a `--verify`
 difference.
 

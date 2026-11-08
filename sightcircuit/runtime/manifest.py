@@ -59,14 +59,15 @@ MAX_REPORTED_PATHS = 20
 # The SteamVR runtime on Frame is the pacman package ``deckard-steamvr-rel`` (E85 read it with ``pacman -Q``:
 # r25765468+0ab5c24d-1 on SteamOS 0.5.6, r26496310+24cb4748-1 on 0.5.8). The manifest reads it from the
 # pacman local database by file reads, best-effort, trying the DBPath of /etc/pacman.conf, the Arch default
-# and the path SteamOS 3 ("holo") ships (the A4 preparation of 2026-11-07 found /var/lib/pacman/local
+# and the location SteamOS 3's pacman.conf is documented to use, not verified on the Frame (the A4 preparation of
+# 2026-11-07 found /var/lib/pacman/local
 # unavailable to the steamos user while ``pacman -Q`` answered). Only when no database is readable does it
 # fall back to a read-only ``pacman -Q``, and the record says which source answered. The version is unknown
 # (None, with a reason) where neither does. The desktop SteamVR package name is unverified and not looked for.
 STEAMVR_PACKAGE = "deckard-steamvr-rel"
 PACMAN_CONFIG = Path("/etc/pacman.conf")
 PACMAN_DEFAULT_DATABASE_ROOT = Path("/var/lib/pacman")
-PACMAN_HOLO_DATABASE_ROOT = Path("/usr/lib/holo/pacmandb")  # SteamOS 3 pacman.conf: DBPath = /usr/lib/holo/pacmandb/
+PACMAN_HOLO_DATABASE_ROOT = Path("/usr/lib/holo/pacmandb")  # Documented SteamOS 3 DBPath; not verified on the Frame.
 PACMAN_QUERY_TIMEOUT_SECONDS = 10
 MAX_PACKAGE_DESCRIPTION_BYTES = 64 * 1024
 MAX_PACKAGE_VERSION_CHARS = 128
@@ -158,7 +159,7 @@ def _package_description(text):
 
 def pacman_local_databases(config=PACMAN_CONFIG):
     """The local package databases to try, in order: ``DBPath`` from ``config`` when it names an absolute
-    path, the Arch default and the SteamOS 3 path, each as ``<root>/local``, without duplicates."""
+    path, the Arch default and the documented SteamOS 3 path, each as ``<root>/local``, without duplicates."""
     roots = []
     try:
         text = Path(config).read_bytes()[:MAX_PACKAGE_DESCRIPTION_BYTES].decode("utf-8", "replace")
