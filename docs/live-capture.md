@@ -184,10 +184,16 @@ about a tenth of the frame near saturation under the lamps
 ([E88](evidence/e088.md)). A4 ran on `6f44260` with the lamps off: the marker
 tile appeared in the mirror for the first time, its whole pattern matched, and
 the corner tags did not decode at about 0.86 of native size, so the attempt
-was rejected and counts as the first of two ([E89](evidence/e089.md)). Also
-merged since: B4 (#19), B7 (#18), B8 (#17), P1 (#15), A11 (#16). Open: A5 (now
-a reviewed marker or decode change for the mirror's scale, then the last
-budgeted attempt), A7 to A10, A3b, B5, B6, C3b (in progress), C5 to C8, P2, E1. The council's hypothesis for the
+was rejected and counts as the first of two ([E89](evidence/e089.md)). The
+owner accepted that evening that the marker or decode change is the one
+reviewed change the budget allows before the last attempt
+([D2 refinement](poc-scope.md#architecture-decisions-2026-11-07)). The owner
+also launched the Arcturus app at 18:36 EST that evening, which the baseline
+recorded as the first run since October 26; recorded here for the G2 timeline,
+not as evidence. Also merged since: B4 (#19), B7 (#18), B8 (#17), P1 (#15), P2
+(#22), A11 (#16). Open: A5 (the marker or decode change for the mirror's scale,
+then the last budgeted attempt under a new approval), A7 to A10, A3b (in
+review), B5, B6, C3b (in progress), C5 to C8, E1. The council's hypothesis for the
 cancellation race was wrong; the recorded cause is the readiness probe firing
 on the worker before it had exec'd ([checks reference](reference/development-checks.md)).
 
@@ -200,11 +206,6 @@ on the worker before it had exec'd ([checks reference](reference/development-che
   constant changes by a reviewed edit.
 - The scope of the Phase 2 guard-enforcement test for the agent runner, which
   also needs a decision on the workspace trust dialog ([E86](evidence/e086.md)).
-- Whether the one reviewed change the D2 budget allows before the last attempt
-  may be a change to the marker or its tag decode for the mirror's scale,
-  rather than the scene-limit revision the decision named, since the November 7
-  attempt failed at the tag decode and not at the precondition
-  ([E89](evidence/e089.md)).
 - Device approvals, each separate: the last budgeted G3 attempt after that
   reviewed change; then the evaluation session C5 with C6.
 - The Frame rebooted into SteamOS 0.5.8 ([E85](evidence/e085.md)); a Frame
