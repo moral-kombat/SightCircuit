@@ -182,6 +182,8 @@ not order reads against the camera producer.
 
 Read by the coordinator on 2026-11-07 at the owner's request. The page is the
 vendor's statement, not a project result, and nothing from it has been run.
+The owner sent the vendor an inquiry about camera access for a passthrough
+overlay on 2026-11-08 (owner's report); no reply is recorded yet.
 
 **Camera data access.** The page states: "A direct camera access API is not
 yet available. We're taking developer inquiries about your use case." That
