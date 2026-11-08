@@ -82,7 +82,8 @@ class MarkerClient(OverlayClient):
         # The native timer started before its ready line, so this bounds its
         # deadline from above: a stop never escalates before the timer ends.
         self.marker_deadline = time.monotonic() + seconds
-        # Native marker mode ignores stdin and creates its own opaque pixels.
+        # Native marker mode takes no frame or settings packet (it creates its own opaque pixels and
+        # refuses both), only the fallback's visibility request, which this client never sends.
         # In particular, no inherited OverlayClient._write thread is started.
         return self
 
@@ -109,7 +110,7 @@ class MarkerClient(OverlayClient):
         return request
 
     def _request_stop(self):
-        """Close stdin as the stop request; marker mode ignores it and keeps its timer."""
+        """Close stdin as the stop request; marker mode ignores the close and keeps its timer."""
         self.process.stdin.close()
         return True
 

@@ -78,9 +78,10 @@ VR contact: it is person-run or Tier B, and it needs the owner's approval.
 
 The next G3 attempt requires a changed marker-stop path with regression
 coverage. That change was made on 2026-11-01 and is covered by cloud tests
-only. The native marker mode ignores stdin. A requested stop, such as an
-observer rejection, therefore closes stdin and waits for the bridge's own
-display deadline plus two seconds. Until then the marker stays up, at most
+only. The native marker mode reads stdin for the fallback's visibility request
+only (since F3a, 2026-11-08) and its display timer ignores end of input. A
+requested stop, such as an observer rejection, therefore closes stdin and waits
+for the bridge's own display deadline plus two seconds. Until then the marker stays up, at most
 `--seconds`. A V4-shaped frame-3 tag/bit rejection, run through the real
 validation bridge, worker and guardian, now ends with clean software cleanup
 and no forced termination. That run used generated input; it is not Frame

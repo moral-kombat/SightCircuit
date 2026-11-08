@@ -265,7 +265,13 @@ counters; cloud-checked only, no device run. The rules, each pinned by
 The final marker report keeps `overlay_shown_event_seen` and
 `overlay_hidden_event_seen` as the flags they were; an event with no pending
 request is still only a flag. The contract header is unchanged: no new value
-was needed. No `overlay_hidden` or `overlay_shown` line has been produced by
+was needed. Two consequences worth knowing: a show request processed inside
+the final poll window, at or after the display deadline, meets
+`Overlay::visibility()`'s existing `calibration_deadline_before_show` and ends
+the run with exit code 1 instead of a missing line (fail closed, the marker's
+late-show rule; not reachable in validation, which makes no call); and a
+marker binary run by hand from a terminal now ends `invalid_packet_magic`
+after twelve bytes of keyboard input, which no documented procedure does. No `overlay_hidden` or `overlay_shown` line has been produced by
 any runtime; in the cloud every request ends missing.
 
 ## Source layout

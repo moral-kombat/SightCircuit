@@ -123,7 +123,7 @@ def reap(client):
 
 @unittest.skipUnless(os.name == "posix", "Executable local helper fixtures")
 class MarkerStartupAndStopTests(unittest.TestCase):
-    """Local helper processes stand in for the bridge; none reads stdin, like marker mode."""
+    """Local helper processes stand in for the bridge; none ends on stdin's close, like marker mode."""
 
     def fake_bridge(self, *, ready):
         temporary = tempfile.TemporaryDirectory()
@@ -359,8 +359,8 @@ class MarkerNativeTests(unittest.TestCase):
         self.assertLess(report["cutoff_requested_ns"], report["display_deadline_ns"])
 
     def test_requested_stop_waits_for_native_timer_and_is_not_forced(self):
-        # V4's early stop (E75): marker mode never reads stdin, so the stop
-        # request is stdin EOF plus a bounded wait for the native timer.
+        # V4's early stop (E75): marker mode reads stdin for the visibility request only and its timer
+        # ignores end of input, so the stop request is stdin EOF plus a bounded wait for the native timer.
         client = marker.MarkerClient(validation_only=True)
         self.addCleanup(reap, client)
         started = time.monotonic()
