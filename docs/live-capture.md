@@ -95,10 +95,12 @@ preserve exact findings and limits; [E84](evidence/e084.md) records what merged.
 These five map onto the work order below: 1 to B6, 2 to A3 and E1, 3 to A3 and
 A5, 4 to B4, 5 to B1 and B3.
 
+
 ### Architecture plan work order (2026-11-07)
 
 The [architecture decisions](poc-scope.md#architecture-decisions-2026-11-07)
-produce five lanes (A, B, C, P and E; the letter D is kept for the decisions).
+produce five lanes (A, B, C, P and E; the letter D is kept for the decisions);
+lane F, the fallback build, opened on 2026-11-08 at the D2 exit.
 Sizes are S, M or L. "Device" marks a step that runs on the
 Frame and needs the owner's approval for that specific run; a historical
 approval does not carry over. Items without a dependency can start now, in
@@ -114,11 +116,11 @@ parallel coder sessions. The acceptance order of the gates is unchanged.
 | A4 | G3 attempt on a checkout containing package O3, with a manifest pinning that checkout | S, device | A2, A3, approval |
 | A5 | Only if A4 stops at the precondition: schema-3 scene limits from the run's recorded statistics, with the documentation table and boundary tests, then at most one more attempt | S to M, then device | A4 |
 | A6 | Calibration record version 2 carrying the mirror's native format metadata | M | none |
-| A7 | Diagnostic gate table, scope record and the call-site changes, including the bridge and its generated header; merges only after an accepted G3 observation | M | A6, accepted G3 |
-| A8 | Union-of-copies footprint provenance in the contract, mask, qualification and candidate records | M | A7 |
-| A9 | Tracking reporter integration behind its flag | L | E1 |
-| A10 | Diagnostic command consuming the scope, and the 60-second procedure; G5 and G6 runs then need their own approvals | M | A7, A8, A9 |
-| A11 | Fallback design document and bridge event contract (time-multiplexed exclusion); built only if the D2 budget is exhausted | S now, L later | none |
+| A7 | Superseded on 2026-11-08 by the fallback (D2 exit, [E90](evidence/e090.md)): diagnostic gate table, scope record and call-site changes for the mask path; not started | M | superseded |
+| A8 | Superseded with A7 (mask path) | M | superseded |
+| A9 | Tracking reporter integration behind its flag (a D1 diagnostic, not on the fallback's path; deferred, not superseded) | L | E1, a later decision |
+| A10 | Superseded with A7; the 60-second run is F7 on the fallback path | M | superseded |
+| A11 | Fallback design document and bridge event contract (time-multiplexed exclusion); done (#16). The build is lane F below, opened on 2026-11-08 when the D2 budget was exhausted | S, done | none |
 
 **Lane B, lifecycle and tests.**
 
@@ -132,6 +134,8 @@ parallel coder sessions. The acceptance order of the gates is unchanged.
 | B6 | The capture supervisor adopts it (paused track, last) | S | B3 |
 | B7 | Suite time budget enforced in CI | S | B1 |
 | B8 | Agent documentation and installer follow-ups from [E86](evidence/e086.md): the workspace trust dialog that the Phase 2 enforcement test depends on, in `docs/guides/frame-sessions.md`; the installer summary reporting its own channel default instead of the installed setting | S | none |
+| B9 | Reproduce the held-signal flake of `test_supervision` seen once in CI (checks run 90, attempt 1; the worker forced after 6.1 s with an empty report) under CPU stress on the runner and locally, then root-cause it; never skipped or quarantined | S to M | B3 |
+| B10 | Phase 2 guard-enforcement test scope for the agent runner: the bounded negative test (what the guard must block, how each refusal is observed), the trust-dialog precondition check, the report the device returns, and the operator steps; cloud work, the device run under its own approval | S | B8 |
 
 **Lane C, detector evaluation.**
 
@@ -160,6 +164,25 @@ parallel coder sessions. The acceptance order of the gates is unchanged.
 | Item | Work | Size | Depends on |
 | --- | --- | --- | --- |
 | E1 | Split `tools/overlay_bridge.cpp` into lifecycle, rendering, reporting and sensing units; move the source-text tests and manifest pins | L | none |
+
+**Lane F, fallback input by time-multiplexed exclusion (opened 2026-11-08).**
+
+Built because the D2 budget is exhausted ([E90](evidence/e090.md)) and the
+owner chose the fallback; the design and costs are in the
+[fallback reference](reference/hud-fallback.md#work-breakdown), which owns the
+step definitions. Sizes as there. "Device" steps need the owner's approval for
+that run.
+
+| Item | Work | Size | Depends on |
+| --- | --- | --- | --- |
+| F1 | Bridge visibility opcode with a cycle number and the timestamped visibility lines (`hide_requested`, `hide_returned`, `overlay_hidden`, the show counterparts, `visibility_event_missing`); header regeneration, rebuild, packet and source-text tests | M | E1 |
+| F2 | `OverlayClient` event queue and a cycle API on the sink | S | F1 |
+| F3 | Device measurements: hide-to-absence latency, hidden-event delivery, loopback repeats, show-to-visible; one evidence entry each | S each, device | F1, approvals |
+| F4 | Capture window and admission rule in the pipeline, with rejection counters and boundary tests | M | F3 |
+| F5 | The fallback stage: hide, window, infer, show on `_run_latest`; tile rendering without a mask; run reports | M | F2, F4 |
+| F6 | Acceptance rows and gate references for the fallback, a reviewed edit to scope, this work order and `sightcircuit/gates.py` | S | planner and owner |
+| F7 | Command and operator guide; the 60-second run under the diagnostic tier's scope record | M, then device | F5, F6 |
+| F8 | Retire or quarantine the dead mask stack and its documentation | M | an accepted fallback run |
 
 Lane A's device steps consume the D2 attempt budget: A4 is the first counted
 attempt, A5 the second and last. An attempt counts when the observer judged the
@@ -208,10 +231,9 @@ mirror's scale, the one reviewed change allowed before the last budgeted G3
 attempt; cloud-checked only, nothing run on the Frame). Lanes B and P are
 complete. The last budgeted G3 attempt ran ([E90](evidence/e090.md)): the
 decode passed and the run rejected on marker movement; the D2 exit rule is
-reached. Open: the owner's decision at the D2 exit (the
-[fallback design](reference/hud-fallback.md), work F1 to F8, or a new
-decision recorded in scope), A7 to A10 (only on a path that keeps the mask),
-C5 and C6 (device, approval), E1. The council's
+reached and the owner chose the fallback ([scope](poc-scope.md#architecture-decisions-2026-11-07)).
+Open: E1 then lane F (F1 to F8), B9 and B10, C5 with C6 (approved, staged on
+the Frame), A9 deferred; A7, A8 and A10 superseded. The council's
 hypothesis for the cancellation race was wrong; the recorded cause is the
 readiness probe firing on the worker before it had exec'd
 ([checks reference](reference/development-checks.md)). One runner-only flake
@@ -224,22 +246,17 @@ lane B item is to make it reproducible under CPU stress before any change.
 
 ### Decisions still needed from the owner
 
-- Who declares the capture layout for the diagnostic run, and on what evidence,
-  since arrows and eye-crossing rejection still depend on it.
-- Whether the observer run, the candidate conversion and the 60-second run must
-  fit one 300-second mapping lifetime under one approval, or the lifetime
-  constant changes by a reviewed edit.
-- The scope of the Phase 2 guard-enforcement test for the agent runner, which
-  also needs a decision on the workspace trust dialog ([E86](evidence/e086.md)).
-- The D2 exit: the last budgeted G3 attempt ran and was rejected on marker
-  movement after the decode passed ([E90](evidence/e090.md)). D2 says the
-  project now switches to the time-multiplexed fallback; the owner decides
-  whether to follow it as written or to record a new decision in scope (for
-  one example, one further attempt with the head held still, which would show
-  a static mapping and would still leave the motion term of the qualification
-  method unmeasured).
-- Device approvals, each separate: the evaluation session C5 with C6; any
-  further marker attempt only under a new recorded decision.
+- Whether the fallback's tile keeps the arrows, which depend on the capture
+  layout, or shows names only; decided when F5 is specified (the capture-layout
+  and 300-second mapping-lifetime questions of the mask path lapsed with the
+  fallback decision).
+- The Phase 2 guard-enforcement test is scheduled (owner, 2026-11-08): B10
+  writes its scope; the owner accepts the workspace trust dialog once on the
+  Frame before the run ([E86](evidence/e086.md)); the run gets its own approval.
+- Decided 2026-11-08: the fallback (D2 as written; [scope](poc-scope.md#architecture-decisions-2026-11-07)),
+  C5 with C6 approved (staged by the Frame manager, E91 reserved), the Phase 2
+  test scheduled. Next device approvals, each separate: the F3 measurements
+  (after F1), the Phase 2 enforcement run (after B10).
 - The Frame rebooted into SteamOS 0.5.8 ([E85](evidence/e085.md)); a Frame
   manager session exists and the "Frame update check" scheduled task was
   rebound to it on 2026-11-07, with the old task left disabled as a record.
