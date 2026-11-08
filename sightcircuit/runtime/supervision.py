@@ -42,6 +42,15 @@ supervisor follow (architecture decision D4). It offers:
   the caller's ``progress`` callback on the supervising thread, and
   ``{"event": "result", "report": {...}}`` or a bare JSON report is the
   final report. The guard's guardian forwards events unchanged.
+- **The worker's stop relay** (``stop_on``, behind ``guard.stop_on_signals``).
+  A stop signal sets the worker's ``threading.Event`` from a relay thread that
+  the signal's C-level delivery wakes through the process's wakeup descriptor
+  (``signal.set_wakeup_fd``); the Python-level handler itself takes no lock.
+  A handler that called ``Event.set()`` on the main thread deadlocked when the
+  signal landed inside ``Event.wait()``'s own critical section, and was not run
+  at all while the main thread blocked, uninterrupted, in the wait's lock
+  acquire (the lane B flake; see the checks reference). Neither can happen to
+  a relay thread.
 - **One report block.** ``status``, ``exit_code``, ``cleanup_ok``,
   ``reason``, ``worker_pid``, ``worker_armed``, ``worker_reaped``,
   ``worker_exit_code``, ``worker_tree_reaped``, ``report_reader_stopped``,
@@ -65,6 +74,7 @@ import subprocess
 import sys
 import threading
 import time
+import weakref
 
 MAX_REPORT_BYTES = 256 * 1024
 ARMED_FD_VARIABLE = "SIGHTCIRCUIT_ARMED_FD"
@@ -245,6 +255,143 @@ def report_armed():
         with contextlib.suppress(OSError):
             os.close(fd)
     return True
+
+
+STOP_SIGNALS = tuple(getattr(signal, name) for name in ("SIGINT", "SIGTERM") if hasattr(signal, name))
+
+
+class StopWakeup:
+    """The process's stop relay: a stop signal's delivery wakes a thread that sets every registered event.
+
+    The Python-level handler a worker installs runs on the main thread, between
+    two bytecodes, and only when the main thread gets to run Python code at all.
+    Setting the worker's stop event from it is therefore unsafe in two ways
+    that both ended workers by SIGKILL in CI: the handler ran while the main
+    thread was inside ``Event.wait()`` holding the event's (non-reentrant)
+    condition lock, so ``Event.set()`` deadlocked on the thread that held it;
+    and a signal whose C-level handler tripped just before the main thread
+    blocked in the wait's lock acquire was not handled until that acquire
+    returned, since only a signal arriving *during* the acquire interrupts it.
+
+    Here the handler only writes a byte to a pipe (``handle``; no lock), and
+    the pipe's write end is also the process's wakeup descriptor
+    (``signal.set_wakeup_fd``), so the C-level delivery of any Python-handled
+    signal writes its number to it at once, from whichever thread received it,
+    whatever the main thread is doing. The relay thread reads the pipe and
+    sets every registered event on a stop signal's byte; it takes the event's
+    lock on its own thread, where a main thread holding it is contention, not
+    a deadlock. Bytes of other signals are ignored. One relay serves the
+    process; a forked child forgets it (``os.register_at_fork``), so it cannot
+    write into a pipe its parent's thread reads.
+    """
+
+    def __init__(self):
+        self.read_fd, self.write_fd = os.pipe()
+        os.set_blocking(self.write_fd, False)
+        os.set_blocking(self.read_fd, False)  # The relay drains the pipe after each wakeup (``drain``).
+        self.events = weakref.WeakSet()
+        self.lock = threading.Lock()
+        self.thread = threading.Thread(target=self.relay, name="sightcircuit-stop-relay", daemon=True)
+        self.thread.start()
+        self.previous_wakeup_fd = signal.set_wakeup_fd(self.write_fd, warn_on_full_buffer=False)
+        os.register_at_fork(after_in_child=self.forget)
+
+    def register(self, stop):
+        with self.lock:
+            self.events.add(stop)
+
+    def handle(self, number, _frame):
+        """The signal handler: one non-blocking write, nothing that takes a lock.
+
+        The C-level delivery already wrote the signal's number to the wakeup
+        descriptor; this byte covers a wakeup descriptor another library
+        replaced after the relay was installed. A full pipe means a byte is
+        already waiting, so the relay wakes anyway. After ``forget`` (a forked
+        child) the handler is inert: the descriptor number may be a file by now.
+        """
+        if self.write_fd < 0:
+            return
+        try:
+            os.write(self.write_fd, bytes([number]))
+        except OSError:
+            pass
+
+    def drain(self):
+        """Every byte waiting in the pipe, so one signal's two bytes cannot wake the relay twice."""
+        data = bytearray()
+        while True:
+            try:
+                chunk = os.read(self.read_fd, 4096)
+            except InterruptedError:
+                continue
+            except BlockingIOError:
+                return bytes(data)
+            if not chunk:
+                return bytes(data)
+            data.extend(chunk)
+            if len(chunk) < 4096:
+                return bytes(data)
+
+    def relay(self):
+        while True:
+            try:
+                select.select([self.read_fd], [], [])
+                data = self.drain()
+            except (InterruptedError, select.error):
+                continue
+            except (OSError, ValueError):
+                return
+            if not data:
+                return  # The write end is gone with the handler: nothing more arrives.
+            if any(byte in STOP_SIGNALS for byte in data):
+                with self.lock:
+                    events = list(self.events)
+                for event in events:
+                    event.set()
+
+    def forget(self):
+        """In a forked child: no relay thread exists, and the parent's pipe is not ours to write.
+
+        The handler stays installed in the child but becomes inert (``handle``
+        on -1), the descriptors are closed once and forgotten, and only the
+        process's current relay clears the module's reference, so a relay a
+        child made afterwards survives a grandchild's fork callbacks of both.
+        """
+        global _stop_wakeup
+        if _stop_wakeup is self:
+            _stop_wakeup = None
+            with contextlib.suppress(ValueError, OSError):
+                signal.set_wakeup_fd(-1)
+        read_fd, write_fd = self.read_fd, self.write_fd
+        self.read_fd = self.write_fd = -1
+        for fd in (read_fd, write_fd):
+            if fd >= 0:
+                with contextlib.suppress(OSError):
+                    os.close(fd)
+
+
+_stop_wakeup = None
+
+
+def stop_on(stop, numbers=STOP_SIGNALS):
+    """Make the signals ``numbers`` (SIGINT and SIGTERM) set the event ``stop``; returns it.
+
+    On POSIX the setting is done by the process's ``StopWakeup`` relay, woken
+    by the signal's C-level delivery, and the installed handler takes no lock.
+    Elsewhere (no wakeup pipe) the handler sets the event itself, as before.
+    Call on the main thread, once per event; later calls add events.
+    """
+    global _stop_wakeup
+    if os.name != "posix":
+        for number in numbers:
+            signal.signal(number, lambda *_: stop.set())
+        return stop
+    if _stop_wakeup is None:
+        _stop_wakeup = StopWakeup()
+    _stop_wakeup.register(stop)
+    for number in numbers:
+        signal.signal(number, _stop_wakeup.handle)
+    return stop
 
 
 def enter_worker(number=signal.SIGTERM):

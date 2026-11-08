@@ -96,11 +96,12 @@ def stop_on_signals(stop=None):
     This is also the worker's arm point: once the handlers are installed the
     supervisor is told (``supervision.report_armed``), so a cancellation that
     arrived while the worker was still starting is delivered now, to a
-    handler, and not earlier, to the default disposition.
+    handler, and not earlier, to the default disposition. The event is set by
+    the process's stop relay (``supervision.StopWakeup``), never by the handler
+    on the main thread, so a signal that lands inside the worker's own
+    ``stop.wait()`` neither deadlocks it nor waits for the wait to time out.
     """
-    stop = threading.Event() if stop is None else stop
-    for number in (signal.SIGINT, signal.SIGTERM):
-        signal.signal(number, lambda *_: stop.set())
+    stop = supervision.stop_on(threading.Event() if stop is None else stop)
     report_armed()
     return stop
 

@@ -188,6 +188,97 @@ class ArmHandshakeTests(unittest.TestCase):
             self.assertFalse(supervision.report_armed())
 
 
+@unittest.skipUnless(os.name == "posix", "The stop relay uses a wakeup pipe")
+class StopRelayTests(unittest.TestCase):
+    """The worker's stop event is set by the relay thread, so the two ways the old handler lost a stop are gone."""
+
+    def worker(self, body, timeout=8):
+        command = [sys.executable, "-c", f"import json, os, signal, sys, threading, time; sys.path.insert(0, {str(ROOT)!r}); "
+                   "from sightcircuit.runtime.guard import stop_on_signals; " + body]
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired as error:
+            self.fail(f"the worker hung: {error.stdout!r} {error.stderr!r}")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    def test_a_signal_inside_the_events_own_critical_section_does_not_deadlock_the_worker(self):
+        # Event.wait() holds the event's condition lock while it checks the flag and registers its waiter; a
+        # handler that called Event.set() there hung on that non-reentrant lock (the lane B flake's worker
+        # traceback: wait -> set -> __enter__). The relay sets the event from its own thread once the lock is free.
+        report = self.worker(
+            "stop = stop_on_signals(); started = time.monotonic()\n"
+            "with stop._cond:\n"
+            "    os.kill(os.getpid(), signal.SIGTERM); time.sleep(0.05)\n"
+            "print(json.dumps({'set': stop.wait(2), 'seconds': time.monotonic() - started}))")
+        self.assertTrue(report["set"], report)
+        self.assertLess(report["seconds"], 1.5, report)
+
+    def test_a_signal_the_main_thread_cannot_handle_yet_still_wakes_its_wait(self):
+        # Only a signal arriving during the wait's lock acquire interrupts it; a signal delivered just before
+        # it, or to another thread, used to be handled after the acquire returned, 10 s later for a worker.
+        # Delivering to another thread makes that deterministic: the main thread's acquire is never interrupted.
+        report = self.worker(
+            "stop = stop_on_signals()\n"
+            "def deliver_here(): time.sleep(0.2); signal.pthread_kill(threading.get_ident(), signal.SIGTERM)\n"
+            "threading.Thread(target=deliver_here, daemon=True).start(); started = time.monotonic()\n"
+            "print(json.dumps({'set': stop.wait(6), 'seconds': time.monotonic() - started}))")
+        self.assertTrue(report["set"], report)
+        self.assertLess(report["seconds"], 2, report)
+
+    def test_a_forked_child_forgets_the_relay_and_can_make_its_own(self):
+        # After os.fork the child has no relay thread and must not write into its parent's pipe: the inherited
+        # handler is inert, the descriptors are closed once and forgotten, and a fresh stop_on_signals in the
+        # child makes a new relay whose signals work; the parent's relay is untouched by the child's fork callbacks.
+        report = self.worker(
+            "import warnings; warnings.simplefilter('ignore', DeprecationWarning)\n"
+            "from sightcircuit.runtime import supervision\n"
+            "stop = stop_on_signals(); relay = supervision._stop_wakeup; pid = os.fork()\n"
+            "if pid == 0:\n"
+            "    inert = supervision._stop_wakeup is None and relay.write_fd == -1 and relay.read_fd == -1\n"
+            "    relay.handle(signal.SIGTERM, None)\n"  # Must neither raise nor write anywhere.
+            "    child_stop = stop_on_signals(); fresh = supervision._stop_wakeup is not relay\n"
+            "    grandchild = os.fork()\n"
+            "    if grandchild == 0:\n"
+            "        os._exit(0 if supervision._stop_wakeup is None and relay.write_fd == -1 else 3)\n"
+            "    _, status = os.waitpid(grandchild, 0)\n"
+            "    os.kill(os.getpid(), signal.SIGTERM); child_ok = child_stop.wait(2)\n"
+            "    os._exit(0 if inert and fresh and child_ok and os.waitstatus_to_exitcode(status) == 0 else 1)\n"
+            "_, status = os.waitpid(pid, 0)\n"
+            "os.kill(os.getpid(), signal.SIGTERM)\n"
+            "print(json.dumps({'child': os.waitstatus_to_exitcode(status), 'parent_set': stop.wait(2), "
+            "'parent_relay_intact': supervision._stop_wakeup is relay and relay.write_fd >= 0}))")
+        self.assertEqual(report, {"child": 0, "parent_set": True, "parent_relay_intact": True})
+
+    def test_the_handler_takes_no_lock_and_later_events_join_the_relay(self):
+        # In-process: the installed handler is the relay's write, not Event.set; every registered event is set.
+        previous = {number: signal.getsignal(number) for number in supervision.STOP_SIGNALS}
+        for number, handler in previous.items():
+            self.addCleanup(signal.signal, number, handler)
+        first, second = threading.Event(), threading.Event()
+        self.assertIs(supervision.stop_on(first), first)
+        self.assertIs(supervision.stop_on(second), second)
+        relay = supervision._stop_wakeup
+        for number in supervision.STOP_SIGNALS:
+            self.assertEqual(signal.getsignal(number), relay.handle)
+        self.assertTrue(relay.thread.is_alive() and relay.thread.daemon)
+        self.assertEqual(signal.set_wakeup_fd(relay.write_fd), relay.write_fd)  # The wakeup descriptor is the relay's pipe.
+        with first._cond:  # Held, as Event.wait holds it: the handler must still return at once.
+            relay.handle(signal.SIGTERM, None)
+        self.assertTrue(first.wait(2) and second.wait(2))
+        # A byte of another signal (the supervisors' SIGHUP handler also writes the wakeup descriptor) sets nothing,
+        # and one real signal's two bytes (the wakeup descriptor's and the handler's) are drained together, so an
+        # event registered afterwards is not set by a stale byte.
+        third = supervision.stop_on(threading.Event())
+        os.write(relay.write_fd, bytes([signal.SIGHUP]))
+        self.assertFalse(third.wait(0.2))
+        signal.raise_signal(signal.SIGTERM)
+        self.assertTrue(third.wait(2))
+        time.sleep(0.1)
+        fourth = supervision.stop_on(threading.Event())
+        self.assertFalse(fourth.wait(0.3))
+
+
 class WorkerSideTests(unittest.TestCase):
     def test_emit_event_writes_one_flushed_json_line(self):
         stream = io.StringIO()

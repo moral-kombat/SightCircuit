@@ -149,6 +149,94 @@ that arrives earlier waits, bounded, for the arm; the test's probe also
 requires the exec'd worker. Its acceptance is fifty consecutive green runs of
 the test under the same stress command.
 
+### Held-signal flake root cause (2026-11-08)
+
+Two runner failures on commits that touched no runtime code, both in the
+replay job, both ending a cooperative worker by force after it had armed:
+
+- Checks run 90, attempt 1 (pull request #29, `1be5eefe`):
+  `test_supervision.SupervisedOwnedTests.test_a_signal_during_process_start_is_held_and_raised_once_the_worker_can_be_ended`
+  reported `cancelled`, exit 143, `cleanup_ok` false, `worker_exit_code` -9,
+  `worker_forced_termination` true, an empty report ("Expecting value: line 1
+  column 1") and 6.113 s elapsed: the arm, the whole 5 s cooperative grace, a
+  group SIGTERM the worker also survived for the 1 s terminate grace, then
+  SIGKILL. The re-run and five local runs passed.
+- Checks run 93 (main, `1889e56e`), the decoder-only `unittest discover` step:
+  `test_bounded_worker.BoundedWorkerTests.test_a_cancellation_before_the_worker_arms_waits_for_its_handler`
+  reported `worker_armed` true, `worker_exit_code` 130 and
+  `worker_forced_termination` true after 1.464 s: the fixture's 0.4 s arm, its
+  1.0 s cooperative grace with no reaction to SIGTERM, then the group SIGTERM,
+  to which the worker *did* react and exited cooperatively.
+
+Reproduced on the cloud container (x86_64, 4 cores, Python 3.12.3) with
+`stress-ng --cpu 8 --cpu-method matrixprod` running throughout and the test
+alone in a loop (`python3.12 -m unittest <test id>`), with an import hook
+that, before the primitive's group termination, read the still-living worker's
+`/proc` signal state and made it dump its Python traceback through
+`faulthandler` on SIGUSR1. The loop and the hook are `tests/stress_supervision.py`
+(not a test; `unittest discover` ignores it), which takes the test ids, the
+run count, the load (`--stress stress-ng`, the default; `--stress python`,
+eight busy loops, when `stress-ng` is not installed, as it is not in the cloud
+container by default; `--stress none`) and `--probe` for the hook, and keeps
+red runs and probe output under `artifacts/stress-supervision/`. The result:
+1 red run in 1600 (one in the first 400, none in the next 1200) for
+the supervision test and 0 in 900 for the bounded-worker test, whose face
+of the race did not recur under this load. The one red run matched run 90
+exactly (exit 143, `worker_exit_code` -9, empty report, 6.5 s), and its
+worker's traceback was the cause:
+
+```text
+File "threading.py", line 300 in __enter__     # Condition.__enter__: acquiring the event's lock
+File "threading.py", line 623 in set           # Event.set
+File "sightcircuit/runtime/guard.py", line 103 in <lambda>   # the stop handler
+File "threading.py", line 350 in wait          # Condition.wait, the lock still held
+File "threading.py", line 655 in wait          # Event.wait
+```
+
+The worker was sleeping in a futex with no signal pending and SIGTERM caught.
+Its stop handler, `lambda *_: stop.set()`, ran on the main thread between two
+bytecodes of `Event.wait()`, inside the region where `wait` holds the event's
+condition lock (from its entry until `Condition.wait` releases the lock
+around the waiter acquire). `Event.set()` then blocked on that non-reentrant
+lock, held by the very thread running the handler: a deadlock the group
+SIGTERM could not break (its handler ran nested, into the same acquire), so
+only SIGKILL ended the worker. None of the three candidates in the work order
+was involved: the worker had armed before the SIGTERM, the empty report was
+the consequence of the kill, not a reader fault, and there was no window
+between the arm and the grace.
+
+Run 93 is the second face of the same handler. A Python-level handler runs
+only when the main thread next executes Python code; a signal whose C-level
+delivery lands after the eval loop's last check and before the main thread
+blocks in the waiter's lock acquire is not handled until that acquire returns
+(only a signal arriving *during* the acquire interrupts it). The slow-arm
+worker therefore sat in `stop.wait(10)` with its SIGTERM already delivered,
+and the group SIGTERM, which did arrive during the acquire, ran the handler
+and let it exit 130. Both are deterministic in `tests/test_supervision.py`
+(`StopRelayTests`): holding the event's lock while the signal arrives
+reproduces the deadlock, and delivering the signal to another thread, which
+never interrupts the main thread's acquire, reproduces the deferral; on the
+old handler the first hangs and the second waits the whole timeout.
+
+The fix is in the primitive, not in a budget: `supervision.stop_on`, which
+`guard.stop_on_signals` now uses, installs a handler that takes no lock (one
+non-blocking write to a pipe) and makes that pipe the process's wakeup
+descriptor (`signal.set_wakeup_fd`), so the C-level delivery of a stop signal
+writes its number at once, from whichever thread received it, whatever the
+main thread is doing. A daemon relay thread reads the pipe and sets every
+registered stop event on its own thread, where a lock the main thread holds
+is contention, not a deadlock; it drains the pipe before setting, so one
+signal's two bytes (the descriptor's and the handler's) cannot set an event
+registered later, and a forked child's copy of the relay is inert (closed
+descriptors forgotten, the handler a no-op) until the child installs its own.
+`test_mirror_launcher`'s check that a raised
+signal sets the event now waits for the relay instead of asserting
+synchronously. Acceptance, as for the cancellation race above: the same
+stress loop on the fixed checkout (`tests/stress_supervision.py` with the
+same load), 0 red runs in 1600 for the supervision test and 0 in 600 for the
+bounded-worker test, fifty consecutive green runs being the bar. These are runner-CPU observations on x86_64; nothing here
+ran on the Frame.
+
 The optional pacing run uses a generated 2464 × 2464 HEVC clip at 60 fps with
 seeded noise. It replays 40 processed frames at a 5 fps cap with two and four
 decoder threads, and checks the [latency statistics](pipeline.md#latency-statistics).
