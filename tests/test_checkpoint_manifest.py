@@ -601,6 +601,19 @@ def code_blocks(text):
 
 PROCEDURES = (("docs/guides/hud-checkpoint.md", "## Bounded edge HUD calibration checkpoint"),)
 BRIDGE_RUNS = ("scripts/hud_marker_check.py", "scripts/hud_marker_observer.py")
+BRIDGE_UNITS = tuple(path for path in manifest.NATIVE_SOURCES if path.endswith(".cpp"))
+
+
+def local_includes(path, seen=None):
+    """The pinned-style paths of every local header ``path`` includes, transitively."""
+    seen = set() if seen is None else seen
+    for name in re.findall(r'^#include "([\w.]+)"', path.read_text(), re.MULTILINE):
+        header = path.parent / name
+        pinned = f"tools/{name}"
+        if header.is_file() and pinned not in seen:
+            seen.add(pinned)
+            local_includes(header, seen)
+    return seen
 
 
 def procedure_blocks():
@@ -639,12 +652,26 @@ class ProcedureDriftTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue((ROOT / path).is_file())
 
-    def test_every_local_header_the_bridge_includes_is_pinned(self):
-        source = (ROOT / "tools/overlay_bridge.cpp").read_text()
-        included = {f"tools/{name}" for name in re.findall(r'^#include "([\w.]+)"', source, re.MULTILINE)
-                    if (ROOT / "tools" / name).is_file()}
-        self.assertIn("tools/overlay_lifecycle.hpp", included)
-        self.assertLessEqual(included, set(manifest.NATIVE_SOURCES))
+    def test_every_bridge_unit_and_every_local_header_it_includes_is_pinned(self):
+        # The pinned sources are exactly the bridge's translation units plus the local headers they reach;
+        # a new unit or header must be pinned, and a pinned header must still be included somewhere.
+        self.assertIn("tools/overlay_bridge.cpp", BRIDGE_UNITS)
+        included = set()
+        for unit in BRIDGE_UNITS:
+            included |= local_includes(ROOT / unit)
+        self.assertLessEqual({"tools/overlay_bridge.hpp", "tools/overlay_lifecycle.hpp", "tools/overlay_frame.hpp",
+                              "tools/hud_contract.hpp"}, included)
+        self.assertEqual(included, set(manifest.NATIVE_SOURCES) - set(BRIDGE_UNITS))
+
+    def test_the_build_and_the_ci_syntax_check_compile_exactly_the_pinned_units(self):
+        build = (ROOT / "scripts/build_openvr_tool.sh").read_text()
+        case = build.split("overlay-bridge)", 1)[1].split(";;", 1)[0]
+        self.assertEqual({f"tools/{name}" for name in re.findall(r"\b(\w+\.cpp)\b", case)}, set(BRIDGE_UNITS))
+        workflow = (ROOT / ".github/workflows/check-jobs.yml").read_text()
+        syntax_checks = [line for line in workflow.splitlines() if "-fsyntax-only" in line]
+        self.assertEqual(len(syntax_checks), 1)
+        self.assertIn("-Werror", syntax_checks[0])
+        self.assertEqual(set(re.findall(r"tools/\w+\.cpp", syntax_checks[0])), set(BRIDGE_UNITS))
 
     def test_each_procedure_verifies_before_it_first_runs_the_bridge(self):
         for path, heading in PROCEDURES:

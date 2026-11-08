@@ -151,13 +151,17 @@ synthetic run's progress streaming on it, so `runtime/process.py` is retired
 
 ### Native bridge
 
-The bridge in `tools/overlay_bridge.cpp` carries connection lifecycle, overlay
-rendering, the marker, context sensing, a watchdog and report assembly in one
-source file. It may end itself on its watchdog or on parent death; the Python
-side owns escalation and the cleanup verdict. The plan splits the source into
-lifecycle, rendering, reporting and sensing units, moving the tests and manifest
-pins that name the file, before the tracking reporter is integrated behind its
-flag. Without the flag the bridge makes no new OpenVR call.
+The bridge carried connection lifecycle, overlay rendering, the marker,
+context sensing, a watchdog and report assembly in one source file,
+`tools/overlay_bridge.cpp`. It may end itself on its watchdog or on parent
+death; the Python side owns escalation and the cleanup verdict. **Implemented
+on 2026-11-08 (item E1):** the source is split into lifecycle, rendering,
+reporting and sensing units behind one shared header, with `main` left in the
+original file, and the source-text tests and manifest pins moved with the code
+([source layout](reference/overlay.md#source-layout)); the behaviour, lines and
+report fields are unchanged and were compared offline against the single-file
+build. The tracking reporter is still to be integrated behind its flag (A9).
+Without the flag the bridge makes no new OpenVR call.
 
 ### Approval tiers
 

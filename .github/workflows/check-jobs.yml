@@ -53,7 +53,7 @@ jobs:
       - name: Build the native overlay bridge
         run: bash scripts/build_overlay_bridge.sh
       - name: Check the bridge source under -Werror
-        run: g++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -I.cache/openvr/headers -I.cache/openvr/src -fsyntax-only tools/overlay_bridge.cpp
+        run: g++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -I.cache/openvr/headers -I.cache/openvr/src -fsyntax-only tools/overlay_bridge.cpp tools/overlay_bridge_lifecycle.cpp tools/overlay_bridge_rendering.cpp tools/overlay_bridge_reporting.cpp tools/overlay_bridge_sensing.cpp
       - name: Build the native exec boundary without starting capture
         run: bash scripts/build_capture_supervisor.sh
       - name: Build capability query without loading Vulkan

@@ -286,8 +286,9 @@ generated from the Python contract by
 levels and corner ids), the pipe packet layouts and opcodes, the marker
 duration (1–20 s), display age (1 s) and frame side (512) limits, the bridge's
 connect budget (6 s, paired with the clients' 8 s ready wait), and
-`PANEL_LIMITS` with the `PanelSettings` defaults. `tools/overlay_bridge.cpp`
-and `tools/overlay_frame.hpp` include it and keep no copies of those values;
+`PANEL_LIMITS` with the `PanelSettings` defaults. The bridge's units (through
+`tools/overlay_bridge.hpp`; [source layout](overlay.md#source-layout)) and
+`tools/overlay_frame.hpp` include it and keep no copies of those values;
 they share one little-endian `read_u32`. Python call sites import the same
 constants from `sightcircuit/hud/contract.py` (`PANEL_LIMITS` and
 `PanelSettings` stay in `sightcircuit/overlay.py`). Change a value only on the

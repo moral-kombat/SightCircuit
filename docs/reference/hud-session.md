@@ -128,7 +128,7 @@ a named reason in the run report's `session_tokens.undeclared`.
   source and the mask's synthetic-only rule are unchanged.
 
 **No native reporter yet.** The Python observer has an event schema, but
-`tools/overlay_bridge.cpp` does not emit those tracking events. The bridge's real
+the bridge (`tools/overlay_bridge*.cpp`) does not emit those tracking events. The bridge's real
 `--stdin` mode is the confirmed replay-panel path ([E47](../evidence/e047.md)),
 and it is the pinned bridge of the next G3 checkpoint. A reporter would add
 OpenVR property, pose and event reads to both, unchecked on a device. The
