@@ -28,6 +28,7 @@ from sightcircuit import overlay
 from sightcircuit.hud import contract, native
 from sightcircuit.hud.contract import HUD_CONFIG, MARKER
 from sightcircuit.overlay import DEFAULT_BRIDGE, PANEL_LIMITS, OverlayClient, PanelSettings, packet
+from sightcircuit.runtime import manifest
 
 ROOT = Path(__file__).resolve().parents[1]
 HAVE_NUMPY = importlib.util.find_spec("numpy") is not None
@@ -186,9 +187,11 @@ class PythonLimitSitesTests(unittest.TestCase):
         header = (ROOT / "tools/hud_contract.hpp").read_text()
         self.assertIn(f"constexpr std::uint32_t kBridgeConnectBudgetSeconds = {contract.BRIDGE_CONNECT_BUDGET_SECONDS};",
                       header)
-        bridge = (ROOT / "tools/overlay_bridge.cpp").read_text()
-        self.assertIn("constexpr unsigned kWatchdogConnectSeconds = contract::kBridgeConnectBudgetSeconds;", bridge)
-        self.assertNotRegex(bridge, r"kWatchdogConnectSeconds\s*=\s*\d")
+        # The budget constant is declared once, in the bridge's shared header, and no unit redefines it.
+        self.assertIn("constexpr unsigned kWatchdogConnectSeconds = contract::kBridgeConnectBudgetSeconds;",
+                      (ROOT / "tools/overlay_bridge.hpp").read_text())
+        for path in manifest.NATIVE_SOURCES:
+            self.assertNotRegex((ROOT / path).read_text(), r"kWatchdogConnectSeconds\s*=\s*\d", path)
         client = (ROOT / "sightcircuit/overlay.py").read_text()
         self.assertIn("self.ready.wait(BRIDGE_READY_WAIT_SECONDS)", client)
         self.assertNotRegex(client, r"ready\.wait\(\d")

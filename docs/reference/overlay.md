@@ -135,3 +135,46 @@ bash scripts/build_overlay_bridge.sh
 With window dependencies and model fixtures installed, this covers valid and
 malformed packets, named missing-runtime failure, signal/EOF cleanup, read
 timeouts, channel order, resizing, Qt forwarding and the existing replay tests.
+
+## Source layout
+
+The bridge is one binary built from five translation units in `tools/`
+(work-order item E1, 2026-11-08). The split moved code only: the modes, their
+protocol lines, report fields, exit codes and error names are those of the
+single-file bridge that the accepted device runs used ([E89](../evidence/e089.md),
+[E90](../evidence/e090.md)), and the offline tests of every validation-only
+mode and no-server refusal pass against the rebuilt binary unchanged.
+
+| File | Unit | Holds |
+| --- | --- | --- |
+| `overlay_bridge.hpp` | shared header | the `Overlay` state (connection, handle, retirement, event flags, settings), the stop flag, the watchdog budgets, `Settings`, and the declarations of the four units |
+| `overlay_bridge.cpp` | entry point | `main`: argument parsing, the opt-in checks, and the connect, run, cleanup, report sequence |
+| `overlay_bridge_lifecycle.cpp` | lifecycle | the stop signal, arming a watchdog phase, the Background-then-Overlay connect (`Overlay::init`), error names, and `Overlay::close` |
+| `overlay_bridge_rendering.cpp` | rendering | settings decoding and bounds, `marker_settings`, the test pattern and the calibration marker, `SetOverlayRaw`, show and hide, and `--render-calibration-marker` |
+| `overlay_bridge_reporting.cpp` | reporting | `emit` (the only JSON writer), the watchdog line, the usage text, the initial, marker, connect and final report fields, and the `ready`, `frame_*` and `test_panel_submitted` lines |
+| `overlay_bridge_sensing.cpp` | sensing | `monotonic_ns` (the clock every reported timestamp reads), the stdin protocol loop with its bounded reads and expiry poll, runtime event polling, the visibility queries and the read-only headset view record |
+
+`overlay_lifecycle.hpp` (stdout isolation, the SIGALRM handler, the connect
+order) and `overlay_frame.hpp` (packet decoding, retirement) stay the OpenVR-free
+helpers that the fixture tests compile on their own; every contract value still
+comes from the generated `hud_contract.hpp`. The `Overlay` member functions are
+defined in the unit that owns them, as the header notes beside each group.
+
+`scripts/build_openvr_tool.sh` compiles exactly these five units into
+`artifacts/overlay-bridge/sightcircuit-overlay-bridge`, and the native CI job's
+`-Werror` syntax check names the same five. The checkpoint manifest pins the
+units and every local header they include (`NATIVE_SOURCES` in
+`sightcircuit/runtime/manifest.py`); `tests/test_checkpoint_manifest.py` fails
+when the pin list, the build script's list and the CI line disagree, or when a
+pinned header is included by no unit. A bridge rebuilt from the split sources
+has a different binary digest from one built before it, so a manifest recorded
+after the split differs from an earlier one in `bridge` and `native_sources`:
+the expected checkout difference the device procedure records, not drift.
+
+The source-text tests moved with the code: the panel-limit check reads the
+rendering unit (`tests/test_overlay_bridge.py`), the connect-budget check
+reads the shared header and every pinned source (`tests/test_hud_contract.py`),
+and no pinned source may name `SetHeadsetView`. The fallback design's
+[bridge events](hud-fallback.md#bridge-events) (item F1) land in the reporting
+unit, with the opcode decoded in the sensing unit and the show and hide calls
+in the rendering unit.

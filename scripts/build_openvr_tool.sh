@@ -3,8 +3,14 @@ set -euo pipefail
 
 PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 case "${1:-}" in
-    camera-probe) sightcircuit_source=camera_probe.cpp; sightcircuit_name=sightcircuit-camera-probe ;;
-    overlay-bridge) sightcircuit_source=overlay_bridge.cpp; sightcircuit_name=sightcircuit-overlay-bridge ;;
+    camera-probe) sightcircuit_tool_sources=(camera_probe.cpp); sightcircuit_name=sightcircuit-camera-probe ;;
+    overlay-bridge)
+        # The bridge's translation units: the entry point and its four units
+        # (docs/reference/overlay.md#source-layout); the checkpoint manifest pins
+        # the same list (sightcircuit/runtime/manifest.py NATIVE_SOURCES).
+        sightcircuit_tool_sources=(overlay_bridge.cpp overlay_bridge_lifecycle.cpp overlay_bridge_rendering.cpp
+                                   overlay_bridge_reporting.cpp overlay_bridge_sensing.cpp)
+        sightcircuit_name=sightcircuit-overlay-bridge ;;
     *) echo "Usage: build_openvr_tool.sh camera-probe|overlay-bridge" >&2; exit 64 ;;
 esac
 OPENVR_REVISION=0924064316de3effbcd1acf1e309182a2deb1c05
@@ -55,8 +61,11 @@ if [ ! -d "$sightcircuit_sdk/.git" ] || \
     exit 1
 fi
 
-sightcircuit_sources=(
-    "$PROJECT_ROOT/tools/$sightcircuit_source"
+sightcircuit_sources=()
+for sightcircuit_source in "${sightcircuit_tool_sources[@]}"; do
+    sightcircuit_sources+=("$PROJECT_ROOT/tools/$sightcircuit_source")
+done
+sightcircuit_sources+=(
     "$sightcircuit_sdk/src/openvr_api_public.cpp"
     "$sightcircuit_sdk/src/jsoncpp.cpp"
 )
