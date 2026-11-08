@@ -159,7 +159,8 @@ the [evidence handoff](../evidence/README.md) rather than assuming the page work
 **Phase 0 installed; guard enforcement and Tier A runs remain untested on Frame.**
 [E82](../evidence/e082.md) records passing installation checks and settings
 matching the template. The commands below are Phase 2 of the
-[agent plan](../agent-on-frame.md), which needs its own approval. A Claude Code
+[agent plan](../agent-on-frame.md), which needs its own approval; the
+[enforcement test guide](agent-enforcement-test.md) is its scope. A Claude Code
 session on Frame may run only `scripts/frame_agent_run.py`, which executes a
 fixed task table by ID. Tier A tasks do not produce VR output, capture camera
 frames or change service state. They do read service metadata and may build
@@ -287,7 +288,9 @@ the trust is recorded in `~/.claude.json`, the allow entries are ignored, so
 an enforcement test would observe prompts or refusals that come from the
 missing trust and not from the guard. Check `claude doctor` for that line
 before the test; this guide records the condition and does not instruct a
-change to the device.
+change to the device. The [enforcement test guide](agent-enforcement-test.md)
+makes the check its first step and owns the test's matrix, report and
+approval boundary.
 
 `scripts/frame_claude_install.sh` runs the Phase 0 stages with a status line
 and a breakpoint before each stage; the procedure is preserved in the

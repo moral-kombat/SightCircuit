@@ -21,4 +21,5 @@ COMMANDS = (
     "mirror_check",
     "frame_session_manifest",
     "annotate_boxes",
+    "agent_enforcement_check",
 )

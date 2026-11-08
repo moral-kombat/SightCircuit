@@ -32,6 +32,7 @@ still display a cloud terminal: confirm where commands run before proceeding.
 | Run bounded recognition and compare detectors | [Mirror recognition and evaluation](guides/mirror-recognition.md) |
 | Run a selected test session and record observations | [Frame sessions](guides/frame-sessions.md) |
 | Prepare the separately approved mapping observation | [HUD checkpoint](guides/hud-checkpoint.md) |
+| Test the agent guard's enforcement on the Frame (Phase 2, approval needed) | [Agent guard enforcement test](guides/agent-enforcement-test.md) |
 
 The checkpoint is experimental. It does not enable the production live HUD.
 Each device guide describes prerequisites, operating limits, and shutdown.
