@@ -46,21 +46,26 @@ reported. Optional `objects` give `label`, source-pixel `box_xyxy` and
 confusable detection overlapping the object at IoU 0.3 is a confusion. Set
 `boxes_complete: true` only when every supported object is boxed, enabling
 false-positive and precision counts. The manifest helper's `--object
-label:x1,y1,x2,y2` and `--boxes-complete` write these
+label:x1,y1,x2,y2` and `--boxes-complete` write these, as does the
+box-annotation window (`scripts/annotate_boxes.py`) through the same helper
 ([procedure](../guides/mirror-recognition.md#compare-detectors-on-frame-stills)).
 Labels a detector cannot output are reported as unsupported. An entry may not repeat a `present` or `absent` label,
 including under another name for the same canonical label (`sofa` and `couch`),
 so the per-label table, the totals and a pin count the same checks. The JSON
 report has per-detector totals, per-image detections and timing; a one-line
 summary per detector and a per-label table go to stderr. Report
-schema version 5 records manifest and resolved image SHA-256 values,
+schema version 6 records manifest and resolved image SHA-256 values,
 decoded and processed dimensions, detector model hashes, runtime versions and
 preprocessing parameters, Python/OpenCV/NumPy versions, the Git revision and
 tracked-diff hash, conversion path, participating source-file SHA-256 values
 and native inference runtime artifact hashes. Each image's `input_path` is the
 file's basename only (schema 4 recorded the resolved path), so a report written
 on the Frame carries no absolute device path; the entry `id` and `input_sha256`
-identify the input. Manifest paths are recorded as given on the command line. It also states annotation coverage explicitly: a
+identify the input. Each image's `input_path_resolution` (schema 6) says which
+file was read: `recorded` when the entry's path existed, `beside_manifest` when
+it did not and the file of the same basename in the manifest's directory was
+used instead ([repeating a recorded run](#repeat-a-recorded-run)), `download`
+for a `file` entry. Manifest paths are recorded as given on the command line. It also states annotation coverage explicitly: a
 presence-only manifest does not measure absent-label or localization accuracy.
 Per detector, a `labels` table holds present (hit, miss,
 unsupported), absent (clean, violation, unsupported) and boxes (matched, missed,
@@ -124,6 +129,31 @@ at the unchanged 0.5 threshold; YOLOX-Nano's best below-threshold score was
 0.427. All audit variants fed identical bytes for this already-grey, small
 preview, so they did not explain the miss. One unboxed still is not an accuracy
 measurement; the investigation remains open and defaults are unchanged.
+
+### Repeat a recorded run
+
+A manifest written by `scripts/frame_session_manifest.py` records each still
+relative to the manifest, so the directory can move as a whole. A hand-written
+manifest may record an absolute path instead: the E80 re-run manifest on the
+Frame names its still under the pre-move `/home/steamos/framejacker/` path, so
+after the checkout's move the path no longer exists ([E86](../evidence/e086.md)).
+The evaluator then looks for a file of the same basename in the manifest's own
+directory and, when one is there, reads that file, says so on stderr and records
+`input_path_resolution: beside_manifest` for the image; a missing recorded path
+with no such file is still reported as not found. The fallback changes which
+file is read, never what identity means: a supplied `sha256` is verified against
+the file actually read, and `--require-input-digests` still needs one for every
+entry, so a different file of the same name fails the digest check.
+
+To repeat E80 on the device, run the recorded command unchanged from the
+checkout's current location, including `--require-input-digests`, with a new
+`--report` path; no manifest or still is edited and nothing is moved. In the
+new report, confirm `input_path_resolution` is `beside_manifest` (or `recorded`
+if the manifest has since been rewritten with a relative path),
+`input_digest_provenance` is `manifest_verified` and `input_sha256` matches the
+E80 report's. The repeat is a device run under its own approval; a cloud
+test (`tests/test_evaluation.py`) establishes the fallback on a copied still
+with a pre-move absolute path, not the device result.
 
 ### Pinned seed counts
 

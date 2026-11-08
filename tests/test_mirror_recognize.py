@@ -18,7 +18,7 @@ from sightcircuit.convert import to_bgr
 from sightcircuit.detection import DEFAULT_DETECTOR
 from sightcircuit.errors import FrameFormatError
 from sightcircuit.frame import Detection, DetectionResult
-from sightcircuit.runtime import live, process
+from sightcircuit.runtime import live
 from sightcircuit.sources import mirror as acquisition
 from sightcircuit.sources import mirror_device as device
 from scripts import mirror_recognize as command
@@ -151,7 +151,7 @@ def recognize(candidate, seconds, stop, want_preview=False, **options):
     return report, last.image if want_preview and last is not None else None
 
 
-def fixture_worker(job, seconds, preview_temp, sender, stop, parent):
+def fixture_worker(job, seconds, outputs, progress, stop):
     import cv2
 
     encode = cv2.imencode
@@ -162,29 +162,24 @@ def fixture_worker(job, seconds, preview_temp, sender, stop, parent):
         return encode(*args)
 
     cv2.imencode = encode_after_close
-    command._worker(job, seconds, preview_temp, sender, stop, parent, backend_factory=FixtureMirror)
+    return command._worker(job, seconds, outputs, progress, stop, backend_factory=FixtureMirror)
 
 
-def pattern_worker(job, seconds, outputs, sender, stop, parent):
-    """Spawned worker: real capture loop and pipeline over a fixture mirror and a fixture model."""
+def pattern_worker(job, seconds, outputs, progress, stop):
+    """Supervised worker: real capture loop and pipeline over a fixture mirror and a fixture model."""
     with patch.object(live, "create_detector", DigestDetector):
-        command._worker(job, seconds, outputs, sender, stop, parent, backend_factory=PatternMirror)
+        return command._worker(job, seconds, outputs, progress, stop, backend_factory=PatternMirror)
 
 
-def digestless_worker(job, seconds, outputs, sender, stop, parent):
+def digestless_worker(job, seconds, outputs, progress, stop):
     """``pattern_worker`` whose result writes the still but omits ``still_sha256``."""
-    send = process.send_report
-
-    def without_digest(sender, report, event="progress"):
-        send(sender, {key: value for key, value in report.items() if key != "still_sha256"}, event)
-
-    with patch.object(process, "send_report", without_digest):
-        pattern_worker(job, seconds, outputs, sender, stop, parent)
+    report = pattern_worker(job, seconds, outputs, progress, stop)
+    return {key: value for key, value in report.items() if key != "still_sha256"}
 
 
-def empty_worker(job, seconds, outputs, sender, stop, parent):
+def empty_worker(job, seconds, outputs, progress, stop):
     with patch.object(live, "create_detector", DigestDetector):
-        command._worker(job, seconds, outputs, sender, stop, parent, backend_factory=EmptyMirror)
+        return command._worker(job, seconds, outputs, progress, stop, backend_factory=EmptyMirror)
 
 
 class RecognitionGuardTests(unittest.TestCase):
@@ -192,7 +187,8 @@ class RecognitionGuardTests(unittest.TestCase):
         output = io.StringIO()
         with patch.object(command, "discover", return_value=DISCOVERY), \
                 patch.object(live, "create_detector", side_effect=AssertionError("model must not load")), \
-                patch.object(process, "run_bounded", side_effect=AssertionError("worker must not start")), redirect_stdout(output):
+                patch.object(acquisition, "supervise_worker", side_effect=AssertionError("worker must not start")), \
+                redirect_stdout(output):
             self.assertEqual(command.main([]), 0)
         report = json.loads(output.getvalue())
         self.assertEqual(report["status"], "discovery_only")
@@ -230,7 +226,7 @@ class RecognitionGuardTests(unittest.TestCase):
             still = Path(directory) / "taken.png"
             still.write_bytes(b"keep")
             with patch.object(command, "discover", return_value=DISCOVERY), \
-                    patch.object(process, "run_bounded", side_effect=AssertionError("worker must not start")), \
+                    patch.object(acquisition, "supervise_worker", side_effect=AssertionError("worker must not start")), \
                     redirect_stdout(io.StringIO()) as output:
                 self.assertEqual(command.main(["--capture", "--still", str(still)]), 1)
             report = json.loads(output.getvalue())

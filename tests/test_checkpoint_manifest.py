@@ -91,12 +91,15 @@ class CheckoutCase(unittest.TestCase):
         versions = patch.object(manifest.metadata, "version", side_effect=fake_version)
         versions.start()
         self.addCleanup(versions.stop)
-        # A fake pacman local database, empty unless a test installs a package; never the host's.
+        # A fake pacman local database, empty unless a test installs a package; never the host's, and no
+        # pacman command runs: the query fallback is a stub that answers "unavailable".
         self.pacman = base / "pacman-local"
         self.pacman.mkdir()
-        database = patch.object(manifest, "PACMAN_LOCAL_DATABASE", self.pacman)
-        database.start()
-        self.addCleanup(database.stop)
+        for target, value in (("pacman_local_databases", lambda config=None: (self.pacman,)),
+                              ("pacman_query", lambda name, timeout=None: (None, "pacman_unavailable"))):
+            patcher = patch.object(manifest, target, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.path = self.out / "checkpoint-manifest.json"
 
     def install_package(self, name, version, *, entry=None, desc=None):
@@ -161,7 +164,10 @@ class WriteTests(CheckoutCase):
                                             "os_release": manifest.os_release(),
                                             "steamvr_package": {"name": "deckard-steamvr-rel",
                                                                 "source": "pacman_local_database",
-                                                                "version": None, "reason": "package_not_installed"}})
+                                                                "database": str(self.pacman),
+                                                                "databases": {str(self.pacman): "read"},
+                                                                "version": None, "reason": "package_not_installed",
+                                                                "query": None}})
         self.assertEqual(set(data["platform"]["os_release"]), {"id", "version_id", "build_id"})
         self.assertEqual(data["bridge"], {manifest.BRIDGE: hashlib.sha256(self.bridge.read_bytes()).hexdigest()})
         self.assertEqual(sorted(data["modules"]), ["sightcircuit/__init__.py", "sightcircuit/gates.py",
@@ -372,26 +378,27 @@ class VerifyTests(CheckoutCase):
         """A3 addendum (2026-11-07): the manifest records the Frame's SteamVR package identity, unknown when absent."""
         name = manifest.STEAMVR_PACKAGE
         self.assertEqual(name, "deckard-steamvr-rel")  # As E85 read it with pacman -Q.
-        unknown = {"name": name, "source": "pacman_local_database", "version": None}
-        # No database (this cloud host), an empty one, a look-alike name, an unreadable or invalid description.
-        self.assertEqual(manifest.steamvr_package(database=self.pacman / "absent"),
-                         dict(unknown, reason="package_database_unavailable"))
-        self.assertEqual(manifest.steamvr_package(), dict(unknown, reason="package_not_installed"))
+        path = str(self.pacman)
+        readable = {"name": name, "source": "pacman_local_database", "database": path, "databases": {path: "read"},
+                    "version": None, "reason": None, "query": None}
+        # An empty database, a look-alike name, an unreadable or invalid description.
+        self.assertEqual(manifest.steamvr_package(), dict(readable, reason="package_not_installed"))
         other = self.install_package(f"{name}-tools", "1.0-1")
-        self.assertEqual(manifest.steamvr_package(), dict(unknown, reason="package_not_installed"))
+        self.assertEqual(manifest.steamvr_package(), dict(readable, reason="package_not_installed"))
         broken = self.install_package(name, "r1-1", entry=f"{name}-r1-1", desc="%NAME%\n" + name + "\n\n%VERSION%\nbad version\n")
-        self.assertEqual(manifest.steamvr_package(), dict(unknown, reason="package_version_invalid"))
+        self.assertEqual(manifest.steamvr_package(), dict(readable, reason="package_version_invalid"))
         (broken / "desc").unlink()
         (broken / "desc").mkdir()  # A directory where the description should be: unreadable.
-        self.assertEqual(manifest.steamvr_package(), dict(unknown, reason="package_description_unreadable"))
+        self.assertEqual(manifest.steamvr_package(), dict(readable, reason="package_description_unreadable"))
         shutil.rmtree(broken)
         shutil.rmtree(other)
         # The installed package, as E85 recorded it after the SteamOS 0.5.8 update; no command runs.
         installed = self.install_package(name, "r26496310+24cb4748-1")
-        with patch("subprocess.run", side_effect=AssertionError("steamvr_package must not run a command")):
-            self.assertEqual(manifest.steamvr_package(), dict(unknown, version="r26496310+24cb4748-1", reason=None))
+        with patch("subprocess.run", side_effect=AssertionError("steamvr_package must not run a command")), \
+                patch.object(manifest, "pacman_query", side_effect=AssertionError("no query while a database reads")):
+            self.assertEqual(manifest.steamvr_package(), dict(readable, version="r26496310+24cb4748-1"))
         previous = self.install_package(name, "r25765468+0ab5c24d-1")
-        self.assertEqual(manifest.steamvr_package(), dict(unknown, reason="package_ambiguous"))
+        self.assertEqual(manifest.steamvr_package(), dict(readable, reason="package_ambiguous"))
         shutil.rmtree(previous)
         # Pinned by the manifest: an updated or vanished package is a difference, and unknown is not a problem.
         data = self.write()
@@ -406,6 +413,50 @@ class VerifyTests(CheckoutCase):
                          [("r26496310+24cb4748-1", "r26496311+ffffffff-1")])
         shutil.rmtree(installed)
         self.assertDiffers(("platform.steamvr_package.version", "changed"), ("platform.steamvr_package.reason", "changed"))
+
+    def test_steamvr_package_names_a_permission_problem_and_falls_back_to_a_read_only_query(self):
+        """A3b (2026-11-07): the A4 preparation found the database unreadable as the steamos user while
+        ``pacman -Q`` answered; the reason names the permission problem apart from an absent database, and
+        the query runs only when no database could be read."""
+        name = manifest.STEAMVR_PACKAGE
+        absent, denied = self.pacman / "absent", self.pacman / "denied"
+        denied.mkdir()
+        unknown = {"name": name, "source": None, "database": None, "version": None, "reason": None, "query": None}
+        real_iterdir = Path.iterdir
+
+        def iterdir(path):
+            if path == denied:
+                raise PermissionError(13, "Permission denied", str(path))
+            return real_iterdir(path)
+
+        unavailable = lambda name, timeout=None: (None, "pacman_unavailable")  # noqa: E731
+        answers = lambda name, timeout=None: ("r26496310+24cb4748-1", None)  # noqa: E731
+        with patch.object(Path, "iterdir", iterdir):
+            # No readable database at all: absent is "unavailable", a permission failure is named as such.
+            self.assertEqual(manifest.steamvr_package(databases=(absent,), query=unavailable),
+                             dict(unknown, databases={str(absent): "absent"}, reason="package_database_unavailable",
+                                  query="pacman_unavailable"))
+            self.assertEqual(manifest.steamvr_package(databases=(absent, denied), query=unavailable),
+                             dict(unknown, databases={str(absent): "absent", str(denied): "permission_denied"},
+                                  reason="package_database_permission_denied", query="pacman_unavailable"))
+            # The read-only query answers where no database could be read, and the record says so.
+            self.assertEqual(manifest.steamvr_package(databases=(denied,), query=answers),
+                             dict(unknown, databases={str(denied): "permission_denied"}, source="pacman_query",
+                                  version="r26496310+24cb4748-1"))
+            # A later readable database answers without any query, and a denied one is still recorded.
+            self.install_package(name, "r26496310+24cb4748-1")
+            with patch.object(manifest, "pacman_query", side_effect=AssertionError("no query while a database reads")):
+                self.assertEqual(manifest.steamvr_package(databases=(denied, self.pacman)),
+                                 dict(unknown, source="pacman_local_database", database=str(self.pacman),
+                                      databases={str(denied): "permission_denied", str(self.pacman): "read"},
+                                      version="r26496310+24cb4748-1"))
+            # Written and verified with the permission reason: a self-consistent unknown is not a problem.
+            with patch.object(manifest, "pacman_local_databases", lambda config=None: (denied,)):
+                data = self.write()
+                self.assertEqual(data["problems"], [])
+                recorded = json.loads(self.path.read_text())["platform"]["steamvr_package"]
+                self.assertEqual((recorded["reason"], recorded["version"]), ("package_database_permission_denied", None))
+                self.assertVerifies()
 
     def test_fails_for_a_different_python(self):
         self.write()
@@ -497,6 +548,44 @@ class DigestTests(unittest.TestCase):
     def test_real_package_lookup_records_an_absent_distribution_as_null(self):
         self.assertEqual(manifest.package_versions({"absent": "sightcircuit-absent-distribution"}),
                          {"sightcircuit-absent-distribution": None})
+
+
+class PacmanLookupTests(unittest.TestCase):
+    """The real candidate list and the real read-only query, on temporary files and a fake pacman."""
+
+    def test_pacman_database_candidates_follow_the_configured_dbpath_then_the_known_roots(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "pacman.conf"
+            config.write_text("[options]\n#DBPath = /var/lib/pacman/\nDBPath = /usr/lib/holo/pacmandb/  # SteamOS\n"
+                              "HoldPkg = pacman glibc\n")
+            self.assertEqual(manifest.pacman_local_databases(config),
+                             (Path("/usr/lib/holo/pacmandb/local"), Path("/var/lib/pacman/local")))
+            config.write_text("[options]\nDBPath = relative/path\n")
+            self.assertEqual(manifest.pacman_local_databases(config),
+                             (Path("/var/lib/pacman/local"), Path("/usr/lib/holo/pacmandb/local")))
+            self.assertEqual(manifest.pacman_local_databases(Path(directory) / "missing.conf"),
+                             (Path("/var/lib/pacman/local"), Path("/usr/lib/holo/pacmandb/local")))
+
+    def test_pacman_query_is_read_only_bounded_and_names_its_failures(self):
+        name = manifest.STEAMVR_PACKAGE
+        with tempfile.TemporaryDirectory() as directory:
+            pacman = Path(directory) / "pacman"
+            cases = ((f"#!/bin/sh\n[ \"$1\" = -Q ] && [ \"$2\" = {name} ] || exit 2\necho '{name} r26496310+24cb4748-1'\n",
+                      ("r26496310+24cb4748-1", None)),
+                     ("#!/bin/sh\necho 'error: package was not found' >&2\nexit 1\n", (None, "package_not_installed")),
+                     ("#!/bin/sh\necho 'other-package 1.0-1'\n", (None, "pacman_query_invalid")),
+                     (f"#!/bin/sh\necho '{name} 1.0-1 extra'\n", (None, "pacman_query_invalid")))
+            for script, expected in cases:
+                pacman.write_text(script)
+                pacman.chmod(0o700)
+                with self.subTest(expected=expected), patch.dict(os.environ, {"PATH": directory}):
+                    self.assertEqual(manifest.pacman_query(name), expected)
+            with patch.dict(os.environ, {"PATH": str(Path(directory) / "empty")}):
+                self.assertEqual(manifest.pacman_query(name), (None, "pacman_unavailable"))
+            pacman.write_text("#!/bin/sh\n/bin/sleep 5\n")
+            pacman.chmod(0o700)
+            with patch.dict(os.environ, {"PATH": directory}):
+                self.assertEqual(manifest.pacman_query(name, timeout=0.2), (None, "pacman_query_failed"))
 
 
 def section(path, heading):

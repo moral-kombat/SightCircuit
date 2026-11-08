@@ -11,9 +11,11 @@ and regenerate status; do not edit generated summaries by hand.
 
 - `sightcircuit/`: library (frames, `Pipeline`, sources, detectors, evaluation,
   runtime helpers). See [development](docs/development.md#python-package-and-pipeline).
-- `scripts/`: documented command entry points only; they import the checkout
-  without installation. Shared code goes in `sightcircuit/`; no active script
-  imports another (`tests/test_scripts_boundary.py`). The paused capture-provider
+- `scripts/`: documented command files only; they import the checkout
+  without installation. The eleven active commands' bodies are in
+  `sightcircuit/commands/` with `scripts/<name>.py` as thin wrappers and
+  `sightcircuit-<name>` console entry points; shared code goes in
+  `sightcircuit/`; no active script imports another (`tests/test_scripts_boundary.py`). The paused capture-provider
   scripts are quarantined in place; see
   [the capture track](docs/development.md#paused-capture-provider-track).
 - `tools/`, `patches/`: native OpenVR and capture-provider code (provider track

@@ -1,10 +1,12 @@
 """The supervision primitive: signal policies, hold-and-arm, the report stream, budgets and the arm handshake."""
+import io
 import json
 import os
 from pathlib import Path
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -184,6 +186,72 @@ class ArmHandshakeTests(unittest.TestCase):
             os.close(writer)
             os.environ[supervision.ARMED_FD_VARIABLE] = str(writer)
             self.assertFalse(supervision.report_armed())
+
+
+class WorkerSideTests(unittest.TestCase):
+    def test_emit_event_writes_one_flushed_json_line(self):
+        stream = io.StringIO()
+        supervision.emit_event("progress", {"n": 1}, stream)
+        supervision.emit_event("result", {"status": "done"}, stream)
+        lines = stream.getvalue().splitlines()
+        self.assertEqual([json.loads(line) for line in lines],
+                         [{"event": "progress", "report": {"n": 1}}, {"event": "result", "report": {"status": "done"}}])
+
+    def test_function_reference_names_a_module_level_function_of_the_checkout_by_its_file(self):
+        self.assertEqual(supervision.function_reference(supervision.enter_worker),
+                         {"module": "sightcircuit.runtime.supervision", "function": "enter_worker"})
+        reference = supervision.function_reference(accept)  # A test module, however it was imported.
+        self.assertEqual(reference, {"module": "tests.test_supervision", "function": "accept"})
+        loaded = supervision.load_function(reference)  # The same function, by name and file: under discovery the
+        self.assertEqual((loaded.__name__, loaded.__code__.co_filename),  # module may be imported a second time.
+                         (accept.__name__, accept.__code__.co_filename))
+        for function in (lambda: None, json.loads, supervision.Signals.hold):
+            with self.subTest(function=function), self.assertRaisesRegex(ValueError, "module_level_in_checkout"):
+                supervision.function_reference(function)
+        for reference in ({"module": "json", "function": "loads"}, {"module": "os.path", "function": "join"},
+                          {"module": "tests.missing", "function": "x"}, {"module": "", "function": "x"},
+                          {"module": "tests.test_supervision", "function": "not an identifier"}):
+            with self.subTest(reference=reference), self.assertRaisesRegex(ValueError, "unsupported_worker_reference"):
+                supervision.load_function(reference)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Parent-death signalling")
+    def test_enter_worker_arms_the_parent_death_signal_and_checks_the_supervisor(self):
+        with mock.patch.dict(os.environ, {supervision.SUPERVISOR_PID_VARIABLE: str(os.getppid())}):
+            self.assertTrue(supervision.enter_worker())
+        with mock.patch.dict(os.environ, {supervision.SUPERVISOR_PID_VARIABLE: "1"}):
+            self.assertFalse(supervision.enter_worker())  # The supervisor named is not this process's parent.
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(supervision.SUPERVISOR_PID_VARIABLE, None)
+            self.assertTrue(supervision.enter_worker())  # Outside a supervisor: only the request is made.
+        # The child asks for SIGTERM on parent death: kill an intermediate parent and the grandchild ends.
+        code = ("import os, subprocess, sys, time; sys.path.insert(0, sys.argv[1]); "
+                "child = subprocess.Popen([sys.executable, '-c', 'import sys, time; sys.path.insert(0, sys.argv[1]); "
+                "from sightcircuit.runtime.supervision import enter_worker; enter_worker(); "
+                "open(sys.argv[2], \"w\").write(str(__import__(\"os\").getpid())); time.sleep(30)', sys.argv[1], sys.argv[2]]); "
+                "time.sleep(30)")
+        with tempfile.TemporaryDirectory() as folder:
+            pid_file = Path(folder) / "pid"
+            parent = subprocess.Popen([sys.executable, "-c", code, str(ROOT), str(pid_file)])
+            try:
+                deadline = time.monotonic() + 10
+                while not (pid_file.exists() and pid_file.read_text()) and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                grandchild = int(pid_file.read_text())
+                parent.kill()
+                parent.wait(timeout=5)
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    try:
+                        os.kill(grandchild, 0)
+                    except ProcessLookupError:
+                        break
+                    time.sleep(0.02)
+                else:
+                    os.kill(grandchild, signal.SIGKILL)
+                    self.fail("the grandchild outlived its parent")
+            finally:
+                if parent.poll() is None:
+                    parent.kill()
 
 
 class ReportStreamTests(unittest.TestCase):

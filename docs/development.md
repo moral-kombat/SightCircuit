@@ -69,6 +69,44 @@ same way. The locks' aarch64 hashes were checked against PyPI's digests only
 digest is present); the Frame rebuild is the first install that exercises
 them.
 
+### Commands and entry points (2026-11-07)
+
+The bodies of the eleven active commands live in `sightcircuit/commands/`
+(`replay_window`, `mirror_recognize`, `live_pipeline`, `hud_marker_check`,
+`hud_marker_observer`, `hud_validation_report`, `evaluate_detectors`,
+`generate_status`, `mirror_check`, `frame_session_manifest`; decision D5 and the
+"Active entry points" call; `annotate_boxes`, the
+[box-annotation window](guides/mirror-recognition.md#compare-detectors-on-frame-stills),
+joined on 2026-11-08 for work-order item C3b). Each `scripts/<name>.py` is a thin wrapper: run as
+a file it adds the checkout root to `sys.path` and calls the body's `main`, so
+every documented `python3 scripts/<name>.py` command keeps working on the Frame
+without installation; imported as `scripts.<name>` it is the body module
+itself, so `main(argv)` and the module's attributes are one object (the tests
+patch them there). `pyproject.toml` declares a `sightcircuit-<name>` console
+entry point for each body (underscores become hyphens), which an editable
+install exposes:
+
+```bash
+.venv-replay/bin/pip install --no-deps -e .
+.venv-replay/bin/sightcircuit-evaluate-detectors --help
+```
+
+The commands that read the checkout (`evaluate_detectors` defaults,
+`generate_status`, the marker commands' bridge path) resolve it from the
+package's location, so the entry points are for an editable install of a
+checkout; a plain install has no `docs/` or `evaluation/` beside the package.
+`live_pipeline` and the marker commands re-spawn their worker by their own file
+path, which works installed and uninstalled because the `sightcircuit` package
+sits beside that file. The checkpoint manifest keeps pinning
+`scripts/hud_marker_check.py` and `scripts/hud_marker_observer.py` (now the
+wrappers) by hash and pins every `sightcircuit/**/*.py` module, so the moved
+bodies are pinned under `modules`; a manifest recorded before this change
+differs from one recorded after it in those entries, which is the expected
+checkout difference, not drift. The paused capture-provider scripts stay in
+`scripts/` with no entry point. `tests/test_entry_points.py` keeps the three
+lists (bodies, wrappers, entry points) identical; `tests/test_scripts_boundary.py`
+still forbids a library module from importing `scripts`.
+
 ### Python 3.14 on the Frame (2026-11-07)
 
 SteamOS 0.5.8 (build 20261106.6144341, applied 2026-11-07) removed Python 3.12

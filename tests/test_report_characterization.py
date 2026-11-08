@@ -29,7 +29,6 @@ from unittest.mock import Mock, patch
 
 from sightcircuit import detection
 from sightcircuit.frame import Detection, DetectionResult
-from sightcircuit.runtime import process
 from sightcircuit.sources import mirror as acquisition
 from sightcircuit.sources import mirror_device as device
 from scripts import mirror_check, mirror_recognize
@@ -179,37 +178,37 @@ class GreyMirror(Mirror):
         return bytes([self.number % 2 * 200]) * 4
 
 
-def recognize_worker(job, seconds, outputs, sender, stop, parent):
-    """Spawned: the real recognizer worker over the fixture mirror and the registered fixture model."""
+def recognize_worker(job, seconds, outputs, progress, stop):
+    """Supervised: the real recognizer worker over the fixture mirror and the registered fixture model."""
     with registered_fixture():
-        mirror_recognize._worker(job, seconds, outputs, sender, stop, parent, backend_factory=Mirror)
+        return mirror_recognize._worker(job, seconds, outputs, progress, stop, backend_factory=Mirror)
 
 
-def empty_recognize_worker(job, seconds, outputs, sender, stop, parent):
+def empty_recognize_worker(job, seconds, outputs, progress, stop):
     with registered_fixture():
-        mirror_recognize._worker(job, seconds, outputs, sender, stop, parent, backend_factory=EmptyMirror)
+        return mirror_recognize._worker(job, seconds, outputs, progress, stop, backend_factory=EmptyMirror)
 
 
-def check_worker(job, seconds, outputs, sender, stop, parent):
-    """Spawned: the real mirror_check worker; its capture opens the fixture in place of the native mirror."""
+def check_worker(job, seconds, outputs, progress, stop):
+    """Supervised: the real mirror_check worker; its capture opens the fixture in place of the native mirror."""
     acquisition.NativeMirror = GreyMirror
-    mirror_check._worker(job, seconds, outputs, sender, stop, parent)
+    return mirror_check._worker(job, seconds, outputs, progress, stop)
 
 
-def stuck_worker(job, seconds, outputs, sender, stop, parent):
-    """Spawned: ignores SIGTERM, signals readiness and never reports a result."""
+def stuck_worker(job, seconds, outputs, progress, stop):
+    """Supervised: ignores SIGTERM, signals readiness and never reports a result."""
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     Path(job.get("candidate", job)["ready_file"]).write_text("ready")
     time.sleep(30)
 
 
 def bounded_quickly(worker, seconds=0.3):
-    """``process.run_bounded`` with ``worker`` and a short capture, whatever the launcher passes."""
-    real = process.run_bounded
+    """``sources.mirror.supervise_worker`` with ``worker`` and a short capture, whatever the launcher passes."""
+    real = acquisition.supervise_worker
 
-    def run(job, _seconds, outputs=None, **options):
-        return real(job, seconds, outputs, **dict(options, worker=worker))
-    return patch.object(process, "run_bounded", side_effect=run)
+    def run(_worker, job, _seconds, outputs=None, **options):
+        return real(worker, job, seconds, outputs, **options)
+    return patch.object(acquisition, "supervise_worker", side_effect=run)
 
 
 def run_main(main, arguments):
@@ -464,7 +463,7 @@ class MirrorRecognizeCommandCharacterizationTests(ShapeAssertions):
 
     def test_discovery_only_and_invalid_options(self):
         with patch.object(mirror_recognize, "discover", return_value=DISCOVERY), \
-                patch.object(process, "run_bounded", side_effect=AssertionError("worker must not start")):
+                patch.object(acquisition, "supervise_worker", side_effect=AssertionError("worker must not start")):
             code, report = run_main(mirror_recognize.main, [])
         self.assertEqual((code, report["status"], report["exit_code"], report["discovery"]), (0, "discovery_only", 0, DISCOVERY))
         self.assertEqual((report["report_kind"], report["images_saved"], report["display_started"]),
@@ -480,7 +479,7 @@ class MirrorRecognizeCommandCharacterizationTests(ShapeAssertions):
 
     def test_unavailable_mirror_and_existing_outputs_stop_before_the_worker(self):
         with patch.object(mirror_recognize, "discover", return_value={"status": "unavailable", "candidates": []}), \
-                patch.object(process, "run_bounded", side_effect=AssertionError("worker must not start")):
+                patch.object(acquisition, "supervise_worker", side_effect=AssertionError("worker must not start")):
             code, report = run_main(mirror_recognize.main, ["--capture"])
         self.assertEqual((code, report["status"], report["reason"], report["exit_code"]),
                          (1, "unavailable", "mirror_unavailable", 1))
@@ -489,7 +488,7 @@ class MirrorRecognizeCommandCharacterizationTests(ShapeAssertions):
             taken.write_bytes(b"keep")
             for kind in ("preview", "still"):
                 with self.subTest(kind=kind), patch.object(mirror_recognize, "discover", return_value=DISCOVERY), \
-                        patch.object(process, "run_bounded", side_effect=AssertionError("worker must not start")):
+                        patch.object(acquisition, "supervise_worker", side_effect=AssertionError("worker must not start")):
                     code, report = run_main(mirror_recognize.main, ["--capture", f"--{kind}", str(taken)])
                 self.assertEqual((code, report["status"], report["reason"], report["exit_code"]),
                                  (1, "error", f"invalid_{kind}_path", 1))
@@ -538,7 +537,7 @@ class MirrorRecognizeCommandCharacterizationTests(ShapeAssertions):
 
         with tempfile.TemporaryDirectory() as directory:
             with patch.object(mirror_recognize, "discover", return_value=DISCOVERY), \
-                    patch.object(process, "run_bounded", side_effect=failed), \
+                    patch.object(acquisition, "supervise_worker", side_effect=failed), \
                     patch.object(Path, "unlink", side_effect=OSError("controlled cleanup failure")):
                 code, report = run_main(mirror_recognize.main, ["--capture", "--preview", str(Path(directory) / "p.png")])
         self.assertEqual((code, report["status"], report["reason"], report["error"], report["exit_code"]),
@@ -550,7 +549,7 @@ class MirrorCheckCommandCharacterizationTests(ShapeAssertions):
 
     def test_discovery_only_and_invalid_options(self):
         with patch.object(mirror_check, "discover", return_value=DISCOVERY), \
-                patch.object(process, "run_bounded", side_effect=AssertionError("worker must not start")):
+                patch.object(acquisition, "supervise_worker", side_effect=AssertionError("worker must not start")):
             code, report = run_main(mirror_check.main, [])
         self.assertEqual((code, report["status"], report["exit_code"], report["discovery"]), (0, "discovery_only", 0, DISCOVERY))
         self.assertEqual((report["report_kind"], report["images_saved"], report["device_open_attempted"]),
@@ -564,7 +563,7 @@ class MirrorCheckCommandCharacterizationTests(ShapeAssertions):
 
     def test_unavailable_mirror_and_existing_preview_stop_before_the_worker(self):
         with patch.object(mirror_check, "discover", return_value={"status": "unavailable", "candidates": []}), \
-                patch.object(process, "run_bounded", side_effect=AssertionError("worker must not start")):
+                patch.object(acquisition, "supervise_worker", side_effect=AssertionError("worker must not start")):
             code, report = run_main(mirror_check.main, ["--capture"])
         self.assertEqual((code, report["status"], report["reason"], report["exit_code"]),
                          (1, "unavailable", "mirror_unavailable", 1))
@@ -572,7 +571,7 @@ class MirrorCheckCommandCharacterizationTests(ShapeAssertions):
             taken = Path(directory) / "taken.png"
             taken.write_bytes(b"keep")
             with patch.object(mirror_check, "discover", return_value=DISCOVERY), \
-                    patch.object(process, "run_bounded", side_effect=AssertionError("worker must not start")):
+                    patch.object(acquisition, "supervise_worker", side_effect=AssertionError("worker must not start")):
                 code, report = run_main(mirror_check.main, ["--capture", "--preview", str(taken)])
             self.assertEqual((code, report["status"], report["reason"], report["exit_code"]),
                              (1, "error", "invalid_preview_path", 1))
@@ -599,15 +598,15 @@ class MirrorCheckCommandCharacterizationTests(ShapeAssertions):
     def test_destination_created_during_the_run_is_kept(self):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "mirror.png"
-            real = process.run_bounded
+            real = acquisition.supervise_worker
 
-            def raced(job, seconds, outputs=None, **options):
-                report = real(job, 0.3, outputs, **dict(options, worker=check_worker))
+            def raced(_worker, job, seconds, outputs=None, **options):
+                report = real(check_worker, job, 0.3, outputs, **options)
                 target.write_bytes(b"keep me")
                 return report
 
             with patch.object(mirror_check, "discover", return_value=DISCOVERY), \
-                    patch.object(process, "run_bounded", side_effect=raced):
+                    patch.object(acquisition, "supervise_worker", side_effect=raced):
                 code, report = run_main(mirror_check.main, ["--capture", "--preview", str(target)])
             self.assertEqual((code, report["status"], report["exit_code"], report["images_saved"]),
                              (1, "error", 1, False), report)
@@ -621,7 +620,7 @@ class MirrorCheckCommandCharacterizationTests(ShapeAssertions):
 
         with tempfile.TemporaryDirectory() as directory:
             with patch.object(mirror_check, "discover", return_value=DISCOVERY), \
-                    patch.object(process, "run_bounded", side_effect=failed), \
+                    patch.object(acquisition, "supervise_worker", side_effect=failed), \
                     patch.object(Path, "unlink", side_effect=OSError("controlled cleanup failure")):
                 code, report = run_main(mirror_check.main, ["--capture", "--preview", str(Path(directory) / "p.png")])
         self.assertEqual((code, report["status"], report["reason"], report["error"], report["exit_code"]),
@@ -635,15 +634,15 @@ class LauncherCancellationCharacterizationTests(unittest.TestCase):
     PROGRAM = '''import sys
 from unittest.mock import patch
 sys.path[:0] = [sys.argv[1]]
-from sightcircuit.runtime import process
+from sightcircuit.sources import mirror as acquisition
 from scripts import {script} as command
 from tests.test_report_characterization import stuck_worker
-real = process.run_bounded
-def run(job, seconds, outputs=None, **options):
-    return real(job, seconds, outputs, **dict(options, worker=stuck_worker))
+real = acquisition.supervise_worker
+def run(_worker, job, seconds, outputs=None, **options):
+    return real(stuck_worker, job, seconds, outputs, **options)
 candidate = {{"node": "/dev/fixture", "name": "SteamVR", "ready_file": sys.argv[2]}}
 with patch.object(command, "discover", return_value={{"candidates": [candidate]}}), \\
-        patch.object(process, "run_bounded", run):
+        patch.object(acquisition, "supervise_worker", run):
     sys.exit(command.main(["--capture", "--seconds", "10"]))
 '''
 

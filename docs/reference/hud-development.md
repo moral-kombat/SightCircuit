@@ -239,7 +239,12 @@ report holds, per fill and detector:
   boxes the runtime keeps (`runtime_kept`), which shows what the strict rule
   costs next to the HUD;
 - leak and determinism checks;
-- time per frame at 96x64 and 1920x1080 on the runner CPU.
+- time per frame at 96x64 and 1920x1080 on the runner CPU;
+- per seed still, `input_path_resolution`: `recorded`, `download`, or
+  `beside_manifest` when a recorded path no longer exists and the file of the
+  same basename beside the manifest was read instead, announced on stderr as
+  the [detector evaluator](detector-evaluation.md#repeat-a-recorded-run) does;
+  the digest check still decides identity.
 
 `--expect-clean-gray-sweep` exits 1 if any detector boxes the mask on the sweep
 with the runtime fill. From the checkout:
@@ -329,9 +334,8 @@ The manifest records the full git commit, whether the tree is clean (tracked
 changes and untracked, non-ignored files count as dirty), the Python version
 and implementation, `platform.machine()`, the OS (with its os-release ID,
 version and build), the kernel release, the SteamVR package identity (since
-2026-11-07: the Frame's `deckard-steamvr-rel` pacman entry, read from the local
-package database by file reads only, with `version` null and a reason where
-the database or the package is absent, as in the cloud), and SHA-256 values of the built
+2026-11-07: the Frame's `deckard-steamvr-rel` pacman entry under
+`platform.steamvr_package`), and SHA-256 values of the built
 `artifacts/overlay-bridge/sightcircuit-overlay-bridge`, every
 `sightcircuit/**/*.py` outside `sightcircuit/agent/` (`modules`), the agent
 package with its scripts and settings template in their own `agent` group,
@@ -353,6 +357,26 @@ mkdir -p artifacts/hud-calibration
 .venv-replay/bin/python scripts/checkpoint_manifest.py \
   --verify artifacts/hud-calibration/checkpoint-manifest.json
 ```
+
+The SteamVR package identity is best-effort and read-only. The writer tries
+the pacman local databases by file reads, in order: the `DBPath` of
+`/etc/pacman.conf`, the Arch default `/var/lib/pacman/local` and
+`/usr/lib/holo/pacmandb/local`, the location SteamOS 3's `pacman.conf` is
+documented to use, not verified on the Frame. The record names the path that
+answered (`database`, `source: pacman_local_database`) and the status of every
+path tried (`databases`: `read`, `absent`, `permission_denied` or
+`unreadable`). Only when no database could be read does it run a read-only
+`pacman -Q deckard-steamvr-rel` (`source: pacman_query`, bounded by a timeout),
+and `query` records why that gave nothing. `version` is null with a `reason`
+where neither answers: `package_database_permission_denied` when a database
+exists but the user may not read it, `package_database_unavailable` when none
+exists (the cloud), or the readable database's own reason. The A4 preparation
+of 2026-11-07 found `/var/lib/pacman/local` unavailable to the steamos user
+on SteamOS 0.5.8 while `pacman -Q` answered, which this order and fallback
+are expected to address, pending the next device manifest write, which the
+Frame manager reports. An
+unknown value is recorded, not a problem, and a changed value is a `--verify`
+difference.
 
 `--write` creates a new file and never overwrites one, so move an earlier
 manifest aside first. It refuses a dirty tree and a path inside the checkout

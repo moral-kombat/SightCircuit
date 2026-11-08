@@ -145,8 +145,9 @@ the window in which a cancellation reached a worker before its handlers were
 installed; the agent runner on it (B4: its raise-mode signal policy with an
 inherited ignore honoured, and the primitive's group termination with reaping,
 the runner being its tasks' subreaper), and the agent package as its own
-checkpoint-manifest group (decision D7). Adoption by the live pipeline and the
-mirror launcher, then the capture supervisor remains planned (B5, B6).
+checkpoint-manifest group (decision D7); the mirror launcher's worker and the
+synthetic run's progress streaming on it, so `runtime/process.py` is retired
+(B5). Adoption by the paused capture supervisor remains planned (B6).
 
 ### Native bridge
 
@@ -177,12 +178,14 @@ rest is a design; no diagnostic command exists.
 
 ### Commands and packaging
 
-Scripts import the checkout without installation and no active script imports
-another. The plan moves the bodies of the active commands into the package,
-keeps each script as a thin wrapper that re-exports `main`, declares console
-entry points, and adds one hashed lock per requirement set. Commands that
-re-spawn themselves by file path, validators imported by dotted name and the
-checkpoint manifest's script pins move with the bodies.
+Implemented on 2026-11-07 (P1, P2): one hashed lock per requirement set,
+installed by the setup scripts; the bodies of the active commands (ten at P2,
+the box-annotation window since C3b) in `sightcircuit/commands/`, each `scripts/<name>.py` a thin wrapper that is the
+body module when imported and runs it when executed, and a `sightcircuit-<name>`
+console entry point per command. The two commands that re-spawn a worker do so
+by their own file path, the validators keep resolving by dotted name under
+`sightcircuit`, and the checkpoint manifest pins the wrappers by name and the
+bodies as package modules ([details](development.md#commands-and-entry-points-2026-11-07)).
 
 ### Operations tooling
 
@@ -240,7 +243,7 @@ was a dated snapshot; this table has a reproducible repository source.
 | Annotated Qt replay window | Device-confirmed | E47 reports 576 frames and reports four labels; label accuracy remains unevaluated; [E47](status.md#e47-recorded-recognition-and-vr-panel-poc-on-frame) |
 | Bounded mirror recognition | Rewritten path re-run on Frame; broader accuracy open | The November 3 rerun had labels matching the owner’s view ([E81](status.md#e81-catch-up-session-on-frame-regressions-400-frame-panel-run-mirror-and-wp2-stills)). [Earlier measurements, still export and limits](evidence/capability-notes.md#bounded-mirror-recognition). |
 | Candidate detector and evaluation harness | E61 miss reproduced; Frame model choice open | The original still and digest were verified on Frame; the miss remains unexplained ([E80](status.md#e80-file-only-detector-re-run-on-the-e61-still-with-audit-variants)). Five unboxed stills support the chair demo, not a model default. [Evaluation details](evidence/capability-notes.md#candidate-detector-and-evaluation-harness). |
-| Fixed edge HUD, marker and offline live pipeline | Offline validation passed; G2 closed; G3 open | The owner accepted rehearsed recovery; the green-input cause is unknown ([E79](status.md#e79-g2-green-input-log-analysis-and-recovery-rehearsal-on-frame)). G3 stopped before any marker ([E83](status.md#e83-g3-marker-observer-attempt-stopped-at-the-observer-scene-precondition)); the file-only analysis of the chair still on Frame predicts that the O3 precondition passes ([E88](status.md#e88-a2-file-only-still-analysis-on-frame-the-chair-still-passes-the-o3-precondition)), which is not an observation. Production gates stay closed; [implementation and limits](evidence/capability-notes.md#fixed-edge-hud-marker-and-offline-live-pipeline). |
+| Fixed edge HUD, marker and offline live pipeline | Offline validation passed; G2 closed; G3 open | The owner accepted rehearsed recovery; the green-input cause is unknown ([E79](status.md#e79-g2-green-input-log-analysis-and-recovery-rehearsal-on-frame)). G3 stopped before any marker ([E83](status.md#e83-g3-marker-observer-attempt-stopped-at-the-observer-scene-precondition)); the file-only analysis of the chair still on Frame predicts that the O3 precondition passes ([E88](status.md#e88-a2-file-only-still-analysis-on-frame-the-chair-still-passes-the-o3-precondition)). On November 7 the marker tile appeared in the mirror for the first time and its whole pattern matched, but the corner tags did not decode at the tile's size in the mirror, so the attempt was rejected; one budgeted attempt remains ([E89](status.md#e89-a4-marker-observer-attempt-on-frame-the-marker-appeared-and-its-tags-did-not-decode-at-the-mirrors-scale)). Production gates stay closed; [implementation and limits](evidence/capability-notes.md#fixed-edge-hud-marker-and-offline-live-pipeline). |
 | Stereo depth and world-space labels | Deferred | Calibration, depth and pose/timebase alignment remain unresolved |
 | Gaussian splat reconstruction and viewing | Deferred optional work | Recorded-data workflow researched; training and headset splat rendering not validated by this project |
 

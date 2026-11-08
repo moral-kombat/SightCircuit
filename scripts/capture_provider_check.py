@@ -1,5 +1,6 @@
 """Supervise metadata inspection of an already running SightCircuit provider."""
 import argparse
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -7,12 +8,33 @@ import selectors
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 try:
-    from .capture_supervisor import StopRequested, cleanup_signals
+    from .capture_supervisor import StopRequested
 except ImportError:
-    from capture_supervisor import StopRequested, cleanup_signals
+    from capture_supervisor import StopRequested
+
+
+@contextlib.contextmanager
+def cleanup_signals():
+    """Ignore SIGINT and SIGTERM for the block: repeated cancellation must not interrupt the kill/reap work.
+
+    This inspector keeps raising handlers (``main``), so its cleanup still
+    needs the ignore; the capture supervisor no longer does (it records its
+    signals for the whole run, work-order item B6), and this helper moved here
+    from it, unchanged.
+    """
+    previous = {}
+    if threading.current_thread() is threading.main_thread():
+        for number in (signal.SIGINT, signal.SIGTERM):
+            previous[number] = signal.signal(number, signal.SIG_IGN)
+    try:
+        yield
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
 
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = ROOT / "artifacts/capture-provider-reference/sightcircuit-provider-inspect"

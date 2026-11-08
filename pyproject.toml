@@ -26,6 +26,21 @@ window = [
 ]
 dev = ["sightcircuit[window]", "onnxruntime>=1.31", "ruff==0.14.2"]
 
+# Console entry points of the active commands; scripts/<name>.py wraps each
+# for the uninstalled checkout (docs/development.md, "Commands and entry points").
+[project.scripts]
+sightcircuit-replay-window = "sightcircuit.commands.replay_window:main"
+sightcircuit-mirror-recognize = "sightcircuit.commands.mirror_recognize:main"
+sightcircuit-live-pipeline = "sightcircuit.commands.live_pipeline:main"
+sightcircuit-hud-marker-check = "sightcircuit.commands.hud_marker_check:main"
+sightcircuit-hud-marker-observer = "sightcircuit.commands.hud_marker_observer:main"
+sightcircuit-hud-validation-report = "sightcircuit.commands.hud_validation_report:main"
+sightcircuit-evaluate-detectors = "sightcircuit.commands.evaluate_detectors:main"
+sightcircuit-generate-status = "sightcircuit.commands.generate_status:main"
+sightcircuit-mirror-check = "sightcircuit.commands.mirror_check:main"
+sightcircuit-frame-session-manifest = "sightcircuit.commands.frame_session_manifest:main"
+sightcircuit-annotate-boxes = "sightcircuit.commands.annotate_boxes:main"
+
 [tool.setuptools.packages.find]
 include = ["sightcircuit*"]
 

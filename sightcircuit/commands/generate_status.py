@@ -1,0 +1,229 @@
+"""Generate capability summaries and an evidence catalog from reviewed sources."""
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+import re
+
+
+ROOT = Path(__file__).resolve().parents[2]
+PROGRESS_START = "<!-- BEGIN progress-summary:"
+PROGRESS_END = "<!-- END progress-summary -->"
+CATALOG_START = "<!-- BEGIN evidence-catalog:"
+CATALOG_END = "<!-- END evidence-catalog -->"
+
+
+def load_sources(root: Path) -> tuple[dict, list[dict]]:
+    data = json.loads((root / "docs/status-data.json").read_text())
+    index = json.loads((root / "docs/evidence/index.json").read_text())
+    if data.get("schema_version") != 1 or index.get("schema_version") != 1:
+        raise ValueError("unsupported evidence source schema")
+    entries = index["entries"]
+    numbers: set[int] = set()
+    filenames: set[str] = set()
+    for entry in entries:
+        number = re.fullmatch(r"E([1-9][0-9]*)", entry["id"])
+        filename = entry["file"]
+        title = entry["title"]
+        if (not number or int(number[1]) in numbers or filename in filenames
+                or Path(filename).name != filename or not filename.endswith(".md")
+                or not isinstance(title, str) or not title or "\n" in title or "|" in title):
+            raise ValueError("duplicate or invalid evidence identity/path")
+        numbers.add(int(number[1]))
+        filenames.add(filename)
+        if entry["kind"] not in {"device_report", "offline", "mixed", "source_review"}:
+            raise ValueError("unsupported evidence provenance")
+        if type(entry["reconstructed"]) is not bool:
+            raise ValueError("reconstructed must be a boolean")
+        heading = f"# {entry['id']}: {entry['title']}"
+        text = (root / "docs/evidence" / filename).read_text()
+        if text.splitlines()[0] != heading:
+            raise ValueError(f"evidence heading mismatch: {filename}")
+        if 63 <= int(number[1]) <= 71 and not entry["reconstructed"]:
+            raise ValueError("E63-E71 must retain reconstructed provenance")
+    entries = sorted(entries, key=lambda entry: int(entry["id"][1:]))
+    if not entries or numbers != set(range(1, max(numbers) + 1)):
+        raise ValueError("evidence IDs must remain contiguous; do not silently drop history")
+    recorded_files = {path.name for path in (root / "docs/evidence").glob("e[0-9]*.md")}
+    if recorded_files != filenames:
+        raise ValueError("numbered evidence files and index disagree; do not leave orphaned records")
+    capabilities = data["capabilities"]
+    names = [row["capability"] for row in capabilities]
+    if len(set(names)) != len(names):
+        raise ValueError("duplicate capability")
+    for row in capabilities:
+        if set(row) != {"capability", "state", "evidence"}:
+            raise ValueError("invalid capability row")
+        for value in row.values():
+            if not isinstance(value, str) or not value or "\n" in value or "|" in value:
+                raise ValueError("invalid capability table cell")
+        for evidence_id in re.findall(r"\[(E[0-9]+)\]", row["evidence"]):
+            if int(evidence_id[1:]) not in numbers:
+                raise ValueError(f"unknown evidence reference: {evidence_id}")
+    if any(name not in names for name in data["architecture_capabilities"]):
+        raise ValueError("unknown architecture capability")
+    groups = data["capability_groups"]
+    if not isinstance(groups, list) or not groups:
+        raise ValueError("capability groups must be a nonempty list")
+    group_titles: set[str] = set()
+    grouped_names: list[str] = []
+    for group in groups:
+        if not isinstance(group, dict) or set(group) != {"title", "capabilities"}:
+            raise ValueError("invalid capability group")
+        title = group["title"]
+        members = group["capabilities"]
+        if (not isinstance(title, str) or not title.strip() or "\n" in title or "|" in title
+                or title in group_titles or not isinstance(members, list) or not members
+                or any(not isinstance(name, str) or name not in names for name in members)):
+            raise ValueError("invalid or duplicate capability group")
+        group_titles.add(title)
+        grouped_names.extend(members)
+    if len(grouped_names) != len(set(grouped_names)) or set(grouped_names) != set(names):
+        raise ValueError("capability groups must include every capability exactly once")
+    return data, entries
+
+
+def provenance(entry: dict) -> str:
+    kinds = {"device_report": "Device report", "offline": "Offline record",
+             "mixed": "Mixed source record", "source_review": "Source review"}
+    label = kinds[entry["kind"]]
+    if entry["reconstructed"]:
+        label += "; reconstructed, original unknowns preserved"
+    return label
+
+
+def render_status(data: dict, entries: list[dict]) -> str:
+    lines = [
+        "# Project status and evidence", "",
+        "<!-- BEGIN status-summary: generated by scripts/generate_status.py; edit docs/status-data.json and docs/evidence/ -->",
+        f"Documentation review: {data['review_date']}. This page summarizes the evidence",
+        "committed to this repository. The review date is not a device-test date.", "",
+        "Recorded replay and bounded mirror recognition have Frame results. The",
+        "continuous live HUD still needs device acceptance; dedicated camera capture",
+        "is paused. See [current work](live-capture.md#current-work-order) for the next",
+        "steps and pending reports, or the [evidence catalog](evidence/README.md#catalog)",
+        "to inspect a result.", "",
+        "## Capability matrix", "",
+        "Each row separates what was demonstrated from what remains unverified.",
+        "Cloud tests, CI, user reports and physical headset recovery are different",
+        "kinds of evidence. Unknown dates, revisions and runtime versions stay unknown.", "",
+    ]
+    rows = {row["capability"]: row for row in data["capabilities"]}
+    for group in data["capability_groups"]:
+        lines.extend([f"### {group['title']}", "", "| Capability | State | Evidence and limits |",
+                      "| --- | --- | --- |"])
+        for name in group["capabilities"]:
+            row = rows[name]
+            lines.append(f"| {name} | {row['state']} | {row['evidence']} |")
+        lines.append("")
+    lines.extend([
+        "Process reaping and successful API cleanup do not",
+        "establish physical headset recovery. Production live HUD gates remain closed.", "",
+        "## Evidence record", "",
+        "These historical headings preserve existing links. Browse the",
+        "[catalog](evidence/README.md#catalog) for newest record IDs first. IDs reflect",
+        "recording order, not execution dates. E63–E71 retain their reconstructed",
+        "provenance and original uncertainty.", "",
+    ])
+    for entry in entries:
+        lines.extend([f"### {entry['id']}: {entry['title']}", "",
+                      f"[Full evidence](evidence/{entry['file']}). {provenance(entry)}.", ""])
+    lines.extend([
+        "## Maintaining the evidence", "",
+        "The coordinator checks pending allocations before assigning an evidence ID and adds its record",
+        "and metadata to `docs/evidence/index.json`. Record execution date, platform,",
+        "runtime, revision, procedure, observations and limits; mark unavailable fields",
+        "unknown. Update reviewed capabilities in `docs/status-data.json`, then run:", "",
+        "```bash", "python3 scripts/generate_status.py",
+        "python3 scripts/generate_status.py --check", "```", "",
+        "The generator updates this file, the evidence catalog and the marked architecture progress block.",
+        "[Live capture](live-capture.md) owns next tasks; the",
+        "[documentation plan](documentation-plan.md) owns maintenance conventions.",
+        "<!-- END status-summary -->", "",
+    ])
+    return "\n".join(lines)
+
+
+def render_catalog(entries: list[dict]) -> str:
+    lines = [
+        "<!-- BEGIN evidence-catalog: generated by scripts/generate_status.py; edit docs/evidence/index.json -->",
+        "| Record | Subject | Provenance |",
+        "| --- | --- | --- |",
+    ]
+    for entry in reversed(entries):
+        lines.append(f"| [{entry['id']}]({entry['file']}) | {entry['title']} | {provenance(entry)} |")
+    lines.append(CATALOG_END)
+    return "\n".join(lines)
+
+
+def render_progress(data: dict) -> str:
+    rows = {row["capability"]: row for row in data["capabilities"]}
+    lines = [
+        "<!-- BEGIN progress-summary: generated by scripts/generate_status.py; edit docs/status-data.json and docs/evidence/ -->",
+        "Generated from reviewed capability rows and per-entry evidence. The",
+        "[historical dashboard](https://claude.ai/artifact/XNPpBHVFUy5Q8JQV9aLaKq)",
+        "was a dated snapshot; this table has a reproducible repository source.",
+        "[Status](status.md) owns evidence and",
+        "[live capture](live-capture.md#current-work-order) owns current work.", "",
+        "| Area | State | Evidence and limits |", "| --- | --- | --- |",
+    ]
+    for name in data["architecture_capabilities"]:
+        row = rows[name]
+        evidence = row["evidence"].replace("](#", "](status.md#")
+        lines.append(f"| {name} | {row['state']} | {evidence} |")
+    lines.extend([
+        "", "The fixed edge HUD has offline validation. Lifecycle acceptance, Frame",
+        "mapping observation/qualification, feedback exclusion, physical expiry and",
+        "the 60-second headset acceptance run remain separate gates. World-locked",
+        "labels, dedicated capture, depth and splats stay deferred.", PROGRESS_END,
+    ])
+    return "\n".join(lines)
+
+
+def generated_files(root: Path) -> dict[Path, str]:
+    data, entries = load_sources(root)
+    architecture_path = root / "docs/architecture.md"
+    architecture = architecture_path.read_text()
+    catalog_path = root / "docs/evidence/README.md"
+    catalog = catalog_path.read_text()
+    return {root / "docs/status.md": render_status(data, entries),
+            architecture_path: replace_block(architecture, PROGRESS_START, PROGRESS_END,
+                                             render_progress(data), "architecture progress"),
+            catalog_path: replace_block(catalog, CATALOG_START, CATALOG_END,
+                                        render_catalog(entries), "evidence catalog")}
+
+
+def replace_block(text: str, start: str, end: str, replacement: str, label: str) -> str:
+    if text.count(start) != 1 or text.count(end) != 1:
+        raise ValueError(f"expected exactly one {label} block")
+    begin = text.index(start)
+    finish = text.index(end)
+    if finish < begin:
+        raise ValueError(f"reversed {label} block markers")
+    finish += len(end)
+    return text[:begin] + replacement + text[finish:]
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--check", action="store_true", help="fail if generated summaries are stale")
+    parser.add_argument("--root", type=Path, default=ROOT, help=argparse.SUPPRESS)
+    args = parser.parse_args(argv)
+    try:
+        outputs = generated_files(args.root)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        parser.error(str(error))
+    stale = [path for path, content in outputs.items() if path.read_text() != content]
+    if args.check:
+        for path in stale:
+            print(f"stale generated summary: {path.relative_to(args.root)}")
+        return int(bool(stale))
+    for path in stale:
+        path.write_text(outputs[path])
+    print(f"Generated {len(outputs)} summaries from {len(load_sources(args.root)[1])} evidence records.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

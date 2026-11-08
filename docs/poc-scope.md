@@ -137,6 +137,7 @@ sequence and its state.
 | D5. Packaging and entry points (item 5) | Hashed lock files generated from the existing pins, one per requirement set; console entry points for the active commands, with the script files kept as thin wrappers so documented commands keep working; the paused capture-provider scripts stay quarantined in place. |
 | D6. Detector default and evaluation set | No model change before the representative set exists: at least twenty boxed native stills on the Frame covering the chair at several distances and lighting, annotated and scored file-only on the device, with only JSON results and digests leaving it. The default-detector rule is chair recall at the POC threshold with Frame inference time inside the live budget. WP1 closes by attribution after this evaluation if no cause is found, and the record says so. |
 | D7. The agent runner's place | `sightcircuit/agent` stays in the package as operations tooling outside the production gates, documented as such, with its own evidence path and its own group in the checkpoint manifest. |
+| D2 refinement, A5 scope (2026-11-07, evening) | The owner accepted that the one reviewed change the D2 budget allows before the last G3 attempt is a change to the marker or its tag decode for the scale the mirror gives, since the first counted attempt failed at the tag decode and not at the scene precondition ([E89](evidence/e089.md)). The scene-limit revision D2 named is not needed; the budget stays at one remaining attempt. |
 | D8. Tests and CI | The current CI layout stays. The load-dependent cancellation test is root-caused inside the D4 consolidation and never skipped, suppressed or quarantined. The suite gets a documented time budget. |
 
 Coordinator's calls made under these decisions, after the council:
@@ -144,11 +145,11 @@ Coordinator's calls made under these decisions, after the council:
 | Topic | Call |
 | --- | --- |
 | Signal policy | The primitive offers both signal modes (raise on signal, and record-and-poll) and takes the inherited-ignore policy as a parameter. The runner keeps honouring an inherited ignore; the suite entry normalises SIGINT for its children. |
-| Progress streaming | Part of the primitive. `runtime/process.py` retires only after it exists; until then the mirror launcher keeps its supervisor. |
+| Progress streaming | Part of the primitive. `runtime/process.py` retired with B5 (#27) once the primitive streamed progress; the mirror launcher and the synthetic run supervise through the primitive. |
 | Tracking tokens | They stay required, as decided on 2026-11-03, so the reporter integration precedes the diagnostic run and follows the bridge split. |
 | Recall and budget | Chair recall is per-box at IoU 0.5 on the boxed set. The live budget is the inference p95 from a `mirror_recognize` run on the Frame. Both become one named constant each in code; the budget's number is the owner's: at most 200 ms, accepted on 2026-11-07 (`POC_THRESHOLD` and `LIVE_INFERENCE_P95_BUDGET_MS` in `sightcircuit/detection.py`; [reference](reference/detection.md#poc-threshold-and-live-budget)). |
 | Locks | One hashed lock per requirement set, carrying both architectures' hashes, verified on the Frame when its setup next runs. |
-| Active entry points | The eight named commands plus `mirror_check` and `frame_session_manifest`. |
+| Active entry points | The eight named commands plus `mirror_check` and `frame_session_manifest` (ten at P2); `annotate_boxes` joined with C3b (#30, 2026-11-08), so eleven. |
 | Attempt budget counting | An attempt counts against the D2 budget when the observer judged the scene: a rejection at the scene precondition counts, and anything after the marker tile appears counts. A stop caused by connectivity or preparation does not count whatever its position in the run: a missing bridge build, a failed manifest verification, headset not connected, the connect watchdog, the marker ready timeout, or a vrserver session stop. Refined on 2026-11-07 after the A3 review (finding F1). |
 | Race fixed | Fifty consecutive green runs of the cancellation test under CPU stress on the cloud runner, then one green ARM64 run on main. |
 
