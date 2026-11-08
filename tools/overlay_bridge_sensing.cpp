@@ -101,9 +101,31 @@ void Overlay::events() {
     while (api->PollNextOverlayEvent(handle,&e,sizeof(e))) {
         overlay_shown_event_seen |= e.eventType == vr::VREvent_OverlayShown;
         overlay_hidden_event_seen |= e.eventType == vr::VREvent_OverlayHidden;
+        if (visibility_pending &&
+                e.eventType == (visibility_pending_hide ? vr::VREvent_OverlayHidden : vr::VREvent_OverlayShown)) {
+            // The event confirms the pending request; observed_ns is the poll time, on the same clock as
+            // request_ns. Without a pending request an event is a flag only (the marker report).
+            emit_visibility_event(visibility_pending_hide, visibility_cycle, monotonic_ns(), validation_only);
+            visibility_pending = false;
+        }
         if (e.eventType == vr::VREvent_Quit || e.eventType == vr::VREvent_OverlayClosed) throw Stopped{};
         if (e.eventType == vr::VREvent_ImageFailed) throw std::runtime_error("overlay_image_failed");
     }
+}
+void Overlay::await_visibility(std::uint32_t cycle, bool hide, std::uint64_t request_ns) {
+    settle_visibility(request_ns, true);  // A still pending hide is reported missing: its event can no longer be told apart.
+    visibility_pending = true; visibility_pending_hide = hide;
+    visibility_cycle = cycle; visibility_request_ns = request_ns;
+}
+void Overlay::settle_visibility(std::uint64_t now, bool force) {
+    if (!visibility_pending) return;
+    if (!force && now < visibility_request_ns + contract::kVisibilityEventBoundNs) return;
+    // Fail closed: a request without its matching event is reported once, so the Python side sees exactly one
+    // terminal line per request; for a hide that means no admission window this cycle.
+    emit_visibility_event_missing(visibility_cycle, now > visibility_request_ns ? now - visibility_request_ns : 0,
+                                  validation_only);
+    ++visibility_events_missing;
+    visibility_pending = false;
 }
 namespace {
 bool read_exact(std::uint8_t* data, std::size_t size, bool eof_allowed, Overlay& overlay,
@@ -141,6 +163,10 @@ void stream(Overlay& overlay, bool validate, Json::Value& report) {
     std::array<std::uint8_t,contract::kPacketHeaderBytes> header{};
     std::uint64_t expiry = 0;
     bool current = false, visible = true;
+    overlay.validation_only = validate;
+    report["visibility_requests_received"] = 0U; report["visibility_events_missing"] = 0U;
+    // Polled on every input wait, so the stdin loop keeps reading while a hidden event is awaited: the
+    // expiry of the presented frame, then the bound on a pending visibility request. Neither blocks.
     const auto expire = [&] {
         const auto now = monotonic_ns();
         if (expiry && now >= expiry) {
@@ -151,6 +177,8 @@ void stream(Overlay& overlay, bool validate, Json::Value& report) {
             emit_frame_expired(expiry, now, validate);
             expiry = 0;
         }
+        overlay.settle_visibility(now);
+        report["visibility_events_missing"] = overlay.visibility_events_missing;
         report["content_current"] = current;
         report["presentation_visible"] = current && visible;
     };
@@ -161,10 +189,12 @@ void stream(Overlay& overlay, bool validate, Json::Value& report) {
         const auto kind = read_u32(header.data()+contract::kPacketHeaderOpcodeOffset);
         const auto size = read_u32(header.data()+contract::kPacketHeaderPayloadBytesOffset);
         if (size > kMaxPayload || (kind != contract::kOpcodeFrame && kind != contract::kOpcodeSettings &&
-                                   kind != contract::kOpcodeStop && kind != contract::kOpcodeExpiringFrame))
+                                   kind != contract::kOpcodeStop && kind != contract::kOpcodeExpiringFrame &&
+                                   kind != contract::kOpcodeVisibility))
             throw std::runtime_error("invalid_packet_header");
         if ((kind == contract::kOpcodeSettings && size != contract::kSettingsBytes) ||
                 (kind == contract::kOpcodeStop && size) ||
+                (kind == contract::kOpcodeVisibility && size != contract::kVisibilityBytes) ||
                 (kind == contract::kOpcodeFrame && size < contract::kFramePrefixBytes))
             throw std::runtime_error("invalid_packet_size");
         if (kind == contract::kOpcodeExpiringFrame && (!validate || size < contract::kExpiringFramePrefixBytes))
@@ -178,6 +208,35 @@ void stream(Overlay& overlay, bool validate, Json::Value& report) {
             visible = s.visible;
             if (!validate) overlay.configure(s);
             report["settings_received"] = report["settings_received"].asUInt()+1;
+        } else if (kind == contract::kOpcodeVisibility) {
+            // One fallback cycle's show or hide: the request time before the call, the return time after
+            // it (the error, if any, is reported on the line and then ends the run as every other call
+            // error does), then the runtime's event is awaited by polling.
+            const auto cycle = read_u32(payload.data()+contract::kVisibilityCycleOffset);
+            const auto requested = read_u32(payload.data()+contract::kVisibilityVisibleOffset);
+            if (requested > 1) throw std::runtime_error("invalid_visibility");
+            const bool hide = requested == 0;
+            report["visibility_requests_received"] = report["visibility_requests_received"].asUInt()+1;
+            const auto request_ns = monotonic_ns();
+            overlay.settle_visibility(request_ns, true);  // A superseded request is settled before the new lines.
+            emit_visibility_requested(hide, cycle, request_ns, validate);
+            visible = !hide;
+            overlay.config.visible = visible;
+            // visibility() shows only while an image is presented and hides otherwise, so a show request with
+            // no image (the frame expired during the hidden window, or validation, where nothing is ever
+            // presented) makes a HideOverlay call: the return line says so and no shown event can follow.
+            const bool can_show = !hide && overlay.has_image;
+            const char* call = validate ? "none" : can_show ? "ShowOverlay" : "HideOverlay";
+            const bool ok = hide || can_show;
+            if (!validate) {
+                try { overlay.visibility(); }
+                catch (const std::exception& error) {
+                    emit_visibility_returned(hide, cycle, monotonic_ns(), false, call, error.what(), validate);
+                    throw;
+                }
+            }
+            emit_visibility_returned(hide, cycle, monotonic_ns(), ok, call, ok ? "" : "no_image", validate);
+            overlay.await_visibility(cycle, hide, request_ns);
         } else {
             const auto frame = sightcircuit_overlay::decode_frame(kind, payload);
             const auto w = frame.width, h = frame.height;
@@ -200,5 +259,8 @@ void stream(Overlay& overlay, bool validate, Json::Value& report) {
         }
         expire();
     }
+    // Input ended (stop or EOF) with a request still pending: it is reported missing, fail closed.
+    overlay.settle_visibility(monotonic_ns(), true);
+    report["visibility_events_missing"] = overlay.visibility_events_missing;
 }
 } // namespace sightcircuit_bridge
