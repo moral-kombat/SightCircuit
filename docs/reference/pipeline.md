@@ -34,7 +34,7 @@ exact tested pins remain in the `requirements-*.txt` files and their locks.
 | `sightcircuit/sources/` | `ReplaySource` (PyAV); `standin` (the synthetic realtime-replay [stand-in clip](development-checks.md#continuous-integration)); `mirror_device` (read-only V4L2 SteamVR mirror discovery and reads); `mirror` (bounded acquisition loop `capture`, `MirrorSource` (its optional `session` declares the HUD session tokens and stamps each frame), and `launch`, the one launcher of both mirror commands: candidate selection, output reservation, the bounded worker and all-or-nothing publication); `recording` (one MP4 box-header decoder for finished-file inspection and the growing-file scan used by `recording_growth_check`; newest recording); `PolledSource` (adapter for `open`/`read`/`close` sources); `session` (read-only [session-token providers](../hud-qualification.md#session-tokens-for-the-mirror-source-2026-11-03) for a mirror run: `HostClock`, `RuntimeProcess`, `TrackingObserver` and `MirrorSession`). Adapters forward the wrapped source's declared identity |
 | `sightcircuit/overlay.py` | Overlay bridge client and `OverlaySink`, the one panel sink: with a caller-owned client (replay's interactive panel) it only submits images; otherwise it owns a validation-only client through `open`/`clear`/`close`, optionally with the frozen HUD placement and payload contract |
 | `sightcircuit/hud/` | Fixed edge HUD contract, shared eye/rectangle geometry (and the [geometric prediction cross-check](../hud-qualification.md#geometric-prediction-cross-check-2026-11-04), which never feeds qualification), the one margin rule, synthetic-only native mask (calibrations from two factories only, with expiry, session tokens and view fields; zeroed regions refilled from their surround by `fill_regions`), tile rendering, the `HudStage` engine stage (and `HudPipelineAdapter`, the stage bound to its sink's fixed output contract, used by `live_pipeline.py`), offline mapping qualification, the calibration marker client, `observation` (empirical marker-copy location in native pixels and the observer report contract, used by `hud_marker_observer.py`), `candidate` (an observer report to an unqualified mapping candidate, used by `hud_validation_report.py --from-observer`) and `validation` (the synthetic HUD run's ledger feed and G5 software counts) |
-| `sightcircuit/runtime/` | `supervision` (the one [supervision primitive](#the-supervision-primitive): an owned worker session with an arm handshake, deadline-based cleanup, group termination with reaping, both signal policies and progress streaming, in one report block), `process` (bounded spawned workers, parent-death signalling; retires once the mirror launcher adopts the primitive), `guard` (the primitive under the guard's policy, the Linux parent-loss guardian, and the one stop-on-signal convention: `sigterm_cancels` and `cancelled` for launchers, `stop_on_signals` for workers), `output` (reserve, write, publish all or none, withdraw and discard explicit image outputs; `publish_new` for finished bytes), `live` (`run_report`, the one report runner on `Pipeline`, used by `run_pipeline`, the gated synthetic run, whose HUD run also feeds the validation ledger, and by `run_recognition`, the mirror recognizer), `synthetic` (the generated source and its declared `SyntheticSession`, the fixture calibration factory and its candidate record, `FixtureDetector` and `HeadlessSink`) `manifest` (the [checkpoint artifact manifest](hud-development.md#checkpoint-artifact-manifest): software identity written and verified on Frame) and `sensors` (the read-only [run-context sensor sidecar](#run-context-sensor-sidecar)) |
+| `sightcircuit/runtime/` | `supervision` (the one [supervision primitive](#the-supervision-primitive): an owned worker session with an arm handshake, deadline-based cleanup, group termination with reaping, both signal policies, progress streaming and the worker side's parent-death guard, in one report block), `guard` (the primitive under the guard's policy, the Linux parent-loss guardian, and the one stop-on-signal convention: `sigterm_cancels` and `cancelled` for launchers, `stop_on_signals` for workers), `output` (reserve, write, publish all or none, withdraw and discard explicit image outputs; `publish_new` for finished bytes), `live` (`run_report`, the one report runner on `Pipeline`, used by `run_pipeline`, the gated synthetic run, whose HUD run also feeds the validation ledger, and by `run_recognition`, the mirror recognizer), `synthetic` (the generated source and its declared `SyntheticSession`, the fixture calibration factory and its candidate record, `FixtureDetector` and `HeadlessSink`) `manifest` (the [checkpoint artifact manifest](hud-development.md#checkpoint-artifact-manifest): software identity written and verified on Frame) and `sensors` (the read-only [run-context sensor sidecar](#run-context-sensor-sidecar)) |
 | `sightcircuit/commands/` | The ten active commands' bodies, each with `main(argv=None)`: replay window, mirror recognition, the synthetic live pipeline, the marker check and observer, the validation report, detector evaluation, status generation, the mirror check and the session-manifest helper. `scripts/<name>.py` wraps each for the uninstalled checkout; `pyproject.toml` names the console entry points |
 | `sightcircuit/agent/` | On-device agent support: the fixed task table, the `frame_agent_run.py` runner (timeouts, lock, run budget, `result.json`), the PreToolUse guard and the Frame-only Claude Code settings template; standard library only ([plan](../agent-on-frame.md)) |
 
@@ -194,18 +194,24 @@ the guard's owned-session supervisor. The guard uses it through
 the guardian). The agent runner uses its `Signals` in raise mode and its
 `OwnedGroup` (group termination with reaping) for tasks and git, which are
 commands rather than report workers (B4). The mirror launcher
-(`runtime/process.py`, which still streams progress with `multiprocessing` for
-`mirror_check.py` and `mirror_recognize.py`) and the paused capture supervisor
-adopt it in later work-order items, and until then keep their own copies. The
-primitive offers:
+(`sources.mirror.launch`, for `mirror_check.py` and `mirror_recognize.py`)
+runs its worker through `supervise_owned` with progress streaming
+([mirror reference](mirror.md#existing-steamvr-mirror-diagnostic)), and the
+synthetic run's worker streams its snapshots the same way, so the former
+`runtime/process.py` (spawned `multiprocessing` workers) is retired (B5). The
+paused capture supervisor adopts it in B6 and keeps its own copy until then.
+The primitive offers:
 
-- **Owned-session spawning** with the caller's descriptors, plus two things the
-  worker inherits: `SIGHTCIRCUIT_ARMED_FD`, a descriptor it writes once its
+- **Owned-session spawning** with the caller's descriptors, plus three things
+  the worker inherits: `SIGHTCIRCUIT_ARMED_FD`, a descriptor it writes once its
   handlers are installed (`stop_on_signals()` does this through
-  `report_armed()`), and `SIGHTCIRCUIT_COOPERATIVE_GRACE`, the seconds it has
+  `report_armed()`); `SIGHTCIRCUIT_COOPERATIVE_GRACE`, the seconds it has
   after SIGTERM, from which `guard.cleanup_budget(default)` derives a worker's
   own cleanup joins (the synthetic run's capture-thread join: the grace less a
-  one-second reserve, so four seconds under the guard, half a second alone).
+  one-second reserve, so four seconds under the guard, half a second alone);
+  and `SIGHTCIRCUIT_SUPERVISOR_PID`, which `enter_worker()` checks after asking
+  the kernel for SIGTERM on parent death (Linux), so a worker whose supervisor
+  is killed during a driver call stops cooperatively instead of being stranded.
 - **Hold-and-arm around process start.** A handler starts held and is armed
   by its caller; `hold` and `resume` bracket a region, such as a `Popen`,
   where there is nothing to terminate yet. The primitive keeps its own handler
@@ -232,11 +238,13 @@ primitive offers:
   the first signal raises `Cancelled` (which carries the finished report after
   the cleanup), and an inherited ignore stays ignored, as `nohup` intends.
 - **Progress streaming** on the report stream: a line
-  `{"event": "progress", "report": {...}}` reaches the caller's `progress`
-  callback on the supervising thread, `{"event": "result", "report": {...}}`
-  or a bare JSON report is the final report, and the guardian forwards events
-  unchanged. A pending line and the report text are each bounded by the
-  report byte limit; events are dispatched, not kept.
+  `{"event": "progress", "report": {...}}` (`emit_event`) reaches the caller's
+  `progress` callback on the supervising thread, `{"event": "result",
+  "report": {...}}` or a bare JSON report is the final report, and the
+  guardian forwards events unchanged. A pending line and the report text are
+  each bounded by the report byte limit; events are dispatched, not kept. The
+  synthetic run's worker streams `run_pipeline`'s snapshots this way;
+  `supervise_synthetic(options, progress=...)` receives them.
 - **One report block**: `status`, `exit_code`, `cleanup_ok`, `reason`,
   `worker_pid`, `worker_armed`, `worker_reaped`, `worker_exit_code`,
   `worker_tree_reaped`, `report_reader_stopped`, `worker_forced_termination`,

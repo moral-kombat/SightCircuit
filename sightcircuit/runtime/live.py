@@ -211,7 +211,9 @@ SYNTHETIC = ReportStyle(LEGACY_FIELDS, "completed", True, synthetic_failure, las
 
 
 def run_pipeline(source, detector, sink, seconds, *, stop=None, max_fps=5, max_age_ms=MAX_DISPLAY_AGE_MS,
-                 threshold=POC_THRESHOLD, hud=None):
+                 threshold=POC_THRESHOLD, hud=None, progress=None):
+    """One gated synthetic run as a report; ``progress``, when given, receives the report before the engine starts
+    and then a snapshot at most once a second (``ProgressSink``)."""
     require_synthetic(source, "live_image_source_not_approved")
     if not (0.05 <= seconds <= 60 and 1 <= max_fps <= 10 and 0 < max_age_ms <= MAX_DISPLAY_AGE_MS and 0 <= threshold <= 1):
         raise ValueError("pipeline_limits_invalid")
@@ -240,8 +242,8 @@ def run_pipeline(source, detector, sink, seconds, *, stop=None, max_fps=5, max_a
 
     pipeline = run_report(report, SYNTHETIC, stop, polled, lambda: detector, close=close,
                           sinks=(validation, sink) if validation is not None else (sink,), hud=hud,
-                          threshold=threshold, max_fps=max_fps, max_age_ms=max_age_ms, seconds=seconds,
-                          join_timeout=cleanup_budget(0.5))
+                          progress=progress, threshold=threshold, max_fps=max_fps, max_age_ms=max_age_ms,
+                          seconds=seconds, join_timeout=cleanup_budget(0.5))
     if pipeline is not None and validation is not None:
         add_validation(report, validation, pipeline, max_age_ms=max_age_ms, max_fps=max_fps, seconds=seconds)
     return report

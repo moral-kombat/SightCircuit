@@ -145,8 +145,9 @@ the window in which a cancellation reached a worker before its handlers were
 installed; the agent runner on it (B4: its raise-mode signal policy with an
 inherited ignore honoured, and the primitive's group termination with reaping,
 the runner being its tasks' subreaper), and the agent package as its own
-checkpoint-manifest group (decision D7). Adoption by the live pipeline and the
-mirror launcher, then the capture supervisor remains planned (B5, B6).
+checkpoint-manifest group (decision D7); the mirror launcher's worker and the
+synthetic run's progress streaming on it, so `runtime/process.py` is retired
+(B5). Adoption by the paused capture supervisor remains planned (B6).
 
 ### Native bridge
 

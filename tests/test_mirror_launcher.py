@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from sightcircuit.errors import OutputError
-from sightcircuit.runtime import guard, output, process
+from sightcircuit.runtime import guard, output, supervision
 from sightcircuit.sources import mirror
 
 CANDIDATE = {"node": "/dev/fixture", "name": "SteamVR"}
@@ -52,9 +52,12 @@ class StopOnSignalTests(unittest.TestCase):
                 self.assertTrue(stop.is_set())
         self.assertFalse(guard.stop_on_signals().is_set())
 
-    def test_process_shares_the_cancellation_pair(self):
-        self.assertIs(process.StopRequested, guard.StopRequested)
-        self.assertIs(process.stop_on_signal, guard.stop_on_signal)
+    def test_the_mirror_worker_runs_on_the_primitive_with_the_bounded_workers_budgets(self):
+        # The retired spawned-worker supervisor joined 0.5 s, then terminated and killed with 1 s each.
+        self.assertEqual((mirror.WORKER_GRACE.cooperative, mirror.WORKER_GRACE.terminate, mirror.WORKER_GRACE.kill),
+                         (0.5, 1.0, 1.0))
+        self.assertIsInstance(mirror.WORKER_GRACE, supervision.Grace)
+        self.assertIn("run_worker", mirror.WORKER_BOOTSTRAP)
 
 
 class PublicationTests(unittest.TestCase):
@@ -143,7 +146,7 @@ class LaunchTests(unittest.TestCase):
 
     def launch(self, run, discovery=DISCOVERY, **options):
         options.setdefault("outputs", {"preview": (self.root / "p.png", ".fixture-")})
-        with patch.object(process, "run_bounded", side_effect=run) as bounded:
+        with patch.object(mirror, "supervise_worker", side_effect=run) as bounded:
             report = mirror.launch({"status": "discovery_only", "exit_code": 0}, discovery, None, 2,
                                    worker=WORKER, report_factory=dict, success_status="captured", **options)
         self.assertIs(signal.getsignal(signal.SIGTERM), signal.SIG_DFL)  # Restored after every outcome.
@@ -154,8 +157,8 @@ class LaunchTests(unittest.TestCase):
     def test_worker_job_report_and_fields(self):
         seen = {}
 
-        def run(job, seconds, outputs, *, report_factory, **options):
-            seen.update(job=job, seconds=seconds, report=report_factory(), options=options)
+        def run(worker, job, seconds, outputs, *, report_factory, **options):
+            seen.update(worker=worker, job=job, seconds=seconds, report=report_factory(), options=options)
             output.write(outputs["preview"], b"png")
             return dict(report_factory(), status="captured", preview_ready=True, exit_code=0)
 
@@ -165,7 +168,7 @@ class LaunchTests(unittest.TestCase):
         self.assertEqual((report["candidate"], report["discovery"], report["requested"]), (CANDIDATE, DISCOVERY, "x"))
         self.assertEqual((seen["job"], seen["seconds"], seen["report"]), ({"candidate": CANDIDATE}, 2,
                                                                           {"candidate": CANDIDATE}))
-        self.assertEqual((seen["options"]["timeout"], seen["options"]["success_status"], seen["options"]["worker"]),
+        self.assertEqual((seen["options"]["timeout"], seen["options"]["success_status"], seen["worker"]),
                          (7, "captured", WORKER))
         self.assertEqual(sorted(path.name for path in self.root.iterdir()), ["p.png"])
 
@@ -187,7 +190,7 @@ class LaunchTests(unittest.TestCase):
                         dict(status="timed_out", cleanup_ok=False, exit_code=1),
                         dict(status="cleanup_failed", cleanup_ok=False, exit_code=1),
                         dict(status="cancelled", reason="signal", signal=15, exit_code=143)):
-            def run(_job, _seconds, outputs, *, report_factory, **_options):
+            def run(_worker, _job, _seconds, outputs, *, report_factory, **_options):
                 output.write(outputs["preview"], b"png")
                 return dict(report_factory(), preview_ready=True, **failure)
 
@@ -198,7 +201,7 @@ class LaunchTests(unittest.TestCase):
                 self.assertNotIn("preview_path", report)
 
     def test_a_required_digest_reaches_publication(self):
-        def run(_job, _seconds, outputs, *, report_factory, **_options):
+        def run(_worker, _job, _seconds, outputs, *, report_factory, **_options):
             output.write(outputs["still"], b"png")
             return dict(report_factory(), status="captured", still_ready=True, exit_code=0)
 
@@ -207,7 +210,7 @@ class LaunchTests(unittest.TestCase):
         self.assertNotIn("still_path", report)
 
     def test_a_cancellation_during_publication_publishes_nothing(self):
-        def run(_job, _seconds, outputs, *, report_factory, **_options):
+        def run(_worker, _job, _seconds, outputs, *, report_factory, **_options):
             output.write(outputs["preview"], b"png")
             return dict(report_factory(), status="captured", preview_ready=True, exit_code=0)
 
@@ -223,7 +226,7 @@ class LaunchTests(unittest.TestCase):
 
     def test_a_cancellation_between_two_links_withdraws_what_was_linked(self):
         """All or none with two outputs: a signal before or after either link, recorded or not, publishes nothing."""
-        def run(_job, _seconds, outputs, *, report_factory, **_options):
+        def run(_worker, _job, _seconds, outputs, *, report_factory, **_options):
             for reservation in outputs.values():
                 output.write(reservation, b"png")
             return dict(report_factory(), status="captured", preview_ready=True, still_ready=True, exit_code=0)

@@ -18,7 +18,6 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from sightcircuit.runtime import process
 from sightcircuit.sources import mirror as acquisition
 from sightcircuit.sources import mirror_device as device
 from scripts import mirror_check as check
@@ -69,7 +68,7 @@ class ErrorMirror(FakeMirror):
         raise device.MirrorError("format_changed", "fixture format changed")
 
 
-def changing_worker(candidate, seconds, outputs, sender, stop, parent):
+def changing_worker(candidate, seconds, outputs, progress, stop):
     acquisition.NativeMirror = FakeMirror
     real_encoder = check.grayscale_png
 
@@ -79,35 +78,53 @@ def changing_worker(candidate, seconds, outputs, sender, stop, parent):
         return real_encoder(*args)
 
     check.grayscale_png = encode_after_close
-    check._worker(candidate, seconds, outputs, sender, stop, parent)
+    return check._worker(candidate, seconds, outputs, progress, stop)
 
 
-def stuck_worker(candidate, seconds, outputs, sender, stop, parent):
+def stuck_worker(candidate, seconds, outputs, progress, stop):
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     if candidate.get("ready_file"):
         Path(candidate["ready_file"]).write_text("ready")
-    sender.send_bytes(json.dumps({"event": "progress", "report": {"fixture_started": True}}).encode())
+    progress({"fixture_started": True})
     time.sleep(30)
 
 
-def crashed_worker(candidate, seconds, outputs, sender, stop, parent):
+def crashed_worker(candidate, seconds, outputs, progress, stop):
     os._exit(7)
+
+
+def progressing_stuck_worker(candidate, seconds, outputs, progress, stop):
+    """Reports capture progress with the report factory's own keys, then hangs past the deadline."""
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    progress(dict(acquisition.new_capture_report(), status="acquiring", device_open_attempted=True,
+                  acquisition_started=True, frames_read=7, read_attempts=9))
+    time.sleep(30)
+
+
+def contradicting_worker(candidate, seconds, outputs, progress, stop):
+    """A full result whose process then exits with another code than the result names."""
+    progress({"fixture_started": True})
+    report = dict(acquisition.new_capture_report(), status="captured", frames_read=3, cleanup_ok=True, exit_code=0)
+    from sightcircuit.runtime.supervision import emit_event
+    emit_event("result", report)
+    os._exit(5)
 
 
 def run_bounded(candidate, seconds, outputs=None, **options):
     """The mirror check's worker supervision as ``sources.mirror.launch`` runs it."""
-    return process.run_bounded(candidate, seconds, outputs, success_status="captured",
-                               report_factory=lambda: dict(acquisition.new_capture_report(), candidate=candidate),
-                               **options)
+    worker = options.pop("worker")
+    return acquisition.supervise_worker(worker, candidate, seconds, outputs, success_status="captured",
+                                        report_factory=lambda: dict(acquisition.new_capture_report(), candidate=candidate),
+                                        **options)
 
 
 def bounded_quickly(worker=changing_worker, seconds=0.22):
     """The launcher's supervision with ``worker`` and a short capture, for command-line tests."""
-    real = process.run_bounded
+    real = acquisition.supervise_worker
 
-    def run(job, _seconds, outputs=None, **options):
-        return real(job, seconds, outputs, **dict(options, worker=worker))
-    return patch.object(process, "run_bounded", side_effect=run)
+    def run(_worker, job, _seconds, outputs=None, **options):
+        return real(worker, job, seconds, outputs, **options)
+    return patch.object(acquisition, "supervise_worker", side_effect=run)
 
 
 class MirrorDiscoveryTests(unittest.TestCase):
@@ -151,7 +168,7 @@ class MirrorDiscoveryTests(unittest.TestCase):
     def test_cli_discovery_and_unavailable_capture_have_no_device_calls(self):
         for args, expected in (([], 0), (["--capture"], 1), (["--capture", "--device", "/dev/video0"], 1)):
             with self.subTest(args=args), patch.object(check, "discover", return_value={"status": "unavailable", "candidates": []}), \
-                    patch.object(process, "run_bounded", side_effect=AssertionError("Unverified capture started")):
+                    patch.object(acquisition, "supervise_worker", side_effect=AssertionError("Unverified capture started")):
                 output = io.StringIO()
                 with redirect_stdout(output):
                     self.assertEqual(check.main(args), expected)
@@ -374,6 +391,35 @@ sys.exit(report['exit_code'])
         self.assertFalse(report["cleanup_ok"])
         self.assertLess(report["worker_elapsed_ms"], 4000)
 
+    def test_progress_delivered_before_a_deadline_survives_the_factory_defaults(self):
+        # The old launcher kept every progress field under a timeout; a timed-out driver call must still show
+        # what the worker had reported (frames_read 7, the device opened), not the report factory's zeros.
+        report = run_bounded(CANDIDATE, 10, worker=progressing_stuck_worker, timeout=0.7)
+        self.assertEqual((report["status"], report["reason"]), ("timed_out", "worker_deadline"), report)
+        self.assertEqual((report["frames_read"], report["read_attempts"], report["device_open_attempted"],
+                          report["acquisition_started"]), (7, 9, True, True), report)
+        self.assertEqual((report["candidate"], report["seconds_requested"]), (CANDIDATE, 10))
+        self.assertFalse(report["cleanup_ok"])
+        self.assertEqual(report["exit_code"], 1)
+
+    def test_a_result_contradicted_by_the_exit_code_keeps_its_content(self):
+        report = run_bounded(CANDIDATE, 1, worker=contradicting_worker)
+        self.assertEqual((report["status"], report["reason"], report["exit_code"], report["cleanup_ok"]),
+                         ("error", "worker_exit_failure", 1, False), report)
+        self.assertEqual((report["frames_read"], report["worker_exit_code"], report["fixture_started"]), (3, 5, True))
+
+    def test_the_launcher_vocabulary_for_an_unkillable_worker_and_the_primitive_reasons(self):
+        base = dict(acquisition.new_capture_report(), candidate=CANDIDATE, seconds_requested=2)
+        block = {"status": "cancelled", "exit_code": 143, "cleanup_ok": False, "worker_pid": 4242, "worker_reaped": False,
+                 "worker_tree_reaped": False, "supervisor_elapsed_seconds": 7.5, "worker_forced_termination": True}
+        report = acquisition.finish_report(base, {"frames_read": 2}, block, None)
+        self.assertEqual((report["status"], report["reason"], report["frames_read"], report["worker_elapsed_ms"]),
+                         ("error", "worker_did_not_exit", 2, 7500.0))
+        block = {"status": "error", "exit_code": 1, "cleanup_ok": False, "worker_pid": 1, "worker_reaped": True,
+                 "reason": "supervisor_lifeline_closed_before_start", "supervisor_elapsed_seconds": 0.1}
+        report = acquisition.finish_report(base, {}, block, None)
+        self.assertEqual((report["status"], report["reason"]), ("error", "supervisor_lifeline_closed_before_start"))
+
     def test_abnormal_worker_exit_is_reported(self):
         report = run_bounded(CANDIDATE, 1, worker=crashed_worker)
         self.assertEqual(report["status"], "error", report)
@@ -410,13 +456,13 @@ sys.exit(report['exit_code'])
         with tempfile.TemporaryDirectory() as folder:
             target = Path(folder) / "mirror.png"
 
-            def raced(candidate, seconds, outputs, **_options):
+            def raced(_worker, candidate, seconds, outputs, **_options):
                 Path(outputs["preview"]["path"]).write_bytes(b"fixture")
                 target.write_bytes(b"keep me")
                 return dict(check.new_report(), status="captured", preview_ready=True, exit_code=0)
 
             with patch.object(check, "discover", return_value={"candidates": [CANDIDATE]}), \
-                    patch.object(process, "run_bounded", side_effect=raced), redirect_stdout(io.StringIO()):
+                    patch.object(acquisition, "supervise_worker", side_effect=raced), redirect_stdout(io.StringIO()):
                 self.assertEqual(check.main(["--capture", "--preview", str(target)]), 1)
             self.assertEqual(target.read_bytes(), b"keep me")
             self.assertFalse(list(Path(folder).glob("*.part")))
