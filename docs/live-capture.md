@@ -195,12 +195,21 @@ not as evidence. Also merged since: B4 (#19), B7 (#18), B8 (#17), P1 (#15), P2
 SteamVR package reader), B5 (#27, the launchers on the primitive and
 `runtime/process.py` retired), B6 (#28, the capture supervisor's record-and-poll
 policy under the unchanged quarantine rule), C7 and C8 (#31), C3b (#30, the
-box-annotation window the C5 session needs; exercised offscreen only). Lanes B
-and P are complete. Open: A5 (the decode change for the mirror's scale, in
-review, then the last budgeted attempt under a new approval), A7 to A10, the C8
-follow-up (#33, in review), C5 and C6 (device, approval), E1. The council's hypothesis for the
-cancellation race was wrong; the recorded cause is the readiness probe firing
-on the worker before it had exec'd ([checks reference](reference/development-checks.md)).
+box-annotation window the C5 session needs; exercised offscreen only), the C8
+follow-up (#33), and A5 (#29, main `0233b12`: the stage-two decode at the
+mirror's scale, the one reviewed change allowed before the last budgeted G3
+attempt; cloud-checked only, nothing run on the Frame). Lanes B and P are
+complete. Open: the last budgeted G3 attempt (device, owner approval; E90
+reserved), A7 to A10 after it, C5 and C6 (device, approval), E1. The council's
+hypothesis for the cancellation race was wrong; the recorded cause is the
+readiness probe firing on the worker before it had exec'd
+([checks reference](reference/development-checks.md)). One runner-only flake
+is on record for lane B: in #29's first replay run (checks run 90, attempt 1,
+a commit that touched no runtime code) `test_supervision`'s held-signal test
+(`test_a_signal_during_process_start_is_held_and_raised_once_the_worker_can_be_ended`)
+ended with the worker forced after 6.1 s and an empty report; the re-run and
+five local runs passed. Not reproduced, not fixed, not quarantined; the next
+lane B item is to make it reproducible under CPU stress before any change.
 
 ### Decisions still needed from the owner
 
@@ -211,8 +220,9 @@ on the worker before it had exec'd ([checks reference](reference/development-che
   constant changes by a reviewed edit.
 - The scope of the Phase 2 guard-enforcement test for the agent runner, which
   also needs a decision on the workspace trust dialog ([E86](evidence/e086.md)).
-- Device approvals, each separate: the last budgeted G3 attempt after that
-  reviewed change; then the evaluation session C5 with C6.
+- Device approvals, each separate: the last budgeted G3 attempt, now ready
+  (A5 merged as `0233b12`; no bridge rebuild, a new manifest, lamps off; the
+  request is with the owner); then the evaluation session C5 with C6.
 - The Frame rebooted into SteamOS 0.5.8 ([E85](evidence/e085.md)); a Frame
   manager session exists and the "Frame update check" scheduled task was
   rebound to it on 2026-11-07, with the old task left disabled as a record.
