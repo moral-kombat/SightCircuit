@@ -147,7 +147,7 @@ adds the stage (F5).
 
 | Call | Does |
 | --- | --- |
-| `OverlayClient.request_visibility(cycle, visible, settings=None)` | Queues the opcode `5` request for the writer thread and returns a `VisibilityRequest` (`cycle`, `visible`, `requested_ns` on `time.monotonic_ns()`, `deadline_ns`). With `settings`, the client's settings change in the same step and are sent right after the request |
+| `OverlayClient.request_visibility(cycle, visible, settings=None)` | Queues the opcode `5` request for the writer thread and returns a `VisibilityRequest` (`cycle`, `visible`, `requested_ns` on `time.monotonic_ns()`, `deadline_ns`). With `settings`, the client's settings change in the same step and are sent right after the request. `MarkerClient.request_visibility` (F3b) writes the request straight to the marker bridge instead (no writer thread, no settings: marker mode refuses a settings packet) and the calls below read its lines unchanged |
 | `OverlayClient.await_visibility(request, deadline_ns=None)` | Blocks until the request's terminal line, the deadline (`request.deadline_ns` by default) or the bridge's end, and returns a `VisibilityOutcome`; it never raises for a failed request |
 | `OverlayClient.visibility_outcome(cycle, visible)` | The same reading without blocking: `None` while the request is pending |
 | `OverlayClient.cycle_lines(cycle)` | Every line the bridge wrote for the cycle, in arrival order; the newest 1,024 cycles are kept (`VISIBILITY_HISTORY_CYCLES`) and dropped cycles are counted in `visibility_cycles_dropped` |

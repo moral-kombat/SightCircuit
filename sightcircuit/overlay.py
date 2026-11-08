@@ -248,6 +248,8 @@ class OverlayClient:
         self.frame_expiry_supported = False
         self.frame_expired = threading.Event()
         self.last_expiry = None
+        # The bridge's own display deadline (its CLOCK_MONOTONIC, from the marker modes' ready line), or None.
+        self.display_deadline_ns = None
         # The visibility cycle (F2): the lines the bridge wrote, by cycle, in arrival order, and the waiters'
         # condition; the requests queued for the writer live under ``condition`` with the frame and settings.
         self.visibility_condition = threading.Condition()
@@ -316,6 +318,8 @@ class OverlayClient:
                         raise RuntimeError("Overlay bridge initialization mode mismatch")
                     self.acknowledged = True
                     self.frame_expiry_supported = message.get("frame_expiry_supported") is True
+                    deadline = message.get("display_deadline_ns")
+                    self.display_deadline_ns = deadline if type(deadline) is int and deadline > 0 else None
                     self.ready.set()
                 if event == "frame_expired":
                     self.last_expiry = message

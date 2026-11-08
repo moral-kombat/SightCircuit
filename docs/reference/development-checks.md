@@ -109,6 +109,11 @@ The runner is the suite's entry point and does two more things there:
   shorten a test: raise it, with the measurement that needs it, when a module
   legitimately grows. `tests/test_run_tests_no_skips.py` checks that every
   listed ceiling names an existing module and that CI enforces the file.
+  Added 2026-11-08 (F3b): `test_fallback_measure` 60 s, from 21 to 28 s
+  measured on the x86 cloud container over ten runs (the real validation
+  bridge end to end, a fake marker bridge driven for several seconds of
+  cycles, and the marker decode on fixture frames), with about twice the
+  margin; the ceiling is a cloud measurement, not a Frame one.
 - Before the tests run it normalises SIGINT for the suite's children. A test
   process started with SIGINT ignored (a background job of a shell without job
   control) passes that ignore to every subprocess the tests signal, so the
