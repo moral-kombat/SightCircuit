@@ -8,6 +8,7 @@ bookkeeping, the report contract, the opt-in rules and the manifest check are
 exercised without either.
 """
 import functools
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -17,8 +18,6 @@ import threading
 import time
 import unittest
 from unittest.mock import patch
-
-import numpy as np
 
 from sightcircuit.hud import observation as hud_observation
 from sightcircuit.hud.contract import HUD_CONFIG, VISIBILITY_EVENT_BOUND_NS
@@ -30,6 +29,10 @@ from scripts import fallback_measure
 from tests.test_checkpoint_manifest import CheckoutCase
 
 ROOT = Path(__file__).resolve().parents[1]
+# The bookkeeping, the report contract, the launcher, the manifest gate and the validate run need neither;
+# the frame decode and the fixture mirror need both (CI's dependency-free steps run without them).
+HAS_PIXELS = importlib.util.find_spec("cv2") is not None and importlib.util.find_spec("numpy") is not None
+PIXELS_REQUIRED = "OpenCV and NumPy are required for the marker decode and the fixture mirror"
 READ = {"sequence": 0, "observed_ns": 0, "digest": "d", "present": True, "decode": "complete_copy"}
 
 
@@ -39,6 +42,7 @@ def read(sequence, observed_ns, present, digest=None):
 
 
 def scene(marker, *, width=1000, height=600):
+    import numpy as np
     image = np.full((height, width, 3), 90, np.uint8)
     if marker:
         image[100:228, 100:420] = hud_observation.marker_template()[:, :, None]
@@ -84,6 +88,7 @@ class TransitionBoundsTests(unittest.TestCase):
                           "distinct_digests": 2, "maximum_read_gap_ns": 100, "reads_with_complete_copy": 3})
         self.assertEqual(fallback_measure.repeat_counts([])["maximum_read_gap_ns"], None)
 
+    @unittest.skipUnless(HAS_PIXELS, PIXELS_REQUIRED)
     def test_a_frame_record_keeps_a_digest_and_presence_never_pixels(self):
         present = fallback_measure.frame_record(3, 12, scene(True))
         absent = fallback_measure.frame_record(4, 13, scene(False))
@@ -420,7 +425,7 @@ class ValidationRunTests(unittest.TestCase):
         self.assertTrue(report["worker_tree_reaped"])
 
 
-@unittest.skipUnless(os.name == "posix", "The fake bridge uses a POSIX shebang")
+@unittest.skipUnless(os.name == "posix" and HAS_PIXELS, "The fake bridge uses a POSIX shebang; " + PIXELS_REQUIRED)
 class FakeBridgeMeasurementTests(unittest.TestCase):
     """A scripted marker bridge confirms every transition, and a fixture mirror follows its visibility.
 
