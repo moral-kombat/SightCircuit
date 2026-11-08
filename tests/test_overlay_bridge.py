@@ -12,6 +12,11 @@ import time
 import unittest
 
 from sightcircuit.overlay import DEFAULT_BRIDGE, MAX_SIDE, PANEL_LIMITS, OverlayClient, PanelSettings, packet
+from sightcircuit.runtime.manifest import NATIVE_SOURCES
+
+ROOT = Path(__file__).resolve().parents[1]
+# The bridge's rendering unit decodes the settings packet and applies the panel limits.
+RENDERING_UNIT = ROOT / "tools/overlay_bridge_rendering.cpp"
 
 
 @unittest.skipUnless(DEFAULT_BRIDGE.is_file(), "Build scripts/build_overlay_bridge.sh first")
@@ -177,8 +182,9 @@ class OverlayBridgeTests(unittest.TestCase):
                 self.assertIsNone(report["view_record"])
                 self.assertIs(report["set_calls_made"], False)
                 self.assertFalse(report["runtime_initialized"])
-        source = (Path(__file__).resolve().parents[1] / "tools/overlay_bridge.cpp").read_text()
-        self.assertNotIn("SetHeadsetView", source)  # GetHeadsetView* only; the mirror's mode is never changed
+        for path in NATIVE_SOURCES:  # GetHeadsetView* only, in every bridge unit; the mirror's mode is never changed
+            with self.subTest(path=path):
+                self.assertNotIn("SetHeadsetView", (ROOT / path).read_text())
 
     def test_validation_modes_stay_runtime_free_with_protocol_on_stdout(self):
         data = packet(1, struct.pack("<II", 1, 1) + bytes(4)) + packet(3)
@@ -327,7 +333,7 @@ class PanelLimitConsistencyTests(unittest.TestCase):
         header = (tools / "hud_contract.hpp").read_text()
         values = {name: float(value) for name, value in
                   re.findall(r"constexpr float (kPanel\w+) = (-?[\d.]+)f;", header)}
-        source = (tools / "overlay_bridge.cpp").read_text()
+        source = RENDERING_UNIT.read_text()
         native = {name: (values[low], values[high]) for name, low, high in
                   re.findall(r"bounded\(s\.(\w+),\s*contract::(kPanel\w+Min),\s*contract::(kPanel\w+Max)\)", source)}
         native["opacity"] = native.pop("alpha")

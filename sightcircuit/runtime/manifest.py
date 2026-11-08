@@ -42,8 +42,12 @@ CHECKPOINT_SCRIPTS = (
     "scripts/build_openvr_tool.sh", "scripts/build_overlay_bridge.sh", "scripts/checkpoint_manifest.py",
     "scripts/hud_marker_check.py", "scripts/hud_marker_observer.py", "scripts/observation_page.py",
 )
-NATIVE_SOURCES = ("tools/hud_contract.hpp", "tools/overlay_bridge.cpp", "tools/overlay_frame.hpp",
-                  "tools/overlay_lifecycle.hpp")
+# The bridge's translation units (scripts/build_openvr_tool.sh compiles exactly these) and every local header
+# they include; tests/test_checkpoint_manifest.py fails when the two lists or the CI syntax check drift apart.
+NATIVE_SOURCES = ("tools/hud_contract.hpp", "tools/overlay_bridge.cpp", "tools/overlay_bridge.hpp",
+                  "tools/overlay_bridge_lifecycle.cpp", "tools/overlay_bridge_rendering.cpp",
+                  "tools/overlay_bridge_reporting.cpp", "tools/overlay_bridge_sensing.cpp",
+                  "tools/overlay_frame.hpp", "tools/overlay_lifecycle.hpp")
 ASSET_MANIFEST = "scripts/smoke-assets.json"
 ASSET_DIRECTORY = ".cache/sightcircuit/assets"
 # Import name -> distribution of every third-party module the checkpoint scripts import (tested).
