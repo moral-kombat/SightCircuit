@@ -173,8 +173,9 @@ Reproduced on the cloud container (x86_64, 4 cores, Python 3.12.3) with
 alone in a loop (`python3.12 -m unittest <test id>`), with an import hook
 that, before the primitive's group termination, read the still-living worker's
 `/proc` signal state and made it dump its Python traceback through
-`faulthandler` on SIGUSR1: BASELINE_SUPERVISION for the supervision test and
-BASELINE_BOUNDED for the bounded-worker test. The one red run matched run 90
+`faulthandler` on SIGUSR1: 1 red run in 1600 (one in the first 400, none in the next 1200) for
+the supervision test and 0 in 900 for the bounded-worker test, whose face
+of the race did not recur under this load. The one red run matched run 90
 exactly (exit 143, `worker_exit_code` -9, empty report, 6.5 s), and its
 worker's traceback was the cause:
 
@@ -221,8 +222,8 @@ registered stop event on its own thread, where a lock the main thread holds
 is contention, not a deadlock. `test_mirror_launcher`'s check that a raised
 signal sets the event now waits for the relay instead of asserting
 synchronously. Acceptance, as for the cancellation race above: the same
-stress loop on the fixed checkout, FIXED_SUPERVISION for the supervision
-test and FIXED_BOUNDED for the bounded-worker test, fifty consecutive green
+stress loop on the fixed checkout, 0 red runs in 1600 for the supervision
+test and 0 in 600 for the bounded-worker test, fifty consecutive green
 runs being the bar. These are runner-CPU observations on x86_64; nothing here
 ran on the Frame.
 
