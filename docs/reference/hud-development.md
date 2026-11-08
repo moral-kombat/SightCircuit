@@ -239,7 +239,12 @@ report holds, per fill and detector:
   boxes the runtime keeps (`runtime_kept`), which shows what the strict rule
   costs next to the HUD;
 - leak and determinism checks;
-- time per frame at 96x64 and 1920x1080 on the runner CPU.
+- time per frame at 96x64 and 1920x1080 on the runner CPU;
+- per seed still, `input_path_resolution`: `recorded`, `download`, or
+  `beside_manifest` when a recorded path no longer exists and the file of the
+  same basename beside the manifest was read instead, announced on stderr as
+  the [detector evaluator](detector-evaluation.md#repeat-a-recorded-run) does;
+  the digest check still decides identity.
 
 `--expect-clean-gray-sweep` exits 1 if any detector boxes the mask on the sweep
 with the runtime fill. From the checkout:

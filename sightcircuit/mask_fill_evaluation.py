@@ -365,9 +365,13 @@ def load_seed_images(manifest_path, downloads, fetch=False, log=None):
                      downloads, log=log or (lambda message: None))
     images = []
     for entry in manifest["images"]:
-        location = evaluation.resolve_image(manifest, entry, downloads)
+        location, resolution = evaluation.locate_image(manifest, entry, downloads)
         if not location.is_file():
             raise FileNotFoundError(f"{entry['id']}: image not found at {location} (run with --fetch)")
+        if resolution == "beside_manifest" and log:  # The same announcement the detector evaluator makes.
+            log(f"{entry['id']}: the recorded path does not exist; using {location.name} beside the manifest "
+                "(the digest check decides identity)")
+        entry = dict(entry, _input_resolution=resolution)
         if entry.get("sha256") and assets.checksum(location) != entry["sha256"]:
             raise ValueError(f"{entry['id']}: image failed SHA-256 verification")
         image = cv2.imread(str(location), cv2.IMREAD_COLOR)
@@ -484,8 +488,9 @@ def seed_comparison(detector, images, fills, threshold=THRESHOLD):
         for placement, scores in scored[name].items():
             pins[name][placement] = dict(pin(scores), runtime_kept=pin(kept_scores[name][placement]))
     summary = {name: dict(sorted(counter.items()), pin_counts=pins[name]) for name, counter in totals.items()}
-    return {"images": [entry["id"] for entry, _ in images], "unmasked_pin_counts": unmasked_pin,
-            "fills": summary, "cases": cases}
+    return {"images": [entry["id"] for entry, _ in images],
+            "input_path_resolution": {entry["id"]: entry.get("_input_resolution", "recorded") for entry, _ in images},
+            "unmasked_pin_counts": unmasked_pin, "fills": summary, "cases": cases}
 
 
 def leak_check(fill, seed=7):
