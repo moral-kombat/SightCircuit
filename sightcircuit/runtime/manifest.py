@@ -58,10 +58,17 @@ MAX_MANIFEST_DEPTH = 8  # A manifest nests three levels; anything far deeper is 
 MAX_REPORTED_PATHS = 20
 # The SteamVR runtime on Frame is the pacman package ``deckard-steamvr-rel`` (E85 read it with ``pacman -Q``:
 # r25765468+0ab5c24d-1 on SteamOS 0.5.6, r26496310+24cb4748-1 on 0.5.8). The manifest reads it from the
-# local package database by file reads only, best-effort: the version is unknown (None, with a reason) where
-# the database or the package is absent. The desktop SteamVR package name is unverified and not looked for.
+# pacman local database by file reads, best-effort, trying the DBPath of /etc/pacman.conf, the Arch default
+# and the location SteamOS 3's pacman.conf is documented to use, not verified on the Frame (the A4 preparation of
+# 2026-11-07 found /var/lib/pacman/local
+# unavailable to the steamos user while ``pacman -Q`` answered). Only when no database is readable does it
+# fall back to a read-only ``pacman -Q``, and the record says which source answered. The version is unknown
+# (None, with a reason) where neither does. The desktop SteamVR package name is unverified and not looked for.
 STEAMVR_PACKAGE = "deckard-steamvr-rel"
-PACMAN_LOCAL_DATABASE = Path("/var/lib/pacman/local")
+PACMAN_CONFIG = Path("/etc/pacman.conf")
+PACMAN_DEFAULT_DATABASE_ROOT = Path("/var/lib/pacman")
+PACMAN_HOLO_DATABASE_ROOT = Path("/usr/lib/holo/pacmandb")  # Documented SteamOS 3 DBPath; not verified on the Frame.
+PACMAN_QUERY_TIMEOUT_SECONDS = 10
 MAX_PACKAGE_DESCRIPTION_BYTES = 64 * 1024
 MAX_PACKAGE_VERSION_CHARS = 128
 SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -150,21 +157,57 @@ def _package_description(text):
     return fields
 
 
-def steamvr_package(name=STEAMVR_PACKAGE, database=None):
-    """The SteamVR package's installed version from the pacman local database, read-only and best-effort.
+def pacman_local_databases(config=PACMAN_CONFIG):
+    """The local package databases to try, in order: ``DBPath`` from ``config`` when it names an absolute
+    path, the Arch default and the documented SteamOS 3 path, each as ``<root>/local``, without duplicates."""
+    roots = []
+    try:
+        text = Path(config).read_bytes()[:MAX_PACKAGE_DESCRIPTION_BYTES].decode("utf-8", "replace")
+    except OSError:
+        text = ""
+    for line in text.splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line.startswith("DBPath") and "=" in line:
+            value = line.split("=", 1)[1].strip()
+            if value.startswith("/"):
+                roots.append(Path(value))
+    roots += [PACMAN_DEFAULT_DATABASE_ROOT, PACMAN_HOLO_DATABASE_ROOT]
+    return tuple(dict.fromkeys(root / "local" for root in roots))
 
-    Returns ``{"name", "source", "version", "reason"}``. ``version`` is None, with the
-    reason, where the database is unreadable (not a SteamOS or Arch host), the
-    package is not installed, its description is unreadable or invalid, or more
-    than one entry claims the name. Only directories named ``<name>-...`` are
-    opened, and each ``desc`` is read up to a bound. No command is run.
-    """
-    record = {"name": name, "source": "pacman_local_database", "version": None, "reason": None}
-    database = PACMAN_LOCAL_DATABASE if database is None else Path(database)
+
+def pacman_query(name, timeout=PACMAN_QUERY_TIMEOUT_SECONDS):
+    """Read-only ``pacman -Q <name>``: ``(version, None)`` or ``(None, reason)``. Nothing is installed or changed."""
+    try:
+        completed = subprocess.run(["pacman", "-Q", name], capture_output=True, text=True, timeout=timeout,
+                                   stdin=subprocess.DEVNULL)
+    except FileNotFoundError:
+        return None, "pacman_unavailable"
+    except (OSError, subprocess.TimeoutExpired):
+        return None, "pacman_query_failed"
+    if completed.returncode != 0:
+        return None, "package_not_installed"
+    parts = completed.stdout.split()
+    if len(parts) != 2 or parts[0] != name or not _version_valid(parts[1]):
+        return None, "pacman_query_invalid"
+    return parts[1], None
+
+
+def _version_valid(version):
+    return (type(version) is str and 1 <= len(version) <= MAX_PACKAGE_VERSION_CHARS and
+            version.isprintable() and " " not in version)
+
+
+def _read_local_database(database, name):
+    """``(status, version, reason)`` for one local database: status ``read``, ``absent``, ``permission_denied``
+    or ``unreadable``; with ``read``, the version or the reason it is unknown."""
     try:
         entries = sorted(entry for entry in database.iterdir() if entry.name.startswith(name + "-"))
+    except PermissionError:
+        return "permission_denied", None, None
+    except (FileNotFoundError, NotADirectoryError):
+        return "absent", None, None
     except OSError:
-        return dict(record, reason="package_database_unavailable")
+        return "unreadable", None, None
     versions, unreadable = [], False
     for entry in entries:
         try:
@@ -176,14 +219,51 @@ def steamvr_package(name=STEAMVR_PACKAGE, database=None):
         if fields.get("NAME") == name:
             versions.append(fields.get("VERSION"))
     if not versions:
-        return dict(record, reason="package_description_unreadable" if unreadable else "package_not_installed")
+        return "read", None, "package_description_unreadable" if unreadable else "package_not_installed"
     if len(versions) > 1:
-        return dict(record, reason="package_ambiguous")
-    version = versions[0]
-    if (type(version) is not str or not 1 <= len(version) <= MAX_PACKAGE_VERSION_CHARS or
-            not version.isprintable() or " " in version):
-        return dict(record, reason="package_version_invalid")
-    return dict(record, version=version)
+        return "read", None, "package_ambiguous"
+    if not _version_valid(versions[0]):
+        return "read", None, "package_version_invalid"
+    return "read", versions[0], None
+
+
+def steamvr_package(name=STEAMVR_PACKAGE, databases=None, query=None):
+    """The SteamVR package's installed version, best-effort and read-only.
+
+    Returns ``{"name", "source", "database", "databases", "version", "reason", "query"}``.
+    Each candidate local database (``pacman_local_databases()``) is tried in
+    order by file reads only; ``databases`` records each path's status and
+    ``database`` the one that answered, with ``source`` ``pacman_local_database``.
+    Only when no database could be read does a read-only ``pacman -Q`` run
+    (``query``, default ``pacman_query``), and then ``source`` is ``pacman_query``;
+    ``query`` records why that fallback gave nothing. ``version`` is None, with
+    ``reason``, where neither source answers: ``package_database_permission_denied``
+    when a database exists but this user may not read it (the A4 preparation's
+    case), ``package_database_unavailable`` when none exists, or the readable
+    database's own reason (not installed, ambiguous, unreadable or invalid
+    description).
+    """
+    databases = pacman_local_databases() if databases is None else tuple(Path(entry) for entry in databases)
+    query = pacman_query if query is None else query
+    record = {"name": name, "source": None, "database": None, "databases": {}, "version": None, "reason": None,
+              "query": None}
+    first_read = None
+    for database in databases:
+        status, version, reason = _read_local_database(database, name)
+        record["databases"][str(database)] = status
+        if status == "read":
+            if version is not None:
+                return dict(record, source="pacman_local_database", database=str(database), version=version)
+            if first_read is None:
+                first_read = (str(database), reason)
+    if first_read is not None:
+        return dict(record, source="pacman_local_database", database=first_read[0], reason=first_read[1])
+    denied = any(status == "permission_denied" for status in record["databases"].values())
+    record["reason"] = "package_database_permission_denied" if denied else "package_database_unavailable"
+    version, query_reason = query(name)
+    if version is not None:
+        return dict(record, source="pacman_query", version=version, reason=None)
+    return dict(record, query=query_reason)
 
 
 def package_versions(packages=CHECKPOINT_PACKAGES):

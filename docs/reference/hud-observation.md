@@ -294,9 +294,10 @@ device record must carry the environment differences against E83 as a
 recorded item**: the OS build, the kernel release, the SteamVR package version
 and the interpreter and its environment, beside the checkout and bridge
 digests. The checkpoint manifest now records the SteamVR package identity
-(`platform.steamvr_package`, read from the pacman local database by file reads
-only, unknown with a reason where absent; `sightcircuit/runtime/manifest.py`,
-`tests/test_checkpoint_manifest.py`) next to the kernel and OS release it
+(`platform.steamvr_package`, read from the pacman local databases by file
+reads with a read-only `pacman -Q` fallback, unknown with a reason where
+neither answers; [manifest contents](hud-development.md#checkpoint-manifest-identity-and-verification),
+`sightcircuit/runtime/manifest.py`, `tests/test_checkpoint_manifest.py`) next to the kernel and OS release it
 already recorded, so a manifest written on Frame for the attempt carries them,
 and a SteamVR update between `--write` and `--verify` is a difference. A
 manifest written before the rebuild does not verify afterwards (interpreter
