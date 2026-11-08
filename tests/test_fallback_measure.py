@@ -610,10 +610,14 @@ emit({{"event": "closed", "status": "validated_marker" if validate else "marker_
         fallback_measure.validate_worker_report(report, 1)
 
     def test_a_request_that_would_enter_the_margin_is_refused_not_sent(self):
-        # With the reserve disabled the driver reaches the margin; the defensive check rejects the run instead of
-        # sending a request the bridge could process inside its final poll window.
+        # With the reserve disabled and fast cycles (a 50 ms pacing floor, a 100 ms phase bound: a cycle start at
+        # least every quarter second), a hide is bound to start inside the 430 ms margin before the deadline; the
+        # defensive check rejects the run instead of sending a request the bridge could process inside its final
+        # poll window. The hide before it ends its pacing at the margin, so its show is sent in time.
         client = MarkerClient(self.fake_bridge(), validation_only=False)
-        with patch.object(fallback_measure, "CYCLE_RESERVE_NS", 0):
+        with patch.object(fallback_measure, "CYCLE_RESERVE_NS", 0), \
+                patch.object(fallback_measure, "REQUEST_GAP_NS", 50_000_000), \
+                patch.object(fallback_measure, "PHASE_BOUND_NS", 100_000_000):
             report = fallback_measure.measure({"node": "synthetic:fake"}, 3, fallback_measure.MAX_CYCLES,
                                               threading.Event(), backend_factory=self.backend(), marker_client=client,
                                               allow_calibration_output=True)
