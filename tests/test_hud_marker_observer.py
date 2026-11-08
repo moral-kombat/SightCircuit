@@ -4,9 +4,10 @@ Session-token tests use a fake /proc root (``tests.test_mirror_session.FakeProc`
 and hand-written tracking events; no test reads the real /proc of any process.
 """
 import contextlib
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
 from dataclasses import replace
 import io
+import itertools
 import json
 import os
 from pathlib import Path
@@ -350,24 +351,37 @@ class MirrorScaleDecodeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "orphan"):
             hud_observation.locate_copies(image, diagnostics=details)
         self.assertEqual(details["tag_fragment_count"], 1)
-        margin = details["minimum_fragment_margin"]
+        margin = details["minimum_fragment_margin"]  # The one counted fragment's margin: the field reports only those.
         self.assertGreaterEqual(margin, hud_observation.FRAGMENT_MIN_MARGIN)
         with patch.object(hud_observation, "FRAGMENT_MIN_MARGIN", margin + .01):
-            self.assertEqual(hud_observation.locate_copies(image), [])  # No fragment, no copy: fail closed.
+            details = {}
+            self.assertEqual(hud_observation.locate_copies(image, diagnostics=details), [])  # No fragment, no copy.
+            self.assertEqual(details["tag_fragment_count"], 0)
+            self.assertNotIn("minimum_fragment_margin", details)  # A decodable square under the margin is not reported.
         with patch.object(hud_observation, "FRAGMENT_MIN_MARGIN", margin - .01), self.assertRaisesRegex(ValueError, "orphan"):
             hud_observation.locate_copies(image)
-        # The scale floor, at 0.5 inclusive: a 160 px tile is accepted, 157 px (0.49) refused, 163 px (0.51) accepted.
-        for scale, accepted in ((.49, False), (.5, True), (.51, True)):
-            image, _ = mirror_render(hud_observation.marker_template(), scale, 0., (0., 0.), 0.)
-            details = {}
-            with self.subTest(scale=scale):
-                if accepted:
-                    self.assertEqual(len(hud_observation.locate_copies(image, diagnostics=details)), 1)
-                else:
-                    with self.assertRaises(ValueError):
-                        hud_observation.locate_copies(image, diagnostics=details)
-                    self.assertIn("marker_too_small", details["best_candidates"][0]["failed_checks"])
-                self.assertAlmostEqual(details["best_candidates"][0]["marker_scale"], scale, delta=.006)
+        # The scale floor, 0.5 inclusive, measured on the quad found. Over four phases and two slopes: 0.49 (157 px)
+        # is refused at every phase, as an orphan with marker_too_small the only failed check; 0.51 (163 px) is
+        # accepted at every phase from the raster contour alone; 0.50 (160 px) is the edge, where the raster contour
+        # measures just under (its edge pixels fall under the bright threshold) and only the bounded refinement
+        # decides, so either outcome is allowed there and marker_too_small is the only check that may fail.
+        phases = tuple(itertools.product(((0., 0.), (.3, .6), (.5, .5), (.8, .2)), (0., .8)))
+        for scale, accepted in ((.49, False), (.5, None), (.51, True)):
+            for phase, slope in phases:
+                image, _ = mirror_render(hud_observation.marker_template(), scale, slope, phase, 0.)
+                details = {}
+                with self.subTest(scale=scale, phase=phase, slope=slope), (still if accepted else nullcontext()):
+                    try:
+                        copies = hud_observation.locate_copies(image, diagnostics=details)
+                    except ValueError as error:
+                        self.assertNotEqual(accepted, True)
+                        self.assertEqual(str(error), "orphan_marker_tag_or_incomplete_copy")  # Not no_complete_marker.
+                        self.assertEqual(details["best_candidates"][0]["failed_checks"], ["marker_too_small"])
+                        self.assertGreaterEqual(details["positional_fragment_count"], 3)
+                    else:
+                        self.assertNotEqual(accepted, False)
+                        self.assertEqual(len(copies), 1)
+                    self.assertAlmostEqual(details["best_candidates"][0]["marker_scale"], scale, delta=.011)
         # A dim tile: correct border and bit pattern, but the tags' bright level at 120 instead of 255.
         dim = hud_observation.marker_template().copy()
         for x, y in hud_observation.TAG_ORIGINS:
@@ -400,6 +414,7 @@ class MirrorScaleDecodeTests(unittest.TestCase):
             hud_observation.locate_copies(image, diagnostics=details)
         # Three from the border outline; the tile's inner rectangle is a second outline candidate and may add one.
         self.assertGreaterEqual(details["positional_fragment_count"], 3)
+        self.assertGreaterEqual(details["minimum_fragment_margin"], hud_observation.FRAGMENT_MIN_MARGIN)  # Counted ones.
         self.assertIn("tag_pattern_error", details["best_candidates"][0]["failed_checks"])
         # Below the scale floor a clean copy is refused by its size, whatever its bits decode to.
         image, _ = mirror_render(hud_observation.marker_template(), .4, 0., (0., 0.), 0.)

@@ -48,8 +48,9 @@ BASELINE_WINDOW_SECONDS = 2.0
 # kept if it ends within this grace, so a slow decode (A5, about 45 ms a frame on the x86 cloud CPU, unmeasured
 # on Frame) delays the next read and drops reads under the 5 per second pacing instead of failing the run. An
 # analysis that ends later still rejects the run (``marker_processing_exceeded_observation_deadline``): that is
-# a stall, not pacing. The grace fits the supervisor's margin beside the baseline window, the declaration
-# budget and the bridge's stop grace.
+# a stall, not pacing. The grace cannot extend the run past its existing bound: the worker already waits up
+# to ``deadline + 2`` for the bridge's own timer to close it (below), and the client's ``close`` waits until the
+# marker deadline plus ``STOP_GRACE_SECONDS``, so an analysis that ends at ``deadline + 1`` ends inside both.
 PROCESSING_GRACE_SECONDS = 1.0
 # After the bridge's ready line, reads without any marker candidate (``no_complete_marker``) are tolerated for
 # this long while no sample exists, and counted as ``warmup_frames_without_marker``; the first such read after

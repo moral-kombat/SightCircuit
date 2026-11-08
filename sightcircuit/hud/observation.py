@@ -54,8 +54,16 @@ TAG_MIN_CONTRAST = 60        # Bright minus dark level inside a tag; worst obser
 TAG_MIN_BRIGHT = 200         # The tag's bright level itself; worst observed 221; the bridge draws 255.
 BIT_MIN_MARGIN = 0.4         # Each core's distance from the midpoint over half the contrast; worst observed 0.51.
 FRAGMENT_MIN_MARGIN = 0.25   # The same for a fragment's bits; worst observed 0.59 on partial copies' tags.
-MIN_MARKER_SCALE = 0.5       # The quad's shorter relative extent: under 160 px wide the 4 px bit cores are under
-#                              2 px in the frame. 0.5 is the documented resolvable floor and 0.4 was never resolvable.
+MIN_MARKER_SCALE = 0.5       # The quad's shorter relative extent, inclusive: under 160 px wide the 4 px bit cores
+#                              are under 2 px in the frame. 0.5 is the documented resolvable floor and 0.4 was never
+#                              resolvable. The floor is measured on the quad found, so a tile drawn at exactly 0.50
+#                              (160 px) is at the edge: its edge pixels fall under the bright threshold and the raster
+#                              contour measures 0.492 to 0.499, accepted only where the bounded corner refinement moves
+#                              the corners out (7 of 8 phase and slope combinations in the synthetic probe). From 0.51
+#                              (163 px) every phase passes from the raster contour alone; 0.49 (157 px) is refused at
+#                              every phase, as an orphan: a clean copy under the floor fails ``marker_too_small``, its
+#                              tags become positional fragments, and the run rejects on the first marker frame instead
+#                              of running under the no-marker warm-up.
 TAG_ORIGINS = tuple(MARKER.tag_origin(tag) for tag in range(len(MARKER.corner_ids)))
 # Why a worker report's ``session_tokens`` holds no session report.
 SESSION_TOKENS_NOT_REQUESTED = "session_tokens_not_requested"  # No session: the default observer run.
@@ -227,8 +235,9 @@ def locate_copies(bgr, *, diagnostics=None):
         Every corner id leaves at least one bit set and two clear, so both
         levels are present in a real tag. A bit is set when its core mean lies
         above the midpoint, and its margin is that distance over half the
-        contrast. Returns ``(contrast, minimum_margin, decoded_id, correct)``;
-        ``correct`` is whether every bit matches ``bits_expected`` (a tag index).
+        contrast. Returns ``(contrast, minimum_margin, decoded_id, correct,
+        bright)``; ``correct`` is whether every bit matches ``bits_expected`` (a
+        tag index) and ``bright`` is the bright level for ``TAG_MIN_BRIGHT``.
         """
         cores = [float(np.mean(tag_pixels[bit_sample(bit, offset=offset)])) for bit in range(MARKER.bits)]
         ring = outline_px - offset  # Rows of the dark outline present in these pixels (0 for a fragment).
@@ -310,11 +319,12 @@ def locate_copies(bgr, *, diagnostics=None):
             # in some rotation, to one of the corner ids with the fragment margin.
             decodes = [code for rotation in range(4) for code in (tag_code(np.rot90(tag_image, rotation), outline_px),)
                        if code[0] >= TAG_MIN_CONTRAST and code[2] in MARKER.corner_ids]
-            if decodes:
-                details["minimum_fragment_margin"] = min(details.get("minimum_fragment_margin", 1.0),
-                                                         round(max(code[1] for code in decodes), 3))
-            if any(code[1] >= FRAGMENT_MIN_MARGIN for code in decodes):
+            margin = max((code[1] for code in decodes), default=0.0)
+            if decodes and margin >= FRAGMENT_MIN_MARGIN:
                 fragments.append(quad)
+                # The smallest margin among the squares counted as fragments (contour and positional), so a
+                # decodable square under the fragment margin, which is not a fragment, never lowers it.
+                details["minimum_fragment_margin"] = min(details.get("minimum_fragment_margin", 1.0), round(margin, 3))
         if not is_outline:
             continue
         matches, best = evaluate_outline(quad, "raster_contour")
@@ -346,6 +356,8 @@ def locate_copies(bgr, *, diagnostics=None):
                     corners = np.float32([[x, y], [x+size-1, y], [x+size-1, y+size-1], [x, y+size-1]]).reshape(4, 1, 2)
                     fragments.append(cv2.perspectiveTransform(corners, inverse)[:, 0])
                     details["positional_fragment_count"] += 1
+                    details["minimum_fragment_margin"] = min(details.get("minimum_fragment_margin", 1.0),
+                                                             round(margin, 3))
         details["best_candidates"].append(dict(pattern_metrics(best[2], best[4], best[0], quad_scale(best[1])),
             quad_native=best[1].round(3).tolist(), geometry=best[3], raw_quad_native=quad.round(3).tolist(),
             refinement_shift_px=round(refinement_shift, 3)))

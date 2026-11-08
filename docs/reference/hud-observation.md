@@ -558,10 +558,19 @@ the mirror's scale as such; the mirror's filtering added to it.
    every one of the 16 bits must equal its corner id and every margin must be
    at least 0.4 (`BIT_MIN_MARGIN`), else `code_bit_error`.
 4. *Minimum scale.* A quad whose shorter relative extent is under 0.5 of the
-   native tile (`MIN_MARKER_SCALE`, inclusive: a 160 px tile is accepted, 157
-   px is refused; under it the 4 px bit cores are under 2 px in the frame) is
-   refused as `marker_too_small`. 0.5 is the documented resolvable floor and
-   0.4 was never resolvable.
+   native tile (`MIN_MARKER_SCALE`, inclusive; under it the 4 px bit cores are
+   under 2 px in the frame) is refused as `marker_too_small`. 0.5 is the
+   documented resolvable floor and 0.4 was never resolvable. The floor is
+   measured on the quad found, so a tile drawn at exactly 0.50 (160 px) sits
+   on the edge: its edge pixels fall under the bright threshold, the raster
+   contour measures 0.492 to 0.499 at every sub-pixel phase, and the copy is
+   accepted only where the bounded corner refinement moves the corners out (7
+   of 8 phase and slope combinations in the synthetic probe; the floor for a
+   raster quad alone is about 0.503). From 0.51 (163 px) every phase and slope
+   passes from the raster contour; at 0.49 (157 px) every phase is refused. A
+   clean copy under the floor is rejected as an orphan, not as no marker: its
+   tags become positional fragments, so the run fails on the first marker
+   frame instead of running under the no-marker warm-up.
 5. *Fragments.* A bright square whose bits decode by contrast, in some
    rotation, to a corner id with margin at least 0.25 (`FRAGMENT_MIN_MARGIN`)
    is a tag fragment, as before from its own contour. New: when an outline
@@ -586,7 +595,8 @@ contour fragments). Each limit is tested at its boundary: the A4 geometry's
 own measured value moved just past the limit refuses it with the named check,
 just short of it accepts it (`tests/test_hud_marker_observer.py`,
 `test_each_limit_at_its_boundary_and_a_dim_tile`), and the scale floor at
-0.49, 0.50 and 0.51.
+0.49, 0.50 and 0.51 over four phases and two slopes (0.50 may go either way,
+by refinement, with `marker_too_small` the only check allowed to fail).
 
 **Per-frame cost and pacing.** On the x86 cloud CPU at the A4 geometry the
 decode takes about 43 ms per marker frame (median of 15; 20 ms before) and
@@ -596,7 +606,11 @@ the next read and the run drops reads, with fewer samples, instead of failing
 a check. A read whose analysis ends past the observation deadline is kept if it
 ends within `PROCESSING_GRACE_SECONDS` (1 s) of it; later than that the run is
 rejected `marker_processing_exceeded_observation_deadline`, a stall rather than
-pacing. Before this change any analysis ending past the deadline rejected the
+pacing. The grace cannot extend the run past its existing bound: the worker
+already waits up to two seconds past the deadline for the bridge's own timer to
+close it, and the client's close waits until the marker deadline plus
+`STOP_GRACE_SECONDS`, so an analysis ending one second past the deadline ends
+inside both. Before this change any analysis ending past the deadline rejected the
 run, which the slower decode would have made likelier on the final read.
 `test_slow_marker_processing_drops_reads_instead_of_failing_a_check` holds a
 500 ms analysis per read through a 10 s run.
@@ -606,7 +620,9 @@ overlap and ambiguity rejections are unchanged. The old `maximum_tag_mae` and
 `maximum_bit_mae` stay in the diagnostics (now against the matched reference,
 information only), beside `minimum_tag_contrast`, `minimum_bit_margin`,
 `decoded_corner_ids`, `minimum_tag_bright`, `marker_scale` and
-`minimum_fragment_margin`. `failed_checks` names
+`minimum_fragment_margin` (the smallest margin among the squares counted as
+fragments, contour or positional; a decodable square under the fragment margin
+is not a fragment and does not lower it). `failed_checks` names
 `whole_pattern_error`, `outline_brightness`, `marker_too_small`,
 `tag_pattern_error` and `code_bit_error`. The A4 shape (one tag's four bits
 inverted) now reports `decoded_corner_ids` `[14, 2, 3, 4]` with
@@ -619,7 +635,7 @@ pixels after rendering).** Accepted valid copies per 12:
 
 | Scale | σ 0 | σ 0.5 | σ 0.8 | σ 1.0 | σ 1.3 |
 | --- | --- | --- | --- | --- | --- |
-| 0.5 | refused under 0.50 (`marker_too_small`), accepted from 0.50: the boundary test | | | | |
+| 0.5 | the edge: refused at 0.49 at every phase (`marker_too_small`), accepted at 0.50 where refinement rescues the raster contour (7 of 8), at every phase from 0.51: the boundary test | | | | |
 | 0.6 | 12 | 12 | 1 | 0 | 0 |
 | 0.7 | 11 | 11 | 10 | 2 | 0 |
 | 0.75 | 12 | 12 | 12 | 2 | 0 |
