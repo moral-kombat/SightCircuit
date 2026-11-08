@@ -223,8 +223,11 @@ device evidence for hide-to-absence latency and loopback repeat behaviour. Its
 costs are HUD duty cycle and flicker. It is designed and costed in the
 [fallback reference](reference/hud-fallback.md) (item A11, 2026-11-07), from
 the draft in the
-[council record](history/2026-11-07-architecture-council.md#fallback-time-multiplexed-exclusion),
-and not built.
+[council record](history/2026-11-07-architecture-council.md#fallback-time-multiplexed-exclusion).
+The D2 budget was exhausted on 2026-11-08 ([E90](evidence/e090.md)) and the
+owner chose this design; it is being built as
+[lane F](live-capture.md#architecture-plan-work-order-2026-11-07)
+of the work order, after the bridge split E1.
 
 ## Milestones and acceptance checks
 
