@@ -158,7 +158,7 @@ parallel coder sessions. The acceptance order of the gates is unchanged.
 | P0 | Python 3.14 on the Frame after SteamOS 0.5.8: pin review, 3.14 pins behind markers, setup scripts accept 3.12 and 3.14 (added 2026-11-07 when the update removed Python 3.12, [E85](evidence/e085.md)) | M | none |
 | P1 | Hashed locks for the three requirement sets; add the missing `av` pin to the dev set; setup scripts use the locks | M | P0 |
 | P2 | Active command bodies move into the package with thin script wrappers and console entry points; validator references and manifest pins follow | M | P1 |
-| P3 | A bounded retry with backoff in `sightcircuit/assets.fetch` for transient network errors (timeouts, resets) on the pinned fixture downloads, with the digest check unchanged and a test; two CI re-runs on 2026-11-08 were caused by one release download timing out on the runner | S | none |
+| P3 | A bounded retry with backoff in `sightcircuit/assets.fetch` for transient network errors on the pinned fixture downloads. Done (#45, 2026-11-08): four attempts with 2, 4 and 8 s between them on timeouts, resets, incomplete reads, HTTP 429 and 5xx; a wrong digest is never retried; no partial file is left; constants and the 254 s per-asset bound pinned by `tests/test_assets.py`. Three CI re-runs that day were caused by one release download timing out on the runner | S, done | none |
 
 **Lane E, native bridge.**
 
@@ -233,8 +233,8 @@ attempt; cloud-checked only, nothing run on the Frame). Lanes B and P are
 complete. The last budgeted G3 attempt ran ([E90](evidence/e090.md)): the
 decode passed and the run rejected on marker movement; the D2 exit rule is
 reached and the owner chose the fallback ([scope](poc-scope.md#architecture-decisions-2026-11-07)).
-E1 (#38), F1 (#41), B9 (#40) and B10 (#42) merged on 2026-11-08; lane B is
-complete. Open: F2 (in progress) then F3 to F8, P3 (in progress), C5 with C6
+E1 (#38), F1 (#41), B9 (#40), B10 (#42) and P3 (#45) merged on 2026-11-08;
+lanes B and P are complete. Open: F2 (in progress) then F3 to F8, C5 with C6
 (approved, staged on the Frame, waiting for the owner's start), the Phase 2
 enforcement run (staged, owner approval), A9 deferred; A7, A8 and A10
 superseded. The Frame's built bridge predates E1 and F1 and is rebuilt only
