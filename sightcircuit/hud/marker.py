@@ -10,7 +10,7 @@ import threading
 import time
 
 from ..gates import claims
-from ..overlay import OverlayClient, bridge_closed_cleanly
+from ..overlay import OverlayClient, VisibilityRequest, bridge_closed_cleanly, visibility_packet
 from .contract import BRIDGE_READY_WAIT_SECONDS, MARKER_MAX_SECONDS, MARKER_MIN_SECONDS
 
 # The bridge's connect budget plus its margin (hud.contract); a bridge that
@@ -31,13 +31,22 @@ def new_report(validation_only=True):
 class MarkerClient(OverlayClient):
     """Reuse the bounded native JSON reader/cleanup; never create a frame writer.
 
-    Native marker mode never reads stdin, so a requested stop (``close``)
-    closes stdin and waits for the bridge's own display deadline plus
-    ``STOP_GRACE_SECONDS``. Cancellation (the ``stop`` event), a ready
+    Native marker mode reads stdin for the fallback's visibility request only
+    (F3a) and its display timer ignores end of input, so a requested stop
+    (``close``) closes stdin and waits for the bridge's own display deadline
+    plus ``STOP_GRACE_SECONDS``. Cancellation (the ``stop`` event), a ready
     timeout or an overrun escalates to SIGTERM then SIGKILL, reported as forced.
+    ``request_visibility`` (F3b) writes a hide or show request of one fallback
+    cycle straight to the bridge, and the inherited ``await_visibility``,
+    ``visibility_outcome`` and ``cycle_lines`` read its lines as for the stream
+    client. The observer and the marker command never call it.
     """
     cancel = None
     marker_deadline = None
+
+    def __init__(self, *arguments, **options):
+        super().__init__(*arguments, **options)
+        self.write_lock = threading.Lock()
 
     def check_built(self):
         """The bridge binary exists and is executable: a preparation check, before any frame is read."""
@@ -59,6 +68,8 @@ class MarkerClient(OverlayClient):
             arguments.append("--allow-calibration-output")
         self.process = subprocess.Popen(arguments, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                         env=self.env, bufsize=0)
+        if os.name == "posix":  # request_visibility's bounded write, as the stream client's writer has.
+            os.set_blocking(self.process.stdin.fileno(), False)
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
         deadline = time.monotonic() + READY_TIMEOUT_SECONDS
@@ -74,6 +85,28 @@ class MarkerClient(OverlayClient):
         # Native marker mode ignores stdin and creates its own opaque pixels.
         # In particular, no inherited OverlayClient._write thread is started.
         return self
+
+    def request_visibility(self, cycle, visible, *, settings=None):
+        """Write the show (``visible``) or hide request of fallback cycle ``cycle`` to the marker bridge.
+
+        Marker mode takes no settings packet (its placement is fixed and the
+        bridge refuses one), so ``settings`` must be None, and there is no
+        writer thread: the packet is written here, bounded as the stream
+        client's writes are, and the returned ``VisibilityRequest`` is awaited
+        with the inherited ``await_visibility``. Raises when the bridge is not
+        running or has ended.
+        """
+        if settings is not None:
+            raise ValueError("marker_visibility_takes_no_settings")
+        data = visibility_packet(cycle, visible)
+        with self.write_lock:
+            if (self.process is None or self.process.poll() is not None or self.stopping.is_set() or
+                    self.done.is_set() or self.error):
+                raise RuntimeError("marker_client_not_running")
+            request = VisibilityRequest(cycle, visible, time.monotonic_ns())
+            self._send(data)
+            self.visibility_requests += 1
+        return request
 
     def _request_stop(self):
         """Close stdin as the stop request; marker mode ignores it and keeps its timer."""

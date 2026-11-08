@@ -4,9 +4,10 @@ Use this reference when the marker-observation budget of decision D2 is
 exhausted and the project switches to the fallback input design. It is a
 design document (work order item A11, 2026-11-07). **Of the work below, only
 F1 (the bridge events), F2 (the Python client's queue and the sink's cycle
-API) and F3a (the marker mode accepting the visibility request, the bridge
-half of the F3 measurement tool), all 2026-11-08, are implemented; no device
-step is implied, and no gate changes.** File and line references are at revision `e4019a4`
+API), F3a (the marker mode accepting the visibility request) and F3b (the
+`fallback_measure` command, the tool for the F3 device measurements), all
+2026-11-08, are implemented; no device step has run, none is implied, and no
+gate changes.** File and line references are at revision `e4019a4`
 unless a paragraph says otherwise.
 
 [Architecture](../architecture.md#fallback-input-design) · [Council record](../history/2026-11-07-architecture-council.md#fallback-time-multiplexed-exclusion) · [Decisions](../poc-scope.md#architecture-decisions-2026-11-07) · [Current gates](../live-capture.md#edge-hud-acceptance-gates)
@@ -190,6 +191,32 @@ The Python half, the measurement command, is F3b. Cloud checks:
 `tests/test_hud_marker_check.py` (the marker never accepts arbitrary input as
 an image; it now names the stop).
 
+**Implemented (F3b, 2026-11-08; cloud-checked, no device run).** The
+measurement command, `sightcircuit/commands/fallback_measure.py`
+(`scripts/fallback_measure.py`, `sightcircuit-fallback-measure`; the thirteenth
+command). `MarkerClient.request_visibility` writes the opcode `5` request
+straight to the marker bridge (marker mode has no writer thread and takes no
+settings packet) and the inherited F2 `await_visibility`, `transition_outcome`
+and `cycle_lines` read its lines, so the outcome logic is the one the sink
+uses. The command verifies the checkpoint manifest first, runs the marker
+bridge under the guard's supervision (`supervise`, as the observer), reads the
+mirror on the capture thread at ten reads per second, waits up to the
+observer's 2 s warm-up for the first complete copy, then runs the cycles with
+the pacing floor of 500 ms between requests and a 2 s bound on each phase's
+mirror transition; the display timer bounds the run and a cycle starts only
+with room for both requests. The report has the four sections of the
+[device evidence table](#device-evidence-needed) and the per-cycle records,
+counts, nanoseconds and digests only. Cloud checks (`tests/test_fallback_measure.py`):
+the `--validate` run end to end through the guard against the real validation
+bridge (every hide missing, every show `no_image`, nothing read); a scripted
+fake marker bridge that confirms every transition and a fixture mirror whose
+frames follow it, giving bounds on every transition; the bookkeeping
+(`transition_bounds`, `repeat_counts`, `sections`); the report contract; the
+opt-in rules; and the manifest check refusing a dirty tree and a rebuilt
+bridge. The confirmed paths are exercised by the fake only; no runtime has
+produced an `overlay_hidden` line, and the pacing and phase bound are cloud
+choices, unmeasured on the Frame.
+
 **Implemented (F2, 2026-11-08; cloud-checked, no device run).** The Python
 side, in `sightcircuit/overlay.py`; the
 [overlay reference](overlay.md#visibility-cycle-api-fallback-item-f2-2026-11-08)
@@ -297,15 +324,33 @@ is not opened.
 
 Each is a separately approved device step; none has run. Each would be recorded
 as a numbered evidence entry with the checkpoint manifest, which now records
-the kernel, OS build and SteamVR package.
+the kernel, OS build and SteamVR package. The first four are produced by one
+run of `scripts/fallback_measure.py` (F3b; the
+[operator guide](../guides/fallback-measurement.md) has the procedure and the
+approval boundary), whose report has one section per row, named in the
+"Measured by" column: the "high-contrast test tile" of the original design is
+the calibration marker in the bridge's marker mode, the one tile the device is
+approved to show and the one pattern `locate_copies` reads from the mirror
+([E90](../evidence/e090.md) decoded a complete copy at scale 0.885), driven by
+F1's visibility opcode (accepted by the marker mode since F3a) through the F2
+request and outcome reading, while the mirror is read at the capture thread's
+ten reads per second and every read is digested whole and decoded.
 
-| Measurement | How | What it decides |
-| --- | --- | --- |
-| Hide-to-absence latency (B) | A bridge test mode toggles a high-contrast test tile on and off at known monotonic times while a reader takes the mirror at ten reads per second and digests each frame; the wearer holds still so the tile is the only change. For each hide, the first read whose digest changes after the hidden event gives one latency sample; many cycles give the distribution. B is the largest sample plus a margin | The bound; whether the overlay appears in the mirror at all (if no read ever changes, the fallback is moot and so is the mask) |
-| Hidden-event delivery | The same run records `overlay_hidden.observed_ns - hide_returned.returned_ns` per cycle and the count of cycles without an event | Whether the confirmed hide can rest on the event, and its bound |
-| Loopback repeat behaviour | Ten reads per second against a static scene and a moving scene, counting identical consecutive full-frame digests (`unchanged_sample_reads` already counts the 32 px sample: 0 of 99 in [E12](../evidence/e012.md), moving scene) | Whether windows can starve; the writer's effective rate |
-| Show-to-visible latency | `show_returned` to the wearer's report, or to the first changed read with the tile present | The duty-cycle table below |
-| Frame inference time | Item C5's `mirror_recognize` p95 | The window-to-show time |
+| Measurement | How | Measured by | What it decides |
+| --- | --- | --- | --- |
+| Hide-to-absence latency (B) | The marker is hidden and shown for N cycles at known monotonic times while the reader takes the mirror at ten reads per second; the wearer holds still so the tile is the only change. For each hide, the last read with a complete marker copy and the first without one bound the moment the tile left the mirror: the lower bound is the later of that last read and the request, the upper bound the first absent read, both relative to the request (and the upper bound also to the hidden event); many cycles give the distribution. B is the largest upper bound plus a margin, set in a reviewed step | `hide_to_absence`: per cycle `request_ns`, `returned_ns`, `event_observed_ns`, `last_present_observed_ns`, `first_absent_observed_ns`, `lower_bound_after_request_ns`, `upper_bound_after_request_ns`, `upper_bound_after_event_ns`; `maximum_upper_bound_after_request_ns`; a transition not seen within `phase_bound_ns` (2 s, a cloud choice) is counted, not inferred | The bound; whether the overlay appears in the mirror at all (`marker_not_visible_in_mirror` ends the run before any cycle: the fallback is then moot and so is the mask) |
+| Hidden-event delivery | The same run records, per cycle, the hide's terminal line and `overlay_hidden.observed_ns - hide_returned.returned_ns`, and the count of cycles without an event (`visibility_event_missing` after the 250 ms bound) | `hidden_event_delivery`: `events_delivered`, `events_missing`, `maximum_event_after_returned_ns`, per cycle `event_after_returned_ns` and `waited_ns` | Whether the confirmed hide can rest on the event, and its bound (which replaces `VISIBILITY_EVENT_BOUND_NS` and the derived F2 deadline) |
+| Loopback repeat behaviour | Ten reads per second for the whole run, each read's full-frame `blake2b` digest kept, counting identical consecutive digests and the longest run of them; the wearer holds still, so this is the static scene (`unchanged_sample_reads` already counts the 32 px sample: 0 of 99 in [E12](../evidence/e012.md), moving scene); the capture report's sample counts sit beside it | `loopback_repeats`: `reads`, `identical_consecutive_digests`, `longest_repeat_run`, `distinct_digests`, `maximum_read_gap_ns`, `observed_read_rate_hz`, and `reads_detail` (every read's `observed_ns`, digest and presence) | Whether windows can starve; the writer's effective rate |
+| Show-to-visible latency | The symmetric reading of each show: the last read without a copy and the first with one, relative to `show_requested`, `show_returned` and `overlay_shown`; the wearer's report is recorded apart | `show_to_visible`: the same bounds as the hide's with `last_absent_observed_ns` and `first_present_observed_ns`, and `shown_event_delivery` for the shown event | The duty-cycle table below |
+| Frame inference time | Item C5's `mirror_recognize` p95 | not this tool | The window-to-show time |
+
+All timestamps are one clock, the bridge's `CLOCK_MONOTONIC` and the mirror
+read's `time.monotonic_ns()` on the same host; the `timebase_id` caveat of
+[the session tokens](hud-session.md#timebase_id) applies and the run record
+states that both processes ran in one time namespace. The report carries
+counts, nanoseconds and digests, never pixels; `--validate` runs the same
+cycles against the validation marker bridge with no VR and no device, where
+every hide ends missing and every show returns `no_image`.
 
 The wearer's answers (tile visible, passthrough and tracking normal, no green
 input, [E59](../evidence/e059.md)) are recorded apart from the measurements,
