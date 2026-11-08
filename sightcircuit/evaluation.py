@@ -101,11 +101,31 @@ def load_manifest(path):
     return manifest
 
 
+def locate_image(manifest, entry, download_directory):
+    """``(path, resolution)``: the file to read and how it was chosen.
+
+    ``recorded``: the entry's ``path`` (a relative one against the manifest's
+    directory), whether or not it exists. ``beside_manifest``: the recorded path
+    does not exist but a file of the same basename in the manifest's directory
+    does, as after the directory moved with its manifest (E86); the digest check
+    still decides identity. ``download``: a ``file`` entry in the download
+    directory.
+    """
+    if "file" in entry:
+        return Path(download_directory) / entry["file"], "download"
+    location = Path(entry["path"]).expanduser()
+    if not location.is_absolute():
+        location = manifest["_directory"] / location
+    if not location.exists():
+        beside = manifest["_directory"] / location.name
+        if beside.is_file():
+            return beside, "beside_manifest"
+    return location, "recorded"
+
+
 def resolve_image(manifest, entry, download_directory):
-    if "path" in entry:
-        location = Path(entry["path"]).expanduser()
-        return location if location.is_absolute() else manifest["_directory"] / location
-    return Path(download_directory) / entry["file"]
+    """The file ``locate_image`` chooses."""
+    return locate_image(manifest, entry, download_directory)[0]
 
 
 def iou(a, b):
