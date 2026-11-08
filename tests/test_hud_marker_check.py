@@ -306,9 +306,6 @@ class MarkerNativeTests(unittest.TestCase):
         ready = events.get(timeout=3)
         self.assertTrue(ready["validation_only"])
         self.assertFalse(ready["runtime_initialized"])
-        # Arbitrary input is ignored by this mode, never accepted as an image.
-        process.stdin.write(b"not a frame or settings packet")
-        process.stdin.flush()
         report = self.final(process, events)
         self.assertEqual(report["status"], "validated_marker")
         self.assertTrue(report["cleanup_ok"])
@@ -332,6 +329,24 @@ class MarkerNativeTests(unittest.TestCase):
         self.assertFalse(report["input_frames_accepted"])
         self.assertEqual(report["frames_submitted"], 0)
         self.assertEqual(report["generated_marker_frames"], 1)
+
+    def test_native_marker_never_accepts_arbitrary_input_as_an_image(self):
+        # Since F3a marker mode reads stdin for the fallback's visibility request only; anything else ends the
+        # run through the invalid-packet path, with cleanup, before its timer, and nothing is taken as an image.
+        process, events = self.launch("--validate-calibration-marker", "--seconds", "3")
+        self.assertEqual(events.get(timeout=3)["event"], "ready")
+        process.stdin.write(b"not a frame or settings packet")
+        process.stdin.flush()
+        report = self.final(process, events)
+        self.assertEqual((report["status"], report["error"], report["exit_code"]), ("error", "invalid_packet_magic", 1))
+        self.assertLess(report["cutoff_requested_ns"], report["display_deadline_ns"])
+        self.assertTrue(report["cleanup_ok"])
+        self.assertFalse(report["input_frames_accepted"])
+        self.assertEqual((report["frames_submitted"], report["generated_marker_frames"]), (0, 1))
+        self.assertEqual(report["visibility_requests_received"], 0)
+        with self.assertRaises(ValueError):
+            marker.validate_worker_report(dict(marker.new_report(), status="completed", exit_code=0, seconds_requested=3,
+                                               bridge={"native_report": report, "validation_only": True}), 0)
 
     def test_native_signal_abort_at_twenty_second_configuration(self):
         process, events = self.launch("--validate-calibration-marker", "--seconds", "20")

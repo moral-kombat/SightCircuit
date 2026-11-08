@@ -360,14 +360,14 @@ class VisibilityLineTests(unittest.TestCase):
         self.assertTrue(all(line["waited_ns"] < VISIBILITY_EVENT_BOUND_NS for line in missing))
         self.assertEqual((messages[-1]["visibility_requests_received"], messages[-1]["visibility_events_missing"]), (4, 4))
 
-    def test_marker_mode_and_the_settings_packet_are_unchanged(self):
+    def test_the_settings_packet_is_unchanged_and_a_marker_run_without_input_counts_nothing(self):
         result = subprocess.run([str(DEFAULT_BRIDGE), "--validate-calibration-marker", "--seconds", "1"],
                                 env=self.env, capture_output=True, timeout=5)
         messages = [json.loads(line) for line in result.stdout.splitlines()]
         self.assertEqual(result.returncode, 0, messages)
         self.assertEqual([message["event"] for message in messages], ["ready", "closed"])
-        self.assertNotIn("visibility_requests_received", messages[-1])
-        self.assertNotIn("visibility_events_missing", messages[-1])
+        # F3a: marker mode counts visibility requests as the stream report does; nothing arrived here.
+        self.assertEqual((messages[-1]["visibility_requests_received"], messages[-1]["visibility_events_missing"]), (0, 0))
         self.assertIn("overlay_hidden_event_seen", messages[-1])
         # A visibility change through the settings packet is the pre-F1 path: no cycle, no lines.
         data = PanelSettings(visible=False).encode() + PanelSettings(visible=True).encode() + packet(3)
@@ -378,6 +378,155 @@ class VisibilityLineTests(unittest.TestCase):
         self.assertEqual(self.visibility_lines(messages), [])
         self.assertEqual((messages[-1]["settings_received"], messages[-1]["visibility_requests_received"],
                           messages[-1]["visibility_events_missing"]), (2, 0, 0))
+
+
+@unittest.skipUnless(DEFAULT_BRIDGE.is_file(), "Build scripts/build_overlay_bridge.sh first")
+class MarkerVisibilityLineTests(unittest.TestCase):
+    """Marker mode accepts the visibility request on stdin (fallback item F3a), on the validation bridge.
+
+    The marker's display timer stays the authority: a run that receives nothing
+    is the run the observer has always had, end of input never ends it, and
+    only the visibility request is accepted. As in ``VisibilityLineTests``, no
+    runtime means no overlay event, so every request ends in
+    ``visibility_event_missing`` and every show returns ``no_image``.
+    """
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.env = dict(os.environ, VR_PATHREG_OVERRIDE=str(Path(self.temporary.name) / "absent.vrpath"))
+
+    def run_marker(self, seconds, steps, *, close_stdin=True, after_ready=False):
+        """Run the validation marker for ``seconds``, writing each payload then waiting; returns lines, code, elapsed."""
+        process = subprocess.Popen([str(DEFAULT_BRIDGE), "--validate-calibration-marker", "--seconds", str(seconds)],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=self.env)
+        started = time.monotonic()
+        lines = []
+        try:
+            if after_ready:
+                lines.append(json.loads(process.stdout.readline()))
+            for data, wait in steps:
+                process.stdin.write(data)
+                process.stdin.flush()
+                time.sleep(wait)
+            if close_stdin:
+                process.stdin.close()
+            output = process.stdout.read()
+            process.wait(timeout=seconds + 10)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=3)
+            for stream in (process.stdin, process.stdout, process.stderr):
+                stream.close()
+        elapsed = time.monotonic() - started
+        return lines + [json.loads(line) for line in output.splitlines()], process.returncode, elapsed
+
+    @staticmethod
+    def visibility_lines(messages):
+        return [message for message in messages if message["event"] in VISIBILITY_LINES]
+
+    def test_a_run_without_input_is_the_observer_run_however_stdin_is_provided(self):
+        # The observer closes stdin as its stop request and the timer ignores it; a closed or null stdin is the same.
+        for options in ({"input": b""}, {"stdin": subprocess.DEVNULL}, {"preexec_fn": lambda: os.close(0)}):
+            with self.subTest(options=list(options)):
+                started = time.monotonic()
+                result = subprocess.run([str(DEFAULT_BRIDGE), "--validate-calibration-marker", "--seconds", "1"],
+                                        env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5,
+                                        **options)
+                elapsed = time.monotonic() - started
+                messages = [json.loads(line) for line in result.stdout.splitlines()]
+                self.assertEqual(result.returncode, 0, messages)
+                self.assertEqual([message["event"] for message in messages], ["ready", "closed"])
+                final = messages[-1]
+                self.assertGreaterEqual(elapsed, 1)  # the timer, not the input, ended the run
+                self.assertEqual((final["status"], final["seconds_requested"], final["calibration_only"]),
+                                 ("validated_marker", 1, True))
+                self.assertEqual((final["visibility_requests_received"], final["visibility_events_missing"]), (0, 0))
+                self.assertIs(final["overlay_hidden_event_seen"], False)
+                self.assertTrue(final["cleanup_ok"])
+                self.assertFalse(final["runtime_initialized"])
+
+    def test_hide_and_show_requests_write_the_stream_modes_lines_and_the_timer_still_ends_the_run(self):
+        bound_seconds = VISIBILITY_EVENT_BOUND_NS / 1e9
+        messages, code, elapsed = self.run_marker(2, [(visibility_packet(7, False), bound_seconds + 0.2),
+                                                      (visibility_packet(8, True), bound_seconds + 0.2)])
+        self.assertEqual(code, 0, messages)
+        self.assertGreaterEqual(elapsed, 2)  # closing stdin did not end the run; the display timer did
+        lines = self.visibility_lines(messages)
+        self.assertEqual([(line["event"], line["cycle"]) for line in lines],
+                         [("hide_requested", 7), ("hide_returned", 7), ("visibility_event_missing", 7),
+                          ("show_requested", 8), ("show_returned", 8), ("visibility_event_missing", 8)])
+        requested, returned, missing, show_requested, show_returned, show_missing = lines
+        # The same fields as the stream mode's lines (VisibilityLineTests), from the same reporting unit.
+        self.assertEqual(set(requested), {"event", "cycle", "request_ns", "validation_only", "report_kind", "schema_version"})
+        self.assertEqual(set(returned), {"event", "cycle", "returned_ns", "ok", "call", "validation_only", "report_kind",
+                                         "schema_version"})
+        self.assertEqual(set(missing), {"event", "cycle", "waited_ns", "validation_only", "report_kind", "schema_version"})
+        self.assertTrue(all(line["validation_only"] is True for line in lines))
+        self.assertEqual((returned["ok"], returned["call"]), (True, "none"))
+        self.assertEqual((show_returned["ok"], show_returned["call"], show_returned["reason"]), (False, "none", "no_image"))
+        self.assertLessEqual(requested["request_ns"], returned["returned_ns"])
+        self.assertLessEqual(returned["returned_ns"], show_requested["request_ns"])
+        self.assertGreaterEqual(missing["waited_ns"], VISIBILITY_EVENT_BOUND_NS)
+        self.assertGreaterEqual(show_missing["waited_ns"], VISIBILITY_EVENT_BOUND_NS)
+        self.assertEqual(messages.index(missing), messages.index(show_requested) - 1)
+        final = messages[-1]
+        self.assertEqual((final["status"], final["visibility_requests_received"], final["visibility_events_missing"]),
+                         ("validated_marker", 2, 2))
+        # The lines lie on the marker's own clock, inside its display window.
+        self.assertLessEqual(final["marker_submit_returned_ns"], requested["request_ns"])
+        self.assertLess(show_missing["waited_ns"] + show_requested["request_ns"], final["display_deadline_ns"])
+        # The rest of the marker report is the report of a run without input.
+        quiet, quiet_code, _ = self.run_marker(1, [])
+        self.assertEqual(quiet_code, 0, quiet)
+        self.assertEqual(set(final), set(quiet[-1]))
+        self.assertNotIn("frames_submitted_after_marker", final)
+
+    def test_a_request_pending_when_the_timer_ends_is_reported_missing_before_the_report(self):
+        # The request lands under the bound before the display deadline, so the timer settles it, fail closed.
+        messages, code, elapsed = self.run_marker(1, [(visibility_packet(3, False), 0)], close_stdin=False,
+                                                  after_ready=True)
+        self.assertEqual(code, 0, messages)
+        lines = self.visibility_lines(messages)
+        self.assertEqual([line["event"] for line in lines], ["hide_requested", "hide_returned", "visibility_event_missing"])
+        self.assertEqual(messages[-1]["event"], "closed")
+        self.assertEqual((messages[-1]["visibility_requests_received"], messages[-1]["visibility_events_missing"]), (1, 1))
+        self.assertLessEqual(lines[0]["request_ns"] + lines[-1]["waited_ns"], messages[-1]["cutoff_requested_ns"])
+
+    def test_only_the_visibility_request_is_accepted(self):
+        frame = packet(1, struct.pack("<II", 2, 1) + bytes(8))
+        expiring = packet(4, struct.pack("<QII", 10 ** 18, 1, 1) + bytes(4))
+        for data, error in ((PanelSettings().encode(), "marker_accepts_visibility_only"),
+                            (frame, "marker_accepts_visibility_only"), (expiring, "marker_accepts_visibility_only"),
+                            (packet(3), "marker_accepts_visibility_only"), (packet(6), "marker_accepts_visibility_only"),
+                            (b"FJO0" + visibility_packet(1, True)[4:], "invalid_packet_magic"),
+                            (packet(5, bytes(7)), "invalid_packet_size"), (packet(5, bytes(9)), "invalid_packet_size"),
+                            (packet(5, struct.pack("<II", 1, 2)), "invalid_visibility"),
+                            (visibility_packet(1, True)[:7], "truncated_packet")):
+            with self.subTest(error=error, data=data[:12]):
+                messages, code, elapsed = self.run_marker(3, [(data, 0.2)])
+                self.assertEqual(code, 1, messages)
+                self.assertLess(elapsed, 3)  # the invalid-packet path ends the run before its timer
+                final = messages[-1]
+                self.assertEqual((final["event"], final["status"], final["error"]), ("error", "error", error))
+                self.assertTrue(final["cleanup_ok"])
+                self.assertFalse(final["runtime_initialized"])
+                self.assertEqual(final["visibility_requests_received"], 0)
+
+    def test_a_request_may_arrive_in_pieces(self):
+        data = visibility_packet(4, False)
+        messages, code, _ = self.run_marker(1, [(data[:5], 0.05), (data[5:14], 0.05), (data[14:], 0.05)])
+        self.assertEqual(code, 0, messages)
+        self.assertEqual([(line["event"], line["cycle"]) for line in self.visibility_lines(messages)],
+                         [("hide_requested", 4), ("hide_returned", 4), ("visibility_event_missing", 4)])
+
+    def test_the_marker_loop_shares_the_stream_loops_request_handling(self):
+        # One decoded request path in the sensing unit, called from both loops; main writes no visibility line.
+        sensing = (ROOT / "tools/overlay_bridge_sensing.cpp").read_text()
+        self.assertEqual(sensing.count("visibility_request(payload, validate, report)"), 2)
+        self.assertEqual(sensing.count("bool Overlay::visibility_request("), 1)
+        self.assertNotIn("emit_visibility_", (ROOT / "tools/overlay_bridge.cpp").read_text())
 
 
 @unittest.skipUnless(os.name == "posix", "Fake bridge uses POSIX shebangs and signals")

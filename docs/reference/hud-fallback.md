@@ -3,9 +3,10 @@
 Use this reference when the marker-observation budget of decision D2 is
 exhausted and the project switches to the fallback input design. It is a
 design document (work order item A11, 2026-11-07). **Of the work below, only
-F1 (the bridge events) and F2 (the Python client's queue and the sink's cycle
-API), both 2026-11-08, are implemented; no device step is implied, and no gate
-changes.** File and line references are at revision `e4019a4`
+F1 (the bridge events), F2 (the Python client's queue and the sink's cycle
+API) and F3a (the marker mode accepting the visibility request, the bridge
+half of the F3 measurement tool), all 2026-11-08, are implemented; no device
+step is implied, and no gate changes.** File and line references are at revision `e4019a4`
 unless a paragraph says otherwise.
 
 [Architecture](../architecture.md#fallback-input-design) · [Council record](../history/2026-11-07-architecture-council.md#fallback-time-multiplexed-exclusion) · [Decisions](../poc-scope.md#architecture-decisions-2026-11-07) · [Current gates](../live-capture.md#edge-hud-acceptance-gates)
@@ -131,8 +132,8 @@ opcode `5` of the pipe protocol, payload `uint32 cycle, uint32 visible`
 `sightcircuit.overlay.visibility_packet(cycle, visible)` and sent by
 `OverlayClient.request_visibility` (F2). The bridge's stream modes (`--stdin`, `--validate-stdin`) write the
 seven lines above with the fields in the table, each also carrying
-`validation_only` as `frame_expired` does; the marker and test-panel modes are
-unchanged. The request line is written before `ShowOverlay`/`HideOverlay`, the
+`validation_only` as `frame_expired` does; the test-panel mode is unchanged,
+and the marker mode was until F3a (below). The request line is written before `ShowOverlay`/`HideOverlay`, the
 return line after it, naming the call made: the bridge's `visibility()` shows
 only while an image is presented and hides otherwise, so a show request with
 no image (the frame expired during the hidden window, or validation, where
@@ -163,6 +164,31 @@ path: no cycle, no lines. The stream report adds `visibility_requests_received` 
 `visibility_events_missing`. Cloud checks: `tests/test_overlay_bridge.py`
 (`VisibilityLineTests`), `tests/test_hud_contract.py` (layout, header, bound,
 packet limits, the lines named only in the reporting unit).
+
+**Implemented (F3a, 2026-11-08; cloud-checked, no device run).** The bridge
+half of the F3 measurement tool. The F3 measurements must not open a gate:
+real HUD output through the stream mode is behind `LIVE_HUD_OUTPUT`, and the
+only tile the device has been approved to show is the calibration marker
+through the bridge's marker mode, which is also the only pattern the mirror can
+be read for reliably (`locate_copies`, [E90](../evidence/e090.md)). So the
+measurements use the marker tile in marker mode, driven by F1's visibility
+opcode. The marker modes (`--calibration-marker`,
+`--validate-calibration-marker`) now accept that one packet kind on stdin,
+polled beside the display timer, and answer with the seven lines above from
+the same reporting unit through the one decoded-request path the stream loop
+uses; the marker report adds `visibility_requests_received` and
+`visibility_events_missing`, as the stream report has. Everything else is as
+before: the timer ends the run, end of input never does (the marker client
+closes stdin as its stop request), the marker image, placement, scale and
+opacity are fixed, and a run that receives nothing is the observer's run with
+two zero counters added. A frame, settings or stop packet ends the run as
+`marker_accepts_visibility_only` through the invalid-packet path; before F3a
+the marker modes ignored stdin. The rules and the error names are in the
+[overlay reference](overlay.md#marker-mode-input-fallback-item-f3a-2026-11-08).
+The Python half, the measurement command, is F3b. Cloud checks:
+`tests/test_overlay_bridge.py` (`MarkerVisibilityLineTests`),
+`tests/test_hud_marker_check.py` (the marker never accepts arbitrary input as
+an image; it now names the stop).
 
 **Implemented (F2, 2026-11-08; cloud-checked, no device run).** The Python
 side, in `sightcircuit/overlay.py`; the

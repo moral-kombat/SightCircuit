@@ -98,7 +98,7 @@ The ten- and three-second input timeouts are the bridge's own.
 | `2`: settings | five float32 values: width, distance, x, y, opacity; then uint32 visibility (0 or 1) |
 | `3`: quit | Empty |
 | `4`: expiring frame (validation-only) | uint64 absolute `CLOCK_MONOTONIC` nanosecond expiry, uint32 width/height, RGBA bytes |
-| `5`: visibility request (fallback item F1, 2026-11-08) | uint32 cycle, uint32 visible (0 or 1); stream modes answer with the timestamped lines `hide_requested`/`show_requested`, `hide_returned`/`show_returned`, `overlay_hidden`/`overlay_shown` and `visibility_event_missing`, each carrying `cycle` and `validation_only`, as [the fallback reference](hud-fallback.md#bridge-events) specifies; the return line names the call made and a request without its runtime event within `VISIBILITY_EVENT_BOUND_NS` (250 ms, a cloud default, unmeasured on the Frame), or superseded or ended first, gets one `visibility_event_missing` line. Encoded by `sightcircuit.overlay.visibility_packet`, sent and answered through the [visibility cycle API](#visibility-cycle-api-fallback-item-f2-2026-11-08) (F2) |
+| `5`: visibility request (fallback item F1, 2026-11-08) | uint32 cycle, uint32 visible (0 or 1); the stream modes and, since F3a, the [marker modes](#marker-mode-input-fallback-item-f3a-2026-11-08) answer with the timestamped lines `hide_requested`/`show_requested`, `hide_returned`/`show_returned`, `overlay_hidden`/`overlay_shown` and `visibility_event_missing`, each carrying `cycle` and `validation_only`, as [the fallback reference](hud-fallback.md#bridge-events) specifies; the return line names the call made and a request without its runtime event within `VISIBILITY_EVENT_BOUND_NS` (250 ms, a cloud default, unmeasured on the Frame), or superseded or ended first, gets one `visibility_event_missing` line. Encoded by `sightcircuit.overlay.visibility_packet`, sent and answered through the [visibility cycle API](#visibility-cycle-api-fallback-item-f2-2026-11-08) (F2) |
 
 Settings ranges match the UI: width 0.25–1.5 m, distance 0.5–3 m, offsets −1–1 m,
 opacity 0.2–1. Input rejects nonfinite values and malformed lengths. The sender
@@ -219,6 +219,55 @@ the confirmed paths, the packet order, a bridge that never writes a terminal
 line and one that ends mid-request. No runtime has produced an
 `overlay_hidden` line; the confirmed path is exercised by the fake only.
 
+## Marker mode input (fallback item F3a, 2026-11-08)
+
+The marker modes (`--calibration-marker`, `--validate-calibration-marker`)
+read stdin for one packet kind only, the visibility request (opcode `5`), so
+that the F3 device measurements can hide and show the one tile the device has
+been approved to display, the calibration marker, with F1's lines and
+counters; cloud-checked only, no device run. The rules, each pinned by
+`tests/test_overlay_bridge.py` (`MarkerVisibilityLineTests`) and
+`tests/test_hud_marker_check.py` against the validation marker:
+
+- **The display timer stays the authority.** The marker is generated,
+  submitted and sampled exactly as before; the loop then polls stdin for 10 ms
+  at a time in place of its former 10 ms sleep, beside the runtime's events
+  and the pending request's bound. A run that receives nothing has the same
+  lines (`ready`, the final report), the same timer, the same report fields and
+  the same cleanup as before F3a, plus `visibility_requests_received` and
+  `visibility_events_missing`, both `0`. The observer and the marker command
+  never write to the bridge's stdin, so their runs are these.
+- **End of input never ends the run.** The marker client closes stdin as its
+  stop request and the timer ignores it, as before; a null or closed stdin is
+  the same. Only the polling stops.
+- **Requests write the stream mode's lines.** A hide or show request writes
+  `hide_requested`/`show_requested`, `hide_returned`/`show_returned`, then the
+  event line or `visibility_event_missing` after `VISIBILITY_EVENT_BOUND_NS`,
+  with the same fields, from the same reporting unit and through the one
+  decoded-request path of the sensing unit (`Overlay::visibility_request`)
+  that the stream loop uses. In validation the return line's `call` is `none`
+  and a show returns `no_image`, as in `--validate-stdin`; in the runtime mode
+  the hide is a `HideOverlay` call on the marker and the show a `ShowOverlay`
+  call while the marker image is presented, the calls `visibility()` has
+  always made. A request still pending when the timer ends is reported
+  missing before the final report, so every request ends in exactly one
+  terminal line here too.
+- **Nothing else is accepted.** A frame, settings, stop or expiring-frame
+  packet, or any other opcode, ends the run as `marker_accepts_visibility_only`
+  through the invalid-packet path (exit code 1, the error report, the same
+  cleanup); a bad magic, a wrong payload size, a visibility value above 1 or a
+  packet cut off by end of input end it as `invalid_packet_magic`,
+  `invalid_packet_size`, `invalid_visibility` or `truncated_packet`, as the
+  stream loop names them. Before F3a the marker modes ignored stdin
+  altogether; a stray packet is now a named stop, never an image and never a
+  settings change (the marker's placement is fixed, as before).
+
+The final marker report keeps `overlay_shown_event_seen` and
+`overlay_hidden_event_seen` as the flags they were; an event with no pending
+request is still only a flag. The contract header is unchanged: no new value
+was needed. No `overlay_hidden` or `overlay_shown` line has been produced by
+any runtime; in the cloud every request ends missing.
+
 ## Source layout
 
 The bridge is one binary built from five translation units in `tools/`
@@ -235,7 +284,7 @@ mode and no-server refusal pass against the rebuilt binary unchanged.
 | `overlay_bridge_lifecycle.cpp` | lifecycle | the stop signal, arming a watchdog phase, the Background-then-Overlay connect (`Overlay::init`), error names, and `Overlay::close` |
 | `overlay_bridge_rendering.cpp` | rendering | settings decoding and bounds, `marker_settings`, the test pattern and the calibration marker, `SetOverlayRaw`, show and hide, and `--render-calibration-marker` |
 | `overlay_bridge_reporting.cpp` | reporting | `emit` (the only JSON writer), the watchdog line, the usage text, the initial, marker, connect and final report fields, and the `ready`, `frame_*` and `test_panel_submitted` lines |
-| `overlay_bridge_sensing.cpp` | sensing | `monotonic_ns` (the clock every reported timestamp reads), the stdin protocol loop with its bounded reads and expiry poll, runtime event polling, the visibility queries and the read-only headset view record |
+| `overlay_bridge_sensing.cpp` | sensing | `monotonic_ns` (the clock every reported timestamp reads), the stdin protocol loop with its bounded reads and expiry poll, the decoded visibility request shared by both loops and the marker mode's stdin poll (`MarkerInput`), runtime event polling, the visibility queries and the read-only headset view record |
 
 `overlay_lifecycle.hpp` (stdout isolation, the SIGALRM handler, the connect
 order) and `overlay_frame.hpp` (packet decoding, retirement) stay the OpenVR-free
@@ -260,4 +309,6 @@ reads the shared header and every pinned source (`tests/test_hud_contract.py`),
 and no pinned source may name `SetHeadsetView`. The fallback design's
 [bridge events](hud-fallback.md#bridge-events) (item F1) land in the reporting
 unit, with the opcode decoded in the sensing unit and the show and hide calls
-in the rendering unit.
+in the rendering unit; the marker mode's input (item F3a) reuses that decoded
+request, and `tests/test_overlay_bridge.py` pins that the two loops share it
+and that the entry point writes no visibility line.
