@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -275,6 +276,27 @@ class ManifestTests(unittest.TestCase):
             self.assertEqual(evaluation.resolve_image(manifest, local, "/downloads"), Path(folder) / "stills/room.png")
             self.assertEqual(evaluation.resolve_image(manifest, remote, "/downloads"), Path("/downloads/r.jpg"))
 
+    def test_a_recorded_path_that_no_longer_exists_falls_back_to_the_basename_beside_the_manifest(self):
+        """A manifest moved with its stills (E86: the E80 re-run manifest keeps a pre-move absolute path)."""
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / "scene-gray.png").write_bytes(b"png")
+            manifest = evaluation.load_manifest(self.write(folder, {"schema_version": 1, "images": [
+                {"id": "moved", "path": "/home/steamos/framejacker/evaluation/local/old/scene-gray.png"},
+                {"id": "relative-moved", "path": "old/scene-gray.png"},
+                {"id": "present", "path": "scene-gray.png"},
+                {"id": "gone", "path": "/home/steamos/framejacker/evaluation/local/old/other.png"},
+                {"id": "remote", "file": "r.jpg", "url": "u"}]}))
+            moved, relative, present, gone, remote = manifest["images"]
+            beside = Path(folder) / "scene-gray.png"
+            self.assertEqual(evaluation.locate_image(manifest, moved, "/downloads"), (beside, "beside_manifest"))
+            self.assertEqual(evaluation.locate_image(manifest, relative, "/downloads"), (beside, "beside_manifest"))
+            self.assertEqual(evaluation.locate_image(manifest, present, "/downloads"), (beside, "recorded"))
+            self.assertEqual(evaluation.locate_image(manifest, gone, "/downloads"),
+                             (Path("/home/steamos/framejacker/evaluation/local/old/other.png"), "recorded"))
+            self.assertEqual(evaluation.locate_image(manifest, remote, "/downloads"),
+                             (Path("/downloads/r.jpg"), "download"))
+            self.assertEqual(evaluation.resolve_image(manifest, moved, "/downloads"), beside)
+
     def test_a_label_repeated_under_any_name_is_rejected(self):
         """One check per canonical label, so per-label tables, totals and pins count the same checks."""
         repeated = (({"present": ["tvmonitor", "tv"]}, "present.*tv"), ({"absent": ["sofa", "couch"]}, "absent.*couch"),
@@ -354,7 +376,7 @@ class CommandTests(unittest.TestCase):
                 code = evaluate_detectors.main(["--manifest", str(manifest), "--report", str(report_path)])
             report = json.loads(output.getvalue())
             self.assertEqual(code, 0, report)
-            self.assertEqual(report["schema_version"], 5)
+            self.assertEqual(report["schema_version"], 6)
             self.assertTrue(report["code"]["revision"])
             self.assertIn("working_tree_dirty", report["code"])
             self.assertIn(str(manifest), report["manifest_sha256"])
@@ -376,6 +398,7 @@ class CommandTests(unittest.TestCase):
                 self.assertTrue(all(len(item["input_sha256"]) == 64 for item in result["images"]))
                 # Schema 5: the input path is the basename, so a device report carries no absolute path.
                 self.assertEqual([item["input_path"] for item in result["images"]], ["dog.jpg"])
+                self.assertEqual([item["input_path_resolution"] for item in result["images"]], ["recorded"])
                 self.assertNotIn(str(ASSETS), json.dumps(result["images"]))
                 self.assertEqual(result["totals"]["box_recall_by_label"]["dog"]["box_recall"], 1.0)
                 self.assertEqual(result["labels"]["boxes"]["dog"]["matched"], 1)
@@ -389,6 +412,35 @@ class CommandTests(unittest.TestCase):
             with redirect_stdout(io.StringIO()) as output, redirect_stderr(io.StringIO()):
                 self.assertEqual(evaluate_detectors.main(["--manifest", str(missing)]), 1)
             self.assertIn("not found", json.loads(output.getvalue())["error"])
+
+
+    def test_a_repeat_after_a_move_uses_the_still_beside_the_manifest_and_still_checks_its_digest(self):
+        """The E80 repeat (E86): the recorded absolute path is gone; the digest, not the path, proves identity."""
+        from scripts import evaluate_detectors
+
+        with tempfile.TemporaryDirectory() as folder:
+            shutil.copy(ASSETS / "dog.jpg", Path(folder) / "dog.jpg")
+            pre_move = "/home/steamos/framejacker/evaluation/local/rerun/dog.jpg"
+            manifest = Path(folder) / "manifest.json"
+            manifest.write_text(json.dumps({"schema_version": 1, "images": [
+                {"id": "dog", "path": pre_move, "sha256": assets.checksum(ASSETS / "dog.jpg"), "present": ["dog"]}]}))
+            with redirect_stdout(io.StringIO()) as output, redirect_stderr(io.StringIO()) as errors:
+                code = evaluate_detectors.main(["--manifest", str(manifest), "--detector", "mobilenet-ssd",
+                                                "--require-input-digests"])
+            report = json.loads(output.getvalue())
+            self.assertEqual(code, 0, report)
+            image = report["detectors"]["mobilenet-ssd"]["images"][0]
+            self.assertEqual((image["input_path"], image["input_path_resolution"], image["input_digest_provenance"]),
+                             ("dog.jpg", "beside_manifest", "manifest_verified"))
+            self.assertNotIn(pre_move, json.dumps(report))
+            self.assertIn("beside the manifest", errors.getvalue())
+            manifest.write_text(json.dumps({"schema_version": 1, "images": [
+                {"id": "dog", "path": pre_move, "sha256": "0" * 64, "present": ["dog"]}]}))
+            with redirect_stdout(io.StringIO()) as output, redirect_stderr(io.StringIO()):
+                code = evaluate_detectors.main(["--manifest", str(manifest), "--detector", "mobilenet-ssd",
+                                                "--require-input-digests"])
+            self.assertEqual(code, 1)
+            self.assertIn("SHA-256", json.loads(output.getvalue())["error"])
 
 
 @unittest.skipUnless(AVAILABLE, "Run scripts/setup_window.sh for OpenCV checks")

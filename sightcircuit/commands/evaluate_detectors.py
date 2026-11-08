@@ -51,10 +51,13 @@ def load_images(manifests, fetch, require_digests=False):
         for entry in manifest["images"]:
             if require_digests and not entry.get("sha256"):
                 raise ValueError(f"{entry['id']}: --require-input-digests needs an independently supplied manifest SHA-256")
-            location = evaluation.resolve_image(manifest, entry, DOWNLOADS)
+            location, resolution = evaluation.locate_image(manifest, entry, DOWNLOADS)
             if not location.is_file():
                 hint = " (run with --fetch)" if "file" in entry else ""
                 raise FileNotFoundError(f"{entry['id']}: image not found at {location}{hint}")
+            if resolution == "beside_manifest":
+                print(f"{entry['id']}: the recorded path does not exist; using {location.name} beside the manifest "
+                      "(the digest check decides identity)", file=sys.stderr)
             digest = assets.checksum(location)
             if entry.get("sha256") and digest != entry["sha256"]:
                 raise ValueError(f"{entry['id']}: image failed SHA-256 verification")
@@ -66,7 +69,8 @@ def load_images(manifests, fetch, require_digests=False):
                 "stored_dtype": str(stored.dtype), "stored_shape": list(stored.shape),
                 "stored_channels": 1 if stored.ndim == 2 else stored.shape[2],
                 "exif_orientation_policy": "IMREAD_COLOR applies supported EXIF orientation; UNCHANGED does not",
-                "crop": "full decoded image; no evaluator crop", "upstream_crop": "unknown"})
+                "crop": "full decoded image; no evaluator crop", "upstream_crop": "unknown"},
+                _input_resolution=resolution)
             images.append((str(path), entry, image, str(location), digest))
     if not images:
         raise ValueError("No images to evaluate")
@@ -154,8 +158,9 @@ def evaluate(detector, images, threshold, iou_threshold, audit=False, variant="b
                                        (bgr.shape[1] / width, bgr.shape[0] / height),
                                        iou_threshold)
         # The basename only: a device report must leave the Frame without its absolute paths; the id and
-        # the digest identify the input.
+        # the digest identify the input. The resolution says whether the recorded path was the file read.
         score.update(manifest=manifest, input_path=Path(image_path).name, input_sha256=image_sha256,
+                     input_path_resolution=entry.get("_input_resolution", "recorded"),
                      input_digest_provenance="manifest_verified" if entry.get("sha256") else "computed_only",
                      decoded_width=width, decoded_height=height, processing_width=bgr.shape[1],
                      processing_height=bgr.shape[0], inference_ms=round(result.inference_ms, 3),
@@ -251,7 +256,7 @@ def main(argv=None):
             parser.error(f"{name} must be in (0, 1]")
     if args.report and args.report.exists():
         parser.error("--report must name a new file")
-    report = {"report_kind": "detector_evaluation", "schema_version": 5, "status": "error",
+    report = {"report_kind": "detector_evaluation", "schema_version": 6, "status": "error",
               "threshold": args.threshold, "iou_threshold": args.iou,
               "confusion_iou_threshold": evaluation.CONFUSION_IOU, "detectors": {},
               "code": source_revision(),
