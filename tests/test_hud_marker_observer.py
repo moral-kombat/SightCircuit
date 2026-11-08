@@ -4,9 +4,10 @@ Session-token tests use a fake /proc root (``tests.test_mirror_session.FakeProc`
 and hand-written tracking events; no test reads the real /proc of any process.
 """
 import contextlib
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
 from dataclasses import replace
 import io
+import itertools
 import json
 import os
 from pathlib import Path
@@ -239,6 +240,190 @@ class MarkerGeometryTests(unittest.TestCase):
         self.assertEqual(len(hud_observation.locate_copies(prepared)), 1)
 
 
+def mirror_render(template, scale, slope_degrees=0.8, phase=(0.3, 0.6), blur=0.0, background=40, origin=(1255, 833)):
+    """The tile rendered into a 1920 x 1080 frame the way the A4 attempt saw it: at ``scale`` of native, with a
+    small slope and sub-pixel phase, two-times supersampled and area-filtered, then an optional Gaussian blur
+    in mirror pixels. Generated pixels; not a reconstruction of the unsaved device image."""
+    w, h = 320 * scale, 128 * scale
+    c, sn = np.cos(np.radians(slope_degrees)), np.sin(np.radians(slope_degrees))
+    corners = np.float32([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]]) @ np.float32([[c, -sn], [sn, c]]).T
+    quad = corners + np.float32([origin[0] + phase[0], origin[1] + phase[1]])
+    source = np.float32([[0, 0], [319, 0], [319, 127], [0, 127]])
+    frame = np.full((2160, 3840), float(background), np.float32)
+    doubled = quad * 2
+    x0, y0 = (np.floor(doubled.min(axis=0)).astype(int) - 4).tolist()
+    x1, y1 = (np.ceil(doubled.max(axis=0)).astype(int) + 5).tolist()
+    region = frame[y0:y1, x0:x1]  # Warping only the tile's region keeps the test fast; the pixels are the same.
+    cv2.warpPerspective(template.astype(np.float32), cv2.getPerspectiveTransform(source, doubled - np.float32([x0, y0])),
+                        (x1 - x0, y1 - y0), dst=region, flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_TRANSPARENT)
+    frame = cv2.resize(frame, (1920, 1080), interpolation=cv2.INTER_AREA)
+    if blur:
+        frame = cv2.GaussianBlur(frame, (0, 0), blur)
+    gray = np.clip(frame + .5, 0, 255).astype(np.uint8)
+    return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR), quad
+
+
+class MirrorScaleDecodeTests(unittest.TestCase):
+    """A5 (2026-11-07): the stage-two decode at the scale the mirror gives, without weaker orphan rejection."""
+
+    def test_limits_are_the_documented_constants(self):
+        self.assertEqual((hud_observation.WHOLE_PATTERN_MAX_MAE, hud_observation.OUTLINE_MIN_MEAN,
+                          hud_observation.TAG_MIN_CONTRAST, hud_observation.TAG_MIN_BRIGHT, hud_observation.BIT_MIN_MARGIN,
+                          hud_observation.FRAGMENT_MIN_MARGIN, hud_observation.MIN_MARKER_SCALE),
+                         (13, 200, 60, 200, 0.4, 0.25, 0.5))
+
+    def test_clean_copies_decode_from_scale_0_6_to_1_2_with_slope_phase_and_moderate_blur(self):
+        template = hud_observation.marker_template()
+        for scale in (.6, .75, .86, 1., 1.2):
+            for blur in (0., .5):
+                for phase, slope in (((.3, .6), .8), ((.5, .5), 3.)):
+                    with self.subTest(scale=scale, blur=blur, phase=phase, slope=slope):
+                        image, quad = mirror_render(template, scale, slope, phase, blur)
+                        details = {}
+                        copies = hud_observation.locate_copies(image, diagnostics=details)
+                        self.assertEqual(len(copies), 1, details["best_candidates"][:1])
+                        np.testing.assert_allclose(copies[0], quad, atol=3)  # Raster corners of a sloped tile.
+                        best = details["best_candidates"][0]
+                        self.assertEqual(best["decoded_corner_ids"], list(hud_observation.MARKER.corner_ids))
+                        self.assertAlmostEqual(best["marker_scale"], scale, delta=.02)
+                        self.assertGreaterEqual(best["minimum_bit_margin"], hud_observation.BIT_MIN_MARGIN)
+
+    def test_the_recorded_a4_geometry_decodes_and_its_inverted_tag_is_named(self):
+        # The A4 quad: about 276 x 113 px, scale 0.86, slope 0.8 degrees; the mirror's filtering fits sigma 0.5.
+        image, _ = mirror_render(hud_observation.marker_template(), .86, .8, (.3, .6), .5)
+        self.assertEqual(len(hud_observation.locate_copies(image)), 1)
+        image, _ = mirror_render(tag_mismatch_template(), .86, .8, (.3, .6), .5)
+        details = {}
+        with self.assertRaisesRegex(ValueError, "orphan_marker_tag_or_incomplete_copy"):
+            hud_observation.locate_copies(image, diagnostics=details)
+        best = details["best_candidates"][0]
+        self.assertEqual(best["failed_checks"], ["code_bit_error"])
+        self.assertEqual(best["decoded_corner_ids"], [14, 2, 3, 4])  # The top-left tag's four bits inverted.
+        self.assertGreaterEqual(details["positional_fragment_count"], 3)
+        self.assertGreater(details["orphan_fragment_count"], 0)
+
+    def test_every_flipped_bit_is_an_orphan_rejection_at_two_scales_and_two_blurs(self):
+        # Every one of the 16 bits, at the low and high ends of the mirror range and with and without the
+        # blur the A4 metrics suggest: the copy's other tags decode, so the rejection is the orphan path.
+        for scale in (.75, 1.1):
+            for blur in (0., .8):
+                for tag in range(4):
+                    for bit in range(4):
+                        template = hud_observation.marker_template()
+                        x0, y0 = hud_observation.TAG_ORIGINS[tag]
+                        bx, by = hud_observation.MARKER.bit_origin(bit)
+                        template[y0+by:y0+by+6, x0+bx:x0+bx+6] = 255 - template[y0+by:y0+by+6, x0+bx:x0+bx+6]
+                        image, _ = mirror_render(template, scale, .8, (.3, .6), blur)
+                        details = {}
+                        with self.subTest(scale=scale, blur=blur, tag=tag, bit=bit), \
+                                self.assertRaisesRegex(ValueError, "orphan_marker_tag_or_incomplete_copy"):
+                            hud_observation.locate_copies(image, diagnostics=details)
+                        self.assertIn("code_bit_error", details["best_candidates"][0]["failed_checks"])
+                        self.assertEqual(details["complete_copy_count"], 0)
+
+    def test_each_limit_at_its_boundary_and_a_dim_tile(self):
+        """Each stage-two limit decides at its boundary: the A4 geometry's own measured value, moved past."""
+        image, _ = mirror_render(hud_observation.marker_template(), .86, .8, (.3, .6), .5)
+        details = {}
+        self.assertEqual(len(hud_observation.locate_copies(image, diagnostics=details)), 1)
+        measured = details["best_candidates"][0]
+        cases = (("WHOLE_PATTERN_MAX_MAE", "whole_pattern_mae", -.1, "whole_pattern_error"),
+                 ("OUTLINE_MIN_MEAN", "outline_min_mean", 1, "outline_brightness"),
+                 ("TAG_MIN_CONTRAST", "minimum_tag_contrast", 1, "tag_pattern_error"),
+                 ("TAG_MIN_BRIGHT", "minimum_tag_bright", 1, "tag_pattern_error"),
+                 ("BIT_MIN_MARGIN", "minimum_bit_margin", .01, "code_bit_error"))
+        still = patch.object(cv2, "cornerSubPix", side_effect=lambda image, points, *args: points)  # No refinement.
+        for constant, metric, step, failure in cases:
+            value = measured[metric]
+            with self.subTest(constant=constant, measured=value), still:
+                with patch.object(hud_observation, constant, value + step):  # Just past the measurement: refused.
+                    rejected = {}
+                    with self.assertRaisesRegex(ValueError, "orphan_marker_tag_or_incomplete_copy"):
+                        hud_observation.locate_copies(image, diagnostics=rejected)
+                    self.assertEqual(rejected["best_candidates"][0]["failed_checks"], [failure])
+                with patch.object(hud_observation, constant, value - step):  # Just short of it: accepted.
+                    self.assertEqual(len(hud_observation.locate_copies(image)), 1)
+        # The fragment margin: a lone tag (no border, no other tag) is a fragment down to the limit, not below.
+        lone = np.full_like(hud_observation.marker_template(), hud_observation.MARKER.background_value)
+        lone[8:32, 8:32] = hud_observation.marker_template()[8:32, 8:32]
+        image, _ = mirror_render(lone, .86, .8, (.3, .6), 0.)  # Sharp: a lone 17 px square blurs out of quad shape.
+        details = {}
+        with self.assertRaisesRegex(ValueError, "orphan"):
+            hud_observation.locate_copies(image, diagnostics=details)
+        self.assertEqual(details["tag_fragment_count"], 1)
+        margin = details["minimum_fragment_margin"]  # The one counted fragment's margin: the field reports only those.
+        self.assertGreaterEqual(margin, hud_observation.FRAGMENT_MIN_MARGIN)
+        with patch.object(hud_observation, "FRAGMENT_MIN_MARGIN", margin + .01):
+            details = {}
+            self.assertEqual(hud_observation.locate_copies(image, diagnostics=details), [])  # No fragment, no copy.
+            self.assertEqual(details["tag_fragment_count"], 0)
+            self.assertNotIn("minimum_fragment_margin", details)  # A decodable square under the margin is not reported.
+        with patch.object(hud_observation, "FRAGMENT_MIN_MARGIN", margin - .01), self.assertRaisesRegex(ValueError, "orphan"):
+            hud_observation.locate_copies(image)
+        # The scale floor, 0.5 inclusive, measured on the quad found. Over four phases and two slopes: 0.49 (157 px)
+        # is refused at every phase, as an orphan with marker_too_small the only failed check; 0.51 (163 px) is
+        # accepted at every phase from the raster contour alone; 0.50 (160 px) is the edge, where the raster contour
+        # measures just under (its edge pixels fall under the bright threshold) and only the bounded refinement
+        # decides, so either outcome is allowed there and marker_too_small is the only check that may fail.
+        phases = tuple(itertools.product(((0., 0.), (.3, .6), (.5, .5), (.8, .2)), (0., .8)))
+        for scale, accepted in ((.49, False), (.5, None), (.51, True)):
+            for phase, slope in phases:
+                image, _ = mirror_render(hud_observation.marker_template(), scale, slope, phase, 0.)
+                details = {}
+                with self.subTest(scale=scale, phase=phase, slope=slope), (still if accepted else nullcontext()):
+                    try:
+                        copies = hud_observation.locate_copies(image, diagnostics=details)
+                    except ValueError as error:
+                        self.assertNotEqual(accepted, True)
+                        self.assertEqual(str(error), "orphan_marker_tag_or_incomplete_copy")  # Not no_complete_marker.
+                        self.assertEqual(details["best_candidates"][0]["failed_checks"], ["marker_too_small"])
+                        self.assertGreaterEqual(details["positional_fragment_count"], 3)
+                    else:
+                        self.assertNotEqual(accepted, False)
+                        self.assertEqual(len(copies), 1)
+                    self.assertAlmostEqual(details["best_candidates"][0]["marker_scale"], scale, delta=.011)
+        # A dim tile: correct border and bit pattern, but the tags' bright level at 120 instead of 255.
+        dim = hud_observation.marker_template().copy()
+        for x, y in hud_observation.TAG_ORIGINS:
+            tag = dim[y:y+24, x:x+24]
+            tag[tag == 255] = 120
+        image, _ = mirror_render(dim, .86, .8, (.3, .6), .5)
+        details = {}
+        with self.assertRaises(ValueError):
+            hud_observation.locate_copies(image, diagnostics=details)
+        best = details["best_candidates"][0]
+        self.assertIn("tag_pattern_error", best["failed_checks"])
+        self.assertLess(best["minimum_tag_bright"], hud_observation.TAG_MIN_BRIGHT)
+        self.assertEqual(best["decoded_corner_ids"], list(hud_observation.MARKER.corner_ids))  # The pattern was right.
+
+    def test_partial_copy_is_an_orphan_at_the_mirror_scale_and_a_small_copy_is_refused(self):
+        partial = hud_observation.marker_template().copy()
+        partial[:40, :40] = 40  # The top-left tag and its border corner are gone: three tags remain.
+        for scale, blur in ((.75, 0.), (.86, 0.), (.86, .5), (1., .5), (1.1, .8)):
+            with self.subTest(scale=scale, blur=blur):
+                image, _ = mirror_render(partial, scale, .8, (.3, .6), blur)
+                with self.assertRaisesRegex(ValueError, "orphan_marker_tag_or_incomplete_copy"):
+                    hud_observation.locate_copies(image)
+        # A copy whose outline is intact but whose tag region is blank fails its tags and is an orphan through
+        # the positional fragments of its three decodable tags, even with the contour fragments blurred away.
+        blanked = hud_observation.marker_template().copy()
+        blanked[8:32, 8:32] = 32
+        image, _ = mirror_render(blanked, .86, .8, (.3, .6), .8)
+        details = {}
+        with self.assertRaisesRegex(ValueError, "orphan_marker_tag_or_incomplete_copy"):
+            hud_observation.locate_copies(image, diagnostics=details)
+        # Three from the border outline; the tile's inner rectangle is a second outline candidate and may add one.
+        self.assertGreaterEqual(details["positional_fragment_count"], 3)
+        self.assertGreaterEqual(details["minimum_fragment_margin"], hud_observation.FRAGMENT_MIN_MARGIN)  # Counted ones.
+        self.assertIn("tag_pattern_error", details["best_candidates"][0]["failed_checks"])
+        # Below the scale floor a clean copy is refused by its size, whatever its bits decode to.
+        image, _ = mirror_render(hud_observation.marker_template(), .4, 0., (0., 0.), 0.)
+        details = {}
+        with self.assertRaises(ValueError):
+            hud_observation.locate_copies(image, diagnostics=details)
+        self.assertIn("marker_too_small", details["best_candidates"][0]["failed_checks"])
+
+
 class FakeClock:
     now = 0
     def tick(self, seconds):
@@ -278,11 +463,12 @@ class MarkerDiagnosticTests(unittest.TestCase):
     def test_excessive_corner_adjustment_and_each_corrupted_bit_remain_rejected(self):
         source = np.float32([[0, 0], [319, 0], [319, 127], [0, 127]])
         target = np.float32([[1309, 731], [1582, 683], [1601, 791], [1329, 839]]) + .5
+        # The sub-pixel perspective copy now decodes from its raster quad alone (A5): no refinement is needed.
         gray = cv2.warpPerspective(hud_observation.marker_template(), cv2.getPerspectiveTransform(source, target),
                                    (1920, 1080), borderValue=90)
-        with patch.object(cv2, "cornerSubPix", side_effect=lambda image, points, *args: points+100), \
-                self.assertRaisesRegex(ValueError, "orphan"):
-            hud_observation.locate_copies(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR))
+        details = {}
+        self.assertEqual(len(hud_observation.locate_copies(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR), diagnostics=details)), 1)
+        self.assertEqual(details["best_candidates"][0]["geometry"], "raster_contour")
         for tag in range(4):
             for bit in range(4):
                 with self.subTest(tag=tag, bit=bit):
@@ -292,15 +478,36 @@ class MarkerDiagnosticTests(unittest.TestCase):
                     template[y:y+6, x:x+6] = 255-template[y:y+6, x:x+6]
                     gray = cv2.warpPerspective(template, cv2.getPerspectiveTransform(source, target),
                                                (1920, 1080), borderValue=90)
+                    details = {}
                     with self.assertRaises(ValueError):
-                        hud_observation.locate_copies(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR))
+                        hud_observation.locate_copies(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR), diagnostics=details)
+                    best = details["best_candidates"][0]
+                    self.assertIn("code_bit_error", best["failed_checks"])
+                    # The decoded ids name the corrupted tag: its id differs by exactly the flipped bit.
+                    expected = list(hud_observation.MARKER.corner_ids)
+                    expected[tag] ^= 1 << bit
+                    self.assertEqual(best["decoded_corner_ids"], expected)
+                    # The copy's three intact tags are fragments at their positions, so it is an orphan rejection.
+                    self.assertGreaterEqual(details["positional_fragment_count"], 3)
+        # A failed candidate is refined only within the bound: a refinement that moves a corner too far is
+        # refused, and the raster quad's own evaluation stands.
+        template = hud_observation.marker_template()
+        template[8+4:8+10, 8+4:8+10] = 255 - template[8+4:8+10, 8+4:8+10]
+        gray = cv2.warpPerspective(template, cv2.getPerspectiveTransform(source, target), (1920, 1080), borderValue=90)
+        details = {}
+        with patch.object(cv2, "cornerSubPix", side_effect=lambda image, points, *args: points+100), \
+                self.assertRaisesRegex(ValueError, "orphan"):
+            hud_observation.locate_copies(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR), diagnostics=details)
+        best = details["best_candidates"][0]
+        self.assertEqual((best["geometry"], best["refinement_shift_px"]), ("raster_contour", 0.0))
 
     def test_same_orphan_error_has_distinct_photometric_resolution_and_outline_evidence(self):
         # A marker on a white block (a white frame is now refused as saturated; see below).
+        # A5 (2026-11-07): the stage-two checks decode by contrast, so a clean 0.4-scale copy decodes but is
+        # refused for its size, and a tag on a white block fails the pattern, border and code checks.
         cases = (("grey", 1, .4545, {"whole_pattern_error"}),
-                 ("grey", .4, 1, {"outline_brightness", "tag_pattern_error", "code_bit_error"}),
-                 ("white_block", 1, 1, {"whole_pattern_error", "outline_brightness", "tag_pattern_error",
-                                        "code_bit_error"}))
+                 ("grey", .4, 1, {"marker_too_small"}),
+                 ("white_block", 1, 1, {"whole_pattern_error", "outline_brightness", "code_bit_error"}))
         for surround, scale, gamma, failed in cases:
             with self.subTest(surround=surround, scale=scale, gamma=gamma):
                 template = np.round(255*(hud_observation.marker_template().astype(np.float32)/255)**gamma).astype(np.uint8)
@@ -452,7 +659,7 @@ class ObserverFixture:
     def run_fixture(self, *, seconds=1, cancel_at=None, bad_format=False, slow=False, close_failure=False,
                     bridge_change=None, baseline_slow=False, incomplete_marker=False, baseline_mode=None,
                     session=None, clock=None, log=None, on_read=None, on_marker=None, frame=None,
-                    bridge_missing=False):
+                    bridge_missing=False, slow_seconds=2):
         """One ``observe`` run on generated frames; ``session`` is passed only when given.
 
         ``log`` records "backend" when the fixture backend is constructed and "frame"
@@ -528,7 +735,7 @@ class ObserverFixture:
         def locate(image, **kwargs):
             result = original(image, **kwargs)
             if (slow and state["marker"]) or (baseline_slow and not state["marker"]):
-                clock.tick(2)
+                clock.tick(slow_seconds)
             return result
         options = {} if session is None else {"session": session}
         with patch.object(observer.time, "monotonic", clock.monotonic), \
@@ -778,6 +985,18 @@ class ObserverLifecycleTests(ObserverFixture, unittest.TestCase):
         self.assertEqual(report["reason"], "orphan_marker_tag_or_incomplete_copy")
         self.assertNotIn("warmup_frames_without_marker", report)
         self.assertEqual(report["marker_warmup_seconds"], observer.MARKER_WARMUP_SECONDS)
+
+    def test_slow_marker_processing_drops_reads_instead_of_failing_a_check(self):
+        """A5: the decode costs more per frame; under the 5 per second pacing a slow read delays the next read.
+        Only a read that ends past the observation deadline fails (``marker_processing_exceeded``)."""
+        quick, _, _ = self.run_fixture(seconds=10)
+        slow, state, _ = self.run_fixture(seconds=10, slow=True, slow_seconds=.5)  # 500 ms per marker read.
+        self.assertEqual((slow["status"], slow["exit_code"]), ("observed_unqualified", 2), slow.get("reason"))
+        self.assertGreaterEqual(slow["sample_count"], 3)
+        self.assertLess(slow["capture"]["frames_read"], quick["capture"]["frames_read"])
+        self.assertGreaterEqual(slow["capture"]["maximum_read_gap_ms"], 500)
+        self.assertLessEqual(slow["capture"]["observed_read_rate_hz"], 5)
+        observer.validate_worker_report(slow, 2)
 
     def test_cancel_format_change_and_processing_overrun_remain_unqualified(self):
         for options, status in ((dict(cancel_at=.4), "cancelled"), (dict(bad_format=True), "rejected"),
@@ -1397,7 +1616,7 @@ class V4ShapedRejectionNativeTests(unittest.TestCase):
         self.assertEqual(details["sequence"], 3)
         self.assertEqual(details["complete_copy_count"], 0)
         self.assertGreater(details["orphan_fragment_count"], 0)
-        self.assertTrue(any({"tag_pattern_error", "code_bit_error"} <= set(candidate["failed_checks"])
+        self.assertTrue(any({"code_bit_error"} <= set(candidate["failed_checks"])
                             for candidate in details["best_candidates"]), details)
         self.assertEqual(report["sample_count"], 0)
         # The rejection requests a stop; the bridge ends on its own timer, unforced.

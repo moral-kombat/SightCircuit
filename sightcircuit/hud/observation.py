@@ -41,6 +41,29 @@ MAX_COPIES = 4
 MAX_DIAGNOSTIC_CANDIDATES = 4
 MAX_DIAGNOSTIC_FRAGMENTS = 16
 MAX_CORNER_REFINEMENT_PX = 2
+# Stage-two limits of the matcher (docs/reference/hud-observation.md, "Stage-two decode at the mirror's
+# scale"). The whole pattern is compared with the template passed through the same quad transform; each
+# tag's bits are decoded by contrast inside the tag, and every bit must match its corner id with a margin.
+# Each limit is derived from the synthetic sweep of 2026-11-07: fixed-edge-hud-v1 rendered at the A4 quad,
+# scales 0.75 to 1.1, blur sigma 0 to 0.8 mirror pixels, four sub-pixel phases by three slopes (216 renders,
+# all accepted); the worst value observed is quoted with the margin kept to it. The Frame's filtering is
+# unmeasured; the recorded A4 metrics fit about sigma 0.5.
+WHOLE_PATTERN_MAX_MAE = 13   # Worst observed 9.8 (kept 3.2 under); a gamma-mapped tile reads about 50.
+OUTLINE_MIN_MEAN = 200       # Brightest border row per side; worst observed 206.7, a translucent tile reads 172.
+TAG_MIN_CONTRAST = 60        # Bright minus dark level inside a tag; worst observed 131, a tag on a white block 118.
+TAG_MIN_BRIGHT = 200         # The tag's bright level itself; worst observed 221; the bridge draws 255.
+BIT_MIN_MARGIN = 0.4         # Each core's distance from the midpoint over half the contrast; worst observed 0.51.
+FRAGMENT_MIN_MARGIN = 0.25   # The same for a fragment's bits; worst observed 0.59 on partial copies' tags.
+MIN_MARKER_SCALE = 0.5       # The quad's shorter relative extent, inclusive: under 160 px wide the 4 px bit cores
+#                              are under 2 px in the frame. 0.5 is the documented resolvable floor and 0.4 was never
+#                              resolvable. The floor is measured on the quad found, so a tile drawn at exactly 0.50
+#                              (160 px) is at the edge: its edge pixels fall under the bright threshold and the raster
+#                              contour measures 0.492 to 0.499, accepted only where the bounded corner refinement moves
+#                              the corners out (7 of 8 phase and slope combinations in the synthetic probe). From 0.51
+#                              (163 px) every phase passes from the raster contour alone; 0.49 (157 px) is refused at
+#                              every phase, as an orphan: a clean copy under the floor fails ``marker_too_small``, its
+#                              tags become positional fragments, and the run rejects on the first marker frame instead
+#                              of running under the no-marker warm-up.
 TAG_ORIGINS = tuple(MARKER.tag_origin(tag) for tag in range(len(MARKER.corner_ids)))
 # Why a worker report's ``session_tokens`` holds no session report.
 SESSION_TOKENS_NOT_REQUESTED = "session_tokens_not_requested"  # No session: the default observer run.
@@ -135,7 +158,7 @@ def locate_copies(bgr, *, diagnostics=None):
     details.update(schema_version=1, scope="Unqualified pattern candidates, not HUD or eye identities",
                    coordinate_space="native_capture_pixels", status="analyzing", scan_complete=False,
                    contour_count=0, quad_count=0, eligible_outline_count=0, refined_outline_count=0,
-                   complete_copy_count=0, tag_fragment_count=0, orphan_fragment_count=0,
+                   complete_copy_count=0, tag_fragment_count=0, positional_fragment_count=0, orphan_fragment_count=0,
                    best_candidates=[], fragment_quads_native=[], complete_copy_corners_native=[])
 
     def reject(reason):
@@ -186,22 +209,87 @@ def locate_copies(bgr, *, diagnostics=None):
     size, outline_px = MARKER.tag_size_px, MARKER.tag_outline_px
     inner = size - 2 * outline_px  # The bright square inside a tag's outline.
     target = np.float32([[0, 0], [width-1, 0], [width-1, height-1], [0, height-1]])
-    tags = [template[y+outline_px:y+size-outline_px, x+outline_px:x+size-outline_px] for x, y in TAG_ORIGINS]
 
-    def pattern_metrics(warped, whole_error):
-        outline = float(min(warped[:3].mean(), warped[-3:].mean(), warped[:, :3].mean(), warped[:, -3:].mean()))
-        tag_error = float(max(np.mean(np.abs(warped[y:y+size, x:x+size] - template[y:y+size, x:x+size]))
+    def reference_through(ordered):
+        """The template as this quad would show it: drawn onto the quad at the frame's resolution over the
+        observed surround, then warped back exactly as the observed pixels are. Thin features (the 2 px tag
+        outline, the 4 px bit cores) then carry the same resampling as the observation, so the metrics
+        measure pattern differences, not the mirror's scale or sub-pixel phase (A5, 2026-11-07)."""
+        x0, y0 = (np.floor(ordered.min(axis=0)).astype(int) - 2).tolist()
+        x1, y1 = (np.ceil(ordered.max(axis=0)).astype(int) + 3).tolist()
+        x0, y0, x1, y1 = max(x0, 0), max(y0, 0), min(x1, gray.shape[1]), min(y1, gray.shape[0])
+        local = ordered - np.float32([x0, y0])
+        canvas = gray[y0:y1, x0:x1].astype(np.float32).copy()
+        cv2.warpPerspective(template, cv2.getPerspectiveTransform(target, local), (x1 - x0, y1 - y0),
+                            dst=canvas, flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_TRANSPARENT)
+        return cv2.warpPerspective(canvas, cv2.getPerspectiveTransform(local, target), (width, height))
+
+    def tag_code(tag_pixels, offset, bits_expected=None):
+        """Decode one tag's bits by contrast inside the tag itself (A5, 2026-11-07).
+
+        ``tag_pixels`` is the tag at template resolution (a full tag with its
+        outline when ``offset`` is 0, or the bright inner square of a fragment
+        when ``offset`` is the outline width). The bright level is the larger
+        of the fill band around the bits and the brightest bit core; the dark
+        level the smaller of the outline ring (full tags) and the darkest core.
+        Every corner id leaves at least one bit set and two clear, so both
+        levels are present in a real tag. A bit is set when its core mean lies
+        above the midpoint, and its margin is that distance over half the
+        contrast. Returns ``(contrast, minimum_margin, decoded_id, correct,
+        bright)``; ``correct`` is whether every bit matches ``bits_expected`` (a
+        tag index) and ``bright`` is the bright level for ``TAG_MIN_BRIGHT``.
+        """
+        cores = [float(np.mean(tag_pixels[bit_sample(bit, offset=offset)])) for bit in range(MARKER.bits)]
+        ring = outline_px - offset  # Rows of the dark outline present in these pixels (0 for a fragment).
+        inner_edge = MARKER.bit_offset_px - offset
+        fill = float(np.mean(np.concatenate([
+            tag_pixels[ring:inner_edge].ravel(), tag_pixels[-inner_edge:-ring or None].ravel(),
+            tag_pixels[:, ring:inner_edge].ravel(), tag_pixels[:, -inner_edge:-ring or None].ravel()])))
+        bright = max(fill, max(cores))
+        dark = min(cores)
+        if ring:
+            outline_ring = np.concatenate([tag_pixels[:ring].ravel(), tag_pixels[-ring:].ravel(),
+                                           tag_pixels[:, :ring].ravel(), tag_pixels[:, -ring:].ravel()])
+            dark = min(dark, float(np.mean(outline_ring)))
+        contrast = bright - dark
+        midpoint = (bright + dark) / 2
+        decoded = sum(1 << bit for bit, core in enumerate(cores) if core > midpoint)
+        margin = min(abs(core - midpoint) / (contrast / 2) for core in cores) if contrast > 0 else 0.0
+        correct = bits_expected is None or decoded == MARKER.corner_ids[bits_expected]
+        return contrast, margin, decoded, correct, bright
+
+    def quad_scale(ordered):
+        """The quad's size against the native tile: the shorter of its mean width and mean height ratios."""
+        # An edge runs between corner pixel centres, so its pixel extent is one more than its length.
+        edges = [float(np.linalg.norm(ordered[(index + 1) % 4] - ordered[index])) + 1 for index in range(4)]
+        return min((edges[0] + edges[2]) / (2 * width), (edges[1] + edges[3]) / (2 * height))
+
+    def pattern_metrics(warped, reference, whole_error, scale):
+        border = MARKER.border_px
+        outline = float(min(max(warped[row].mean() for row in range(border)),
+                            max(warped[-1 - row].mean() for row in range(border)),
+                            max(warped[:, row].mean() for row in range(border)),
+                            max(warped[:, -1 - row].mean() for row in range(border))))
+        tag_error = float(max(np.mean(np.abs(warped[y:y+size, x:x+size] - reference[y:y+size, x:x+size]))
                               for x, y in TAG_ORIGINS))
         bit_error = float(max(np.mean(np.abs(warped[y:y+size, x:x+size][bit_sample(bit)] -
-                                             template[y:y+size, x:x+size][bit_sample(bit)]))
+                                             reference[y:y+size, x:x+size][bit_sample(bit)]))
                               for x, y in TAG_ORIGINS for bit in range(MARKER.bits)))
-        failures = (["whole_pattern_error"] if whole_error > 13 else [])
-        failures += ["outline_brightness"] if outline < 210 else []
-        failures += ["tag_pattern_error"] if tag_error > 45 else []
-        failures += ["code_bit_error"] if bit_error > 30 else []
+        codes = [tag_code(warped[y:y+size, x:x+size], 0, tag) for tag, (x, y) in enumerate(TAG_ORIGINS)]
+        contrast = min(code[0] for code in codes)
+        margin = min(code[1] for code in codes)
+        bright = min(code[4] for code in codes)
+        failures = (["whole_pattern_error"] if whole_error > WHOLE_PATTERN_MAX_MAE else [])
+        failures += ["outline_brightness"] if outline < OUTLINE_MIN_MEAN else []
+        failures += ["marker_too_small"] if scale < MIN_MARKER_SCALE else []
+        failures += ["tag_pattern_error"] if contrast < TAG_MIN_CONTRAST or bright < TAG_MIN_BRIGHT else []
+        failures += ["code_bit_error"] if not all(code[3] for code in codes) or margin < BIT_MIN_MARGIN else []
         return {"whole_pattern_mae": round(whole_error, 3), "outline_min_mean": round(outline, 3),
+                "marker_scale": round(scale, 3),
                 "maximum_tag_mae": round(tag_error, 3), "maximum_bit_mae": round(bit_error, 3),
-                "failed_checks": failures}
+                "minimum_tag_contrast": round(contrast, 3), "minimum_tag_bright": round(bright, 3),
+                "minimum_bit_margin": round(margin, 3),
+                "decoded_corner_ids": [code[2] for code in codes], "failed_checks": failures}
 
     def evaluate_outline(quad, geometry):
         matches, best = [], None
@@ -210,10 +298,11 @@ def locate_copies(bgr, *, diagnostics=None):
                 ordered = np.roll(order, shift, axis=0).copy()
                 warped = cv2.warpPerspective(gray, cv2.getPerspectiveTransform(ordered, target),
                                              (width, height)).astype(np.float32)
-                whole_error = float(np.mean(np.abs(warped - template)))
+                reference = reference_through(ordered)
+                whole_error = float(np.mean(np.abs(warped - reference)))
                 if best is None or whole_error < best[0]:
-                    best = (whole_error, ordered, warped, geometry)
-                if whole_error <= 13 and not pattern_metrics(warped, whole_error)["failed_checks"]:
+                    best = (whole_error, ordered, warped, geometry, reference)
+                if not pattern_metrics(warped, reference, whole_error, quad_scale(ordered))["failed_checks"]:
                     matches.append(ordered)
         return matches, best
 
@@ -224,15 +313,18 @@ def locate_copies(bgr, *, diagnostics=None):
         if min(edges) >= 6 and max(edges) / min(edges) < 2.5:
             tag_image = cv2.warpPerspective(gray, cv2.getPerspectiveTransform(quad,
                 np.float32([[0, 0], [inner-1, 0], [inner-1, inner-1], [0, inner-1]])), (inner, inner)).astype(np.float32)
-            # Orphan detection is deliberately more conservative than complete
-            # copy acceptance: aliased tag borders must not conceal a partial
-            # second copy. Still require each bit, not just an average score.
-            if any(np.mean(np.abs(rotated - tag)) < 50 and all(
-                       np.mean(np.abs(rotated[bit_sample(bit, offset=outline_px)] -
-                                      tag[bit_sample(bit, offset=outline_px)])) < 80
-                       for bit in range(MARKER.bits))
-                   for rotation in range(4) for rotated in (np.rot90(tag_image, rotation),) for tag in tags):
+            # Orphan detection is deliberately more permissive than complete copy
+            # acceptance: a partial second copy must not hide behind resampling.
+            # A fragment is any bright square whose bits decode, by contrast and
+            # in some rotation, to one of the corner ids with the fragment margin.
+            decodes = [code for rotation in range(4) for code in (tag_code(np.rot90(tag_image, rotation), outline_px),)
+                       if code[0] >= TAG_MIN_CONTRAST and code[2] in MARKER.corner_ids]
+            margin = max((code[1] for code in decodes), default=0.0)
+            if decodes and margin >= FRAGMENT_MIN_MARGIN:
                 fragments.append(quad)
+                # The smallest margin among the squares counted as fragments (contour and positional), so a
+                # decodable square under the fragment margin, which is not a fragment, never lowers it.
+                details["minimum_fragment_margin"] = min(details.get("minimum_fragment_margin", 1.0), round(margin, 3))
         if not is_outline:
             continue
         matches, best = evaluate_outline(quad, "raster_contour")
@@ -253,7 +345,20 @@ def locate_copies(bgr, *, diagnostics=None):
                 if refined_matches or refined_best[0] < best[0]:
                     best, refinement_shift = refined_best, shift
                 matches = refined_matches
-        details["best_candidates"].append(dict(pattern_metrics(best[2], best[0]),
+        if not matches:
+            # A failed outline whose tags still decode is a partial or unaccepted copy: its decodable tags are
+            # fragments at their template positions, so a copy that lost a tag, or failed a check, is rejected
+            # as an orphan even where the tags' own contours no longer form quads (A5, 2026-11-07).
+            inverse = cv2.getPerspectiveTransform(target, best[1])
+            for tag, (x, y) in enumerate(TAG_ORIGINS):
+                contrast, margin, decoded, _, _ = tag_code(best[2][y:y+size, x:x+size], 0)
+                if contrast >= TAG_MIN_CONTRAST and margin >= FRAGMENT_MIN_MARGIN and decoded in MARKER.corner_ids:
+                    corners = np.float32([[x, y], [x+size-1, y], [x+size-1, y+size-1], [x, y+size-1]]).reshape(4, 1, 2)
+                    fragments.append(cv2.perspectiveTransform(corners, inverse)[:, 0])
+                    details["positional_fragment_count"] += 1
+                    details["minimum_fragment_margin"] = min(details.get("minimum_fragment_margin", 1.0),
+                                                             round(margin, 3))
+        details["best_candidates"].append(dict(pattern_metrics(best[2], best[4], best[0], quad_scale(best[1])),
             quad_native=best[1].round(3).tolist(), geometry=best[3], raw_quad_native=quad.round(3).tolist(),
             refinement_shift_px=round(refinement_shift, 3)))
         details["best_candidates"].sort(key=lambda candidate: candidate["whole_pattern_mae"])

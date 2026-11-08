@@ -216,10 +216,14 @@ totals, and if they were 1920 × 1080 reads like every recorded mirror read,
 all three E83 reads would pass the O3 speck and contour limits. No bright
 fraction or quad count was recorded for them, so whether they pass saturation
 and the quad and outline budgets is unknown. Passing the precondition does not
-mean the marker will be found. Bright structure touching a copy often defeats
-it: at every scale for a surround, half-plane, corner block or line, and up to
-scale 1.5 for a bar on its edge. So the background around the HUD should stay
-dark. Before the attempt, a person can run `--analyze-still`
+mean the marker will be found. The A4 attempt of 2026-11-07 did show the tile
+in the mirror at scale 0.86, and its tags then failed the old pixel-error
+checks; the stage-two decode now reads the bits by contrast and accepts clean
+copies from scale 0.6 to 1.2 synthetically
+([decode at the mirror's scale](reference/hud-observation.md#stage-two-decode-at-the-mirrors-scale-a5-2026-11-07)).
+Bright structure touching a copy still defeats it: at every scale for a
+surround, half-plane, corner block or line, and up to scale 1.5 for a bar on
+its edge. So the background around the HUD should stay dark. Before the attempt, a person can run `--analyze-still`
 on a native still of the planned view
 ([procedure](guides/hud-checkpoint.md#measure-the-observers-scene-precondition-on-saved-stills)).
 That reads only the file and predicts the precondition's outcome on that view.
