@@ -3,8 +3,9 @@
 Use this reference when the marker-observation budget of decision D2 is
 exhausted and the project switches to the fallback input design. It is a
 design document (work order item A11, 2026-11-07). **Of the work below, only
-F1 (the bridge events, 2026-11-08) is implemented; no device step is implied,
-and no gate changes.** File and line references are at revision `e4019a4`
+F1 (the bridge events) and F2 (the Python client's queue and the sink's cycle
+API), both 2026-11-08, are implemented; no device step is implied, and no gate
+changes.** File and line references are at revision `e4019a4`
 unless a paragraph says otherwise.
 
 [Architecture](../architecture.md#fallback-input-design) · [Council record](../history/2026-11-07-architecture-council.md#fallback-time-multiplexed-exclusion) · [Decisions](../poc-scope.md#architecture-decisions-2026-11-07) · [Current gates](../live-capture.md#edge-hud-acceptance-gates)
@@ -117,7 +118,8 @@ so the visibility request becomes its own opcode with a cycle number, added
 to `sightcircuit/hud/contract.py` and generated into the header by
 `scripts/hud_contract_header.py --write`; the bridge is rebuilt and the
 packet tests extended. `OverlayClient._read` (`overlay.py:126-159`) gains an
-event queue the fallback stage consumes; today it keeps only the last expiry.
+event queue the fallback stage consumes (F2, below); before it the client kept
+only the last expiry.
 Whether the Frame's runtime delivers `VREvent_OverlayHidden` to the overlay's
 own client, and how soon, is unverified; the design fails closed on a missing
 event.
@@ -126,8 +128,8 @@ event.
 opcode `5` of the pipe protocol, payload `uint32 cycle, uint32 visible`
 (`VISIBILITY_FIELDS`, `OPCODE_VISIBILITY` in `sightcircuit/hud/contract.py`,
 `kVisibility*` and `kOpcodeVisibility` in the regenerated header), encoded by
-`sightcircuit.overlay.visibility_packet(cycle, visible)`; no client sends it
-yet (F2). The bridge's stream modes (`--stdin`, `--validate-stdin`) write the
+`sightcircuit.overlay.visibility_packet(cycle, visible)` and sent by
+`OverlayClient.request_visibility` (F2). The bridge's stream modes (`--stdin`, `--validate-stdin`) write the
 seven lines above with the fields in the table, each also carrying
 `validation_only` as `frame_expired` does; the marker and test-panel modes are
 unchanged. The request line is written before `ShowOverlay`/`HideOverlay`, the
@@ -158,10 +160,65 @@ line precedes the new request's lines), is reported missing once, so every
 request ends in exactly one terminal line; for a hide that means no window
 this cycle. Visibility changes through the settings packet remain the pre-F1
 path: no cycle, no lines. The stream report adds `visibility_requests_received` and
-`visibility_events_missing`. `OverlayClient` still keeps only the last expiry;
-the event queue is F2. Cloud checks: `tests/test_overlay_bridge.py`
+`visibility_events_missing`. Cloud checks: `tests/test_overlay_bridge.py`
 (`VisibilityLineTests`), `tests/test_hud_contract.py` (layout, header, bound,
 packet limits, the lines named only in the reporting unit).
+
+**Implemented (F2, 2026-11-08; cloud-checked, no device run).** The Python
+side, in `sightcircuit/overlay.py`; the
+[overlay reference](overlay.md#visibility-cycle-api-fallback-item-f2-2026-11-08)
+has the call table. `OverlayClient` keeps every visibility line the bridge
+writes, by cycle and in arrival order (`cycle_lines`), with the names taken
+from `VISIBILITY_LINES` (`VISIBILITY_HIDE_LINES`, `VISIBILITY_SHOW_LINES`,
+`VISIBILITY_MISSING_LINE` in the contract); the newest 1,024 cycles are kept
+and dropped cycles counted. `request_visibility(cycle, visible)` queues the
+opcode `5` request for the writer thread and `await_visibility(request)`
+blocks on its terminal line; `transition_outcome` reads a cycle's lines into a
+`VisibilityOutcome` that is `confirmed` only when `overlay_hidden` (or
+`overlay_shown`) followed the request's own requested and returned-ok lines,
+and whose `reason` otherwise names the failure: the returned line's `reason`,
+`visibility_event_missing`, `visibility_deadline`, or the bridge ending. A
+hide's lines end at the first show line and a show's begin at
+`show_requested`, so a missing line is the request's whose lines it falls
+among, as the bridge orders them. The sink's cycle: `OverlaySink.hide(cycle)`
+sends the hide and blocks for its outcome, `sink.cycle.hidden_ns` is the
+confirmed `observed_ns` for the admission window (`None`: no window), and
+`OverlaySink.show(cycle, closes_ns)` sends the show only once `closes_ns` has
+passed and blocks likewise, so the bridge's `request_ns` is at or after it on
+the same clock; cycle numbers increase, a cycle's show must be requested
+before the next hide, and `closes_ns` may lie at most `MAX_DISPLAY_AGE_NS`
+ahead. Blocking was chosen over callbacks: the fallback stage (F5) is a
+sequential state machine on the pipeline's own thread that needs the confirmed
+time before it opens the window, the client's reader thread already fills the
+queue, and a bounded wait on a condition is the smallest correct consumer;
+`visibility_outcome` reads a cycle without blocking. The deadline on a
+terminal line is `VISIBILITY_TERMINAL_DEADLINE_NS` = 320 ms from the moment
+the request is queued: the bridge's 250 ms bound, plus its 20 ms input poll
+(the missing line is written on the first poll at or after the bound), plus a
+50 ms margin for the pipe write, the decode, the line's write, the `readline`
+and the wake-up; pinned by `tests/test_visibility_cycle.py`, **unmeasured on
+the Frame**, and rebuilt with the bound from the hidden-event delivery
+measurement (F3). The deadline passing, the bridge ending, a missing line or
+a returned line with `ok` false is a failed cycle the caller sees as such,
+never an exception; only a confirmed hide has a window. Two couplings follow
+from the bridge's existing behaviour: it applies every settings packet as a
+show or hide call (`configure()` ends in `visibility()`) and the client
+heartbeats the settings every second, so each cycle request also changes the
+settings' visibility and a writer iteration that carries a cycle request sends
+the pending frame, then the cycle requests, then the settings (one without a
+request keeps the settings-then-frame order), so that the request's call is
+the transition the runtime's event answers and the heartbeat repeats the
+cycle's state instead of undoing it; and `OverlaySink.submit` leaves the panel down while a cycle is
+hidden, so the tile submitted during the window is presented by the show. The
+settings-packet visibility path, the marker client and the bridge are
+unchanged. Cloud checks: `tests/test_visibility_cycle.py`: the pure reading
+of lines, the deadline derivation against the sensing unit's poll, the real
+validation bridge (every hide ends missing and every show returns `no_image`,
+the fail-closed paths; the heartbeat keeps a cycle's hide; the show waits for
+`closes_ns`), and a scripted fake bridge for the confirmed paths
+(`overlay_hidden`, `overlay_shown`), the packet order, a bridge that never
+writes a terminal line and one that ends mid-request. No runtime has produced
+an `overlay_hidden` line; the confirmed path is exercised by the fake only.
 
 ### Admission window
 
