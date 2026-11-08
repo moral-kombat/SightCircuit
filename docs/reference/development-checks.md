@@ -27,7 +27,7 @@ model.
 | `artifacts/smoke/readiness.json` | Current passing validation report | No |
 | `artifacts/smoke/detection-window.png` | Rendered detection result | No |
 | `artifacts/smoke/sample.avi` | Generated repeated-image MJPEG video | No |
-| `scripts/smoke-assets.json` | Immutable fixture URLs and SHA-256 checksums | Yes |
+| `scripts/smoke-assets.json` | Immutable fixture URLs and SHA-256 checksums; downloads retry transient network errors four times with a 2, 4, 8 s backoff and never retry a wrong digest ([development](../development.md#prerequisites)) | Yes |
 
 Set `UV_CACHE_DIR` or `XDG_CACHE_HOME` before setup to reuse another writable
 package/font cache. The fixture directory stays repository-local. The downloader

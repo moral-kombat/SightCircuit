@@ -28,6 +28,13 @@ fixtures also need a C++17 compiler; the paused capture-reference builds link
 First setup downloads pinned Python packages and checksum-verified fixtures
 from PyPI, GitHub releases, and `raw.githubusercontent.com`. No API key is needed.
 Keep failed checksum results for investigation instead of changing the expected hash.
+A fixture download that fails with a transient network error (a timeout, a
+reset or incomplete connection, an HTTP 429 or 5xx answer) is retried: four
+attempts in all, with 2, 4 and 8 seconds between them, each retry announced
+on the error stream with the asset, its URL and the error class
+(`sightcircuit/assets.py`, work-order item P3). A wrong SHA-256 is never
+retried, a 4xx answer other than 429 is final, and no partial file is left in
+the asset directory; `tests/test_assets.py` pins the counts and each path.
 
 ## Choose an environment
 
