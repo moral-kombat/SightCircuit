@@ -118,6 +118,26 @@ class StillSetTests(unittest.TestCase):
             stills.save()
         self.assertEqual(json.loads(self.manifest.read_text())["images"][0], entry, "a refused save writes nothing")
 
+    def test_a_pinned_entry_is_not_rewritten_without_its_capture_report(self):
+        """A rewrite through the helper pins from the report alone, so without one the pin would be lost."""
+        image = self.root / "room-a.png"
+        image.write_bytes(b"x")
+        pinned = {"id": "room-a", "path": "room-a.png", "present": ["chair"], "absent": [],
+                  "sha256": hashlib.sha256(b"x").hexdigest(),
+                  "capture": {"detector": "yolox-nano", "source": "mirror:observed", "sequence": 7}}
+        self.manifest.write_text(json.dumps({"schema_version": 1, "images": [pinned]}))
+        stills = annotate_boxes.StillSet(self.root, self.manifest)
+        self.assertTrue(stills.current["pinned"])
+        stills.add_box("chair", 0, 0, 10, 10)
+        with self.assertRaisesRegex(ValueError, "pinned.*room-a.json"):
+            stills.save()
+        self.assertEqual(json.loads(self.manifest.read_text())["images"], [pinned], "nothing written")
+        (self.root / "room-a.json").write_text(json.dumps(still_report(image, 400, 300)))
+        self.assertTrue(stills.save())
+        entry = json.loads(self.manifest.read_text())["images"][0]
+        self.assertEqual((entry["sha256"], entry["capture"]["sequence"], entry["objects"]),
+                         (pinned["sha256"], 7, [{"label": "chair", "box_xyxy": [0, 0, 10, 10]}]))
+
     def test_the_command_refuses_a_missing_or_empty_directory_without_a_window(self):
         for directory in (self.root / "missing", self.root):
             with self.subTest(directory=directory.name), redirect_stdout(io.StringIO()) as output:
@@ -146,7 +166,8 @@ class WindowTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.manifest = self.root / "frame.json"
         for name, (width, height), colour in (("room-a.png", (400, 300), (200, 80, 20)),
-                                               ("room-b.png", (640, 360), (40, 80, 120))):
+                                               ("room-b.png", (640, 360), (40, 80, 120)),
+                                               ("room-c.png", (2000, 1500), (90, 140, 60))):  # Downscaled on screen.
             image = self.QtGui.QImage(width, height, self.QtGui.QImage.Format.Format_RGB888)
             image.fill(self.QtGui.QColor(*colour))
             self.assertTrue(image.save(str(self.root / name)))
@@ -180,7 +201,7 @@ class WindowTests(unittest.TestCase):
         Key = self.QtCore.Qt.Key
         canvas = self.window.canvas
         self.assertEqual((canvas.image.width(), canvas.image.height()), (400, 300))
-        self.assertIn("1/2 room-a.png", self.window.status.text())
+        self.assertIn("1/3 room-a.png", self.window.status.text())
         self.drag(50, 60, 250, 200)
         self.drag(30, 30, 30, 30)  # A click is not a box.
         self.drag(390, 290, 460, 340)  # Beyond the still: clamped to its edge.
@@ -202,21 +223,35 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(entry["path"], "room-a.png")
         self.assertEqual(entry["sha256"], hashlib.sha256((self.root / "room-a.png").read_bytes()).hexdigest())
         self.assertNotIn("boxes_complete", entry)
-        self.assertIn("2/2 room-b.png", self.window.status.text())
+        self.assertIn("2/3 room-b.png", self.window.status.text())
         self.assertEqual((canvas.image.width(), canvas.image.height()), (640, 360))
         self.assertEqual(self.window.absent_edit.text(), "couch")
         self.assertFalse(self.window.complete_box.isChecked())
         self.window.label_box.setCurrentText("chair")
         self.drag(100, 100, 500, 350)
         self.window.complete_box.setChecked(True)
-        self.window.next_button.click()  # The last still: saved, still shown.
-        self.assertIn("last still", self.window.status.text())
-        self.assertEqual(self.stills.index, 1)
+        self.window.next_button.click()
         entries = json.loads(self.manifest.read_text())["images"]
         self.assertEqual([entry["id"] for entry in entries], ["room-b", "room-a"], "replaced in place, then appended")
         self.assertEqual(entries[0], {"id": "room-b", "path": "room-b.png", "present": ["chair"], "absent": ["couch"],
                                       "objects": [{"label": "chair", "box_xyxy": [100, 100, 500, 350]}],
                                       "boxes_complete": True})
+        # The 2000 × 1500 still is shown smaller than life: a widget pixel is more than one source pixel.
+        self.assertIn("3/3 room-c.png", self.window.status.text())
+        scale, left, top = canvas.placement()
+        self.assertLess(scale, 1)
+        start, end = canvas.to_widget(400, 300).toPoint(), canvas.to_widget(1600, 1200).toPoint()
+        expected = [round(value) for point in (start, end) for value in canvas.to_source(point)]
+        self.drag(400, 300, 1600, 1200)
+        box = self.stills.current["boxes"][0]["box_xyxy"]
+        self.assertEqual(box, [expected[0], expected[1], expected[2], expected[3]])
+        for value, intended in zip(box, (400, 300, 1600, 1200)):
+            self.assertLessEqual(abs(value - intended), round(0.5 / scale) + 1, (box, scale))
+        self.window.next_button.click()  # The last still: saved, still shown.
+        self.assertIn("last still", self.window.status.text())
+        self.assertEqual(self.stills.index, 2)
+        self.assertEqual(self.entries()["room-c"]["objects"], [{"label": "chair", "box_xyxy": box}])
+        self.QTest.keyClick(canvas, Key.Key_Left)
         self.QTest.keyClick(canvas, Key.Key_Left)
         self.assertEqual(self.stills.index, 0)
         self.assertEqual([obj["box_xyxy"] for obj in self.stills.current["boxes"]], [[50, 60, 250, 200]])

@@ -209,8 +209,9 @@ its `present` and `absent` labels; boxed labels join `present`, and a label
 that is both boxed and listed absent is refused before anything is written.
 When the still's capture report (`<stem>.json`, saved beside it by the
 procedure above) exists, the entry is pinned by the report's SHA-256 exactly as
-`--still-report` does, and a box outside the recorded still size is refused.
-Stills are read and never written; the window writes the manifest and nothing
+`--still-report` does, and a box outside the recorded still size is refused;
+an entry that is already pinned is refused when that report is missing, so a
+rewrite never drops a pin. Stills are read and never written; the window writes the manifest and nothing
 else, lists only the stills directly in the directory (an `invalid-*/` folder
 is not entered), and prints a JSON summary of the entries it wrote. The
 stills, their reports and `frame.json` stay in ignored `evaluation/local/` on

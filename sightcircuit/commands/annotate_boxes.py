@@ -133,7 +133,9 @@ class StillSet:
         """Write the current still's entry if it changed; True when a write happened.
 
         ``present`` keeps the loaded labels and gains each boxed label it lacks. A boxed
-        label that is also listed absent is a contradiction and is refused before writing.
+        label that is also listed absent is a contradiction and is refused before writing,
+        as is a pinned entry whose capture report is no longer beside the still (the
+        replacement would lose the SHA-256 pin that ``--require-input-digests`` needs).
         """
         state = self.current
         if not self.changed(state):
@@ -156,6 +158,9 @@ class StillSet:
                 raise ValueError(f"Still report {report_path.name} could not be read: {error}") from None
             if not isinstance(report, dict):
                 raise ValueError(f"Still report {report_path.name} must be a JSON object")
+        elif state["pinned"]:  # Replacing the entry without its report would silently drop the digest pin.
+            raise ValueError(f"{self.path.stem} is pinned by a capture report, but {self.path.stem}.json is not "
+                             "beside the still; restore the report before boxing it")
         add_image(self.manifest, self.path.stem, self.path, present, state["absent"], report,
                   state["boxes"], state["boxes_complete"], replace=True)
         state.update(present=present, pinned=report is not None, in_manifest=True)
@@ -312,6 +317,7 @@ def create_window(stills, default_label="chair"):
             parts = [f"{self.stills.index + 1}/{len(self.stills.stills)} {self.stills.path.name}", size,
                      f"{len(state['boxes'])} box{'es' if len(state['boxes']) != 1 else ''}",
                      "capture report beside it" if self.stills.report_path() else "no capture report",
+                     *(["entry pinned"] if state["pinned"] else []),
                      "unsaved" if self.stills.changed() else (
                          "in manifest" if state["in_manifest"] else "not in manifest")]
             if self.error:
