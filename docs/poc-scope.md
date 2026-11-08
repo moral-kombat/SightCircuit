@@ -153,6 +153,7 @@ Coordinator's calls made under these decisions, after the council:
 | Active entry points | The eight named commands plus `mirror_check` and `frame_session_manifest` (ten at P2); `annotate_boxes` joined with C3b (#30, 2026-11-08), so eleven; `agent_enforcement_check` with B10 (2026-11-08), so twelve. |
 | Attempt budget counting | An attempt counts against the D2 budget when the observer judged the scene: a rejection at the scene precondition counts, and anything after the marker tile appears counts. A stop caused by connectivity or preparation does not count whatever its position in the run: a missing bridge build, a failed manifest verification, headset not connected, the connect watchdog, the marker ready timeout, or a vrserver session stop. Refined on 2026-11-07 after the A3 review (finding F1). |
 | Race fixed | Fifty consecutive green runs of the cancellation test under CPU stress on the cloud runner, then one green ARM64 run on main. |
+| Fallback measurements (F3) | Made with the calibration marker in the bridge's marker mode, extended to accept the visibility opcode (F3a), and read from the mirror with the marker decoder; no stream-mode HUD output and no gate change. The design's "high-contrast test tile" is the marker, the one tile the device is approved to show (2026-11-08). |
 
 ## Upstream reuse plan (2026-10-31)
 
