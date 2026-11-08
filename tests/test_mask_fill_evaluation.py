@@ -305,6 +305,27 @@ class BoundaryTests(unittest.TestCase):
             fills.seed_comparison(detector, [({"id": "x", "present": [], "absent": []}, image)], ("ring_mean",))
         self.assertGreater(detector.calls, 0)
 
+    def test_a_moved_seed_manifest_reads_the_still_beside_it_and_says_so(self):
+        """The detector evaluator's path fallback (C8) is announced and reported here as well, never silent."""
+        with tempfile.TemporaryDirectory() as folder:
+            still = Path(folder) / "scene.png"
+            self.assertTrue(cv2.imwrite(str(still), scene(240, 320, 5)))
+            manifest = Path(folder) / "manifest.json"
+            manifest.write_text(json.dumps({"schema_version": 1, "images": [
+                {"id": "moved", "path": "/home/steamos/framejacker/evaluation/local/old/scene.png"},
+                {"id": "here", "path": "scene.png"}]}))
+            messages = []
+            images = fills.load_seed_images(manifest, Path(folder) / "downloads", log=messages.append)
+            self.assertEqual([entry["_input_resolution"] for entry, _ in images], ["beside_manifest", "recorded"])
+            self.assertEqual(len(messages), 1)
+            self.assertIn("moved: the recorded path does not exist; using scene.png beside the manifest", messages[0])
+            result = fills.seed_comparison(BlackBoxDetector(), images, ("zero",))
+            self.assertEqual(result["input_path_resolution"], {"moved": "beside_manifest", "here": "recorded"})
+            manifest.write_text(json.dumps({"schema_version": 1, "images": [
+                {"id": "gone", "path": "/home/steamos/framejacker/evaluation/local/old/other.png"}]}))
+            with self.assertRaises(FileNotFoundError):
+                fills.load_seed_images(manifest, Path(folder) / "downloads", log=messages.append)
+
     def test_seed_pin_counts_separate_the_raw_output_from_what_the_runtime_keeps(self):
         """A present object boxed over the lower-right corner is a raw hit everywhere, kept only off the mask."""
         detector = CornerDetector()
