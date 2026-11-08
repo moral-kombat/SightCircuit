@@ -20,4 +20,5 @@ COMMANDS = (
     "generate_status",
     "mirror_check",
     "frame_session_manifest",
+    "annotate_boxes",
 )
