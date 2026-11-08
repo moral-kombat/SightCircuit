@@ -178,9 +178,9 @@ that run.
 | --- | --- | --- | --- |
 | F1 | Bridge visibility opcode with a cycle number and the timestamped visibility lines (`hide_requested`, `hide_returned`, `overlay_hidden`, the show counterparts, `visibility_event_missing`); header regeneration, rebuild, packet and source-text tests. Done (#41, 2026-11-08): the returned line names the OpenVR call made, every request ends in exactly one terminal line, the 250 ms bound is a cloud default pinned by a test and unmeasured on the Frame; no `overlay_hidden` line has ever been produced (no runtime in the cloud) | M, done | E1 |
 | F2 | `OverlayClient` event queue and a cycle API on the sink. Done (#48, 2026-11-08): every visibility line kept by cycle, a pure outcome reading confirmed only by the runtime's event, a derived 320 ms deadline (cloud default, unmeasured on the Frame), `OverlaySink.hide` and `show` failing closed; no runtime event has ever been produced | S, done | F1 |
-| F3a | The marker bridge mode accepts the visibility opcode while the marker is displayed and writes the seven lines, so the measurements use the one tile the device is approved to show and the one pattern the mirror can be read for (the coordinator's call, 2026-11-08; the observer's runs unchanged) | S | F1 |
-| F3b | `fallback_measure`, the thirteenth command: the marker bridge in that mode driven for N bounded cycles through the F2 API while the mirror is read at full rate and `locate_copies` tells presence from absence; one report with a section per measurement (hide-to-absence bounds, hidden-event delivery, loopback repeats by full-frame digest, show-to-visible), counts and nanoseconds only; validate mode, opt-in flags and the checkpoint manifest as the observer has them | M | F3a, F2 |
-| F3 | The device measurements themselves: hide-to-absence latency, hidden-event delivery, loopback repeats, show-to-visible; one run can give the four evidence entries | S, device | F3b, a bridge rebuild, approval |
+| F3a | The marker bridge mode accepts the visibility opcode while the marker is displayed and writes the seven lines, so the measurements use the one tile the device is approved to show and the one pattern the mirror can be read for (the coordinator's call, 2026-11-08). Done (#50): a run that receives nothing is the observer's run, measured identical; only the visibility request is accepted on stdin; the bridge must be rebuilt on the Frame before any run that uses it | S, done | F1 |
+| F3b | `fallback_measure`, the thirteenth command: the marker bridge in that mode driven for N bounded cycles through the F2 API while the mirror is read at full rate and `locate_copies` tells presence from absence; one report with a section per measurement, counts and nanoseconds only; validate mode, opt-in flags and the checkpoint manifest as the observer has them. Done (#51): margins taken from the bridge's own display deadline, a cycle starts only with room for both requests, a capture failure ends the cycling; [guide](guides/fallback-measurement.md) | M, done | F3a, F2 |
+| F3 | The device measurements themselves: hide-to-absence latency, hidden-event delivery, loopback repeats, show-to-visible; one `fallback_measure` run of 20 s and five cycles can give the four evidence entries (E93 to E96 reserved). Staged by the Frame manager; needs the owner's approval, which covers the bridge rebuild from the F3a sources and a new checkpoint manifest | S, device | F3b, approval |
 | F4 | Capture window and admission rule in the pipeline, with rejection counters and boundary tests | M | F3 |
 | F5 | The fallback stage: hide, window, infer, show on `_run_latest`; tile rendering without a mask; run reports | M | F2, F4 |
 | F6 | Acceptance rows and gate references for the fallback, a reviewed edit to scope, this work order and `sightcircuit/gates.py` | S | planner and owner |
@@ -235,12 +235,12 @@ attempt; cloud-checked only, nothing run on the Frame). Lanes B and P are
 complete. The last budgeted G3 attempt ran ([E90](evidence/e090.md)): the
 decode passed and the run rejected on marker movement; the D2 exit rule is
 reached and the owner chose the fallback ([scope](poc-scope.md#architecture-decisions-2026-11-07)).
-E1 (#38), F1 (#41), F2 (#48), B9 (#40), B10 (#42) and P3 (#45) merged on
-2026-11-08; lanes B and P are complete. Open: F3a and F3b (in progress, one
-coder), then F3 (device, approval, the first bridge rebuild since E1), F4 to
-F8, C5 with C6 (approved, staged on the Frame, waiting for the owner's start),
-the Phase 2 enforcement run (staged, owner approval), A9 deferred; A7, A8 and
-A10 superseded. The Frame's built bridge predates E1 and F1 and is rebuilt only
+E1 (#38), F1 (#41), F2 (#48), F3a (#50), F3b (#51), B9 (#40), B10 (#42) and
+P3 (#45) merged on 2026-11-08; lanes B and P are complete and lane F's cloud
+work up to the device measurements is done. Open, all waiting on the owner: F3
+(device, approval, with the first bridge rebuild since E1), C5 with C6
+(approved, staged, waiting for the owner's start), the Phase 2 enforcement run
+(staged, approval). After F3: F4 to F8. A9 deferred; A7, A8 and A10 superseded. The Frame's built bridge predates E1 and F1 and is rebuilt only
 when a device step needs it (F3), under that step's approval. The council's
 hypothesis for the cancellation race was wrong; the recorded cause is the
 readiness probe firing on the worker before it had exec'd
@@ -262,8 +262,9 @@ handler on the main thread ([checks reference](reference/development-checks.md#h
   ([E86](evidence/e086.md), [guide](guides/agent-enforcement-test.md)).
 - Decided 2026-11-08: the fallback (D2 as written; [scope](poc-scope.md#architecture-decisions-2026-11-07)),
   C5 with C6 approved (staged by the Frame manager, E91 reserved), the Phase 2
-  test scheduled. Next device approvals, each separate: the F3 measurements
-  (after F1), the Phase 2 enforcement run (after B10).
+  test scheduled. Next device approvals, each separate: the F3 measurement
+  run (staged, with the bridge rebuild), the Phase 2 enforcement run (staged),
+  and the owner's start of the C5/C6 sitting.
 - The Frame rebooted into SteamOS 0.5.8 ([E85](evidence/e085.md)); a Frame
   manager session exists and the "Frame update check" scheduled task was
   rebound to it on 2026-11-07, with the old task left disabled as a record.
