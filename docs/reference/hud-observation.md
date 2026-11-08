@@ -427,7 +427,8 @@ rejection, and the statistics name the same one:
    at least 32 px, longest at least 80 px, the matcher's own test). This is
    checked before any quad is warped.
 
-The matcher after these checks is unchanged.
+The matcher after these checks was unchanged by O3; item A5 changed its
+stage-two decode ([below](#stage-two-decode-at-the-mirrors-scale-a5-2026-11-07)).
 
 | Constant | Value | Derivation |
 | --- | --- | --- |
@@ -499,6 +500,149 @@ Every synthetic noise frame still rejects:
 
 Each limit is tested at its boundary on both sides.
 
+<a id="stage-two-decode-at-the-mirrors-scale-a5-2026-11-07"></a>
+
+## Stage-two decode at the mirror's scale (A5, 2026-11-07)
+
+**Recorded device result (relayed by the planner from the Frame report of the
+A4 attempt on 2026-11-07, checkout `6f44260`; E89 is being recorded).** The
+marker tile appeared in the SteamVR mirror for the first time. The scene
+precondition passed (1,859 contours, 5 quads). The observer matched the whole
+pattern on the first marker frame (`whole_pattern_mae` 7.4) and then rejected
+it `orphan_marker_tag_or_incomplete_copy`: `tag_pattern_error` and
+`code_bit_error` failed (`maximum_tag_mae` 53.8, `maximum_bit_mae` 42.0), the
+two left-hand tags were found as orphan fragments of 16 to 17 px and the
+right-hand tags were not found. The tile's quad was about (1255, 833),
+(1530, 837), (1531, 948), (1255, 946): 276 × 113 px for the 320 × 128 native
+tile, scale 0.86, tags about 16 px, with a slope of about 0.8°. No image was
+saved, by design. This is the same shape as V4 ([E75](../evidence/e075.md)).
+
+**Why the tags did not decode when the whole pattern did.** The stage-two
+checks compared the quad, warped back to the native 320 × 128 tile, with the
+crisp template pixel by pixel: the mean absolute error over each 24 × 24 tag
+had to stay under 45 and over each bit's 4 × 4 core under 30. Those regions are
+thin features, a 2 px outline and 6 px bits, and any resampling of the tile
+(a scale other than 1, a slope, a sub-pixel phase) smears them in the warped
+image while the template stays sharp. The whole-pattern error averages over a
+tile that is mostly flat, so it stays small. Reproduced synthetically from the
+recorded geometry (`fixed-edge-hud-v1` rendered into a 1920 × 1080 frame at
+the recorded quad, two-times supersampled and area-filtered, grey background):
+at scale 0.86 with the 0.8° slope and no blur the tag error was already 59
+(whole 6.2), with three 16 px fragments; at scale 1.0 with the same slope it
+was 68. A texture blur of 0.5 px plus a screen blur of 0.4 to 0.6 px gave
+whole 7.3, tag 64 and bit 33 to 43, close to the recorded 7.4, 53.8 and 42.
+So the failure was the metric's sensitivity to resampling at any scale, not
+the mirror's scale as such; the mirror's filtering added to it.
+
+**The change (decode only; the marker and the HUD footprint are unchanged).**
+`locate_copies` in `sightcircuit/hud/observation.py` now decodes this way:
+
+1. *Whole pattern.* The warped quad is compared with the template passed
+   through the same quad transform (drawn onto the quad at the frame's
+   resolution over the observed surround, then warped back), so resampling
+   cancels; the limit stays 13 (`WHOLE_PATTERN_MAX_MAE`).
+2. *Border.* On each side, the brightest of the border's four rows must
+   average at least 200 (`OUTLINE_MIN_MEAN`), the row a raster offset, a
+   slope or a moderate blur leaves cleanest. A translucent marker, every row
+   dim, reads 172 and fails.
+3. *Code bits by contrast.* Each tag's bits are decoded inside the tag itself:
+   the bright level is the larger of the fill band around the bits and the
+   brightest bit core, the dark level the smaller of the outline ring and the
+   darkest core (every corner id leaves at least one bit set and two clear).
+   A bit is set when its core mean is above the midpoint, its margin is the
+   distance from the midpoint over half the contrast. The tag's contrast must
+   be at least 60 (`TAG_MIN_CONTRAST`, else `tag_pattern_error`), every one
+   of the 16 bits must equal its corner id and every margin must be at least
+   0.4 (`BIT_MIN_MARGIN`, else `code_bit_error`).
+4. *Minimum scale.* A quad whose shorter relative edge is under 0.45 of the
+   native tile (`MIN_MARKER_SCALE`: a tile under 144 px wide, bit cores under
+   1.8 px) is refused as `marker_too_small`. The documented resolvable range
+   began at 0.5 and 0.4 was never resolvable; the floor sits between.
+5. *Fragments.* A bright square whose bits decode by contrast, in some
+   rotation, to a corner id with margin at least 0.25 (`FRAGMENT_MIN_MARGIN`)
+   is a tag fragment, as before from its own contour. New: when an outline
+   candidate fails, its tags that still decode are fragments at their template
+   positions (`positional_fragment_count`), so a copy that lost a tag or failed
+   a check is rejected as an orphan even where the tags' contours no longer
+   form quads. Fragments inside an accepted copy are not orphans, as before.
+
+The orientation search, the corner refinement bound, the copy budget and the
+overlap and ambiguity rejections are unchanged. The old `maximum_tag_mae` and
+`maximum_bit_mae` stay in the diagnostics (now against the matched reference,
+information only), beside `minimum_tag_contrast`, `minimum_bit_margin`,
+`decoded_corner_ids` and `marker_scale`. `failed_checks` names
+`whole_pattern_error`, `outline_brightness`, `marker_too_small`,
+`tag_pattern_error` and `code_bit_error`. The A4 shape (one tag's four bits
+inverted) now reports `decoded_corner_ids` `[14, 2, 3, 4]` with
+`code_bit_error` and three positional fragments.
+
+**Cloud results (synthetic, `fixed-edge-hud-v1` at the recorded quad position,
+grey background 40, two-times supersampled; 12 renders per cell: four
+sub-pixel phases by slopes 0°, 0.8° and 3°; blur is a Gaussian σ in mirror
+pixels after rendering).** Accepted valid copies per 12:
+
+| Scale | σ 0 | σ 0.5 | σ 0.8 | σ 1.0 | σ 1.3 |
+| --- | --- | --- | --- | --- | --- |
+| 0.5 | 0 (`marker_too_small` at 0.49) | 0 | 0 | 0 | 0 |
+| 0.6 | 12 | 12 | 1 | 0 | 0 |
+| 0.7 | 11 | 11 | 10 | 2 | 0 |
+| 0.75 | 12 | 12 | 12 | 2 | 0 |
+| 0.8 | 12 | 12 | 12 | 10 | 1 |
+| 0.86 | 12 | 12 | 12 | 11 | 1 |
+| 0.9 | 12 | 12 | 12 | 12 | 3 |
+| 1.0 | 12 | 12 | 12 | 11 | 9 |
+| 1.1 | 12 | 12 | 12 | 12 | 11 |
+| 1.2 | 12 | 12 | 12 | 12 | 12 |
+
+Before the change the same renders were accepted 1 to 5 times in 12 at
+σ 0 and at most 4 at σ 0.5, at every scale from 0.75 to 1.1. A single
+flipped bit (16 variants per scale and blur, slope 0.8°) was rejected 16 of 16
+times at every cell of the table, before and after. A partial copy (its
+top-left tag and border corner erased) is rejected as an orphan, per 12:
+
+| Scale | σ 0 | σ 0.5 | σ 0.8 | σ 1.0 |
+| --- | --- | --- | --- | --- |
+| 0.7 | 11 | 4 | 0 | 0 |
+| 0.75 | 12 (before: 12) | 7 (6) | 0 (0) | 0 (0) |
+| 0.86 | 12 (12) | 12 (12) | 0 (0) | 0 (0) |
+| 1.0 | 12 (12) | 12 (12) | 8 (5) | 0 (0) |
+| 1.1 | 12 (12) | 12 (12) | 12 (12) | 0 (0) |
+| 1.2 | 12 | 12 | 12 | 10 |
+
+So the decode passes synthetically from scale 0.6 to 1.2 at σ ≤ 0.5 and from
+0.75 to 1.2 at σ 0.8; an orphan fragment is detected from 0.7 to 1.2 at σ ≤ 0.5
+(12 of 12 at 0.86 and above), and from 1.0 up at σ 0.8. Where the partial copy
+is not detected at σ ≥ 0.8 the run ends `no_complete_marker`, as before: the
+orphan path is not weakened at any cell, and nothing is accepted there.
+The limit at σ ≥ 0.8 is the v1 tag geometry, not the decode: the bright ring
+between a tag's outline and its bits is 2 px, so blur merges the inner square
+with its bits and its contour stops being a quad; the positional fragments
+need an outline candidate, which the erased corner removes. The mirror's real
+blur is unmeasured; the recorded metrics fit about σ 0.5.
+
+**Marker revision, measured and not made.** A `fixed-edge-marker-v2` with
+32 px tags, a 4 px ring (bit offset 6, pitch 10, 8 px bits) and the same
+8 px inset, under the same decode: valid acceptance equal to v1 (12, 11, 8 of
+12 at scales 0.86, 1.0 and 0.75 for σ 0.8), orphan detection of the partial
+copy 12 of 12 at every scale from 0.75 to 1.0 up to σ 1.3 (11 at 0.75). It
+would keep the tile's footprint, placement, scale and opacity, so the
+[qualification rule](../hud-qualification.md#proposed-g4-method) holds, but
+it changes the generated header and the bridge, and it has never been shown
+on the device. It is the prepared follow-up if the next attempt's
+`minimum_tag_contrast` or `minimum_bit_margin` reads low, and it is not part
+of this change.
+
+**Still unknown.** Why the right-hand tags were not found as fragments on the
+device (the positional fragments now cover a copy whose outline is found);
+the mirror's filtering; whether the compositor's placement differs between
+the eyes. The next attempt is the last in the D2 budget and needs the owner's
+approval after this change merges; no device step is part of it.
+
+Cloud checks: `tests/test_hud_marker_observer.py` (the scaled, perspective,
+rotated, flipped-bit, partial, orphan, photometric and V4-shaped cases, with
+their expectations updated to the new check names), `tests/test_hud_contract.py`
+(the native marker decodes with zero error at scale 1).
+
 **What O3 does not close.**
 
 - *Where copies can still be missed silently.* Bright structure touching a
@@ -512,11 +656,15 @@ Each limit is tested at its boundary on both sides.
   - default `expected_copies` whenever more than one copy is expected.
 - *The marker's size in the mirror.* The derivation assumes scale 0.75 to 3
   (240 to 960 px wide) and takes each constant at the low end, where it is
-  strictest. The only Frame-derived geometry is V4's candidate quad, 277 × 110
-  px (scale about 0.86), and it failed its tag checks. At about scale 0.7 (224
-  px wide) and below, the matcher misses copies even on a clean frame (clean
-  composites: 22 of 24 found at 0.7, 13 of 24 at 0.65, 1 or 2 of 12 at 0.6). A
-  side-by-side stereo mirror would put copies there.
+  strictest. The Frame-derived geometry is V4's candidate quad, 277 × 110 px
+  (scale about 0.86), and the A4 attempt's quad of 2026-11-07, about 276 × 113
+  px at (1255, 833) to (1531, 948) in the 1920 × 1080 mirror, also scale 0.86
+  with tags about 16 px; both failed the old tag checks. Before A5, at about
+  scale 0.7 (224 px wide) and below the matcher missed copies even on a clean
+  frame (clean composites: 22 of 24 found at 0.7, 13 of 24 at 0.65, 1 or 2 of
+  12 at 0.6). The A5 decode accepts clean copies from scale 0.6 up and refuses
+  anything under 0.45 ([scale table](#stage-two-decode-at-the-mirrors-scale-a5-2026-11-07)).
+  A side-by-side stereo mirror would put copies near the low end.
 - *The data.* The composites are synthetic: opaque paste, a bilinear warp, no
   mirror resampling, tone mapping or compression. Specks drawn over the copy
   (noise added after compositing, which a rendered mirror should not have)
