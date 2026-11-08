@@ -202,7 +202,7 @@ jobs:
           .venv-replay/bin/python scripts/run_tests_no_skips.py --all --budget tests/time_budget.json \
             tests/test_detection.py tests/test_evaluation.py \
             tests/test_pipeline.py tests/test_playback_clock.py tests/test_replay_source.py tests/test_mirror_recognize.py \
-            tests/test_replay_window.py tests/test_overlay_bridge.py tests/test_live_pipeline.py \
+            tests/test_replay_window.py tests/test_overlay_bridge.py tests/test_visibility_cycle.py tests/test_live_pipeline.py \
             tests/test_hud_mask.py tests/test_hud_marker_check.py tests/test_hud_marker_observer.py \
             tests/test_observer_scene.py \
             tests/test_display_expiry.py tests/test_bounded_worker.py tests/test_supervision.py tests/test_overlay_cleanup.py \

@@ -14,12 +14,34 @@ from .gates import LIVE_HUD_OUTPUT
 from .hud.contract import (BRIDGE_READY_WAIT_SECONDS, EXPIRING_FRAME_PREFIX_FORMAT, FRAME_PREFIX_FORMAT, HUD_CONFIG,
                            MAX_DISPLAY_AGE_NS, MAX_SIDE, OPCODE_EXPIRING_FRAME, OPCODE_FRAME, OPCODE_SETTINGS, OPCODE_STOP,
                            OPCODE_VISIBILITY, PACKET_HEADER_FORMAT, PACKET_MAGIC, RGBA_BYTES, SETTINGS_FORMAT,
-                           VISIBILITY_FORMAT)
+                           VISIBILITY_EVENT_BOUND_NS, VISIBILITY_FORMAT, VISIBILITY_HIDE_LINES, VISIBILITY_LINES,
+                           VISIBILITY_MISSING_LINE, VISIBILITY_SHOW_LINES)
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BRIDGE = ROOT / "artifacts/overlay-bridge/sightcircuit-overlay-bridge"
 # (name, low, high); the native bridge takes these from the generated tools/hud_contract.hpp.
 PANEL_LIMITS = (("width", .25, 1.5), ("distance", .5, 3), ("x", -1, 1), ("y", -1, 1), ("opacity", .2, 1))
+
+# The Python side's deadline on one visibility request's terminal line (fallback item F2), in nanoseconds of
+# time.monotonic_ns(), counted from the moment the request is queued here. The bridge reports a request whose
+# runtime event has not been polled within VISIBILITY_EVENT_BOUND_NS as missing on its next input poll, which
+# returns at most BRIDGE_INPUT_POLL_NS later (the sensing unit's poll(2) timeout, pinned against its source by
+# tests/test_visibility_cycle.py); the margin covers this side's pipe write of the request, the bridge's decode,
+# the line's write, the reader thread's readline and the waiter's wake-up, each far under a millisecond when
+# uncontended. 320 ms in all: a terminal line that has not arrived by then is a failed request (fail closed), and
+# the whole stays under the fastest costed cycle (500 ms at two per second) with room for the window. These are
+# cloud choices, unmeasured on the Frame; the hidden-event delivery measurement (F3) replaces the bound they
+# are built on.
+BRIDGE_INPUT_POLL_NS = 20_000_000
+VISIBILITY_DEADLINE_MARGIN_NS = 50_000_000
+VISIBILITY_TERMINAL_DEADLINE_NS = VISIBILITY_EVENT_BOUND_NS + BRIDGE_INPUT_POLL_NS + VISIBILITY_DEADLINE_MARGIN_NS
+# Cycles whose lines the client keeps; past it the oldest cycle's lines are dropped and counted.
+VISIBILITY_HISTORY_CYCLES = 1024
+# Why a request did not confirm, beside the bridge's own reason on a returned line with ok false and the name
+# of the missing line itself.
+VISIBILITY_DEADLINE_REASON = "visibility_deadline"
+VISIBILITY_BRIDGE_ENDED_REASON = "overlay_bridge_ended"
+VISIBILITY_ORDER_REASON = "visibility_lines_out_of_order"
 
 
 def packet(kind, payload=b""):
@@ -29,9 +51,9 @@ def packet(kind, payload=b""):
 def visibility_packet(cycle, visible):
     """The show (``True``) or hide request of fallback cycle ``cycle`` (``OPCODE_VISIBILITY``).
 
-    Encoding only: no client sends it yet (work item F2 adds the cycle API and
-    the event queue). The bridge answers with the timestamped visibility lines
-    of ``sightcircuit.hud.contract.VISIBILITY_LINES``, each carrying ``cycle``.
+    ``OverlayClient.request_visibility`` sends it (work item F2). The bridge
+    answers with the timestamped visibility lines of
+    ``sightcircuit.hud.contract.VISIBILITY_LINES``, each carrying ``cycle``.
     """
     if type(cycle) is not int or not 0 <= cycle < 2 ** 32:
         raise ValueError("visibility_cycle_out_of_range")
@@ -42,6 +64,122 @@ def visibility_packet(cycle, visible):
 
 def _zero(value):
     return type(value) is int and value == 0
+
+
+def _cycle_number(cycle):
+    if type(cycle) is not int or not 0 <= cycle < 2 ** 32:
+        raise ValueError("visibility_cycle_out_of_range")
+    return cycle
+
+
+@dataclass(frozen=True)
+class VisibilityRequest:
+    """One queued show (``visible``) or hide request of fallback cycle ``cycle``.
+
+    ``requested_ns`` is ``time.monotonic_ns()`` when the client queued it, and
+    ``deadline_ns`` the default deadline on its terminal line
+    (``VISIBILITY_TERMINAL_DEADLINE_NS`` later).
+    """
+    cycle: int
+    visible: bool
+    requested_ns: int
+
+    @property
+    def deadline_ns(self):
+        return self.requested_ns + VISIBILITY_TERMINAL_DEADLINE_NS
+
+
+@dataclass(frozen=True)
+class VisibilityOutcome:
+    """How one visibility request ended, read from the cycle's lines (``transition_outcome``).
+
+    ``confirmed`` is true only when the runtime's event line (``overlay_hidden``
+    for a hide, ``overlay_shown`` for a show) followed the request's own
+    requested and returned-ok lines; ``observed_ns`` is then the event's time in
+    the bridge's ``CLOCK_MONOTONIC`` nanoseconds, the clock of
+    ``Frame.observed_ns`` on the same host, and the admission window of a hide
+    opens from it. Otherwise ``reason`` says why not: the returned line's
+    ``reason`` (``no_image``, or the call's error), the missing line's name,
+    ``visibility_deadline`` when the deadline passed first,
+    ``overlay_bridge_ended`` or the client's error when the bridge ended first,
+    or ``visibility_lines_out_of_order``. ``terminal`` names the line that ended
+    the request, or is None when no line did. ``lines`` are the request's own
+    lines in arrival order. A hide that is not confirmed opens no window.
+    """
+    cycle: int
+    visible: bool
+    confirmed: bool
+    terminal: str | None
+    reason: str | None
+    request_ns: int | None
+    returned_ns: int | None
+    observed_ns: int | None
+    waited_ns: int | None
+    call: str | None
+    lines: tuple
+
+
+def _timestamp(line, field):
+    value = line.get(field) if line is not None else None
+    return value if type(value) is int and value >= 0 else None
+
+
+def transition_outcome(cycle, visible, lines, ended=None):
+    """The outcome of cycle ``cycle``'s show (``visible`` true) or hide from the cycle's lines in arrival order.
+
+    None while the request is still pending, unless ``ended`` names why no
+    further line can come (the deadline, the bridge ending); then a failed
+    outcome. The bridge writes a hide's lines before the cycle's show lines and
+    exactly one terminal line per request, so a hide's lines end at the first
+    show line and a show's begin at ``show_requested``; a missing line is the
+    request's whose lines it falls among. The terminal line is the first of the
+    event line, the missing line and a returned line with ``ok`` false. A
+    returned line with ``ok`` false ends the request here even though the
+    bridge still awaits (and later reports missing) its event.
+    """
+    requested, returned, event = VISIBILITY_SHOW_LINES if visible else VISIBILITY_HIDE_LINES
+    other = VISIBILITY_HIDE_LINES if visible else VISIBILITY_SHOW_LINES
+    own, terminal, requested_line, returned_line = [], None, None, None
+    started = not visible
+    for line in lines:
+        name = line.get("event")
+        if not started:
+            started = name == requested
+            if not started:
+                continue
+        if name in other:
+            if visible:
+                continue  # a hide line after show_requested is not the show's
+            break  # the hide's lines end where the show's begin
+        own.append(line)
+        if name == requested:
+            requested_line = line
+        elif name == returned:
+            returned_line = line
+        if name == event or name == VISIBILITY_MISSING_LINE or (name == returned and line.get("ok") is not True):
+            terminal = line
+            break
+    request_ns, returned_ns = _timestamp(requested_line, "request_ns"), _timestamp(returned_line, "returned_ns")
+    call = returned_line.get("call") if returned_line is not None else None
+    if terminal is None:
+        if ended is None:
+            return None
+        return VisibilityOutcome(cycle, visible, False, None, str(ended), request_ns, returned_ns, None, None, call,
+                                 tuple(own))
+    name, observed_ns, waited_ns = terminal["event"], None, None
+    if name == event:
+        observed_ns = _timestamp(terminal, "observed_ns")
+        ordered = requested_line is not None and returned_line is not None and returned_line.get("ok") is True
+        confirmed = ordered and observed_ns is not None
+        reason = None if confirmed else VISIBILITY_ORDER_REASON
+        if not confirmed:
+            observed_ns = None
+    elif name == VISIBILITY_MISSING_LINE:
+        confirmed, reason, waited_ns = False, name, _timestamp(terminal, "waited_ns")
+    else:
+        confirmed, reason = False, str(terminal.get("reason") or "visibility_call_failed")
+    return VisibilityOutcome(cycle, visible, confirmed, name, reason, request_ns, returned_ns, observed_ns, waited_ns,
+                             call, tuple(own))
 
 
 def bridge_closed_cleanly(report):
@@ -110,6 +248,13 @@ class OverlayClient:
         self.frame_expiry_supported = False
         self.frame_expired = threading.Event()
         self.last_expiry = None
+        # The visibility cycle (F2): the lines the bridge wrote, by cycle, in arrival order, and the waiters'
+        # condition; the requests queued for the writer live under ``condition`` with the frame and settings.
+        self.visibility_condition = threading.Condition()
+        self.visibility_lines = {}
+        self.visibility_cycles_dropped = 0
+        self.pending_visibility = []
+        self.visibility_requests = 0
         self.forced_termination = False
         self.stop_requested = False
         self.process = self.reader = self.writer = None
@@ -118,6 +263,23 @@ class OverlayClient:
         with self.condition:
             if not self.error:
                 self.error = str(error)
+        self._wake_visibility_waiters()
+
+    def _wake_visibility_waiters(self):
+        with self.visibility_condition:
+            self.visibility_condition.notify_all()
+
+    def _keep_visibility_line(self, message):
+        """Queue one of the bridge's visibility lines under its cycle; every line is kept, oldest cycles first out."""
+        cycle = message.get("cycle")
+        if type(cycle) is not int or not 0 <= cycle < 2 ** 32:
+            raise RuntimeError("overlay_visibility_line_invalid")
+        with self.visibility_condition:
+            self.visibility_lines.setdefault(cycle, []).append(message)
+            while len(self.visibility_lines) > VISIBILITY_HISTORY_CYCLES:
+                del self.visibility_lines[next(iter(self.visibility_lines))]
+                self.visibility_cycles_dropped += 1
+            self.visibility_condition.notify_all()
 
     def start(self):
         if not self.binary.is_file() or not os.access(self.binary, os.X_OK):
@@ -158,6 +320,8 @@ class OverlayClient:
                 if event == "frame_expired":
                     self.last_expiry = message
                     self.frame_expired.set()
+                if event in VISIBILITY_LINES:
+                    self._keep_visibility_line(message)
                 if event == "error":
                     self._fail(message.get("error", "Overlay bridge failed"))
                 if "exit_code" in message:
@@ -171,6 +335,7 @@ class OverlayClient:
                 self._fail("Overlay bridge disconnected without a final cleanup report")
             self.done.set()
             self.ready.set()
+            self._wake_visibility_waiters()
 
     def _send(self, data):
         """Bound each POSIX pipe write, including a bridge that stops reading."""
@@ -199,33 +364,107 @@ class OverlayClient:
             last_heartbeat = 0
             while True:
                 with self.condition:
-                    if (self.pending_frame is None and self.settings == previous_settings
-                            and not self.stopping.is_set()):
+                    if (self.pending_frame is None and not self.pending_visibility
+                            and self.settings == previous_settings and not self.stopping.is_set()):
                         self.condition.wait(timeout=1)
                     frame, self.pending_frame = self.pending_frame, None
+                    requests, self.pending_visibility = self.pending_visibility, []
                     settings = self.settings
                 if self.stopping.is_set():
                     self._send(packet(OPCODE_STOP))
                     break
-                if settings != previous_settings or time.monotonic() - last_heartbeat >= 1:
-                    self._send(settings.encode())
-                    previous_settings, last_heartbeat = settings, time.monotonic()
+                # The frame, then the visibility requests, then the settings: a tile submitted before a show
+                # request is presented before it, and the settings packet, which the bridge applies as a show or
+                # hide call too, follows the request so that the request's call is the transition the runtime's
+                # event answers and the heartbeat then repeats the cycle's state instead of undoing it.
                 if frame:
                     self._send(frame)
                     self.frames_sent += 1
+                for data in requests:
+                    self._send(data)
+                if settings != previous_settings or time.monotonic() - last_heartbeat >= 1:
+                    self._send(settings.encode())
+                    previous_settings, last_heartbeat = settings, time.monotonic()
         except (OSError, RuntimeError, ValueError) as error:
             if not self.stopping.is_set():
                 self._fail(error)
         finally:
             self.process.stdin.close()
 
+    def _check_settings(self, settings):
+        """Encodable, and the frozen placement when one is pinned (only visibility may differ); under ``condition``."""
+        if self._fixed_settings is not None and replace(settings, visible=False) != self._fixed_settings:
+            raise ValueError("overlay_settings_frozen")
+
     def set_settings(self, settings):
         settings.encode()
         with self.condition:
-            if self._fixed_settings is not None and replace(settings, visible=False) != self._fixed_settings:
-                raise ValueError("overlay_settings_frozen")
+            self._check_settings(settings)
             self.settings = settings
             self.condition.notify()
+
+    def request_visibility(self, cycle, visible, *, settings=None):
+        """Queue the show (``visible``) or hide request of fallback cycle ``cycle`` for the writer.
+
+        With ``settings``, the client's settings change to them in the same
+        step and the writer sends them right after the request, so the
+        heartbeat repeats the cycle's visibility instead of undoing it (the
+        bridge applies every settings packet as a show or hide call). Returns
+        the ``VisibilityRequest`` to await. Raises when the client is not
+        running; a request queued before a transport failure ends with that
+        failure as its outcome's reason.
+        """
+        data = visibility_packet(cycle, visible)
+        if settings is not None:
+            settings.encode()
+        with self.condition:
+            if self.writer is None or not self.writer.is_alive() or self.stopping.is_set():
+                raise RuntimeError("overlay_client_not_running")
+            if settings is not None:
+                self._check_settings(settings)
+                self.settings = settings
+            request = VisibilityRequest(cycle, visible, time.monotonic_ns())
+            self.pending_visibility.append(data)
+            self.visibility_requests += 1
+            self.condition.notify()
+        return request
+
+    def cycle_lines(self, cycle):
+        """Every visibility line the bridge wrote for ``cycle``, in arrival order."""
+        with self.visibility_condition:
+            return tuple(self.visibility_lines.get(_cycle_number(cycle), ()))
+
+    def visibility_outcome(self, cycle, visible):
+        """The outcome of ``cycle``'s show or hide so far, or None while it is pending; never blocks."""
+        with self.visibility_condition:
+            return transition_outcome(_cycle_number(cycle), visible, self.visibility_lines.get(cycle, ()))
+
+    def await_visibility(self, request, *, deadline_ns=None):
+        """Block until ``request`` has its terminal line, the deadline passes or the bridge ends; the outcome.
+
+        ``deadline_ns`` is in ``time.monotonic_ns()`` and defaults to the
+        request's (``VISIBILITY_TERMINAL_DEADLINE_NS`` after it was queued).
+        The deadline passing or the bridge ending first is a failed request,
+        never an exception: the caller sees a cycle without a confirmed
+        transition and opens no window.
+        """
+        if deadline_ns is None:
+            deadline_ns = request.deadline_ns
+        if type(deadline_ns) is not int:
+            raise ValueError("visibility_deadline_invalid")
+        with self.visibility_condition:
+            while True:
+                lines = self.visibility_lines.get(request.cycle, ())
+                outcome = transition_outcome(request.cycle, request.visible, lines)
+                if outcome is not None:
+                    return outcome
+                if self.done.is_set() or self.error:
+                    return transition_outcome(request.cycle, request.visible, lines,
+                                              ended=self.error or VISIBILITY_BRIDGE_ENDED_REASON)
+                remaining = deadline_ns - time.monotonic_ns()
+                if remaining <= 0:
+                    return transition_outcome(request.cycle, request.visible, lines, ended=VISIBILITY_DEADLINE_REASON)
+                self.visibility_condition.wait(min(remaining / 1e9, .05))
 
     def freeze_settings(self, settings):
         """Pin calibrated candidate geometry; only visibility may change afterward."""
@@ -326,6 +565,28 @@ class OverlayClient:
 
 
 
+@dataclass(frozen=True)
+class FallbackCycle:
+    """One fallback cycle on the sink: its number, then the hide's outcome and the show's as each is known.
+
+    ``hidden_ns`` is the confirmed hide's ``observed_ns`` (the bridge's
+    ``CLOCK_MONOTONIC``, the clock of ``Frame.observed_ns``), from which the
+    admission window opens, or None: no confirmed hide, no window this cycle.
+    """
+    cycle: int
+    hide: VisibilityOutcome | None = None
+    show: VisibilityOutcome | None = None
+
+    @property
+    def hidden_ns(self):
+        return self.hide.observed_ns if self.hide is not None and self.hide.confirmed else None
+
+    @property
+    def hidden(self):
+        """True between the hide request and the show request: the panel is down for this cycle."""
+        return self.show is None
+
+
 class OverlaySink:
     """Pipeline sink presenting each result on the VR panel.
 
@@ -337,6 +598,12 @@ class OverlaySink:
     shutdown. ``hud`` (the fixed HUD configuration) also freezes the HUD
     placement and accepts only HUD tiles drawn for it; real fixed-HUD output
     stays behind the ``LIVE_HUD_OUTPUT`` gate.
+
+    The fallback's visibility cycle (work item F2) is ``hide`` then ``show``
+    on an owned client: each sends the cycle's request through
+    ``OverlayClient.request_visibility`` and blocks on its terminal line, and
+    the sink's ``cycle`` keeps both outcomes. While a cycle is hidden,
+    ``submit`` leaves the panel down (the tile is presented by the show).
     """
 
     def __init__(self, client=None, *, hud=None, client_factory=None):
@@ -346,6 +613,7 @@ class OverlaySink:
         self.owns_client = client is None
         self.client_factory = client_factory or OverlayClient
         self.report = None
+        self.cycle = None
 
     def placement(self, visible):
         if self.hud is None:
@@ -382,7 +650,7 @@ class OverlaySink:
                                      processed.image.shape != (self.hud.height_px, self.hud.width_px, 3)):
             raise ValueError("hud_payload_contract_mismatch")
         if self.owns_client:
-            self.client.set_settings(self.placement(True))
+            self.client.set_settings(self.placement(self.panel_visible))
         if processed.expires_ns is None:
             self.client.submit_bgr(processed.image)
         else:
@@ -391,6 +659,73 @@ class OverlaySink:
     def clear(self):
         if self.owns_client and self.client is not None:
             self.client.set_settings(self.placement(False))
+
+    @property
+    def panel_visible(self):
+        """False while a fallback cycle is hidden; a submitted result is then presented by the cycle's show."""
+        return self.cycle is None or not self.cycle.hidden
+
+    def _cycle_client(self):
+        if not self.owns_client or self.client is None:
+            raise RuntimeError("hud_sink_cycle_requires_owned_client")
+        if self.hud is not None:
+            self.check_contract(HUD_CONFIG)
+        if self.client.error:
+            raise RuntimeError(self.client.error)
+        return self.client
+
+    def hide(self, cycle, *, deadline_ns=None):
+        """Start fallback cycle ``cycle``: hide the panel and block for the bridge's terminal line; the outcome.
+
+        Cycle numbers increase, and the previous cycle's show must have been
+        requested. The request goes with the hidden placement, so the settings
+        heartbeat keeps the panel down. The outcome is confirmed only by the
+        runtime's ``overlay_hidden`` line, and ``cycle.hidden_ns`` then holds
+        its time for the admission window; a missing line, a returned line with
+        ``ok`` false, the deadline (``VISIBILITY_TERMINAL_DEADLINE_NS`` after the
+        request unless ``deadline_ns`` is given) or the bridge ending is a failed
+        cycle with no window, reported, never raised.
+        """
+        _cycle_number(cycle)
+        client = self._cycle_client()
+        if self.cycle is not None:
+            if cycle <= self.cycle.cycle:
+                raise ValueError("hud_cycle_not_increasing")
+            if self.cycle.hidden:
+                raise ValueError("hud_cycle_show_pending")
+        self.cycle = FallbackCycle(cycle)
+        request = client.request_visibility(cycle, False, settings=self.placement(False))
+        outcome = client.await_visibility(request, deadline_ns=deadline_ns)
+        self.cycle = replace(self.cycle, hide=outcome)
+        return outcome
+
+    def show(self, cycle, closes_ns, *, deadline_ns=None):
+        """End cycle ``cycle``: once ``closes_ns`` has passed, show the panel and block for the terminal line.
+
+        ``closes_ns`` is the admission window's close in ``time.monotonic_ns()``
+        (the current time when the hide was not confirmed and there is no
+        window); it may not lie further ahead than ``MAX_DISPLAY_AGE_NS``. The
+        request is sent only after it, so no admitted frame can carry the tile,
+        and the bridge's ``request_ns`` is at or after it on the same clock.
+        The request goes with the visible placement, so the heartbeat keeps the
+        panel up. The outcome is confirmed only by ``overlay_shown``; a show
+        with nothing presented returns ``ok`` false with reason ``no_image``.
+        """
+        client = self._cycle_client()
+        if self.cycle is None or self.cycle.cycle != cycle or self.cycle.hide is None:
+            raise ValueError("hud_cycle_not_hidden")
+        if not self.cycle.hidden:
+            raise ValueError("hud_cycle_already_shown")
+        if type(closes_ns) is not int or closes_ns < 0:
+            raise ValueError("hud_window_close_invalid")
+        if closes_ns > time.monotonic_ns() + MAX_DISPLAY_AGE_NS:
+            raise ValueError("hud_window_close_too_far_ahead")
+        while (remaining := closes_ns - time.monotonic_ns()) > 0:
+            time.sleep(remaining / 1e9)
+        request = client.request_visibility(cycle, True, settings=self.placement(True))
+        outcome = client.await_visibility(request, deadline_ns=deadline_ns)
+        self.cycle = replace(self.cycle, show=outcome)
+        return outcome
 
     def close(self):
         if not self.owns_client or self.client is None:

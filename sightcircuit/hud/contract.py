@@ -159,6 +159,11 @@ VISIBILITY_FORMAT = layout_format(VISIBILITY_FIELDS)
 VISIBILITY_EVENT_BOUND_NS = 250_000_000
 VISIBILITY_LINES = ("hide_requested", "hide_returned", "overlay_hidden",
                     "show_requested", "show_returned", "overlay_shown", "visibility_event_missing")
+# One request's lines in the order the bridge writes them (requested, returned, event), by the request's
+# direction, and the terminal line both directions share; derived from VISIBILITY_LINES so the names stay in
+# one place. The Python client (sightcircuit.overlay, F2) reads its queue by these.
+VISIBILITY_HIDE_LINES, VISIBILITY_SHOW_LINES = VISIBILITY_LINES[:3], VISIBILITY_LINES[3:6]
+VISIBILITY_MISSING_LINE = VISIBILITY_LINES[6]
 
 
 def required_margin_px(error_terms_px=()):
