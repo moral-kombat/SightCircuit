@@ -10,6 +10,7 @@ import importlib.util
 import os
 from pathlib import Path
 import re
+import struct
 import sys
 import tempfile
 import time
@@ -21,7 +22,7 @@ from sightcircuit.hud.contract import (HUD_CONFIG, MAX_DISPLAY_AGE_NS, VISIBILIT
 from sightcircuit.overlay import (BRIDGE_INPUT_POLL_NS, DEFAULT_BRIDGE, VISIBILITY_BRIDGE_ENDED_REASON,
                                   VISIBILITY_DEADLINE_MARGIN_NS, VISIBILITY_DEADLINE_REASON, VISIBILITY_HISTORY_CYCLES,
                                   VISIBILITY_ORDER_REASON, VISIBILITY_TERMINAL_DEADLINE_NS, FallbackCycle, OverlayClient,
-                                  OverlaySink, VisibilityOutcome, VisibilityRequest, transition_outcome)
+                                  OverlaySink, VisibilityOutcome, VisibilityRequest, packet, transition_outcome)
 
 ROOT = Path(__file__).resolve().parents[1]
 HIDE_REQUESTED, HIDE_RETURNED, OVERLAY_HIDDEN = VISIBILITY_HIDE_LINES
@@ -393,6 +394,39 @@ emit({{"exit_code": 0, "cleanup_ok": True, "status": "validated", "mode": "--val
         self.assertNotIn("settings 1", packets[hide_at:show_at])
         self.assertEqual(len(client.cycle_lines(1)), 6)
         self.assertEqual(client.visibility_outcome(1, False), hide)
+
+    def test_without_a_cycle_request_the_settings_still_precede_the_frame(self):
+        # The pre-F2 order for the interactive client: a hide and a frame that one writer iteration picks up
+        # together land hide first (both are queued under the writer's lock, then one notify).
+        sink = self.open_sink(self.CONFIRM)
+        client = sink.client
+        client.set_settings(sink.placement(True))
+        time.sleep(.1)
+        with client.condition:
+            client.settings = sink.placement(False)
+            client.pending_frame = packet(1, struct.pack("<II", 2, 1) + bytes(8))
+            client.condition.notify()
+        time.sleep(.2)
+        packets = self.packets()
+        self.assertEqual(packets[-2:], ["settings 0", "frame"])
+        self.assertNotIn("visibility 1 0", packets)
+
+    def test_a_client_that_stops_between_the_check_and_the_queue_leaves_the_sink_usable(self):
+        sink = self.open_sink(self.CONFIRM)
+        client = sink.client
+
+        def refuse(*args, **kwargs):
+            raise RuntimeError("overlay_client_not_running")
+
+        original = client.request_visibility
+        client.request_visibility = refuse
+        with self.assertRaisesRegex(RuntimeError, "overlay_client_not_running"):
+            sink.hide(1)
+        self.assertIsNone(sink.cycle)
+        self.assertTrue(sink.panel_visible)
+        client.request_visibility = original
+        self.assertTrue(sink.hide(1).confirmed)  # the next hide is accepted, not refused as show-pending
+        self.assertTrue(sink.show(1, time.monotonic_ns()).confirmed)
 
     @unittest.skipUnless(importlib.util.find_spec("cv2"), "OpenCV required for sink image conversion")
     def test_submit_keeps_the_panel_down_while_a_cycle_is_hidden(self):

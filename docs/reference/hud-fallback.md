@@ -204,10 +204,11 @@ never an exception; only a confirmed hide has a window. Two couplings follow
 from the bridge's existing behaviour: it applies every settings packet as a
 show or hide call (`configure()` ends in `visibility()`) and the client
 heartbeats the settings every second, so each cycle request also changes the
-settings' visibility and the writer sends the pending frame, then the cycle
-requests, then the settings, so that the request's call is the transition the
-runtime's event answers and the heartbeat repeats the cycle's state instead
-of undoing it; and `OverlaySink.submit` leaves the panel down while a cycle is
+settings' visibility and a writer iteration that carries a cycle request sends
+the pending frame, then the cycle requests, then the settings (one without a
+request keeps the settings-then-frame order), so that the request's call is
+the transition the runtime's event answers and the heartbeat repeats the
+cycle's state instead of undoing it; and `OverlaySink.submit` leaves the panel down while a cycle is
 hidden, so the tile submitted during the window is presented by the show. The
 settings-packet visibility path, the marker client and the bridge are
 unchanged. Cloud checks: `tests/test_visibility_cycle.py`: the pure reading

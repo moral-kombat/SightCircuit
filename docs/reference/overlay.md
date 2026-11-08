@@ -183,16 +183,26 @@ bridge's decode, the line's write, the reader's `readline` and the waiter's
 wake-up. A cloud choice, **unmeasured on the Frame**; the hidden-event
 delivery measurement (F3) replaces the bound it is built on. The deadline
 passing is a failed request like a missing line: the caller opens no window.
+The deadline counts from the moment the request is queued, not sent: a writer
+blocked in a pipe write (bounded at 2 s) can let it lapse before the request
+reaches the bridge, and the bridge may then perform and confirm that hide
+after the sink has recorded `visibility_deadline`. The sink's recorded
+outcome (`sink.cycle.hide`, `sink.cycle.show`) is the one that counts for the
+cycle; `client.visibility_outcome` reads the queue as it stands and can
+diverge from it after a deadline.
 
 **Why the settings move with the request.** The bridge applies every settings
 packet as a show or hide call (`configure()` ends in `visibility()`), and the
 client heartbeats the settings every second, so a hide sent by opcode `5`
 alone would be undone by the next heartbeat. The cycle API therefore changes
-the settings' visibility with each request, and the writer sends the pending
-frame, then the cycle requests, then the settings: a tile submitted before a
-show is presented before it, the request's call is the transition the
-runtime's event answers, and the heartbeat then repeats the cycle's state.
-While a cycle is hidden, `OverlaySink.submit` leaves the panel down
+the settings' visibility with each request, and in a writer iteration that
+carries a cycle request the order is the pending frame, then the cycle
+requests, then the settings: a tile submitted before a show is presented
+before it, the request's call is the transition the runtime's event answers,
+and the heartbeat then repeats the cycle's state. An iteration without a
+cycle request keeps the pre-F2 order, the settings and then the frame, so an
+interactive hide on the replay window's client still lands before the frame
+it shares an iteration with. While a cycle is hidden, `OverlaySink.submit` leaves the panel down
 (`panel_visible` is false), so the tile submitted during the window is
 presented by the show. A visibility change through the settings packet alone
 remains the pre-F1 path: no cycle, no lines.

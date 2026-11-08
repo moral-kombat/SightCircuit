@@ -373,16 +373,22 @@ class OverlayClient:
                 if self.stopping.is_set():
                     self._send(packet(OPCODE_STOP))
                     break
-                # The frame, then the visibility requests, then the settings: a tile submitted before a show
-                # request is presented before it, and the settings packet, which the bridge applies as a show or
-                # hide call too, follows the request so that the request's call is the transition the runtime's
-                # event answers and the heartbeat then repeats the cycle's state instead of undoing it.
+                # Without a cycle request the order is the settings, then the frame, as before F2: an
+                # interactive hide lands before the frame it shares an iteration with. With one, the frame, then
+                # the requests, then the settings: a tile submitted before a show request is presented before it,
+                # and the settings packet, which the bridge applies as a show or hide call too, follows the
+                # request so that the request's call is the transition the runtime's event answers and the
+                # heartbeat then repeats the cycle's state instead of undoing it.
+                send_settings = settings != previous_settings or time.monotonic() - last_heartbeat >= 1
+                if send_settings and not requests:
+                    self._send(settings.encode())
+                    previous_settings, last_heartbeat = settings, time.monotonic()
                 if frame:
                     self._send(frame)
                     self.frames_sent += 1
                 for data in requests:
                     self._send(data)
-                if settings != previous_settings or time.monotonic() - last_heartbeat >= 1:
+                if send_settings and requests:
                     self._send(settings.encode())
                     previous_settings, last_heartbeat = settings, time.monotonic()
         except (OSError, RuntimeError, ValueError) as error:
@@ -693,8 +699,10 @@ class OverlaySink:
                 raise ValueError("hud_cycle_not_increasing")
             if self.cycle.hidden:
                 raise ValueError("hud_cycle_show_pending")
-        self.cycle = FallbackCycle(cycle)
+        # The cycle is recorded only once its request is queued: a client that stopped between the check above
+        # and the queue raises here and leaves the sink's state as it was, so the next hide is still accepted.
         request = client.request_visibility(cycle, False, settings=self.placement(False))
+        self.cycle = FallbackCycle(cycle)
         outcome = client.await_visibility(request, deadline_ns=deadline_ns)
         self.cycle = replace(self.cycle, hide=outcome)
         return outcome
