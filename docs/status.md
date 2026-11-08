@@ -437,6 +437,10 @@ provenance and original uncertainty.
 
 [Full evidence](evidence/e090.md). Device report.
 
+### E91: Journal watchers left running after the A4 and A5 runs; a correction to E90 and an independent corroboration of its quiet run window
+
+[Full evidence](evidence/e091.md). Device report.
+
 ## Maintaining the evidence
 
 The coordinator checks pending allocations before assigning an evidence ID and adds its record

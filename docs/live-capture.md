@@ -180,7 +180,7 @@ that run.
 | F2 | `OverlayClient` event queue and a cycle API on the sink. Done (#48, 2026-11-08): every visibility line kept by cycle, a pure outcome reading confirmed only by the runtime's event, a derived 320 ms deadline (cloud default, unmeasured on the Frame), `OverlaySink.hide` and `show` failing closed; no runtime event has ever been produced | S, done | F1 |
 | F3a | The marker bridge mode accepts the visibility opcode while the marker is displayed and writes the seven lines, so the measurements use the one tile the device is approved to show and the one pattern the mirror can be read for (the coordinator's call, 2026-11-08). Done (#50): a run that receives nothing is the observer's run, measured identical; only the visibility request is accepted on stdin; the bridge must be rebuilt on the Frame before any run that uses it | S, done | F1 |
 | F3b | `fallback_measure`, the thirteenth command: the marker bridge in that mode driven for N bounded cycles through the F2 API while the mirror is read at full rate and `locate_copies` tells presence from absence; one report with a section per measurement, counts and nanoseconds only; validate mode, opt-in flags and the checkpoint manifest as the observer has them. Done (#51): margins taken from the bridge's own display deadline, a cycle starts only with room for both requests, a capture failure ends the cycling; [guide](guides/fallback-measurement.md) | M, done | F3a, F2 |
-| F3 | The device measurements themselves: hide-to-absence latency, hidden-event delivery, loopback repeats, show-to-visible; one `fallback_measure` run of 20 s and five cycles can give the four evidence entries (E93 to E96 reserved). Staged by the Frame manager; needs the owner's approval, which covers the bridge rebuild from the F3a sources and a new checkpoint manifest | S, device | F3b, approval |
+| F3 | The device measurements themselves: hide-to-absence latency, hidden-event delivery, loopback repeats, show-to-visible; one `fallback_measure` run of 20 s and five cycles can give the four evidence entries (E94 to E97 reserved). Staged by the Frame manager; needs the owner's approval, which covers the bridge rebuild from the F3a sources and a new checkpoint manifest | S, device | F3b, approval |
 | F4 | Capture window and admission rule in the pipeline, with rejection counters and boundary tests | M | F3 |
 | F5 | The fallback stage: hide, window, infer, show on `_run_latest`; tile rendering without a mask; run reports | M | F2, F4 |
 | F6 | Acceptance rows and gate references for the fallback, a reviewed edit to scope, this work order and `sightcircuit/gates.py` | S | planner and owner |
@@ -261,7 +261,7 @@ handler on the main thread ([checks reference](reference/development-checks.md#h
   owner accepts the workspace trust dialog once on the Frame
   ([E86](evidence/e086.md), [guide](guides/agent-enforcement-test.md)).
 - Decided 2026-11-08: the fallback (D2 as written; [scope](poc-scope.md#architecture-decisions-2026-11-07)),
-  C5 with C6 approved (staged by the Frame manager, E91 reserved), the Phase 2
+  C5 with C6 approved (staged by the Frame manager, E92 reserved), the Phase 2
   test scheduled. Next device approvals, each separate: the F3 measurement
   run (staged, with the bridge rebuild), the Phase 2 enforcement run (staged),
   and the owner's start of the C5/C6 sitting.
