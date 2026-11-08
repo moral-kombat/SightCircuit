@@ -34,16 +34,27 @@ it (`run_worker`): the worker enters with the parent-death guard, arms its
 stop event, streams the capture's snapshots as `progress` events and ends
 with a `result` event whose `exit_code` (0 for `captured` or `recognized`
 with cleanup confirmed, else 1) is also its process exit code. The launcher's
-report keeps every field and meaning of the earlier supervisor (`worker_pid`,
+report keeps the fields of the earlier supervisor (`worker_pid`,
 `worker_exit_code`, `worker_forced_termination`, `worker_elapsed_ms`,
 `cleanup_ok`, `exit_code`; `timed_out` with `worker_deadline`, `error` with
-`worker_exited_without_result` or `worker_exit_failure`, `cancelled` with
-`signal`) and adds the primitive's (`worker_armed`, `worker_reaped`,
-`worker_tree_reaped`, `report_reader_stopped`, `worker_termination_requested`,
-`supervisor_elapsed_seconds`). The cleanup budgets are the earlier ones:
-half a second of cooperative stop after SIGTERM, then one second each for
-SIGTERM and SIGKILL on the worker's group (`WORKER_GRACE`); a cancellation
-first waits up to one second for a worker that has not yet armed.
+`worker_exited_without_result`, `worker_exit_failure` or
+`worker_did_not_exit`, `cancelled` with `signal`), with progress delivered
+before a deadline or a result-less exit kept under the final outcome, and
+adds the primitive's (`worker_armed`, `worker_reaped`, `worker_tree_reaped`,
+`report_reader_stopped`, `worker_termination_requested`,
+`supervisor_elapsed_seconds`). Three meanings differ from the spawned worker
+and are stated here: a stop now reaches the worker as SIGTERM to the handler
+`stop_on_signals` installed, so a worker that never polls its stop event is
+ended by SIGKILL inside the budgets below and reported forced, where the
+spawned worker's stop event could be ignored for as long; a worker whose
+result contradicts its exit code keeps its result content under `error` /
+`worker_exit_failure`, as before, but `cleanup_ok` is false and the exit code
+1 come from the launcher, not the result; and a worker that survives SIGKILL
+is `error` / `worker_did_not_exit` with `worker_reaped` false. The cleanup
+budgets are the earlier ones: half a second of cooperative stop after SIGTERM,
+then one second each for SIGTERM and SIGKILL on the worker's group
+(`WORKER_GRACE`); a cancellation first waits up to one second for a worker
+that has not yet armed.
 
 The launcher is the shared `sightcircuit/sources/mirror.py` `launch`, which mirror
 recognition also uses. An unsuitable `--preview` path stops it before the worker

@@ -257,26 +257,50 @@ def supervise_worker(worker, job, seconds, outputs=None, *, report_factory, succ
     snapshots, seen = {}, {}
 
     def validate(candidate, returncode):
-        seen["result"] = True
+        seen["result"] = candidate  # Kept even when the exit code contradicts it, as the launcher kept it before.
         if (not isinstance(candidate, dict) or type(candidate.get("exit_code")) is not int or
                 type(candidate.get("cleanup_ok")) is not bool):
             raise ValueError("invalid_worker_report")
         if candidate["exit_code"] != returncode:
             raise ValueError("worker_exit_failure")
 
+    # The primitive gets no base report: its block is composed over the factory's defaults and the snapshots
+    # below, so progress delivered before a deadline or a result-less exit is never hidden by a default.
     supervised = supervise_owned(
         [sys.executable, "-c", WORKER_BOOTSTRAP, str(guard.ROOT), json.dumps(reference), json.dumps(payload)],
-        base, seconds + 3 if timeout is None else timeout, validate, grace=WORKER_GRACE, progress=snapshots.update)
-    report = {**snapshots, **supervised}
-    if report["status"] == "timed_out":
+        {}, seconds + 3 if timeout is None else timeout, validate, grace=WORKER_GRACE, progress=snapshots.update)
+    return finish_report(base, snapshots, supervised, seen.get("result"))
+
+
+def finish_report(base, snapshots, supervised, result):
+    """The launcher's report: the factory's defaults, the progress snapshots, then the primitive's block, in the
+    launcher's vocabulary.
+
+    ``result`` is the worker's result when one was read, accepted or not. The
+    outcomes keep their names: ``timed_out`` with ``worker_deadline``;
+    ``error`` with ``worker_exited_without_result`` (no result),
+    ``worker_exit_failure`` (a result whose exit code contradicts the
+    process's; its content is kept, its status is not), ``worker_did_not_exit``
+    (the worker survived SIGKILL) or the primitive's reason; ``cancelled``
+    with ``reason`` ``signal``, ``signal`` and exit 128 + signal.
+    """
+    report = {**base, **snapshots, **supervised}
+    status = supervised["status"]
+    if status == "timed_out":
         report["reason"] = "worker_deadline"
-    elif report["status"] in ("invalid_worker_report", "supervisor_lost", "cleanup_failed"):
+    elif status in ("invalid_worker_report", "supervisor_lost", "cleanup_failed", "error"):
         report["status"] = "error"
-        if not seen:
-            report["reason"] = "worker_exited_without_result"
-    elif report["status"] == "cancelled":
+        if result is None:
+            report["reason"] = "worker_exited_without_result" if status == "invalid_worker_report" else \
+                report.get("reason") or status
+        elif supervised.get("reason") == "worker_exit_failure":
+            report = {**report, **{key: value for key, value in result.items() if key != "status"},
+                      "status": "error", "reason": "worker_exit_failure", "exit_code": 1, "cleanup_ok": False}
+    elif status == "cancelled":
         report.update(reason="signal", signal=report["exit_code"] - 128)
-    report["worker_elapsed_ms"] = round(report["supervisor_elapsed_seconds"] * 1000, 3)
+    if supervised.get("worker_reaped") is False and supervised.get("worker_pid") is not None:
+        report.update(status="error", reason="worker_did_not_exit")
+    report["worker_elapsed_ms"] = round(supervised["supervisor_elapsed_seconds"] * 1000, 3)
     return report
 
 

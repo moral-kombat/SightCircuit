@@ -93,6 +93,23 @@ def crashed_worker(candidate, seconds, outputs, progress, stop):
     os._exit(7)
 
 
+def progressing_stuck_worker(candidate, seconds, outputs, progress, stop):
+    """Reports capture progress with the report factory's own keys, then hangs past the deadline."""
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    progress(dict(acquisition.new_capture_report(), status="acquiring", device_open_attempted=True,
+                  acquisition_started=True, frames_read=7, read_attempts=9))
+    time.sleep(30)
+
+
+def contradicting_worker(candidate, seconds, outputs, progress, stop):
+    """A full result whose process then exits with another code than the result names."""
+    progress({"fixture_started": True})
+    report = dict(acquisition.new_capture_report(), status="captured", frames_read=3, cleanup_ok=True, exit_code=0)
+    from sightcircuit.runtime.supervision import emit_event
+    emit_event("result", report)
+    os._exit(5)
+
+
 def run_bounded(candidate, seconds, outputs=None, **options):
     """The mirror check's worker supervision as ``sources.mirror.launch`` runs it."""
     worker = options.pop("worker")
@@ -373,6 +390,35 @@ sys.exit(report['exit_code'])
         self.assertTrue(report["worker_forced_termination"])
         self.assertFalse(report["cleanup_ok"])
         self.assertLess(report["worker_elapsed_ms"], 4000)
+
+    def test_progress_delivered_before_a_deadline_survives_the_factory_defaults(self):
+        # The old launcher kept every progress field under a timeout; a timed-out driver call must still show
+        # what the worker had reported (frames_read 7, the device opened), not the report factory's zeros.
+        report = run_bounded(CANDIDATE, 10, worker=progressing_stuck_worker, timeout=0.7)
+        self.assertEqual((report["status"], report["reason"]), ("timed_out", "worker_deadline"), report)
+        self.assertEqual((report["frames_read"], report["read_attempts"], report["device_open_attempted"],
+                          report["acquisition_started"]), (7, 9, True, True), report)
+        self.assertEqual((report["candidate"], report["seconds_requested"]), (CANDIDATE, 10))
+        self.assertFalse(report["cleanup_ok"])
+        self.assertEqual(report["exit_code"], 1)
+
+    def test_a_result_contradicted_by_the_exit_code_keeps_its_content(self):
+        report = run_bounded(CANDIDATE, 1, worker=contradicting_worker)
+        self.assertEqual((report["status"], report["reason"], report["exit_code"], report["cleanup_ok"]),
+                         ("error", "worker_exit_failure", 1, False), report)
+        self.assertEqual((report["frames_read"], report["worker_exit_code"], report["fixture_started"]), (3, 5, True))
+
+    def test_the_launcher_vocabulary_for_an_unkillable_worker_and_the_primitive_reasons(self):
+        base = dict(acquisition.new_capture_report(), candidate=CANDIDATE, seconds_requested=2)
+        block = {"status": "cancelled", "exit_code": 143, "cleanup_ok": False, "worker_pid": 4242, "worker_reaped": False,
+                 "worker_tree_reaped": False, "supervisor_elapsed_seconds": 7.5, "worker_forced_termination": True}
+        report = acquisition.finish_report(base, {"frames_read": 2}, block, None)
+        self.assertEqual((report["status"], report["reason"], report["frames_read"], report["worker_elapsed_ms"]),
+                         ("error", "worker_did_not_exit", 2, 7500.0))
+        block = {"status": "error", "exit_code": 1, "cleanup_ok": False, "worker_pid": 1, "worker_reaped": True,
+                 "reason": "supervisor_lifeline_closed_before_start", "supervisor_elapsed_seconds": 0.1}
+        report = acquisition.finish_report(base, {}, block, None)
+        self.assertEqual((report["status"], report["reason"]), ("error", "supervisor_lifeline_closed_before_start"))
 
     def test_abnormal_worker_exit_is_reported(self):
         report = run_bounded(CANDIDATE, 1, worker=crashed_worker)
