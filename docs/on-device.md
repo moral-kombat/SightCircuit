@@ -13,6 +13,7 @@ capabilities; the [current plan](live-capture.md) owns the next proposed work.
 | Discover the mirror, recognize objects, or collect stills | [Mirror recognition](guides/mirror-recognition.md) |
 | Run a guided session or collect wearer observations | [Frame sessions](guides/frame-sessions.md) |
 | Prepare a reviewed calibration checkpoint | [HUD checkpoint](guides/hud-checkpoint.md) |
+| Test the agent guard's enforcement (Phase 2) | [Agent guard enforcement test](guides/agent-enforcement-test.md) |
 | Inspect paused-provider build procedures | [Retained device checks](reference/capture-device-checks.md) |
 
 Read prerequisites and expected results before running a device command.

@@ -106,7 +106,11 @@ Implemented and cloud-tested in [E77](evidence/e077.md); see the
 
 Use the [runner guide](guides/frame-sessions.md#run-automated-checks-with-an-on-device-agent)
 within the approved scope. [E82](evidence/e082.md) records no Tier A run or
-device test of guard enforcement. The proposed first-run acceptance and negative test
+device test of guard enforcement. The
+[enforcement test guide](guides/agent-enforcement-test.md) is the scheduled
+test's scope: the trust precondition, the negative matrix that
+`scripts/agent_enforcement_check.py` drives offline, the positive control, the
+counts-only report and the approval boundary. The proposed first-run acceptance and negative test
 are preserved in [Phase 2](history/agent-on-frame-2026-11-01.md#phase-2-first-agent-driven-tier-a-run-approval-needed).
 
 ### Phase 3: on-demand runs from the app or cloud
