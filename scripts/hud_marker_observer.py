@@ -44,6 +44,13 @@ from sightcircuit.sources.mirror_device import discover, select_candidate  # noq
 from sightcircuit.sources.session import HostClock, MirrorSession, RuntimeProcess, TrackingObserver  # noqa: E402
 
 BASELINE_WINDOW_SECONDS = 2.0
+# A marker read is analysed whole once it has started; one whose analysis ends past the observation deadline is
+# kept if it ends within this grace, so a slow decode (A5, about 45 ms a frame on the x86 cloud CPU, unmeasured
+# on Frame) delays the next read and drops reads under the 5 per second pacing instead of failing the run. An
+# analysis that ends later still rejects the run (``marker_processing_exceeded_observation_deadline``): that is
+# a stall, not pacing. The grace fits the supervisor's margin beside the baseline window, the declaration
+# budget and the bridge's stop grace.
+PROCESSING_GRACE_SECONDS = 1.0
 # After the bridge's ready line, reads without any marker candidate (``no_complete_marker``) are tolerated for
 # this long while no sample exists, and counted as ``warmup_frames_without_marker``; the first such read after
 # it rejects the run. The window covers the bridge's marker generation and submit after its ready line, the
@@ -176,7 +183,7 @@ def observe(candidate, seconds, stop, *, backend_factory, marker_client, config=
                     report["warmup_frames_without_marker"] = report.get("warmup_frames_without_marker", 0) + 1
                     return
                 raise
-            if time.monotonic() >= deadline:
+            if time.monotonic() >= deadline + PROCESSING_GRACE_SECONDS:
                 raise ValueError("marker_processing_exceeded_observation_deadline")
         def on_progress(_report):
             if not marker_started:
