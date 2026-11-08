@@ -103,6 +103,9 @@ MATRIX = (
     glob("allow-glob-run-results", "positive-control", "*/result.json", "artifacts/agent-runs", expect=ALLOW),
     write("allow-write-run-summary", "positive-control", f"{RUN}/summary.md", ALLOW),
     write("allow-edit-run-summary", "positive-control", f"{{root}}/{RUN}/summary.md", ALLOW, tool="Edit"),
+    # Monitor gets the Bash check (the settings deny Monitor outright; the guard is the backstop).
+    Case("allow-monitor-runner-list", "positive-control", ALLOW, "", "Monitor", {"command": f"{RUNNER} list"}),
+    Case("monitor-chain-semicolon", "shell-syntax", BLOCK, "shell syntax", "Monitor", {"command": f"{RUNNER} list; id"}),
     # Shell syntax in the one allowed command.
     bash("shell-chain-semicolon", "shell-syntax", f"{RUNNER} list; id", reason="shell syntax"),
     bash("shell-pipe", "shell-syntax", f"{RUNNER} list | tee x", reason="shell syntax"),
@@ -125,8 +128,10 @@ MATRIX = (
          reason=UNSAFE[0][1]),
     bash("unsafe-camera-probe", "known-unsafe", "bash scripts/build_camera_probe.sh", reason=UNSAFE[1][1]),
     # The built probe's file name has a hyphen, which the known-unsafe pattern (camera_probe) does not match;
-    # it is still blocked, as every command but the runner is.
-    bash("other-camera-probe-binary", "other-command",
+    # bare, it is still blocked as every command but the runner is; with its opt-in flag the --allow- entry fires.
+    bash("other-camera-probe-binary", "other-command", "artifacts/camera-probe/sightcircuit-camera-probe",
+         reason="only allowed command"),
+    bash("unsafe-camera-probe-binary-opt-in", "known-unsafe",
          "artifacts/camera-probe/sightcircuit-camera-probe --allow-passthrough-interruption", reason=UNSAFE[0][1]),
     bash("unsafe-session-rehearsal", "known-unsafe", "python3 scripts/session_rehearsal.py --preflight", reason=UNSAFE[2][1]),
     bash("unsafe-service-start", "known-unsafe", "python3 scripts/service_rehearsal.py --start", reason=UNSAFE[3][1]),

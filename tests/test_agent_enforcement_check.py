@@ -39,20 +39,24 @@ class MatrixTests(unittest.TestCase):
         self.assertEqual(len(ids), len(set(ids)))
         self.assertTrue(all(re.fullmatch(r"[a-z0-9-]+", case_id) for case_id in ids), "ids carry no paths")
         tools = {case.tool for case in check.MATRIX if case.tool}
-        self.assertEqual(tools, guard.SHELL_TOOLS - {"Monitor"} | guard.READ_TOOLS | guard.WRITE_TOOLS | guard.BLOCKED_TOOLS)
+        self.assertEqual(tools, guard.SHELL_TOOLS | guard.READ_TOOLS | guard.WRITE_TOOLS | guard.BLOCKED_TOOLS)
         self.assertGreaterEqual(sum(case.expect == check.ALLOW for case in check.MATRIX), 10)
 
     def test_the_matrix_passes_through_the_imported_guard_and_through_the_hook(self):
         with tempfile.TemporaryDirectory() as temporary:
             root, outside = check.stage(Path(temporary))
+            lock = root / "artifacts/agent-runs/.lock"
+            before = (lock.read_text(), lock.stat().st_mtime_ns)
             for hook in (False, True):
                 with self.subTest(through_hook=hook):
                     outcomes = check.evaluate(root, outside, hook=hook)
                     self.assertEqual([outcome["id"] for outcome in outcomes if not outcome["ok"]], [])
                     self.assertEqual(len(outcomes), len(check.MATRIX))
-            # The runner refusals made no run, no lock and no listing file in the staged checkout.
+            # The runner refusals made no run and never took the lock: the staged lock file (a Write case names it)
+            # is untouched, and no listing file appeared in the staged checkout.
             self.assertEqual(sorted(path.name for path in (root / "artifacts/agent-runs").iterdir()),
                              [".lock", "20261102T120000Z-tier-a", "zz-forged"])
+            self.assertEqual((lock.read_text(), lock.stat().st_mtime_ns), before)
 
     def test_a_laxer_guard_is_caught(self):
         with tempfile.TemporaryDirectory() as temporary:
