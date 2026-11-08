@@ -227,7 +227,9 @@ the draft in the
 The D2 budget was exhausted on 2026-11-08 ([E90](evidence/e090.md)) and the
 owner chose this design; it is being built as
 [lane F](live-capture.md#architecture-plan-work-order-2026-11-07)
-of the work order, after the bridge split E1.
+of the work order, after the bridge split E1. F1, the bridge's visibility
+opcode and timestamped visibility lines, is implemented (2026-11-08,
+cloud-checked; [the contract](reference/hud-fallback.md#bridge-events)).
 
 ## Milestones and acceptance checks
 

@@ -78,15 +78,18 @@ def _sections():
          _layout("Settings", contract.SETTINGS_FIELDS) +
          _layout("FramePrefix", contract.FRAME_PREFIX_FIELDS) +
          _layout("ExpiringFramePrefix", contract.EXPIRING_FRAME_PREFIX_FIELDS) +
+         _layout("Visibility", contract.VISIBILITY_FIELDS) +
          [("kOpcodeFrame", UINT32, contract.OPCODE_FRAME), ("kOpcodeSettings", UINT32, contract.OPCODE_SETTINGS),
           ("kOpcodeStop", UINT32, contract.OPCODE_STOP),
-          ("kOpcodeExpiringFrame", UINT32, contract.OPCODE_EXPIRING_FRAME)]),
+          ("kOpcodeExpiringFrame", UINT32, contract.OPCODE_EXPIRING_FRAME),
+          ("kOpcodeVisibility", UINT32, contract.OPCODE_VISIBILITY)]),
         ("Limits: sightcircuit.hud.contract",
          [("kMarkerMinSeconds", "int", contract.MARKER_MIN_SECONDS),
           ("kMarkerMaxSeconds", "int", contract.MARKER_MAX_SECONDS),
           ("kMaxDisplayAgeNs", "std::uint64_t", contract.MAX_DISPLAY_AGE_NS),
           ("kMaxSide", UINT32, contract.MAX_SIDE), ("kRgbaBytes", UINT32, contract.RGBA_BYTES),
-          ("kBridgeConnectBudgetSeconds", UINT32, contract.BRIDGE_CONNECT_BUDGET_SECONDS)]),
+          ("kBridgeConnectBudgetSeconds", UINT32, contract.BRIDGE_CONNECT_BUDGET_SECONDS),
+          ("kVisibilityEventBoundNs", "std::uint64_t", contract.VISIBILITY_EVENT_BOUND_NS)]),
         ("Panel limits and defaults: sightcircuit.overlay.PANEL_LIMITS and PanelSettings",
          panel_limits + _record("PanelDefault", overlay.PanelSettings())),
     )

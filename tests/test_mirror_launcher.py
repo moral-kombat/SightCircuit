@@ -43,14 +43,14 @@ class StopOnSignalTests(unittest.TestCase):
 
     def test_worker_signals_set_its_stop_event(self):
         restore_handlers(self, signal.SIGINT, signal.SIGTERM)
+        self.assertFalse(guard.stop_on_signals().is_set())  # Before any signal: nothing is set unasked.
         for number in (signal.SIGINT, signal.SIGTERM):
             with self.subTest(signal=number):
                 given = threading.Event()
                 stop = guard.stop_on_signals(given)
                 self.assertIs(stop, given)
                 signal.raise_signal(number)
-                self.assertTrue(stop.is_set())
-        self.assertFalse(guard.stop_on_signals().is_set())
+                self.assertTrue(stop.wait(2))  # Set by the stop relay's thread, not by the handler itself.
 
     def test_the_mirror_worker_runs_on_the_primitive_with_the_bounded_workers_budgets(self):
         # The retired spawned-worker supervisor joined 0.5 s, then terminated and killed with 1 s each.

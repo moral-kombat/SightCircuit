@@ -61,6 +61,13 @@ public:
     bool overlay_shown_event_seen = false, overlay_hidden_event_seen = false;
     std::uint64_t calibration_show_deadline_ns = 0;
     Settings config;
+    // The one visibility request (stream mode, opcode visibility) whose runtime event is awaited, and
+    // whether this run is validation-only (reported on every visibility line). Fallback item F1.
+    bool validation_only = false;
+    bool visibility_pending = false, visibility_pending_hide = false;
+    std::uint32_t visibility_cycle = 0;
+    std::uint64_t visibility_request_ns = 0;
+    std::uint32_t visibility_events_missing = 0;
     ~Overlay() { close(); }
     // Lifecycle: connect, error names and close.
     void check(vr::EVROverlayError e, const char* op);
@@ -75,6 +82,12 @@ public:
     void events();
     void calibration_visibility(Json::Value& sample);
     void view_record(Json::Value& connect, Json::Value& record);
+    // Sensing: the awaited visibility event of a cycle. await_visibility() settles a still pending request
+    // first; settle_visibility() reports a request (hide or show) whose matching event has not been polled
+    // within the bound (or at all, with force) as visibility_event_missing, once. Every request therefore
+    // ends in exactly one terminal line: overlay_hidden, overlay_shown or visibility_event_missing.
+    void await_visibility(std::uint32_t cycle, bool hide, std::uint64_t request_ns);
+    void settle_visibility(std::uint64_t now, bool force = false);
 };
 
 // Lifecycle (overlay_bridge_lifecycle.cpp): arm a watchdog phase with its
@@ -100,6 +113,13 @@ void emit_ready(const std::string& mode, bool validate, bool marker, std::uint64
 void emit_test_panel_submitted(int seconds, bool api_visible);
 void emit_frame_expired(std::uint64_t deadline_ns, std::uint64_t observed_ns, bool validate);
 void emit_first_frame(bool validate, std::uint32_t width, std::uint32_t height);
+// The visibility lines of one fallback cycle (hud-fallback.md "Bridge events"): hide_requested or
+// show_requested, hide_returned or show_returned, overlay_hidden or overlay_shown, visibility_event_missing.
+void emit_visibility_requested(bool hide, std::uint32_t cycle, std::uint64_t request_ns, bool validate);
+void emit_visibility_returned(bool hide, std::uint32_t cycle, std::uint64_t returned_ns, bool ok, const char* call,
+                              const std::string& reason, bool validate);
+void emit_visibility_event(bool hide, std::uint32_t cycle, std::uint64_t observed_ns, bool validate);
+void emit_visibility_event_missing(std::uint32_t cycle, std::uint64_t waited_ns, bool validate);
 void record_run_end(Json::Value& report, const Overlay& overlay, bool marker, std::uint64_t marker_deadline_ns);
 int record_cleanup(Json::Value& report, const Overlay& overlay, bool marker, bool watchdog_armed, bool ok,
                    int exit_code);

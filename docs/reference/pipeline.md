@@ -245,6 +245,17 @@ The primitive offers:
   each bounded by the report byte limit; events are dispatched, not kept. The
   synthetic run's worker streams `run_pipeline`'s snapshots this way;
   `supervise_synthetic(options, progress=...)` receives them.
+- **The worker's stop relay** (`stop_on`, behind `guard.stop_on_signals`).
+  A stop signal sets the worker's `threading.Event` from a relay thread that
+  the signal's C-level delivery wakes through the process's wakeup descriptor
+  (`signal.set_wakeup_fd`); the Python-level handler itself only writes a byte
+  to that pipe and takes no lock. The earlier handler called `Event.set()` on
+  the main thread, which deadlocked when the signal landed inside the worker's
+  own `Event.wait()` (its condition lock is not reentrant), and was not run at
+  all while the main thread blocked, uninterrupted, in the wait's lock acquire;
+  both ended a cooperative worker by SIGKILL after the whole cooperative grace
+  ([held-signal flake root cause](development-checks.md#held-signal-flake-root-cause-2026-11-08)).
+  A forked child forgets the relay, so it cannot write into its parent's pipe.
 - **One report block**: `status`, `exit_code`, `cleanup_ok`, `reason`,
   `worker_pid`, `worker_armed`, `worker_reaped`, `worker_exit_code`,
   `worker_tree_reaped`, `report_reader_stopped`, `worker_forced_termination`,
@@ -253,7 +264,9 @@ The primitive offers:
   field that existed before keeps its meaning.
 
 `tests/test_supervision.py` covers the policies, the hold, the stream, the
-budgets and the handshake; `tests/test_bounded_worker.py` covers the guard on
+budgets, the handshake and the stop relay (a signal inside the event's own
+critical section, and one the main thread cannot handle yet, both still stop
+the worker promptly); `tests/test_bounded_worker.py` covers the guard on
 it with real subprocess chains, including a cancellation that arrives before
 the worker has armed and a worker that never arms.
 

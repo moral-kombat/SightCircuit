@@ -13,7 +13,8 @@ import time
 from .gates import LIVE_HUD_OUTPUT
 from .hud.contract import (BRIDGE_READY_WAIT_SECONDS, EXPIRING_FRAME_PREFIX_FORMAT, FRAME_PREFIX_FORMAT, HUD_CONFIG,
                            MAX_DISPLAY_AGE_NS, MAX_SIDE, OPCODE_EXPIRING_FRAME, OPCODE_FRAME, OPCODE_SETTINGS, OPCODE_STOP,
-                           PACKET_HEADER_FORMAT, PACKET_MAGIC, RGBA_BYTES, SETTINGS_FORMAT)
+                           OPCODE_VISIBILITY, PACKET_HEADER_FORMAT, PACKET_MAGIC, RGBA_BYTES, SETTINGS_FORMAT,
+                           VISIBILITY_FORMAT)
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BRIDGE = ROOT / "artifacts/overlay-bridge/sightcircuit-overlay-bridge"
@@ -23,6 +24,20 @@ PANEL_LIMITS = (("width", .25, 1.5), ("distance", .5, 3), ("x", -1, 1), ("y", -1
 
 def packet(kind, payload=b""):
     return struct.pack(PACKET_HEADER_FORMAT, PACKET_MAGIC, kind, len(payload)) + payload
+
+
+def visibility_packet(cycle, visible):
+    """The show (``True``) or hide request of fallback cycle ``cycle`` (``OPCODE_VISIBILITY``).
+
+    Encoding only: no client sends it yet (work item F2 adds the cycle API and
+    the event queue). The bridge answers with the timestamped visibility lines
+    of ``sightcircuit.hud.contract.VISIBILITY_LINES``, each carrying ``cycle``.
+    """
+    if type(cycle) is not int or not 0 <= cycle < 2 ** 32:
+        raise ValueError("visibility_cycle_out_of_range")
+    if type(visible) is not bool:
+        raise ValueError("Panel visibility must be boolean")
+    return packet(OPCODE_VISIBILITY, struct.pack(VISIBILITY_FORMAT, cycle, int(visible)))
 
 
 def _zero(value):
