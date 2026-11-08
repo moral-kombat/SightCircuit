@@ -194,10 +194,11 @@ not as evidence. Also merged since: B4 (#19), B7 (#18), B8 (#17), P1 (#15), P2
 (#22), A11 (#16). Merged on 2026-11-08 (UTC): A3b (#23, the manifest's
 SteamVR package reader), B5 (#27, the launchers on the primitive and
 `runtime/process.py` retired), B6 (#28, the capture supervisor's record-and-poll
-policy under the unchanged quarantine rule), C7 and C8 (#31). Lanes B and P are
-complete. Open: A5 (the marker or decode change for the mirror's scale, in
-review, then the last budgeted attempt under a new approval), A7 to A10, C3b
-(in review), C5 and C6 (device, approval), E1. The council's hypothesis for the
+policy under the unchanged quarantine rule), C7 and C8 (#31), C3b (#30, the
+box-annotation window the C5 session needs; exercised offscreen only). Lanes B
+and P are complete. Open: A5 (the decode change for the mirror's scale, in
+review, then the last budgeted attempt under a new approval), A7 to A10, the C8
+follow-up (#33, in review), C5 and C6 (device, approval), E1. The council's hypothesis for the
 cancellation race was wrong; the recorded cause is the readiness probe firing
 on the worker before it had exec'd ([checks reference](reference/development-checks.md)).
 
