@@ -39,6 +39,7 @@ sightcircuit-evaluate-detectors = "sightcircuit.commands.evaluate_detectors:main
 sightcircuit-generate-status = "sightcircuit.commands.generate_status:main"
 sightcircuit-mirror-check = "sightcircuit.commands.mirror_check:main"
 sightcircuit-frame-session-manifest = "sightcircuit.commands.frame_session_manifest:main"
+sightcircuit-annotate-boxes = "sightcircuit.commands.annotate_boxes:main"
 
 [tool.setuptools.packages.find]
 include = ["sightcircuit*"]

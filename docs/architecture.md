@@ -178,8 +178,8 @@ rest is a design; no diagnostic command exists.
 ### Commands and packaging
 
 Implemented on 2026-11-07 (P1, P2): one hashed lock per requirement set,
-installed by the setup scripts; the bodies of the ten active commands in
-`sightcircuit/commands/`, each `scripts/<name>.py` a thin wrapper that is the
+installed by the setup scripts; the bodies of the active commands (ten at P2,
+the box-annotation window since C3b) in `sightcircuit/commands/`, each `scripts/<name>.py` a thin wrapper that is the
 body module when imported and runs it when executed, and a `sightcircuit-<name>`
 console entry point per command. The two commands that re-spawn a worker do so
 by their own file path, the validators keep resolving by dotted name under

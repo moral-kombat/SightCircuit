@@ -209,6 +209,7 @@ jobs:
             tests/test_frame_session.py tests/test_generate_status.py tests/test_hud_qualification.py \
             tests/test_capture_context.py tests/test_scripts_boundary.py tests/test_gates.py tests/test_hud_contract.py \
             tests/test_frame_session_commands.py tests/test_frame_session_manifest.py tests/test_checkpoint_manifest.py \
+            tests/test_annotate_boxes.py \
             tests/test_hud_candidate.py tests/test_hud_calibration.py tests/test_hud_validation.py \
             tests/test_report_characterization.py tests/test_mirror_launcher.py tests/test_latency_statistics.py \
             tests/test_frame_agent.py tests/test_frame_agent_commands.py tests/test_frame_claude_install.py \

@@ -38,6 +38,23 @@ class ManifestTests(unittest.TestCase):
             manifest.add_image(self.path, "rug", self.image, [], [])
         self.assertEqual(self.path.read_text(), before)
 
+    def test_replace_rewrites_the_entry_in_place(self):
+        manifest.add_image(self.path, "rug", self.image, ["chair"], ["couch"])
+        manifest.add_image(self.path, "tv", self.image, [], [])
+        boxes = [{"label": "chair", "box_xyxy": [10, 20, 110, 220]}]
+        manifest.add_image(self.path, "rug", self.image, ["chair"], ["couch"], objects=boxes, boxes_complete=True,
+                           replace=True)
+        data = json.loads(self.path.read_text())
+        self.assertEqual([entry["id"] for entry in data["images"]], ["rug", "tv"])
+        self.assertEqual(data["images"][0], {"id": "rug", "path": "room.png", "present": ["chair"],
+                                             "absent": ["couch"], "objects": boxes, "boxes_complete": True})
+        manifest.main(["--manifest", str(self.path), "--id", "tv", "--image", str(self.image),
+                       "--object", "tv:1,2,3,4", "--replace"])
+        self.assertEqual(json.loads(self.path.read_text())["images"][1]["objects"],
+                         [{"label": "tv", "box_xyxy": [1, 2, 3, 4]}])
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):  # Without --replace, as before.
+            manifest.main(["--manifest", str(self.path), "--id", "tv", "--image", str(self.image)])
+
     def still_report(self, **changes):
         report = {"report_kind": "steamvr_mirror_recognition", "status": "recognized", "exit_code": 0,
                   "still_path": str(self.image.resolve()), "still_detector": "yolox-nano",

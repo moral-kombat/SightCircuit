@@ -46,7 +46,8 @@ reported. Optional `objects` give `label`, source-pixel `box_xyxy` and
 confusable detection overlapping the object at IoU 0.3 is a confusion. Set
 `boxes_complete: true` only when every supported object is boxed, enabling
 false-positive and precision counts. The manifest helper's `--object
-label:x1,y1,x2,y2` and `--boxes-complete` write these
+label:x1,y1,x2,y2` and `--boxes-complete` write these, as does the
+box-annotation window (`scripts/annotate_boxes.py`) through the same helper
 ([procedure](../guides/mirror-recognition.md#compare-detectors-on-frame-stills)).
 Labels a detector cannot output are reported as unsupported. An entry may not repeat a `present` or `absent` label,
 including under another name for the same canonical label (`sofa` and `couch`),

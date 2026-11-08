@@ -182,9 +182,39 @@ absence lists are unchanged:
 ```
 
 Without `--object` the entry stays presence-only, as the session script
-writes it. The representative set for the default-detector decision needs at
+writes it; to rewrite an entry that exists, for example to add boxes to a
+presence-only one, add `--replace`. The representative set for the
+default-detector decision needs at
 least twenty boxed chair stills ([D6](../poc-scope.md#architecture-decisions-2026-11-07));
 the evaluator's `box_recall_by_label.chair` is the number that rule reads.
+
+Drawing the boxes is quicker than reading corners by hand. The box-annotation
+window opens the stills of a directory one at a time on the Frame desktop (the
+replay window's Qt, so `.venv-replay` and the graphical session):
+
+```bash
+.venv-replay/bin/python scripts/annotate_boxes.py evaluation/local --label chair
+```
+
+Drag a rectangle over each object; its label is the one selected in the
+toolbar's canonical-name list (`--label` chooses the one shown first). Right
+arrow, Space, N or Next saves the still's entry and shows the next still; Left
+arrow, P or Previous saves and goes back; Z, Backspace or Undo removes the last
+box; the "Boxes complete" box and the absent-labels field set `boxes_complete`
+and `absent`. Closing the window saves the still on screen. Every entry is
+written through the manifest helper's `--object` path with `--replace`, under
+the still's file stem as its id (the id the procedure above uses), so a
+presence-only entry from the session script gains its boxes in place and keeps
+its `present` and `absent` labels; boxed labels join `present`, and a label
+that is both boxed and listed absent is refused before anything is written.
+When the still's capture report (`<stem>.json`, saved beside it by the
+procedure above) exists, the entry is pinned by the report's SHA-256 exactly as
+`--still-report` does, and a box outside the recorded still size is refused.
+Stills are read and never written; the window writes the manifest and nothing
+else, lists only the stills directly in the directory (an `invalid-*/` folder
+is not entered), and prints a JSON summary of the entries it wrote. The
+stills, their reports and `frame.json` stay in ignored `evaluation/local/` on
+the device and never enter the repository or a pull request.
 
 Compare both detectors on those same inputs, requiring every entry to have a digest:
 

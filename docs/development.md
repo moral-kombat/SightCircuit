@@ -71,11 +71,13 @@ them.
 
 ### Commands and entry points (2026-11-07)
 
-The bodies of the ten active commands live in `sightcircuit/commands/`
+The bodies of the eleven active commands live in `sightcircuit/commands/`
 (`replay_window`, `mirror_recognize`, `live_pipeline`, `hud_marker_check`,
 `hud_marker_observer`, `hud_validation_report`, `evaluate_detectors`,
 `generate_status`, `mirror_check`, `frame_session_manifest`; decision D5 and the
-"Active entry points" call). Each `scripts/<name>.py` is a thin wrapper: run as
+"Active entry points" call; `annotate_boxes`, the
+[box-annotation window](guides/mirror-recognition.md#compare-detectors-on-frame-stills),
+joined on 2026-11-08 for work-order item C3b). Each `scripts/<name>.py` is a thin wrapper: run as
 a file it adds the checkout root to `sys.path` and calls the body's `main`, so
 every documented `python3 scripts/<name>.py` command keeps working on the Frame
 without installation; imported as `scripts.<name>` it is the body module

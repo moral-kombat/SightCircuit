@@ -9,7 +9,8 @@ presence-only, as before. With ``--still-report`` (the JSON that
 ``mirror_recognize.py --still`` printed), the entry also pins the still's SHA-256 from
 that capture report, which ``evaluate_detectors.py`` verifies (and
 ``--require-input-digests`` requires), plus its detector, source and sequence, and
-every box must fit the still's recorded size.
+every box must fit the still's recorded size. ``--replace`` rewrites the entry that already
+carries the id (for example to add boxes to a presence-only entry) instead of refusing it.
 """
 import argparse
 import hashlib
@@ -87,13 +88,19 @@ def still_fields(report, image):
     return {"sha256": digest, "capture": capture}
 
 
-def add_image(manifest, image_id, image, present, absent, still_report=None, objects=(), boxes_complete=False):
-    """Append one entry; ``objects`` and ``boxes_complete`` are written only when given."""
+def add_image(manifest, image_id, image, present, absent, still_report=None, objects=(), boxes_complete=False,
+              replace=False):
+    """Append one entry; ``objects`` and ``boxes_complete`` are written only when given.
+
+    With ``replace`` an entry that already carries ``image_id`` is rewritten in
+    place, keeping its position; without it a repeated id is refused.
+    """
     manifest = Path(manifest)
     data = json.loads(manifest.read_text()) if manifest.exists() else {"schema_version": 1, "images": []}
     if data.get("schema_version") != 1 or not isinstance(data.get("images"), list):
         raise ValueError("Unsupported manifest")
-    if any(entry.get("id") == image_id for entry in data["images"]):
+    existing = [index for index, entry in enumerate(data["images"]) if entry.get("id") == image_id]
+    if existing and not replace:
         raise ValueError(f"Image id already present: {image_id}")
     pinned = still_fields(still_report, image) if still_report is not None else {}
     objects = list(objects)
@@ -103,8 +110,11 @@ def add_image(manifest, image_id, image, present, absent, still_report=None, obj
     if boxes_complete:
         boxes["boxes_complete"] = True
     relative = os.path.relpath(Path(image).resolve(), manifest.parent.resolve())
-    data["images"].append({"id": image_id, "path": Path(relative).as_posix(),
-                           "present": present, "absent": absent, **boxes, **pinned})
+    entry = {"id": image_id, "path": Path(relative).as_posix(), "present": present, "absent": absent, **boxes, **pinned}
+    if existing:
+        data["images"][existing[0]] = entry
+    else:
+        data["images"].append(entry)
     manifest.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", dir=manifest.parent, suffix=".tmp", delete=False) as handle:
         json.dump(data, handle, indent=2)
@@ -125,6 +135,8 @@ def main(argv=None):
                         help="Every supported object in the still is boxed (unmatched detections become false positives)")
     parser.add_argument("--still-report", type=Path,
                         help="JSON report of the mirror_recognize.py --still run that saved --image")
+    parser.add_argument("--replace", action="store_true",
+                        help="Rewrite the entry that already has this id instead of refusing it")
     args = parser.parse_args(argv)
     if not args.image.is_file():
         sys.exit(f"Image not found: {args.image}")
@@ -134,7 +146,7 @@ def main(argv=None):
         if report is not None and not isinstance(report, dict):
             raise ValueError("Still report must be a JSON object")
         add_image(args.manifest, args.id, args.image, split(args.present), split(args.absent), report,
-                  objects, args.boxes_complete)
+                  objects, args.boxes_complete, replace=args.replace)
     except (OSError, ValueError) as error:
         sys.exit(str(error))
 
