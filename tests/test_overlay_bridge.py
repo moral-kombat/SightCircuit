@@ -513,6 +513,8 @@ class MarkerVisibilityLineTests(unittest.TestCase):
                 self.assertTrue(final["cleanup_ok"])
                 self.assertFalse(final["runtime_initialized"])
                 self.assertEqual(final["visibility_requests_received"], 0)
+                # Never accepted as an image, whatever the packet: pinned here as in test_hud_marker_check.
+                self.assertEqual((final["frames_submitted"], final["input_frames_accepted"]), (0, False))
 
     def test_a_request_may_arrive_in_pieces(self):
         data = visibility_packet(4, False)

@@ -242,7 +242,7 @@ void stream(Overlay& overlay, bool validate, Json::Value& report) {
             report["settings_received"] = report["settings_received"].asUInt()+1;
         } else if (kind == contract::kOpcodeVisibility) {
             visible = overlay.visibility_request(payload, validate, report);
-                } else {
+        } else {
             const auto frame = sightcircuit_overlay::decode_frame(kind, payload);
             const auto w = frame.width, h = frame.height;
             const auto requested_expiry = frame.expiry;

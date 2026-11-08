@@ -31,9 +31,10 @@ def new_report(validation_only=True):
 class MarkerClient(OverlayClient):
     """Reuse the bounded native JSON reader/cleanup; never create a frame writer.
 
-    Native marker mode never reads stdin, so a requested stop (``close``)
-    closes stdin and waits for the bridge's own display deadline plus
-    ``STOP_GRACE_SECONDS``. Cancellation (the ``stop`` event), a ready
+    Native marker mode reads stdin for the fallback's visibility request only
+    (F3a) and its display timer ignores end of input, so a requested stop
+    (``close``) closes stdin and waits for the bridge's own display deadline
+    plus ``STOP_GRACE_SECONDS``. Cancellation (the ``stop`` event), a ready
     timeout or an overrun escalates to SIGTERM then SIGKILL, reported as forced.
     """
     cancel = None
@@ -71,12 +72,13 @@ class MarkerClient(OverlayClient):
         # The native timer started before its ready line, so this bounds its
         # deadline from above: a stop never escalates before the timer ends.
         self.marker_deadline = time.monotonic() + seconds
-        # Native marker mode ignores stdin and creates its own opaque pixels.
+        # Native marker mode takes no frame or settings packet (it creates its own opaque pixels and
+        # refuses both), only the fallback's visibility request, which this client never sends.
         # In particular, no inherited OverlayClient._write thread is started.
         return self
 
     def _request_stop(self):
-        """Close stdin as the stop request; marker mode ignores it and keeps its timer."""
+        """Close stdin as the stop request; marker mode ignores the close and keeps its timer."""
         self.process.stdin.close()
         return True
 
