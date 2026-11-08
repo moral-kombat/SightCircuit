@@ -124,9 +124,13 @@ void emit_visibility_requested(bool hide, std::uint32_t cycle, std::uint64_t req
     line["request_ns"] = Json::UInt64(request_ns);
     emit(line);
 }
-void emit_visibility_returned(bool hide, std::uint32_t cycle, std::uint64_t returned_ns, bool ok, bool validate) {
+void emit_visibility_returned(bool hide, std::uint32_t cycle, std::uint64_t returned_ns, bool ok, const char* call,
+                              const std::string& reason, bool validate) {
+    // call names the OpenVR call actually made ("none" in validation); ok is whether that call was the requested
+    // transition and returned without error, and reason says why not (no_image, or the call's error name).
     auto line = visibility_line(hide ? "hide_returned" : "show_returned", cycle, validate);
-    line["returned_ns"] = Json::UInt64(returned_ns); line["ok"] = ok;
+    line["returned_ns"] = Json::UInt64(returned_ns); line["ok"] = ok; line["call"] = call;
+    if (!ok) line["reason"] = reason;
     emit(line);
 }
 void emit_visibility_event(bool hide, std::uint32_t cycle, std::uint64_t observed_ns, bool validate) {

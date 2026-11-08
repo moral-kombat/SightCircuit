@@ -266,9 +266,10 @@ class OverlayBridgeTests(unittest.TestCase):
 class VisibilityLineTests(unittest.TestCase):
     """The fallback's visibility lines (work item F1) on the validation bridge: software timing, no runtime.
 
-    Without a runtime no overlay event can arrive, so every hide ends in
+    Without a runtime no overlay event can arrive, so every request ends in
     ``visibility_event_missing``: the fail-closed path is what these tests
-    exercise. ``overlay_hidden`` and ``overlay_shown`` need a device run.
+    exercise. ``overlay_hidden`` and ``overlay_shown`` need a device run, and
+    nothing is ever presented here, so every show returns ``no_image``.
     """
 
     def setUp(self):
@@ -305,24 +306,27 @@ class VisibilityLineTests(unittest.TestCase):
         lines = self.visibility_lines(messages)
         self.assertEqual([(line["event"], line["cycle"]) for line in lines],
                          [("hide_requested", 7), ("hide_returned", 7), ("visibility_event_missing", 7),
-                          ("show_requested", 8), ("show_returned", 8)])
-        requested, returned, missing, show_requested, show_returned = lines
+                          ("show_requested", 8), ("show_returned", 8), ("visibility_event_missing", 8)])
+        requested, returned, missing, show_requested, show_returned, show_missing = lines
         self.assertEqual(set(requested), {"event", "cycle", "request_ns", "validation_only", "report_kind", "schema_version"})
-        self.assertEqual(set(returned), {"event", "cycle", "returned_ns", "ok", "validation_only", "report_kind", "schema_version"})
+        self.assertEqual(set(returned), {"event", "cycle", "returned_ns", "ok", "call", "validation_only", "report_kind",
+                                         "schema_version"})
         self.assertEqual(set(missing), {"event", "cycle", "waited_ns", "validation_only", "report_kind", "schema_version"})
         self.assertTrue(all(line["validation_only"] is True for line in lines))
-        self.assertIs(returned["ok"], True)
-        self.assertIs(show_returned["ok"], True)
+        # Validation makes no OpenVR call: the hide is the requested transition; a show has nothing to show.
+        self.assertEqual((returned["ok"], returned["call"]), (True, "none"))
+        self.assertEqual((show_returned["ok"], show_returned["call"], show_returned["reason"]), (False, "none", "no_image"))
         self.assertLessEqual(requested["request_ns"], returned["returned_ns"])
         self.assertLessEqual(returned["returned_ns"], show_requested["request_ns"])
         self.assertGreaterEqual(missing["waited_ns"], VISIBILITY_EVENT_BOUND_NS)
         self.assertLess(missing["waited_ns"], VISIBILITY_EVENT_BOUND_NS + 1_000_000_000)
+        self.assertGreaterEqual(show_missing["waited_ns"], VISIBILITY_EVENT_BOUND_NS)
         # The bound is polled, not slept: the stdin loop went on reading, and the show after it carried the
         # tile's presentation state while the hide had switched it off.
         self.assertEqual(messages.index(missing), messages.index(show_requested) - 1)
         final = messages[-1]
         self.assertEqual((final["status"], final["frames_received"], final["visibility_requests_received"],
-                          final["visibility_events_missing"]), ("validated", 1, 2, 1))
+                          final["visibility_events_missing"]), ("validated", 1, 2, 2))
         self.assertIs(final["presentation_visible"], True)  # shown again, the frame still current
         self.assertNotIn("overlay_hidden", [line["event"] for line in lines])
         self.assertNotIn("overlay_shown", [line["event"] for line in lines])
@@ -340,7 +344,9 @@ class VisibilityLineTests(unittest.TestCase):
         self.assertLess(self.visibility_lines(messages)[-1]["waited_ns"], VISIBILITY_EVENT_BOUND_NS)
         self.assertEqual(final["visibility_events_missing"], 1)
 
-    def test_a_new_request_settles_a_pending_hide_before_its_own_lines_and_a_pending_show_silently(self):
+    def test_a_new_request_settles_the_pending_one_before_its_own_lines_hide_or_show(self):
+        # Exactly one terminal line per request, written before the superseding request's lines; waited_ns is
+        # then under the bound, as it is at input end.
         messages, code = self.run_steps([(visibility_packet(1, False), 0.05), (visibility_packet(2, False), 0.05),
                                          (visibility_packet(3, True), 0.05), (visibility_packet(4, False), 0.05),
                                          (packet(3), 0)])
@@ -348,11 +354,11 @@ class VisibilityLineTests(unittest.TestCase):
         self.assertEqual([(line["event"], line["cycle"]) for line in self.visibility_lines(messages)],
                          [("hide_requested", 1), ("hide_returned", 1), ("visibility_event_missing", 1),
                           ("hide_requested", 2), ("hide_returned", 2), ("visibility_event_missing", 2),
-                          ("show_requested", 3), ("show_returned", 3),
+                          ("show_requested", 3), ("show_returned", 3), ("visibility_event_missing", 3),
                           ("hide_requested", 4), ("hide_returned", 4), ("visibility_event_missing", 4)])
         missing = [line for line in self.visibility_lines(messages) if line["event"] == "visibility_event_missing"]
         self.assertTrue(all(line["waited_ns"] < VISIBILITY_EVENT_BOUND_NS for line in missing))
-        self.assertEqual((messages[-1]["visibility_requests_received"], messages[-1]["visibility_events_missing"]), (4, 3))
+        self.assertEqual((messages[-1]["visibility_requests_received"], messages[-1]["visibility_events_missing"]), (4, 4))
 
     def test_marker_mode_and_the_settings_packet_are_unchanged(self):
         result = subprocess.run([str(DEFAULT_BRIDGE), "--validate-calibration-marker", "--seconds", "1"],

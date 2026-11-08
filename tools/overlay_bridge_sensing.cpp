@@ -120,13 +120,11 @@ void Overlay::await_visibility(std::uint32_t cycle, bool hide, std::uint64_t req
 void Overlay::settle_visibility(std::uint64_t now, bool force) {
     if (!visibility_pending) return;
     if (!force && now < visibility_request_ns + contract::kVisibilityEventBoundNs) return;
-    // Fail closed: a hide without its hidden event is reported once and opens no window; a show that
-    // was never confirmed is forgotten without a line, as the design specifies the missing line for hides.
-    if (visibility_pending_hide) {
-        emit_visibility_event_missing(visibility_cycle, now > visibility_request_ns ? now - visibility_request_ns : 0,
-                                      validation_only);
-        ++visibility_events_missing;
-    }
+    // Fail closed: a request without its matching event is reported once, so the Python side sees exactly one
+    // terminal line per request; for a hide that means no admission window this cycle.
+    emit_visibility_event_missing(visibility_cycle, now > visibility_request_ns ? now - visibility_request_ns : 0,
+                                  validation_only);
+    ++visibility_events_missing;
     visibility_pending = false;
 }
 namespace {
@@ -224,14 +222,20 @@ void stream(Overlay& overlay, bool validate, Json::Value& report) {
             emit_visibility_requested(hide, cycle, request_ns, validate);
             visible = !hide;
             overlay.config.visible = visible;
+            // visibility() shows only while an image is presented and hides otherwise, so a show request with
+            // no image (the frame expired during the hidden window, or validation, where nothing is ever
+            // presented) makes a HideOverlay call: the return line says so and no shown event can follow.
+            const bool can_show = !hide && overlay.has_image;
+            const char* call = validate ? "none" : can_show ? "ShowOverlay" : "HideOverlay";
+            const bool ok = hide || can_show;
             if (!validate) {
                 try { overlay.visibility(); }
-                catch (const std::exception&) {
-                    emit_visibility_returned(hide, cycle, monotonic_ns(), false, validate);
+                catch (const std::exception& error) {
+                    emit_visibility_returned(hide, cycle, monotonic_ns(), false, call, error.what(), validate);
                     throw;
                 }
             }
-            emit_visibility_returned(hide, cycle, monotonic_ns(), true, validate);
+            emit_visibility_returned(hide, cycle, monotonic_ns(), ok, call, ok ? "" : "no_image", validate);
             overlay.await_visibility(cycle, hide, request_ns);
         } else {
             const auto frame = sightcircuit_overlay::decode_frame(kind, payload);
@@ -255,7 +259,7 @@ void stream(Overlay& overlay, bool validate, Json::Value& report) {
         }
         expire();
     }
-    // Input ended (stop or EOF) with a request still pending: a hide is reported missing, fail closed.
+    // Input ended (stop or EOF) with a request still pending: it is reported missing, fail closed.
     overlay.settle_visibility(monotonic_ns(), true);
     report["visibility_events_missing"] = overlay.visibility_events_missing;
 }

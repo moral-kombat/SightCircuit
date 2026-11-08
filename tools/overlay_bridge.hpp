@@ -83,8 +83,9 @@ public:
     void calibration_visibility(Json::Value& sample);
     void view_record(Json::Value& connect, Json::Value& record);
     // Sensing: the awaited visibility event of a cycle. await_visibility() settles a still pending request
-    // first; settle_visibility() reports a hide whose hidden event has not been polled within the bound
-    // (or at all, with force) as visibility_event_missing, once, and forgets a pending show silently.
+    // first; settle_visibility() reports a request (hide or show) whose matching event has not been polled
+    // within the bound (or at all, with force) as visibility_event_missing, once. Every request therefore
+    // ends in exactly one terminal line: overlay_hidden, overlay_shown or visibility_event_missing.
     void await_visibility(std::uint32_t cycle, bool hide, std::uint64_t request_ns);
     void settle_visibility(std::uint64_t now, bool force = false);
 };
@@ -115,7 +116,8 @@ void emit_first_frame(bool validate, std::uint32_t width, std::uint32_t height);
 // The visibility lines of one fallback cycle (hud-fallback.md "Bridge events"): hide_requested or
 // show_requested, hide_returned or show_returned, overlay_hidden or overlay_shown, visibility_event_missing.
 void emit_visibility_requested(bool hide, std::uint32_t cycle, std::uint64_t request_ns, bool validate);
-void emit_visibility_returned(bool hide, std::uint32_t cycle, std::uint64_t returned_ns, bool ok, bool validate);
+void emit_visibility_returned(bool hide, std::uint32_t cycle, std::uint64_t returned_ns, bool ok, const char* call,
+                              const std::string& reason, bool validate);
 void emit_visibility_event(bool hide, std::uint32_t cycle, std::uint64_t observed_ns, bool validate);
 void emit_visibility_event_missing(std::uint32_t cycle, std::uint64_t waited_ns, bool validate);
 void record_run_end(Json::Value& report, const Overlay& overlay, bool marker, std::uint64_t marker_deadline_ns);

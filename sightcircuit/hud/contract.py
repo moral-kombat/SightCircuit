@@ -145,8 +145,12 @@ VISIBILITY_FORMAT = layout_format(VISIBILITY_FIELDS)
 # The bridge's lines for one visibility request, in its CLOCK_MONOTONIC nanoseconds (the clock of
 # Frame.observed_ns on the same host). The request and return lines are written for every request; the
 # event lines when the runtime's overlay event is polled while that request is pending; the missing line
-# when a hide request's hidden event has not been polled within VISIBILITY_EVENT_BOUND_NS, so a cycle
-# without a confirmed hide fails closed (no admission window). The bound is a cloud default: the bridge
+# when a request's matching event has not been polled within VISIBILITY_EVENT_BOUND_NS, or the request was
+# superseded or input ended first (waited_ns may then be under the bound), so every request ends in exactly
+# one terminal line and a cycle without a confirmed hide fails closed (no admission window). The returned
+# line names the call made (``call``: ShowOverlay, HideOverlay or none) and, when ``ok`` is false, the
+# ``reason`` (no_image for a show with nothing presented, else the call's error). The bound is a cloud
+# default: the bridge
 # polls runtime events on every input wait (20 ms), so it is a dozen polls, ten times the illustrative
 # 25 ms request-to-hidden term of the fallback costing and half of its fastest costed cycle (500 ms at
 # two per second), so a late event still confirms the hide within the cycle and a missing one is reported

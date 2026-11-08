@@ -106,10 +106,10 @@ the same host; the time-namespace caveat of
 | Line | When | Fields |
 | --- | --- | --- |
 | `hide_requested` | A visibility-off request is decoded, before `HideOverlay` | `cycle`, `request_ns` |
-| `hide_returned` | `HideOverlay` returned | `cycle`, `returned_ns`, `ok` |
-| `overlay_hidden` | `VREvent_OverlayHidden` polled | `cycle`, `observed_ns` |
+| `hide_returned` | `HideOverlay` returned | `cycle`, `returned_ns`, `ok`, `call` (the OpenVR call made: `HideOverlay`, `ShowOverlay`, or `none` in validation), `reason` when `ok` is false (`no_image` for a show with nothing presented, else the call's error name) |
+| `overlay_hidden` | `VREvent_OverlayHidden` polled while the hide is pending | `cycle`, `observed_ns` |
 | `show_requested`, `show_returned`, `overlay_shown` | The symmetric show transitions | as above |
-| `visibility_event_missing` | No hidden event within the bound after a hide request | `cycle`, `waited_ns` |
+| `visibility_event_missing` | No matching event (hidden for a hide, shown for a show) within the bound after the request, or the request was superseded by the next request or input ended first; `waited_ns` may then be under the bound. Every request ends in exactly one terminal line: the event line or this one | `cycle`, `waited_ns` |
 
 The `cycle` number lets the Python side correlate lines with its requests.
 The settings packet (`OPCODE_SETTINGS`, fixed layout) carries no such field,
@@ -131,23 +131,33 @@ yet (F2). The bridge's stream modes (`--stdin`, `--validate-stdin`) write the
 seven lines above with the fields in the table, each also carrying
 `validation_only` as `frame_expired` does; the marker and test-panel modes are
 unchanged. The request line is written before `ShowOverlay`/`HideOverlay`, the
-return line after it (`ok` false and then the run ends on a call error, as for
-every other call), and the event line when the runtime's overlay event is
+return line after it, naming the call made: the bridge's `visibility()` shows
+only while an image is presented and hides otherwise, so a show request with
+no image (the frame expired during the hidden window, or validation, where
+nothing is ever presented) makes a `HideOverlay` call and returns `ok` false
+with `reason` `no_image`, and no shown event can follow; a call error returns
+`ok` false with the error as `reason` and then ends the run, as every other
+call error does. The event line is written when the runtime's overlay event is
 polled while that cycle is pending; an event with no pending request stays a
-flag in the marker report. The bound for `visibility_event_missing` is
+flag in the marker report. `events()` confirms the pending cycle with any
+event of the matching type, so two requests processed between two polls could
+be attributed to the wrong cycle, and a runtime-caused hide while a hide is
+pending confirms it; the costed pacing (one request per 500 ms or slower)
+keeps this out of reach, and the hidden-event delivery measurement (F3)
+measures it. The bound for `visibility_event_missing` is
 `VISIBILITY_EVENT_BOUND_NS` = 250 ms (`kVisibilityEventBoundNs`), a cloud
 default pinned by `tests/test_hud_contract.py`: at least a dozen of the
 bridge's 20 ms event polls, ten times the illustrative 25 ms request-to-hidden
 term below, and half of the fastest costed cycle; **it is unmeasured on the
 Frame**, and the hidden-event delivery measurement replaces it. The wait does
 not block the stdin loop: the bound is polled on every input wait beside the
-frame expiry, so frames and further requests keep arriving. A hide whose
-hidden event has not been polled within the bound, or that is still pending
-when input ends or when the next request arrives, is reported missing once
-and opens no window; a pending show that is never confirmed is forgotten
-without a line (the table specifies the missing line for hides). Visibility
-changes through the settings packet remain the pre-F1 path: no cycle, no
-lines. The stream report adds `visibility_requests_received` and
+frame expiry, so frames and further requests keep arriving. A request, hide
+or show, whose matching event has not been polled within the bound, or that
+is still pending when input ends or when the next request arrives (its missing
+line precedes the new request's lines), is reported missing once, so every
+request ends in exactly one terminal line; for a hide that means no window
+this cycle. Visibility changes through the settings packet remain the pre-F1
+path: no cycle, no lines. The stream report adds `visibility_requests_received` and
 `visibility_events_missing`. `OverlayClient` still keeps only the last expiry;
 the event queue is F2. Cloud checks: `tests/test_overlay_bridge.py`
 (`VisibilityLineTests`), `tests/test_hud_contract.py` (layout, header, bound,
