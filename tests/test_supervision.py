@@ -226,6 +226,30 @@ class StopRelayTests(unittest.TestCase):
         self.assertTrue(report["set"], report)
         self.assertLess(report["seconds"], 2, report)
 
+    def test_a_forked_child_forgets_the_relay_and_can_make_its_own(self):
+        # After os.fork the child has no relay thread and must not write into its parent's pipe: the inherited
+        # handler is inert, the descriptors are closed once and forgotten, and a fresh stop_on_signals in the
+        # child makes a new relay whose signals work; the parent's relay is untouched by the child's fork callbacks.
+        report = self.worker(
+            "import warnings; warnings.simplefilter('ignore', DeprecationWarning)\n"
+            "from sightcircuit.runtime import supervision\n"
+            "stop = stop_on_signals(); relay = supervision._stop_wakeup; pid = os.fork()\n"
+            "if pid == 0:\n"
+            "    inert = supervision._stop_wakeup is None and relay.write_fd == -1 and relay.read_fd == -1\n"
+            "    relay.handle(signal.SIGTERM, None)\n"  # Must neither raise nor write anywhere.
+            "    child_stop = stop_on_signals(); fresh = supervision._stop_wakeup is not relay\n"
+            "    grandchild = os.fork()\n"
+            "    if grandchild == 0:\n"
+            "        os._exit(0 if supervision._stop_wakeup is None and relay.write_fd == -1 else 3)\n"
+            "    _, status = os.waitpid(grandchild, 0)\n"
+            "    os.kill(os.getpid(), signal.SIGTERM); child_ok = child_stop.wait(2)\n"
+            "    os._exit(0 if inert and fresh and child_ok and os.waitstatus_to_exitcode(status) == 0 else 1)\n"
+            "_, status = os.waitpid(pid, 0)\n"
+            "os.kill(os.getpid(), signal.SIGTERM)\n"
+            "print(json.dumps({'child': os.waitstatus_to_exitcode(status), 'parent_set': stop.wait(2), "
+            "'parent_relay_intact': supervision._stop_wakeup is relay and relay.write_fd >= 0}))")
+        self.assertEqual(report, {"child": 0, "parent_set": True, "parent_relay_intact": True})
+
     def test_the_handler_takes_no_lock_and_later_events_join_the_relay(self):
         # In-process: the installed handler is the relay's write, not Event.set; every registered event is set.
         previous = {number: signal.getsignal(number) for number in supervision.STOP_SIGNALS}
@@ -242,10 +266,17 @@ class StopRelayTests(unittest.TestCase):
         with first._cond:  # Held, as Event.wait holds it: the handler must still return at once.
             relay.handle(signal.SIGTERM, None)
         self.assertTrue(first.wait(2) and second.wait(2))
-        # A byte of another signal (the supervisors' SIGHUP handler also writes the wakeup descriptor) sets nothing.
+        # A byte of another signal (the supervisors' SIGHUP handler also writes the wakeup descriptor) sets nothing,
+        # and one real signal's two bytes (the wakeup descriptor's and the handler's) are drained together, so an
+        # event registered afterwards is not set by a stale byte.
         third = supervision.stop_on(threading.Event())
         os.write(relay.write_fd, bytes([signal.SIGHUP]))
         self.assertFalse(third.wait(0.2))
+        signal.raise_signal(signal.SIGTERM)
+        self.assertTrue(third.wait(2))
+        time.sleep(0.1)
+        fourth = supervision.stop_on(threading.Event())
+        self.assertFalse(fourth.wait(0.3))
 
 
 class WorkerSideTests(unittest.TestCase):

@@ -288,6 +288,7 @@ class StopWakeup:
     def __init__(self):
         self.read_fd, self.write_fd = os.pipe()
         os.set_blocking(self.write_fd, False)
+        os.set_blocking(self.read_fd, False)  # The relay drains the pipe after each wakeup (``drain``).
         self.events = weakref.WeakSet()
         self.lock = threading.Lock()
         self.thread = threading.Thread(target=self.relay, name="sightcircuit-stop-relay", daemon=True)
@@ -305,23 +306,43 @@ class StopWakeup:
         The C-level delivery already wrote the signal's number to the wakeup
         descriptor; this byte covers a wakeup descriptor another library
         replaced after the relay was installed. A full pipe means a byte is
-        already waiting, so the relay wakes anyway.
+        already waiting, so the relay wakes anyway. After ``forget`` (a forked
+        child) the handler is inert: the descriptor number may be a file by now.
         """
+        if self.write_fd < 0:
+            return
         try:
             os.write(self.write_fd, bytes([number]))
         except OSError:
             pass
 
+    def drain(self):
+        """Every byte waiting in the pipe, so one signal's two bytes cannot wake the relay twice."""
+        data = bytearray()
+        while True:
+            try:
+                chunk = os.read(self.read_fd, 4096)
+            except InterruptedError:
+                continue
+            except BlockingIOError:
+                return bytes(data)
+            if not chunk:
+                return bytes(data)
+            data.extend(chunk)
+            if len(chunk) < 4096:
+                return bytes(data)
+
     def relay(self):
         while True:
             try:
-                data = os.read(self.read_fd, 64)
-            except InterruptedError:
+                select.select([self.read_fd], [], [])
+                data = self.drain()
+            except (InterruptedError, select.error):
                 continue
-            except OSError:
+            except (OSError, ValueError):
                 return
             if not data:
-                return
+                return  # The write end is gone with the handler: nothing more arrives.
             if any(byte in STOP_SIGNALS for byte in data):
                 with self.lock:
                     events = list(self.events)
@@ -329,14 +350,24 @@ class StopWakeup:
                     event.set()
 
     def forget(self):
-        """In a forked child: no relay thread exists, and the parent's pipe is not ours to write."""
+        """In a forked child: no relay thread exists, and the parent's pipe is not ours to write.
+
+        The handler stays installed in the child but becomes inert (``handle``
+        on -1), the descriptors are closed once and forgotten, and only the
+        process's current relay clears the module's reference, so a relay a
+        child made afterwards survives a grandchild's fork callbacks of both.
+        """
         global _stop_wakeup
-        _stop_wakeup = None
-        with contextlib.suppress(ValueError, OSError):
-            signal.set_wakeup_fd(-1)
-        for fd in (self.read_fd, self.write_fd):
-            with contextlib.suppress(OSError):
-                os.close(fd)
+        if _stop_wakeup is self:
+            _stop_wakeup = None
+            with contextlib.suppress(ValueError, OSError):
+                signal.set_wakeup_fd(-1)
+        read_fd, write_fd = self.read_fd, self.write_fd
+        self.read_fd = self.write_fd = -1
+        for fd in (read_fd, write_fd):
+            if fd >= 0:
+                with contextlib.suppress(OSError):
+                    os.close(fd)
 
 
 _stop_wakeup = None

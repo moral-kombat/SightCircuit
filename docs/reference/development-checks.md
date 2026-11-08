@@ -173,7 +173,13 @@ Reproduced on the cloud container (x86_64, 4 cores, Python 3.12.3) with
 alone in a loop (`python3.12 -m unittest <test id>`), with an import hook
 that, before the primitive's group termination, read the still-living worker's
 `/proc` signal state and made it dump its Python traceback through
-`faulthandler` on SIGUSR1: 1 red run in 1600 (one in the first 400, none in the next 1200) for
+`faulthandler` on SIGUSR1. The loop and the hook are `tests/stress_supervision.py`
+(not a test; `unittest discover` ignores it), which takes the test ids, the
+run count, the load (`--stress stress-ng`, the default; `--stress python`,
+eight busy loops, when `stress-ng` is not installed, as it is not in the cloud
+container by default; `--stress none`) and `--probe` for the hook, and keeps
+red runs and probe output under `artifacts/stress-supervision/`. The result:
+1 red run in 1600 (one in the first 400, none in the next 1200) for
 the supervision test and 0 in 900 for the bounded-worker test, whose face
 of the race did not recur under this load. The one red run matched run 90
 exactly (exit 143, `worker_exit_code` -9, empty report, 6.5 s), and its
@@ -219,12 +225,16 @@ descriptor (`signal.set_wakeup_fd`), so the C-level delivery of a stop signal
 writes its number at once, from whichever thread received it, whatever the
 main thread is doing. A daemon relay thread reads the pipe and sets every
 registered stop event on its own thread, where a lock the main thread holds
-is contention, not a deadlock. `test_mirror_launcher`'s check that a raised
+is contention, not a deadlock; it drains the pipe before setting, so one
+signal's two bytes (the descriptor's and the handler's) cannot set an event
+registered later, and a forked child's copy of the relay is inert (closed
+descriptors forgotten, the handler a no-op) until the child installs its own.
+`test_mirror_launcher`'s check that a raised
 signal sets the event now waits for the relay instead of asserting
 synchronously. Acceptance, as for the cancellation race above: the same
-stress loop on the fixed checkout, 0 red runs in 1600 for the supervision
-test and 0 in 600 for the bounded-worker test, fifty consecutive green
-runs being the bar. These are runner-CPU observations on x86_64; nothing here
+stress loop on the fixed checkout (`tests/stress_supervision.py` with the
+same load), 0 red runs in 1600 for the supervision test and 0 in 600 for the
+bounded-worker test, fifty consecutive green runs being the bar. These are runner-CPU observations on x86_64; nothing here
 ran on the Frame.
 
 The optional pacing run uses a generated 2464 × 2464 HEVC clip at 60 fps with
