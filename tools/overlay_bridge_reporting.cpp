@@ -43,7 +43,9 @@ std::string usage_text() {
                  "Runtime modes join an already running SteamVR only: a Background probe comes first and\n"
                  "never starts a vrserver. A SIGALRM watchdog ends a stalled step with one JSON error.\n"
                  "A runtime mode may end with --connect-as overlay (default) or --connect-as background,\n"
-                 "which keeps the Background client and never connects as Overlay (device check, opt-in).\n";
+                 "which keeps the Background client and never connects as Overlay (device check, opt-in).\n"
+                 "The marker modes accept only the visibility request (opcode 5) on stdin, beside their display\n"
+                 "timer, which end of input never ends; the stream modes take the whole pipe protocol.\n";
     return usage.str();
 }
 Json::Value closed_report(const std::string& mode) {
@@ -64,6 +66,9 @@ void describe_marker_run(Json::Value& report, int seconds, std::uint64_t start_n
     report["physical_display_recovery_verified"]=false;
     report["capture_started"]=false; report["inference_started"]=false;
     report["images_saved"]=false; report["input_frames_accepted"]=false;
+    // Fallback item F3a: marker mode accepts visibility requests on stdin and counts them as the stream
+    // report does; both stay zero in a run that receives nothing.
+    report["visibility_requests_received"]=0U; report["visibility_events_missing"]=0U;
     auto& visibility=report["visibility_after_submit"];
     visibility["scope"]="runtime_queries_not_physical_visibility";
     visibility["sampled"]=false;

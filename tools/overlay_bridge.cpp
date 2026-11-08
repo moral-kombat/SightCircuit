@@ -81,6 +81,7 @@ int main(int argc, char* argv[]) {
     if (marker) {
         overlay.config=marker_settings();
         overlay.calibration_show_deadline_ns=marker_deadline;
+        overlay.validation_only=validate;
         describe_marker_run(report,seconds,marker_start,marker_deadline);
     }
     describe_connect(report,view_record,validate,background_only);
@@ -111,13 +112,21 @@ int main(int argc, char* argv[]) {
             report["marker_submit_returned_ns"]=Json::UInt64(monotonic_ns());
             if (monotonic_ns()>=marker_deadline) throw std::runtime_error("calibration_submit_overran_deadline");
             if (!validate) overlay.calibration_visibility(report["visibility_after_submit"]);
+            // The display timer stays the authority. Beside it, stdin is polled for the visibility requests
+            // of fallback cycles (F3a); a run that receives none is the marker run the observer has always had.
+            MarkerInput input;
             while (monotonic_ns()<marker_deadline) {
                 lifecycle::rearm_watchdog(kWatchdogStallSeconds);
                 if (stopping) throw Stopped{};
                 overlay.events();
+                overlay.settle_visibility(monotonic_ns());
+                report["visibility_events_missing"]=overlay.visibility_events_missing;
                 if (monotonic_ns()>=marker_deadline) break;
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                input.poll_input(overlay,validate,report);
             }
+            // The timer ended with a request still pending: it is reported missing, fail closed.
+            overlay.settle_visibility(monotonic_ns(), true);
+            report["visibility_events_missing"]=overlay.visibility_events_missing;
         } else if (mode=="--test-panel") {
             auto pixels=pattern();
             overlay.frame(256,128,pixels.data());

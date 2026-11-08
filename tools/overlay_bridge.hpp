@@ -61,7 +61,7 @@ public:
     bool overlay_shown_event_seen = false, overlay_hidden_event_seen = false;
     std::uint64_t calibration_show_deadline_ns = 0;
     Settings config;
-    // The one visibility request (stream mode, opcode visibility) whose runtime event is awaited, and
+    // The one visibility request (opcode visibility, stream or marker mode) whose runtime event is awaited, and
     // whether this run is validation-only (reported on every visibility line). Fallback item F1.
     bool validation_only = false;
     bool visibility_pending = false, visibility_pending_hide = false;
@@ -88,6 +88,19 @@ public:
     // ends in exactly one terminal line: overlay_hidden, overlay_shown or visibility_event_missing.
     void await_visibility(std::uint32_t cycle, bool hide, std::uint64_t request_ns);
     void settle_visibility(std::uint64_t now, bool force = false);
+    // Sensing: one decoded visibility request (opcode visibility), shared by the stream and marker loops: the
+    // request, returned and awaited-event lines, and the report counter. Returns the requested visibility.
+    bool visibility_request(const std::vector<std::uint8_t>& payload, bool validate, Json::Value& report);
+};
+
+// Sensing (overlay_bridge_sensing.cpp): marker mode's stdin, polled beside the display timer (fallback item
+// F3a). Only the visibility request is accepted; end of input ends the polling, never the run.
+constexpr int kMarkerPollMs = 10;
+struct MarkerInput {
+    bool open = true, size_known = false;
+    std::uint32_t payload_bytes = 0;
+    std::vector<std::uint8_t> buffer;
+    void poll_input(Overlay& overlay, bool validate, Json::Value& report);
 };
 
 // Lifecycle (overlay_bridge_lifecycle.cpp): arm a watchdog phase with its
