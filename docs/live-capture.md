@@ -135,7 +135,7 @@ parallel coder sessions. The acceptance order of the gates is unchanged.
 | B7 | Suite time budget enforced in CI | S | B1 |
 | B8 | Agent documentation and installer follow-ups from [E86](evidence/e086.md): the workspace trust dialog that the Phase 2 enforcement test depends on, in `docs/guides/frame-sessions.md`; the installer summary reporting its own channel default instead of the installed setting | S | none |
 | B9 | The held-signal flake of `test_supervision` (checks run 90 on #29 and, found by the coder, run 93 on main at `1889e56`): reproduced at 1 in 1600 under CPU stress, root-caused to the worker's stop handler calling `Event.set()` on the main thread, fixed by a stop relay thread woken through the process's wakeup descriptor (#40, 2026-11-08); two deterministic tests fail on main and pass after; `tests/stress_supervision.py` re-runs the loop. The "race fixed" call is met: the ARM64 run on main at `b4cb2d4` passed on 2026-11-08 | S to M, done | B3 |
-| B10 | Phase 2 guard-enforcement test scope for the agent runner: the bounded negative test (what the guard must block, how each refusal is observed), the trust-dialog precondition check, the report the device returns, and the operator steps; cloud work, the device run under its own approval | S | B8 |
+| B10 | Phase 2 guard-enforcement test scope for the agent runner. Done (#42, 2026-11-08): [the guide](guides/agent-enforcement-test.md) with the trust precondition, the 95-case matrix over every refusal class and every Tier B and C id, refusals observed from the hook, the saved verbose session transcript and the run directory, the counts-only reports, and `sightcircuit-agent-enforcement-check` (the twelfth command) driving the real guard offline. The device run is a separate approval; the guard stays at version 4 | S, done | B8 |
 
 **Lane C, detector evaluation.**
 
@@ -233,9 +233,10 @@ attempt; cloud-checked only, nothing run on the Frame). Lanes B and P are
 complete. The last budgeted G3 attempt ran ([E90](evidence/e090.md)): the
 decode passed and the run rejected on marker movement; the D2 exit rule is
 reached and the owner chose the fallback ([scope](poc-scope.md#architecture-decisions-2026-11-07)).
-E1 (#38), F1 (#41) and B9 (#40) merged on 2026-11-08. Open: F2 (in
-progress) then F3 to F8, B10 (in progress), P3, C5 with C6 (approved, staged on
-the Frame, waiting for the owner's start), A9 deferred; A7, A8 and A10
+E1 (#38), F1 (#41), B9 (#40) and B10 (#42) merged on 2026-11-08; lane B is
+complete. Open: F2 (in progress) then F3 to F8, P3 (in progress), C5 with C6
+(approved, staged on the Frame, waiting for the owner's start), the Phase 2
+enforcement run (staged, owner approval), A9 deferred; A7, A8 and A10
 superseded. The Frame's built bridge predates E1 and F1 and is rebuilt only
 when a device step needs it (F3), under that step's approval. The council's
 hypothesis for the cancellation race was wrong; the recorded cause is the
@@ -252,9 +253,10 @@ handler on the main thread ([checks reference](reference/development-checks.md#h
   layout, or shows names only; decided when F5 is specified (the capture-layout
   and 300-second mapping-lifetime questions of the mask path lapsed with the
   fallback decision).
-- The Phase 2 guard-enforcement test is scheduled (owner, 2026-11-08): B10
-  writes its scope; the owner accepts the workspace trust dialog once on the
-  Frame before the run ([E86](evidence/e086.md)); the run gets its own approval.
+- The Phase 2 guard-enforcement test is scoped (B10, #42) and staged by the
+  Frame manager; it runs only on the owner's approval of that run, after the
+  owner accepts the workspace trust dialog once on the Frame
+  ([E86](evidence/e086.md), [guide](guides/agent-enforcement-test.md)).
 - Decided 2026-11-08: the fallback (D2 as written; [scope](poc-scope.md#architecture-decisions-2026-11-07)),
   C5 with C6 approved (staged by the Frame manager, E91 reserved), the Phase 2
   test scheduled. Next device approvals, each separate: the F3 measurements
