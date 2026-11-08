@@ -134,7 +134,7 @@ parallel coder sessions. The acceptance order of the gates is unchanged.
 | B6 | The capture supervisor adopts it (paused track, last) | S | B3 |
 | B7 | Suite time budget enforced in CI | S | B1 |
 | B8 | Agent documentation and installer follow-ups from [E86](evidence/e086.md): the workspace trust dialog that the Phase 2 enforcement test depends on, in `docs/guides/frame-sessions.md`; the installer summary reporting its own channel default instead of the installed setting | S | none |
-| B9 | Reproduce the held-signal flake of `test_supervision` seen once in CI (checks run 90, attempt 1; the worker forced after 6.1 s with an empty report) under CPU stress on the runner and locally, then root-cause it; never skipped or quarantined | S to M | B3 |
+| B9 | The held-signal flake of `test_supervision` (checks run 90 on #29 and, found by the coder, run 93 on main at `1889e56`): reproduced at 1 in 1600 under CPU stress, root-caused to the worker's stop handler calling `Event.set()` on the main thread, fixed by a stop relay thread woken through the process's wakeup descriptor (#40, 2026-11-08); two deterministic tests fail on main and pass after; `tests/stress_supervision.py` re-runs the loop. The "race fixed" call completes with the ARM64 run on main | S to M, done | B3 |
 | B10 | Phase 2 guard-enforcement test scope for the agent runner: the bounded negative test (what the guard must block, how each refusal is observed), the trust-dialog precondition check, the report the device returns, and the operator steps; cloud work, the device run under its own approval | S | B8 |
 
 **Lane C, detector evaluation.**
@@ -158,6 +158,7 @@ parallel coder sessions. The acceptance order of the gates is unchanged.
 | P0 | Python 3.14 on the Frame after SteamOS 0.5.8: pin review, 3.14 pins behind markers, setup scripts accept 3.12 and 3.14 (added 2026-11-07 when the update removed Python 3.12, [E85](evidence/e085.md)) | M | none |
 | P1 | Hashed locks for the three requirement sets; add the missing `av` pin to the dev set; setup scripts use the locks | M | P0 |
 | P2 | Active command bodies move into the package with thin script wrappers and console entry points; validator references and manifest pins follow | M | P1 |
+| P3 | A bounded retry with backoff in `sightcircuit/assets.fetch` for transient network errors (timeouts, resets) on the pinned fixture downloads, with the digest check unchanged and a test; two CI re-runs on 2026-11-08 were caused by one release download timing out on the runner | S | none |
 
 **Lane E, native bridge.**
 
@@ -175,7 +176,7 @@ that run.
 
 | Item | Work | Size | Depends on |
 | --- | --- | --- | --- |
-| F1 | Bridge visibility opcode with a cycle number and the timestamped visibility lines (`hide_requested`, `hide_returned`, `overlay_hidden`, the show counterparts, `visibility_event_missing`); header regeneration, rebuild, packet and source-text tests | M | E1 |
+| F1 | Bridge visibility opcode with a cycle number and the timestamped visibility lines (`hide_requested`, `hide_returned`, `overlay_hidden`, the show counterparts, `visibility_event_missing`); header regeneration, rebuild, packet and source-text tests. Done (#41, 2026-11-08): the returned line names the OpenVR call made, every request ends in exactly one terminal line, the 250 ms bound is a cloud default pinned by a test and unmeasured on the Frame; no `overlay_hidden` line has ever been produced (no runtime in the cloud) | M, done | E1 |
 | F2 | `OverlayClient` event queue and a cycle API on the sink | S | F1 |
 | F3 | Device measurements: hide-to-absence latency, hidden-event delivery, loopback repeats, show-to-visible; one evidence entry each | S each, device | F1, approvals |
 | F4 | Capture window and admission rule in the pipeline, with rejection counters and boundary tests | M | F3 |
@@ -232,18 +233,18 @@ attempt; cloud-checked only, nothing run on the Frame). Lanes B and P are
 complete. The last budgeted G3 attempt ran ([E90](evidence/e090.md)): the
 decode passed and the run rejected on marker movement; the D2 exit rule is
 reached and the owner chose the fallback ([scope](poc-scope.md#architecture-decisions-2026-11-07)).
-E1 merged on 2026-11-08 (#38). Open: lane F (F1 in progress, then F2 to
-F8), B9 and B10 (in progress), C5 with C6 (approved, staged on the Frame,
-waiting for the owner's start), A9 deferred; A7, A8 and A10 superseded. The council's
+E1 (#38), F1 (#41) and B9 (#40) merged on 2026-11-08. Open: F2 (in
+progress) then F3 to F8, B10 (in progress), P3, C5 with C6 (approved, staged on
+the Frame, waiting for the owner's start), A9 deferred; A7, A8 and A10
+superseded. The Frame's built bridge predates E1 and F1 and is rebuilt only
+when a device step needs it (F3), under that step's approval. The council's
 hypothesis for the cancellation race was wrong; the recorded cause is the
 readiness probe firing on the worker before it had exec'd
-([checks reference](reference/development-checks.md)). One runner-only flake
-is on record for lane B: in #29's first replay run (checks run 90, attempt 1,
-a commit that touched no runtime code) `test_supervision`'s held-signal test
-(`test_a_signal_during_process_start_is_held_and_raised_once_the_worker_can_be_ended`)
-ended with the worker forced after 6.1 s and an empty report; the re-run and
-five local runs passed. Not reproduced, not fixed, not quarantined; the next
-lane B item is to make it reproducible under CPU stress before any change.
+([checks reference](reference/development-checks.md)). The held-signal flake
+seen in #29's first replay run (checks run 90) and on main at `1889e56` (run
+93) was reproduced under CPU stress, root-caused and fixed in B9 (#40):
+the worker's stop event is now set by a relay thread, never by the signal
+handler on the main thread ([checks reference](reference/development-checks.md#held-signal-flake-root-cause-2026-11-08)).
 
 ### Decisions still needed from the owner
 
