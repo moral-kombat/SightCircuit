@@ -93,10 +93,13 @@ assert MARKER_INPUT_POLL_NS <= BRIDGE_INPUT_POLL_NS
 # the run is rejected request_inside_display_deadline_margin, fail closed, which CYCLE_RESERVE_NS makes
 # unreachable in a run that keeps its pacing.
 LAST_REQUEST_MARGIN_NS = VISIBILITY_TERMINAL_DEADLINE_NS + MARKER_INPUT_POLL_NS + 100_000_000
+# A hide's phase and pacing are capped this much before the margin, so the show that follows is sent with the
+# margin to spare rather than refused at its edge (the show's check is "now plus the margin past the deadline").
+HIDE_CAP_SLACK_NS = 100_000_000
 # A cycle starts only with this much of the marker's display left: its hide phase may run to the phase bound
 # (or the pacing floor, whichever is longer) before the show request, which must still be LAST_REQUEST_MARGIN_NS
-# before the deadline; the show phase that follows makes no call and may run to the deadline.
-CYCLE_RESERVE_NS = max(PHASE_BOUND_NS, REQUEST_GAP_NS) + LAST_REQUEST_MARGIN_NS
+# plus the slack before the deadline; the show phase that follows makes no call and may run to the deadline.
+CYCLE_RESERVE_NS = max(PHASE_BOUND_NS, REQUEST_GAP_NS) + LAST_REQUEST_MARGIN_NS + HIDE_CAP_SLACK_NS
 # The supervisor's bound is --seconds plus this margin, counted from the worker's start (as the observer's).
 SUPERVISOR_MARGIN_SECONDS = 12
 TIMEBASE_CAVEAT = ("Bridge timestamps (CLOCK_MONOTONIC) and mirror observed_ns (time.monotonic_ns) are compared "
@@ -118,7 +121,7 @@ def new_report(validation_only=False, *, cycles=DEFAULT_CYCLES):
                        "visibility_event_bound_ns": VISIBILITY_EVENT_BOUND_NS,
                        "terminal_deadline_ns": VISIBILITY_TERMINAL_DEADLINE_NS,
                        "marker_input_poll_ns": MARKER_INPUT_POLL_NS, "last_request_margin_ns": LAST_REQUEST_MARGIN_NS,
-                       "cycle_reserve_ns": CYCLE_RESERVE_NS},
+                       "hide_cap_slack_ns": HIDE_CAP_SLACK_NS, "cycle_reserve_ns": CYCLE_RESERVE_NS},
             **{name: {"measured": False} for name in MEASUREMENTS}}
 
 
@@ -135,21 +138,27 @@ def frame_record(sequence, observed_ns, image):
     return {"sequence": sequence, "observed_ns": observed_ns, "digest": digest, "present": present, "decode": decode}
 
 
-def transition_bounds(reads, request_ns, want_present):
+def transition_bounds(reads, request_ns, want_present, since_ns=None):
     """The mirror's bounds on one transition requested at ``request_ns`` (the bridge's clock).
 
     ``want_present`` is False for a hide (the tile should vanish) and True for a
-    show. The upper bound is the first read at or after the request whose
-    presence is the wanted one; the lower bound is the last read before it,
-    whether before or after the request, that still showed the previous
-    state, floored at the request itself (the transition cannot precede its
-    request). Returns the two observed times (None when not seen), the bounds
-    relative to the request, and how many reads fell between the request and
-    the transition.
+    show. The starting state must be established: at least one read since
+    ``since_ns`` (the previous request; None: any read) and before the
+    transition showed the previous state, else the phase is marked
+    ``starting_state_established`` False and has no bounds, so a hide after a
+    show whose tile never came back cannot count as an instant transition.
+    With it established, the upper bound is the first read at or after the
+    request whose presence is the wanted one; the lower bound is the last read
+    before it that still showed the previous state, floored at the request
+    itself (the transition cannot precede its request). Returns the two
+    observed times (None when not seen), the bounds relative to the request,
+    and how many reads fell between the request and the transition.
     """
     first_target = last_opposite = None
     examined = 0
     for read in reads:
+        if since_ns is not None and read["observed_ns"] < since_ns:
+            continue
         if read["observed_ns"] < request_ns:
             if read["present"] != want_present:
                 last_opposite = read["observed_ns"]
@@ -159,12 +168,14 @@ def transition_bounds(reads, request_ns, want_present):
             first_target = read["observed_ns"]
             break
         last_opposite = read["observed_ns"]
+    established = last_opposite is not None
     target, opposite = ("first_present", "last_absent") if want_present else ("first_absent", "last_present")
-    record = {f"{target}_observed_ns": first_target, f"{opposite}_observed_ns": last_opposite,
+    bounded = established and first_target is not None
+    record = {"starting_state_established": established,
+              f"{target}_observed_ns": first_target if established else None, f"{opposite}_observed_ns": last_opposite,
               "reads_after_request_before_transition": examined - (1 if first_target is not None else 0),
-              "upper_bound_after_request_ns": None if first_target is None else first_target - request_ns,
-              "lower_bound_after_request_ns": None if first_target is None else
-              max(0, (last_opposite if last_opposite is not None else request_ns) - request_ns)}
+              "upper_bound_after_request_ns": first_target - request_ns if bounded else None,
+              "lower_bound_after_request_ns": max(0, last_opposite - request_ns) if bounded else None}
     return record
 
 
@@ -199,13 +210,33 @@ def outcome_record(outcome):
 
 
 class MirrorReads:
-    """The reads the capture thread records, shared with the cycle driver under one condition."""
+    """The reads the capture thread records, shared with the cycle driver under one condition.
+
+    ``end(report)`` is the capture's last word: a report with status ``error``
+    sets ``failure`` (its reason), and every wait returns at once, so a decode
+    failure in the capture thread ends the cycling instead of leaving it to
+    drive blind cycles to the deadline.
+    """
 
     def __init__(self):
         self.condition = threading.Condition()
         self.records = []
         self.descriptor = None
         self.first_present_observed_ns = None
+        self.ended = False
+        self.failure = None
+
+    def end(self, report):
+        with self.condition:
+            self.ended = True
+            if report.get("status") == "error":
+                self.failure = str(report.get("error") or report.get("reason") or "capture_failed")[:1024]
+            self.condition.notify_all()
+
+    def check(self):
+        """Raise the capture's failure, if it has one."""
+        if self.failure is not None:
+            raise ValueError(self.failure)
 
     def add(self, record):
         with self.condition:
@@ -224,6 +255,8 @@ class MirrorReads:
             while not stop.is_set():
                 if predicate(self.records):
                     return True
+                if self.ended:
+                    return False
                 remaining = deadline_ns - time.monotonic_ns()
                 if remaining <= 0:
                     return False
@@ -268,8 +301,15 @@ def measure(candidate, seconds, cycles, stop, *, backend_factory, marker_client,
         marker_client.check_built()
         marker_client.start_marker(seconds, stop, allow_calibration_output=allow_calibration_output)
         marker_started = True
-        deadline_ns = int(marker_client.marker_deadline * 1_000_000_000)  # the bridge's display timer, this clock
         report["marker_ready_ns"] = time.monotonic_ns()
+        # The bridge's display timer started before its connect, so its ready line's display_deadline_ns (its
+        # CLOCK_MONOTONIC, this clock) is earlier than the client's own bound by the connect time; every margin
+        # and the capture's end are taken from the earlier of the two, and a bridge that names none is refused.
+        if marker_client.display_deadline_ns is None:
+            raise ValueError("bridge_display_deadline_missing")
+        deadline_ns = min(int(marker_client.marker_deadline * 1_000_000_000), marker_client.display_deadline_ns)
+        report["display_deadline_ns"] = deadline_ns
+        report["client_deadline_ns"] = int(marker_client.marker_deadline * 1_000_000_000)
         if not validation_only:
             def on_frame(data, fmt, sequence, observed_ns):
                 if stop.is_set() or time.monotonic_ns() >= deadline_ns:
@@ -282,9 +322,12 @@ def measure(candidate, seconds, cycles, stop, *, backend_factory, marker_client,
                 reads.add(frame_record(sequence, observed_ns, image))
 
             def run_capture():
-                capture_result["report"], _ = capture(candidate, seconds, stop, backend_factory=backend_factory,
-                                                      on_frame=on_frame, max_fps=READ_RATE_HZ,
-                                                      deadline=deadline_ns / 1e9)
+                try:
+                    capture_result["report"], _ = capture(candidate, seconds, stop, backend_factory=backend_factory,
+                                                          on_frame=on_frame, max_fps=READ_RATE_HZ,
+                                                          deadline=deadline_ns / 1e9)
+                finally:
+                    reads.end(capture_result.get("report") or {"status": "error", "reason": "capture_ended_without_report"})
 
             report["capture_started"] = True
             capture_thread = threading.Thread(target=run_capture, name="fallback-measure-capture", daemon=True)
@@ -293,19 +336,23 @@ def measure(candidate, seconds, cycles, stop, *, backend_factory, marker_client,
             if not reads.wait_for(lambda records: reads.first_present_observed_ns is not None, warmup_ns, stop):
                 if stop.is_set():
                     raise InterruptedError("cancelled")
-                if capture_thread is not None and not capture_thread.is_alive():
-                    captured = capture_result.get("report") or {}
-                    if captured.get("status") == "error":
-                        raise ValueError(captured.get("error", captured.get("reason", "capture_failed")))
+                reads.check()
                 raise ValueError("marker_not_visible_in_mirror")
             report["marker_first_present_observed_ns"] = reads.first_present_observed_ns
+        # Each phase's starting state must be established by a read since the previous request (the first hide's
+        # since the marker was first seen), or its bounds do not count.
+        previous_request_ns = report.get("marker_first_present_observed_ns") or report["marker_ready_ns"]
         for cycle in range(1, cycles + 1):
             if stop.is_set():
                 raise InterruptedError("cancelled")
+            reads.check()
             if deadline_ns - time.monotonic_ns() < CYCLE_RESERVE_NS:
                 break
-            hide = run_phase(marker_client, reads, cycle, False, deadline_ns, stop, validation_only)
-            show = run_phase(marker_client, reads, cycle, True, deadline_ns, stop, validation_only)
+            hide = run_phase(marker_client, reads, cycle, False, deadline_ns, stop, validation_only, previous_request_ns)
+            previous_request_ns = hide["request_ns"] if hide["request_ns"] is not None else hide["requested_monotonic_ns"]
+            reads.check()
+            show = run_phase(marker_client, reads, cycle, True, deadline_ns, stop, validation_only, previous_request_ns)
+            previous_request_ns = show["request_ns"] if show["request_ns"] is not None else show["requested_monotonic_ns"]
             phases.append({"cycle": cycle, "hide": hide, "show": show})
             report["cycles_completed"] = len(phases)
         report["cycles_not_started"] = cycles - len(phases)
@@ -319,9 +366,7 @@ def measure(candidate, seconds, cycles, stop, *, backend_factory, marker_client,
             stop.wait(.02)
         if stop.is_set():
             raise InterruptedError("cancelled")
-        captured = capture_result.get("report")
-        if captured is not None and captured.get("status") == "error":
-            raise ValueError(captured.get("error", captured.get("reason", "capture_failed")))
+        reads.check()
         report.update(status="measured" if report["cycles_not_started"] == 0 else "measurement_incomplete",
                       exit_code=0 if report["cycles_not_started"] == 0 else 1)
         if report["status"] == "measurement_incomplete":
@@ -364,13 +409,15 @@ def measure(candidate, seconds, cycles, stop, *, backend_factory, marker_client,
     return report
 
 
-def run_phase(client, reads, cycle, visible, deadline_ns, stop, validation_only):
+def run_phase(client, reads, cycle, visible, deadline_ns, stop, validation_only, since_ns=None):
     """One request of a cycle: send it, await its terminal line, then wait for the mirror and the pacing floor.
 
-    A hide's phase ends early enough for the cycle's show to be sent
-    ``LAST_REQUEST_MARGIN_NS`` before the display deadline; a show's phase,
-    which makes no call, may run to the deadline. No request is sent inside the
-    margin: that is a rejected run, not a late call.
+    A hide's phase and pacing are capped ``HIDE_CAP_SLACK_NS`` before the
+    ``LAST_REQUEST_MARGIN_NS`` margin, so the cycle's show is sent with the
+    margin to spare; a show's phase, which makes no call, may run to the
+    deadline. No request is sent inside the margin: that is a rejected run,
+    not a late call. ``since_ns`` is the previous request, from which the
+    phase's starting state must be established.
     """
     if time.monotonic_ns() + LAST_REQUEST_MARGIN_NS > deadline_ns:
         raise ValueError("request_inside_display_deadline_margin")
@@ -378,16 +425,19 @@ def run_phase(client, reads, cycle, visible, deadline_ns, stop, validation_only)
     outcome = client.await_visibility(request)
     record = {"visible": visible, "requested_monotonic_ns": request.requested_ns, **outcome_record(outcome)}
     request_ns = outcome.request_ns if outcome.request_ns is not None else request.requested_ns
-    latest_end = deadline_ns if visible else deadline_ns - LAST_REQUEST_MARGIN_NS
+    latest_end = deadline_ns if visible else deadline_ns - LAST_REQUEST_MARGIN_NS - HIDE_CAP_SLACK_NS
     phase_end = min(request.requested_ns + PHASE_BOUND_NS, latest_end)
     if validation_only:
         record["mirror"] = {"measured": False, "reason": "validation_reads_no_mirror"}
         ended_by = "no_mirror"
     else:
-        seen = reads.wait_for(lambda records: transition_bounds(records, request_ns, visible)[
-            "first_present_observed_ns" if visible else "first_absent_observed_ns"] is not None, phase_end, stop)
-        record["mirror"] = {"measured": True, **transition_bounds(reads.snapshot(), request_ns, visible)}
+        seen = reads.wait_for(lambda records: transition_bounds(records, request_ns, visible, since_ns)[
+            "upper_bound_after_request_ns"] is not None, phase_end, stop)
+        bounds = transition_bounds(reads.snapshot(), request_ns, visible, since_ns)
+        record["mirror"] = {"measured": True, **bounds}
+        reads.check()
         ended_by = "transition_observed" if seen else "stopped" if stop.is_set() else \
+            "starting_state_not_established" if not bounds["starting_state_established"] else \
             "display_deadline" if phase_end == latest_end else "phase_bound"
     record["ended_by"] = ended_by
     # The pacing floor between requests, however fast the mirror answered; never past a hide's latest end.
@@ -433,6 +483,8 @@ def sections(phases, records, validation_only):
                 "cycles": len(requests), "transitions_observed": len(upper),
                 "transitions_not_observed_within_bound": sum(item["ended_by"] in ("phase_bound", "display_deadline")
                                                              for item in requests),
+                "starting_state_not_established": sum(item["ended_by"] == "starting_state_not_established"
+                                                      for item in requests),
                 "maximum_upper_bound_after_request_ns": max(upper) if upper else None,
                 "minimum_upper_bound_after_request_ns": min(upper) if upper else None, "per_cycle": per_cycle}
 

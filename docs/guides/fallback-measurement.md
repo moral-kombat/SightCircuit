@@ -127,15 +127,22 @@ What the command passes, and why:
   transition stretches a phase to at most 2 s (`phase_bound_ns`), after which
   it is recorded as not observed within the bound.
 - The deadline margins, derived and pinned by `tests/test_fallback_measure.py`.
-  A show request that the bridge processes inside its final 10 ms poll window
-  at the display deadline ends the run `calibration_deadline_before_show`
-  (exit 1) instead of a missing line, so no request is sent later than
-  `last_request_margin_ns` = 430 ms before the deadline: the client's 320 ms
-  terminal deadline, one 10 ms marker poll and a 100 ms margin for the pipe
-  write, the call and scheduling. A cycle starts only with
-  `cycle_reserve_ns` = 2.43 s of display left (the hide phase's 2 s bound plus
-  that margin), so its show is always sent in time; a request that would still
-  enter the margin is refused and the run rejected
+  The deadline they are measured against is the bridge's own: its ready line
+  carries `display_deadline_ns` on its `CLOCK_MONOTONIC`, earlier than the
+  client's ready-based bound by the whole connect time (up to 6 s on the
+  device), and the command refuses a bridge whose ready line names none
+  (`bridge_display_deadline_missing`). A show request that the bridge
+  processes inside its final 10 ms poll window at that deadline ends the run
+  `calibration_deadline_before_show` (exit 1) instead of a missing line, so no
+  request is sent later than `last_request_margin_ns` = 430 ms before it: the
+  client's 320 ms terminal deadline, one 10 ms marker poll and a 100 ms margin
+  for the pipe write, the call and scheduling. A hide's phase and pacing are
+  capped a further `hide_cap_slack_ns` = 100 ms earlier, so the show after it
+  is sent with the margin to spare, and a cycle starts only with
+  `cycle_reserve_ns` = 2.53 s of display left (the hide phase's 2 s bound plus
+  the margin and the slack). What the margin guarantees is that no request the
+  command sends can be processed inside the final poll window; a request that
+  would still enter the margin is refused and the run rejected
   `request_inside_display_deadline_margin`, never sent. The marker bridge's
   10 ms stdin poll also means a missing line arrives within 10 ms of the 250 ms
   bound, inside the 20 ms stream poll the F2 320 ms deadline already allows
@@ -170,7 +177,7 @@ The four sections and the evidence entry each supports:
 
 | Section | Holds | Evidence row |
 | --- | --- | --- |
-| `hide_to_absence` | Per cycle: the hide's `request_ns`, `returned_ns` and `event_observed_ns`; the last read with a complete copy and the first without one; the bounds relative to the request (`lower_bound_after_request_ns`, `upper_bound_after_request_ns`) and to the hidden event (`upper_bound_after_event_ns`); `maximum_upper_bound_after_request_ns` over the run | Hide-to-absence latency (B): the largest upper bound plus a margin, after review |
+| `hide_to_absence` | Per cycle: the hide's `request_ns`, `returned_ns` and `event_observed_ns`; the last read with a complete copy and the first without one; the bounds relative to the request (`lower_bound_after_request_ns`, `upper_bound_after_request_ns`) and to the hidden event (`upper_bound_after_event_ns`); `maximum_upper_bound_after_request_ns` over the run. A phase whose starting state no read since the previous request established (`starting_state_established` false, counted in `starting_state_not_established`) has no bounds and is left out of the maxima | Hide-to-absence latency (B): the largest upper bound plus a margin, after review |
 | `hidden_event_delivery` | Per cycle: the terminal line (`overlay_hidden` or `visibility_event_missing`), `event_after_returned_ns`, `waited_ns`; `events_delivered`, `events_missing`, the maximum delivery | Hidden-event delivery: whether the confirmed hide can rest on the event, and its bound |
 | `loopback_repeats` | Every read's `observed_ns`, digest and presence (`reads_detail`), `identical_consecutive_digests`, `longest_repeat_run`, `distinct_digests`, `maximum_read_gap_ns`, `observed_read_rate_hz`; the capture report's 32 px sample counts beside it | Loopback repeat behaviour: whether windows can starve; the writer's effective rate |
 | `show_to_visible` | The symmetric bounds of each show (last read without a copy, first with one) and the shown event's delivery (`shown_event_delivery`) | Show-to-visible latency, for the duty-cycle table |

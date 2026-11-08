@@ -55,8 +55,8 @@ class TransitionBoundsTests(unittest.TestCase):
     def test_a_hide_has_its_upper_bound_at_the_first_absent_read_and_its_lower_at_the_last_present(self):
         reads = [read(1, 900, True), read(2, 1_050, True), read(3, 1_150, False), read(4, 1_250, False)]
         bounds = fallback_measure.transition_bounds(reads, 1_000, False)
-        self.assertEqual(bounds, {"first_absent_observed_ns": 1_150, "last_present_observed_ns": 1_050,
-                                  "reads_after_request_before_transition": 1,
+        self.assertEqual(bounds, {"starting_state_established": True, "first_absent_observed_ns": 1_150,
+                                  "last_present_observed_ns": 1_050, "reads_after_request_before_transition": 1,
                                   "upper_bound_after_request_ns": 150, "lower_bound_after_request_ns": 50})
 
     def test_the_lower_bound_is_floored_at_the_request_when_the_last_present_read_preceded_it(self):
@@ -72,6 +72,22 @@ class TransitionBoundsTests(unittest.TestCase):
         self.assertIsNone(bounds["upper_bound_after_request_ns"])
         self.assertEqual((bounds["last_present_observed_ns"], bounds["reads_after_request_before_transition"]),
                          (1_100, 1))
+
+    def test_a_phase_whose_starting_state_was_never_seen_has_no_bounds(self):
+        # After a show whose tile never came back, the next hide sees only absent reads: an instant "transition"
+        # would pollute the maxima, so it is marked not established instead (since_ns is the previous request).
+        reads = [read(1, 500, True), read(2, 900, False), read(3, 1_050, False)]
+        bounds = fallback_measure.transition_bounds(reads, 1_000, False, since_ns=800)
+        self.assertIs(bounds["starting_state_established"], False)
+        self.assertIsNone(bounds["first_absent_observed_ns"])
+        self.assertIsNone(bounds["upper_bound_after_request_ns"])
+        self.assertIsNone(bounds["lower_bound_after_request_ns"])
+        # Without since_ns the earlier present read establishes it; a present read after the request does too.
+        self.assertIs(fallback_measure.transition_bounds(reads, 1_000, False)["starting_state_established"], True)
+        later = [read(2, 900, False), read(3, 1_020, True), read(4, 1_120, False)]
+        bounds = fallback_measure.transition_bounds(later, 1_000, False, since_ns=800)
+        self.assertEqual((bounds["starting_state_established"], bounds["upper_bound_after_request_ns"],
+                          bounds["lower_bound_after_request_ns"]), (True, 120, 20))
 
     def test_a_show_is_the_symmetric_reading(self):
         reads = [read(1, 950, False), read(2, 1_020, False), read(3, 1_120, True)]
@@ -121,7 +137,8 @@ class TransitionBoundsTests(unittest.TestCase):
         self.assertEqual(set(sections), set(fallback_measure.MEASUREMENTS))
         absence = sections["hide_to_absence"]
         self.assertEqual((absence["measured"], absence["cycles"], absence["transitions_observed"],
-                          absence["maximum_upper_bound_after_request_ns"]), (True, 1, 1, 100))
+                          absence["maximum_upper_bound_after_request_ns"], absence["starting_state_not_established"]),
+                         (True, 1, 1, 100, 0))
         self.assertEqual(absence["per_cycle"][0]["upper_bound_after_event_ns"], 70)
         delivery = sections["hidden_event_delivery"]
         self.assertEqual((delivery["events_delivered"], delivery["events_missing"],
@@ -158,7 +175,9 @@ class PacingDerivationTests(unittest.TestCase):
         self.assertEqual(margin, VISIBILITY_TERMINAL_DEADLINE_NS + fallback_measure.MARKER_INPUT_POLL_NS + 100_000_000)
         self.assertEqual(margin, 430_000_000)
         self.assertEqual(fallback_measure.CYCLE_RESERVE_NS,
-                         max(fallback_measure.PHASE_BOUND_NS, fallback_measure.REQUEST_GAP_NS) + margin)
+                         max(fallback_measure.PHASE_BOUND_NS, fallback_measure.REQUEST_GAP_NS) + margin +
+                         fallback_measure.HIDE_CAP_SLACK_NS)
+        self.assertGreater(fallback_measure.HIDE_CAP_SLACK_NS, 0)
         # The longest run leaves room for the default cycles after the ready wait and the marker warm-up.
         from sightcircuit.hud.contract import BRIDGE_READY_WAIT_SECONDS, MARKER_MAX_SECONDS
         available = (MARKER_MAX_SECONDS - BRIDGE_READY_WAIT_SECONDS - fallback_measure.MARKER_WARMUP_SECONDS) * 1e9
@@ -351,6 +370,8 @@ class MarkerClientRequestTests(unittest.TestCase):
         client.start_marker(3, stop)
         try:
             self.assertIsNone(client.writer)  # still no writer thread: nothing but requests reach the bridge
+            self.assertIsInstance(client.display_deadline_ns, int)  # the ready line's deadline, the bridge's clock
+            self.assertLessEqual(client.display_deadline_ns, int(client.marker_deadline * 1e9))
             with self.assertRaisesRegex(ValueError, "marker_visibility_takes_no_settings"):
                 client.request_visibility(1, False, settings=PanelSettings())
             hide = client.request_visibility(1, False)
@@ -443,7 +464,7 @@ class FakeBridgeMeasurementTests(unittest.TestCase):
         self.state = Path(self.temporary.name) / "visible"
         self.state.write_text("1")
 
-    def fake_bridge(self, *, event_delay_ms=15, confirm=True):
+    def fake_bridge(self, *, event_delay_ms=15, confirm=True, ready_delay_ms=0):
         path = Path(self.temporary.name) / "fake-marker-bridge"
         path.write_text(f"""#!{sys.executable}
 import json, os, select, struct, sys, time
@@ -453,6 +474,7 @@ seconds = int(sys.argv[sys.argv.index("--seconds") + 1])
 validate = sys.argv[1] == "--validate-calibration-marker"
 started = now()
 deadline = started + seconds * 1000000000
+time.sleep({ready_delay_ms} / 1000)  # the connect, on the device up to 6 s: the timer ran meanwhile
 state = {self.state.as_posix()!r}
 def emit(obj):
     sys.stdout.write(json.dumps(dict(obj, report_kind="sightcircuit_overlay_bridge", schema_version=1)) + "\\n")
@@ -557,6 +579,8 @@ emit({{"event": "closed", "status": "validated_marker" if validate else "marker_
         self.assertTrue(report["cleanup_ok"], report)
         self.assertEqual(source.reads[-1], "closed")
         self.assertGreater(report["marker_first_present_observed_ns"], report["marker_ready_ns"] - 1)
+        self.assertEqual(report["display_deadline_ns"], report["bridge"]["native_report"]["display_deadline_ns"])
+        self.assertLessEqual(report["display_deadline_ns"], report["client_deadline_ns"])
         fallback_measure.validate_worker_report(report, 0)
         absence, visible = report["hide_to_absence"], report["show_to_visible"]
         self.assertEqual((absence["measured"], absence["cycles"], absence["transitions_observed"],
@@ -614,11 +638,55 @@ emit({{"event": "closed", "status": "validated_marker" if validate else "marker_
         self.assertEqual(report["bridge"]["native_report"]["visibility_requests_received"], len(requests))
         fallback_measure.validate_worker_report(report, 1)
 
+    def test_the_bridges_own_deadline_bounds_the_run_when_its_ready_line_is_late(self):
+        # The bridge's timer starts before its connect; its ready line names the deadline on its own clock. With
+        # the ready line a second late (as a device connect would make it), the client's own bound is a second
+        # too generous, so every margin must come from the bridge's display_deadline_ns: no logged request may
+        # enter the margin, and the run ends incomplete, never rejected.
+        client = MarkerClient(self.fake_bridge(ready_delay_ms=1_000), validation_only=False)
+        report = fallback_measure.measure({"node": "synthetic:fake"}, 4, fallback_measure.MAX_CYCLES, threading.Event(),
+                                          backend_factory=self.backend(), marker_client=client,
+                                          allow_calibration_output=True)
+        self.assertEqual((report["status"], report["exit_code"]), ("measurement_incomplete", 1), report)
+        self.assertTrue(report["cleanup_ok"], report)
+        deadline = report["bridge"]["native_report"]["display_deadline_ns"]
+        self.assertEqual(report["display_deadline_ns"], deadline)
+        self.assertGreaterEqual(report["client_deadline_ns"] - deadline, 900_000_000)
+        requests = [phase["request_ns"] for cycle in report["cycles"] for phase in (cycle["hide"], cycle["show"])]
+        self.assertGreaterEqual(len(requests), 2)
+        self.assertLessEqual(max(requests), deadline - fallback_measure.LAST_REQUEST_MARGIN_NS)
+        self.assertEqual(report["bridge"]["native_report"]["visibility_requests_received"], len(requests))
+
+    def test_a_capture_failure_ends_the_cycling_at_once(self):
+        # A decode failure in the capture thread (not an incomplete copy) ends the run with its reason as soon as the
+        # driver next waits, instead of driving blind cycles to the deadline.
+        client = MarkerClient(self.fake_bridge(), validation_only=False)
+        original = fallback_measure.locate_copies
+        calls = []
+
+        def failing(image, **kwargs):
+            calls.append(1)
+            if len(calls) == 8:
+                raise ValueError("observer_pixel_budget")
+            return original(image, **kwargs)
+        started = time.monotonic()
+        with patch.object(fallback_measure, "locate_copies", failing):
+            report = fallback_measure.measure({"node": "synthetic:fake"}, 6, fallback_measure.MAX_CYCLES,
+                                              threading.Event(), backend_factory=self.backend(), marker_client=client,
+                                              allow_calibration_output=True)
+        elapsed = time.monotonic() - started
+        self.assertEqual((report["status"], report["exit_code"], report["reason"]), ("rejected", 1, "observer_pixel_budget"))
+        self.assertEqual(report["capture"]["status"], "error")
+        self.assertLessEqual(report["cycles_completed"], 1)
+        # Ended on the failure, with the bridge's own timer (six seconds) still to run; the client's close waits for it.
+        self.assertLess(elapsed, 6 + 3)
+        self.assertLess(len(report["loopback_repeats"]["reads_detail"]), 12)
+
     def test_a_request_that_would_enter_the_margin_is_refused_not_sent(self):
         # With the reserve disabled and fast cycles (a 50 ms pacing floor, a 100 ms phase bound: a cycle start at
-        # least every quarter second), a hide is bound to start inside the 430 ms margin before the deadline; the
+        # least every quarter second), a request is bound to fall inside the 430 ms margin before the deadline; the
         # defensive check rejects the run instead of sending a request the bridge could process inside its final
-        # poll window. The hide before it ends its pacing at the margin, so its show is sent in time.
+        # poll window. A hide's cap ends its slack before the margin, so the show after it is sent, not refused.
         client = MarkerClient(self.fake_bridge(), validation_only=False)
         with patch.object(fallback_measure, "CYCLE_RESERVE_NS", 0), \
                 patch.object(fallback_measure, "REQUEST_GAP_NS", 50_000_000), \
@@ -631,6 +699,8 @@ emit({{"event": "closed", "status": "validated_marker" if validate else "marker_
         deadline = report["bridge"]["native_report"]["display_deadline_ns"]
         requests = [phase["request_ns"] for cycle in report["cycles"] for phase in (cycle["hide"], cycle["show"])]
         self.assertLessEqual(max(requests), deadline - fallback_measure.LAST_REQUEST_MARGIN_NS)
+        # Every completed cycle's show was sent: a hide capped at its slack never cost the show its margin.
+        self.assertTrue(all(cycle["show"]["request_ns"] is not None for cycle in report["cycles"]))
 
     def test_a_marker_that_never_reaches_the_mirror_rejects_the_run_without_cycling(self):
         self.state.write_text("0")
@@ -659,6 +729,11 @@ emit({{"event": "closed", "status": "validated_marker" if validate else "marker_
         self.assertEqual(absence["per_cycle"][0]["ended_by"], "phase_bound")
         self.assertIsNone(absence["per_cycle"][0]["first_absent_observed_ns"])
         self.assertEqual(report["hidden_event_delivery"]["events_missing"], 1)
+        # The tile never left, so the show that follows has no absent read to start from: not a transition.
+        visible = report["show_to_visible"]
+        self.assertEqual((visible["transitions_observed"], visible["starting_state_not_established"]), (0, 1))
+        self.assertEqual(visible["per_cycle"][0]["ended_by"], "starting_state_not_established")
+        self.assertIsNone(visible["per_cycle"][0]["upper_bound_after_request_ns"])
 
     def test_a_cancellation_ends_the_run_as_cancelled_with_the_bridge_closed(self):
         stop = threading.Event()

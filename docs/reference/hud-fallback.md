@@ -203,14 +203,24 @@ bridge under the guard's supervision (`supervise`, as the observer), reads the
 mirror on the capture thread at ten reads per second, waits up to the
 observer's 2 s warm-up for the first complete copy, then runs the cycles with
 the pacing floor of 500 ms between requests and a 2 s bound on each phase's
-mirror transition. The display timer bounds the run, and two derived margins
-keep every request clear of it (pinned by the tests): no request is sent later
-than `LAST_REQUEST_MARGIN_NS` = 430 ms before the deadline (the F2 terminal
-deadline of 320 ms, one 10 ms marker poll and a 100 ms margin), because a show
-the bridge processes inside its final poll window ends the run
-`calibration_deadline_before_show` instead of writing a missing line; and a
-cycle starts only with `CYCLE_RESERVE_NS` = 2.43 s left (the hide phase's bound
-plus that margin), so its show is always in time. The marker loop's 10 ms poll
+mirror transition. The bridge's own display timer bounds the run: its ready
+line's `display_deadline_ns` (the bridge's `CLOCK_MONOTONIC`, earlier than the
+client's ready-based bound by the connect time) is the deadline every margin
+is measured against, and a bridge that names none is refused. Two derived
+margins keep every request clear of it (pinned by the tests): no request is
+sent later than `LAST_REQUEST_MARGIN_NS` = 430 ms before the deadline (the F2
+terminal deadline of 320 ms, one 10 ms marker poll and a 100 ms margin),
+because a show the bridge processes inside its final poll window ends the run
+`calibration_deadline_before_show` instead of writing a missing line; a hide's
+phase and pacing are capped `HIDE_CAP_SLACK_NS` = 100 ms earlier still, so the
+show after it is sent with the margin to spare; and a cycle starts only with
+`CYCLE_RESERVE_NS` = 2.53 s left (the hide phase's bound plus the margin and
+the slack). The guarantee is that no request the command sends can be
+processed inside the final poll window, not that every requested cycle fits:
+the cycles the timer leaves no room for are counted. A phase whose starting
+state no read since the previous request established has no bounds and is
+counted apart, and a decode failure in the capture thread ends the cycling at
+once with its reason. The marker loop's 10 ms poll
 also keeps the F2 deadline derivation valid for the marker client: a missing
 line arrives within 10 ms of the bound, inside the 20 ms stream poll the
 320 ms deadline allows for. The report has the four sections of the

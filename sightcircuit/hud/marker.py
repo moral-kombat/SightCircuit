@@ -81,6 +81,9 @@ class MarkerClient(OverlayClient):
             raise RuntimeError(self.error or "marker_ready_timeout")
         # The native timer started before its ready line, so this bounds its
         # deadline from above: a stop never escalates before the timer ends.
+        # The ready line's display_deadline_ns (``self.display_deadline_ns``, the
+        # bridge's own clock) is the timer itself, earlier by the connect time;
+        # the measurement command (F3b) takes its margins from that.
         self.marker_deadline = time.monotonic() + seconds
         # Native marker mode takes no frame or settings packet (it creates its own opaque pixels and
         # refuses both), only the fallback's visibility request, which this client never sends.
