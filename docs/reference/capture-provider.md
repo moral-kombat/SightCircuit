@@ -460,6 +460,29 @@ or unconditional stale-file deletion occurs. The tests cover hangs at each
 GPU phase, crashes/output limits, signals, parent death, graceful deadline
 retirement, exact recovery and preservation of foreign files.
 
+**Signals on the supervision primitive's policy (2026-11-07, work-order item
+B6).** `supervise()` now records SIGINT and SIGTERM for its whole run and
+polls them: the [supervision primitive](pipeline.md#the-supervision-primitive)'s
+record-and-poll policy with an inherited ignore overridden, applied by a
+local `RecordedSignals` with the same contract as the primitive's `Signals`,
+because the frozen track imports only the standard library and itself
+(`tests/test_scripts_boundary.py`). A signal that arrives while the worker
+starts, while its output is read or while it is cleaned up is only noted, so
+the run always reaches its cleanup with a handle on the worker, ends
+`cancelled` with exit 128 + the first signal, and the caller's own handlers,
+restored afterwards, are not invoked for it. This replaces the three
+mechanisms the two 2026-11-04 entries below describe (`recorded_signals`,
+`deferred_signals`, `cleanup_signals`, all removed) and closes the two gaps
+they left: a SIGINT and a SIGTERM pending together during cleanup, and a
+caller whose disposition is `SIG_DFL`, no longer end the supervisor without
+reaping, because nothing is replayed and no handler raises during the run.
+Everything else those entries record (the races, their reproductions, the
+recovery rules, the report fields, the lease written before the cancellation
+is acted on) stands; a deterministic test sends both signals back to back and
+runs the supervisor under `SIG_DFL`. The two entries below are kept as the
+dated record of what was observed and how it was first fixed. Cloud checks
+only; no provider is activated and nothing ran on a device.
+
 **Cancellation while a publication is recorded (2026-11-04).** A SIGINT or
 SIGTERM that arrived after the supervisor had taken the worker's
 `publication_ready` line from the pipe, but before `Session.publication` stored
