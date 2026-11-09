@@ -23,6 +23,7 @@
 #include <vector>
 
 #include <fcntl.h>
+#include <poll.h>
 #include <pthread.h>
 #include <signal.h>
 #include <sys/file.h>
@@ -82,9 +83,33 @@ constexpr const char* kSdkAgreementVersion = nullptr;
 
 // ---- a small JSON writer -------------------------------------------------
 
+// The length of the well-formed UTF-8 sequence starting at text[index], or 0 when the bytes
+// there are not one (an unexpected lead or continuation byte, an overlong form, a surrogate,
+// a code point past U+10FFFF, or a truncated sequence).
+std::size_t utf8_sequence_length(const std::string& text, std::size_t index) {
+    const unsigned char lead = static_cast<unsigned char>(text[index]);
+    std::size_t length = 0;
+    unsigned char second_min = 0x80, second_max = 0xbf;
+    if (lead >= 0xc2 && lead <= 0xdf) length = 2;
+    else if (lead >= 0xe0 && lead <= 0xef) { length = 3; if (lead == 0xe0) second_min = 0xa0; if (lead == 0xed) second_max = 0x9f; }
+    else if (lead >= 0xf0 && lead <= 0xf4) { length = 4; if (lead == 0xf0) second_min = 0x90; if (lead == 0xf4) second_max = 0x8f; }
+    else return 0;
+    if (index + length > text.size()) return 0;
+    const unsigned char second = static_cast<unsigned char>(text[index + 1]);
+    if (second < second_min || second > second_max) return 0;
+    for (std::size_t i = 2; i < length; ++i) {
+        const unsigned char c = static_cast<unsigned char>(text[index + i]);
+        if (c < 0x80 || c > 0xbf) return 0;
+    }
+    return length;
+}
+
+// Control characters are escaped; well-formed UTF-8 passes through unchanged; a byte that is
+// not part of a well-formed sequence becomes U+FFFD, so every line stays valid JSON.
 std::string json_quote(const std::string& text) {
     std::string out = "\"";
-    for (unsigned char c : text) {
+    for (std::size_t index = 0; index < text.size();) {
+        const unsigned char c = static_cast<unsigned char>(text[index]);
         switch (c) {
             case '"': out += "\\\""; break;
             case '\\': out += "\\\\"; break;
@@ -92,14 +117,21 @@ std::string json_quote(const std::string& text) {
             case '\r': out += "\\r"; break;
             case '\t': out += "\\t"; break;
             default:
-                if (c < 0x20 || c >= 0x7f) {
+                if (c < 0x20 || c == 0x7f) {
                     char escaped[8];
                     std::snprintf(escaped, sizeof escaped, "\\u%04x", static_cast<unsigned>(c));
                     out += escaped;
-                } else {
+                } else if (c < 0x80) {
                     out += static_cast<char>(c);
+                } else if (const std::size_t length = utf8_sequence_length(text, index)) {
+                    out.append(text, index, length);
+                    index += length;
+                    continue;
+                } else {
+                    out += "\\ufffd";
                 }
         }
+        ++index;
     }
     out += '"';
     return out;
@@ -323,7 +355,62 @@ const char* usage_text() {
 
 // ---- records -----------------------------------------------------------------
 
+// Protocol writes are bounded, so a consumer that stopped reading cannot hold the helper past
+// the run bound with the reader active. Each record waits at most kProtocolWriteBudgetMs for
+// the pipe to drain, and in probe mode never past the run deadline; the final record waits
+// kFinalWriteBudgetMs, so a consumer that resumes still receives it. A write that does not
+// complete marks the protocol stalled: the session ends (reason protocol_stalled, outcome
+// helper_error), the reader is deactivated and nothing but the final record is written.
+constexpr unsigned kProtocolWriteBudgetMs = 1000;
+constexpr unsigned kFinalWriteBudgetMs = 5000;
+constexpr std::size_t kProtocolChunkBytes = 4096;  // PIPE_BUF: a chunk this size completes once poll() reports room
 bool g_protocol_write_failed = false;
+bool g_protocol_stalled = false;
+bool g_protocol_torn = false;      // a stalled write left a partial line in the pipe
+int64_t g_run_deadline_ns = 0;     // probe loop only; 0 means no run bound applies to writes
+
+// One line to the real stdout, chunked, each chunk written only after poll() reports room and
+// never past the deadline. False when the deadline passed or the descriptor failed.
+bool write_protocol_bounded(const std::string& line, int64_t deadline_ns) {
+    const char* data = line.data();
+    std::size_t size = line.size();
+    bool ok = true;
+    lifecycle::emitting = 1;
+    while (size) {
+        const int64_t remaining = deadline_ns - clock_ns(CLOCK_MONOTONIC);
+        const int64_t remaining_ms = (remaining + 999999) / 1000000;  // rounded up; re-checked each turn
+        const int wait_ms = remaining <= 0 ? 0 : static_cast<int>(remaining_ms < 1000 ? remaining_ms : 1000);
+        pollfd poll_fd{};
+        poll_fd.fd = lifecycle::protocol_fd;
+        poll_fd.events = POLLOUT;
+        const int ready = ::poll(&poll_fd, 1, wait_ms);
+        if (ready < 0) {
+            if (errno == EINTR) continue;
+            ok = false;
+            break;
+        }
+        if (ready == 0) {
+            if (remaining <= 0) { ok = false; break; }
+            continue;
+        }
+        const std::size_t chunk = size < kProtocolChunkBytes ? size : kProtocolChunkBytes;
+        const ssize_t count = ::write(lifecycle::protocol_fd, data, chunk);
+        if (count < 0 && (errno == EINTR || errno == EAGAIN)) continue;
+        if (count <= 0) { ok = false; break; }
+        data += count;
+        size -= static_cast<std::size_t>(count);
+    }
+    lifecycle::emitting = 0;
+    if (!ok && size != line.size()) g_protocol_torn = true;
+    return ok;
+}
+
+int64_t write_deadline(bool final) {
+    const int64_t now = clock_ns(CLOCK_MONOTONIC);
+    int64_t deadline = now + static_cast<int64_t>(final ? kFinalWriteBudgetMs : kProtocolWriteBudgetMs) * 1000000ll;
+    if (!final && g_run_deadline_ns && g_run_deadline_ns < deadline) deadline = g_run_deadline_ns;
+    return deadline;
+}
 
 JsonObject record(const char* event) {
     JsonObject object;
@@ -332,16 +419,21 @@ JsonObject record(const char* event) {
     return object;
 }
 
-void emit(const JsonObject& object) {
-    const std::string line = object.done() + "\n";
+void emit(const JsonObject& object, bool final = false) {
+    if (g_protocol_stalled && !final) return;  // one stall ends the run; only the final record follows
+    std::string line = object.done() + "\n";
     if (line.size() > kMaxLineBytes) {
         // Never emit a torn or oversized line; say what happened instead.
-        const std::string replacement = record("outcome").str("call", "emit").str("outcome", "helper_error")
+        line = record("outcome").str("call", "emit").str("outcome", "helper_error")
             .boolean("retryable", false).str("message", "record exceeded 8 KiB").done() + "\n";
-        if (!lifecycle::write_protocol(replacement)) g_protocol_write_failed = true;
-        return;
     }
-    if (!lifecycle::write_protocol(line)) g_protocol_write_failed = true;
+    const int64_t deadline = write_deadline(final);
+    // A line torn by an earlier stall is terminated first, so the final record parses on its own.
+    if (final && g_protocol_torn && write_protocol_bounded("\n", deadline)) g_protocol_torn = false;
+    if (!write_protocol_bounded(line, deadline)) {
+        g_protocol_write_failed = true;
+        g_protocol_stalled = true;
+    }
 }
 
 int exit_code_for(Outcome outcome) {
@@ -469,9 +561,11 @@ struct FormatKey {
 
 class Session {
 public:
+    // The alarm covers one acquire at its full socket timeout (the command timeout plus the frame
+    // timeout) followed by the release at the command timeout, plus one second of margin.
     Session(const Options& options, CameraBackend& backend)
         : options_(options), backend_(backend),
-          watchdog_seconds_(static_cast<unsigned>(std::ceil((options.timeout_ms + kFrameTimeoutMs) / 1000.0)) + 1) {
+          watchdog_seconds_(static_cast<unsigned>(std::ceil((2.0 * options.timeout_ms + kFrameTimeoutMs) / 1000.0)) + 1) {
         for (int i = 0; i < kOutcomeCount; ++i) counts_[i] = 0;
     }
 
@@ -494,7 +588,7 @@ public:
     }
 
     int run() {
-        if (!step_connect()) return finish();
+        if (!step_connect() || stalled()) return finish();
         if (options_.mode == Options::hello) {
             ControlSummary controls;
             if (step_controls("hello", controls)) {
@@ -503,7 +597,7 @@ public:
             }
             return finish();
         }
-        if (!step_controls("start", start_controls_)) return finish();
+        if (!step_controls("start", start_controls_) || stalled()) return finish();
         have_start_ = true;
         if (check_stop()) return finish();
         if (!call_set_reader(true)) return finish();
@@ -513,6 +607,17 @@ public:
     }
 
 private:
+    // A protocol write that did not complete ends the run: the consumer is gone or stalled, and
+    // the reader must not stay active for it.
+    bool stalled() {
+        if (!g_protocol_stalled) return false;
+        if (reason_.empty()) {
+            outcome_ = Outcome::helper_error;
+            reason_ = "protocol_stalled";
+        }
+        return true;
+    }
+
     bool check_stop() {
         if (!stop_signal_.empty()) return true;
         const int signal = pending_stop();
@@ -599,7 +704,9 @@ private:
     void loop() {
         const int64_t started = clock_ns(CLOCK_MONOTONIC);
         const int64_t deadline = started + static_cast<int64_t>(options_.max_seconds) * 1000000000ll;
+        g_run_deadline_ns = deadline;  // record writes never wait past the run bound
         for (;;) {
+            if (stalled()) return;
             if (check_stop()) return;
             if (frame_sets_ >= options_.frame_sets) return;
             const int64_t pass_started = clock_ns(CLOCK_MONOTONIC);
@@ -628,8 +735,10 @@ private:
                 object.raw("cameras", cameras.done()).raw("host_clocks_before", before.json())
                     .raw("host_clocks_after", after.json());
                 emit(object);
+                if (stalled()) return;
             } else if (outcome_retryable(outcome)) {
                 emit_outcome("acquire", outcome, true);
+                if (stalled()) return;
                 if (have_last_frame_set_ && !have_first_retryable_after_) {
                     first_retryable_after_ns_ = after.monotonic_ns;
                     have_first_retryable_after_ = true;
@@ -661,14 +770,25 @@ private:
         }
         last_sequence_ = meta.sequence;
         have_last_sequence_ = true;
-        for (uint32_t camera = 0; camera < meta.camera_count && camera < kMaxCameras; ++camera) {
+        for (uint32_t camera = 0; camera < kMaxCameras && camera < meta.camera_count; ++camera) {
             const CameraMeta& frame = meta.cameras[camera];
-            const int64_t timestamp_ns = static_cast<int64_t>(frame.timestamp_seconds * 1e9);
+            // Server-supplied timestamps are data: a non-finite or out-of-range timestamp_seconds, or a
+            // difference that would overflow, is counted in invalid_timestamps and takes no part in the ranges.
+            const double scaled = frame.timestamp_seconds * 1e9;
+            const bool timestamp_ok = std::isfinite(scaled) && scaled > -9.2e18 && scaled < 9.2e18;
+            const int64_t timestamp_ns = timestamp_ok ? static_cast<int64_t>(scaled) : 0;
             const int64_t host[3] = {after.monotonic_ns, after.boottime_ns, after.realtime_ns};
+            bool invalid = !timestamp_ok;
             for (int clock = 0; clock < 3; ++clock) {
-                exposure_offsets_[clock].add(host[clock] - frame.exposure_timestamp_ns);
-                timestamp_offsets_[clock].add(host[clock] - timestamp_ns);
+                int64_t difference = 0;
+                if (__builtin_sub_overflow(host[clock], frame.exposure_timestamp_ns, &difference)) invalid = true;
+                else exposure_offsets_[clock].add(difference);
+                if (timestamp_ok) {
+                    if (__builtin_sub_overflow(host[clock], timestamp_ns, &difference)) invalid = true;
+                    else timestamp_offsets_[clock].add(difference);
+                }
             }
+            if (invalid) ++invalid_timestamps_;
             const FormatKey key = FormatKey::of(frame);
             if (!have_format_[camera]) {
                 first_format_[camera] = key;
@@ -711,6 +831,8 @@ private:
             lifecycle::disarm_watchdog();
         }
         connected_ = false;
+        g_run_deadline_ns = 0;  // the final record has its own, longer budget
+        stalled();
         if (reason_.empty()) reason_ = outcome_name(outcome_);
         int exit_code = exit_code_for(outcome_);
         if (exit_code == 0 && g_protocol_write_failed) exit_code = 1;
@@ -749,6 +871,7 @@ private:
                                                 .raw("after_minus_timestamp_seconds_ns", timestamp_offsets_[clock].json())
                                                 .done());
         }
+        offsets.unsigned_integer("invalid_timestamps", invalid_timestamps_);
         object.raw("clock_offsets", offsets.done());
         if (have_start_ && have_end_) {
             const std::vector<std::string> changed = start_controls_.changed_fields(end_controls_);
@@ -771,7 +894,7 @@ private:
             for (const std::string& call : *calls) array.str(call);
             object.raw("fake_calls", array.done());
         }
-        emit(object);
+        emit(object, true);
     }
 
     const Options& options_;
@@ -799,6 +922,7 @@ private:
     bool have_last_frame_set_ = false, have_first_retryable_after_ = false;
     int64_t last_frame_set_ns_ = 0, first_retryable_after_ns_ = 0;
     Range exposure_offsets_[3], timestamp_offsets_[3];
+    unsigned invalid_timestamps_ = 0;
 };
 
 // ---- process setup, refusals and modes ----------------------------------------
@@ -846,11 +970,20 @@ std::string notice_for(const Options& options) {
            "passthrough during the run and for 30 seconds afterwards.";
 }
 
-// The lock keeps one helper per runtime directory; never /tmp.
+// The lock keeps one helper per runtime directory; never /tmp. The directory must be what a
+// runtime directory is: an absolute path to an existing directory owned by this user with
+// mode 0700; anything else (a relative path would put the lock in the working directory) is
+// refused as runtime_dir_invalid.
 int take_lock(std::string& reason) {
     const char* directory = std::getenv("XDG_RUNTIME_DIR");
     if (!directory || !*directory) {
         reason = "runtime_dir_missing";
+        return -1;
+    }
+    struct stat status {};
+    if (directory[0] != '/' || ::stat(directory, &status) != 0 || !S_ISDIR(status.st_mode) ||
+        status.st_uid != ::getuid() || (status.st_mode & 07777) != 0700) {
+        reason = "runtime_dir_invalid";
         return -1;
     }
     const std::string path = std::string(directory) + "/sightcircuit-camera-helper.lock";
