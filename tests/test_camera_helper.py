@@ -52,7 +52,10 @@ CLAIMS = {"camera_connected": False, "reader_enabled": False, "recording_request
 
 def code(path):
     """A source without its line comments (the comments name what the code must not contain)."""
-    return re.sub(r"//[^\n]*", "", path.read_text())
+    text = path.read_text(errors="replace")
+    if path.suffix in (".cpp", ".hpp", ".h"):
+        return re.sub(r"//[^\n]*", "", text)
+    return re.sub(r"(?m)^\s*#[^\n]*", "", text)  # shell and Python: whole-line comments
 
 
 def repository_sources():
@@ -71,11 +74,19 @@ class ContainmentSourceTests(unittest.TestCase):
             self.assertNotIn(path.relative_to(ROOT).as_posix(), NATIVE_SOURCES)
 
     def test_only_the_sdk_unit_includes_the_sdk_headers(self):
+        # In code (comments removed), the SDK's names appear in the SDK unit and, as the two strings the
+        # build script greps and links, in the build script; nowhere else under tools, sightcircuit,
+        # scripts or tests, the two tests about the SDK excepted.
         for path in repository_sources():
-            if path == SDK_UNIT or path.name in ("test_arcturus_sdk_headers.py", Path(__file__).name):
+            if path in (SDK_UNIT, BUILD_SCRIPT) or path.name in ("test_arcturus_sdk_headers.py", Path(__file__).name):
                 continue
             with self.subTest(path=path.relative_to(ROOT).as_posix()):
-                self.assertNotIn("AV1Camera", path.read_text(errors="replace"))
+                text = code(path)
+                self.assertNotIn("AV1Camera", text)
+                self.assertNotIn("av1_ipc", text)
+        script = code(BUILD_SCRIPT)
+        self.assertEqual(sorted(set(re.findall(r"\w*AV1Camera[\w:]*(?:\.a)?", script))),
+                         ["AV1CameraClient::setControls", "libAV1CameraClient.a"])
         text = SDK_UNIT.read_text()
         self.assertEqual(text.count('#include "AV1CameraClient.h"'), 1)
         self.assertNotIn("AV1CameraIPCProtocol", code(SDK_UNIT))  # the protocol header comes through the client header only
