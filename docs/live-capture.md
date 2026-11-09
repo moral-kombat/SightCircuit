@@ -182,7 +182,7 @@ that run.
 | F2 | `OverlayClient` event queue and a cycle API on the sink. Done (#48, 2026-11-08): every visibility line kept by cycle, a pure outcome reading confirmed only by the runtime's event, a derived 320 ms deadline (cloud default, unmeasured on the Frame), `OverlaySink.hide` and `show` failing closed; no runtime event has ever been produced | S, done | F1 |
 | F3a | The marker bridge mode accepts the visibility opcode while the marker is displayed and writes the seven lines, so the measurements use the one tile the device is approved to show and the one pattern the mirror can be read for (the coordinator's call, 2026-11-08). Done (#50): a run that receives nothing is the observer's run, measured identical; only the visibility request is accepted on stdin; the bridge must be rebuilt on the Frame before any run that uses it | S, done | F1 |
 | F3b | `fallback_measure`, the thirteenth command: the marker bridge in that mode driven for N bounded cycles through the F2 API while the mirror is read at full rate and `locate_copies` tells presence from absence; one report with a section per measurement, counts and nanoseconds only; validate mode, opt-in flags and the checkpoint manifest as the observer has them. Done (#51): margins taken from the bridge's own display deadline, a cycle starts only with room for both requests, a capture failure ends the cycling; [guide](guides/fallback-measurement.md) | M, done | F3a, F2 |
-| F3 | The device measurements themselves: hide-to-absence latency, hidden-event delivery, loopback repeats, show-to-visible; one `fallback_measure` run of 20 s and five cycles can give the four evidence entries (E94 to E97 reserved). Staged by the Frame manager; needs the owner's approval, which covers the bridge rebuild from the F3a sources and a new checkpoint manifest | S, device | F3b, approval |
+| F3 | The device measurements themselves: hide-to-absence latency, hidden-event delivery, loopback repeats, show-to-visible; one `fallback_measure` run of 20 s and five cycles can give the four evidence entries (E95 to E98 reserved). Staged by the Frame manager; needs the owner's approval, which covers the bridge rebuild from the F3a sources and a new checkpoint manifest | S, device | F3b, approval |
 | F4 | Capture window and admission rule in the pipeline, with rejection counters and boundary tests | M, held | F3; held until S5 answers the passthrough question (owner, 2026-11-08) |
 | F5 | The fallback stage: hide, window, infer, show on `_run_latest`; tile rendering without a mask; run reports | M, held | F2, F4 |
 | F6 | Acceptance rows and gate references for the fallback, a reviewed edit to scope, this work order and `sightcircuit/gates.py` | S, held | planner and owner |
@@ -239,8 +239,12 @@ findings) follow lane F and are not scheduled.
 | S8 | Pixel path on the Frame without saving: `--export-frames` into the reader's validate path, counts and timings only, the passthrough observation as in S5 | S, device | S5, S6, S7, approval |
 | S9 | Bounded camera recognition on the Frame: one `camera_recognize` run of at most 30 s on the chair scene, no display, counts, labels, boxes and timings in the report; the proof of concept the owner asked for | S, device | S8, approval |
 
-Evidence identifiers for S4 to S9 are allocated when each is approved (E94
-to E97 stay reserved for F3).
+Evidence identifiers for S4 to S9 are allocated when each is approved (E95
+to E98 stay reserved for F3; Phase A, approved on 2026-11-09, takes E99). The
+merged chain ran end to end in the cloud against the fake backend on
+2026-11-09 ([E94](evidence/e094.md)): twenty synthetic frames exported by the
+helper, confirmed on a terminal, read, recognised and reported without a
+pixel; a fit check, not a device result.
 
 #### Progress (2026-11-07, evening)
 
@@ -318,7 +322,7 @@ handler on the main thread ([checks reference](reference/development-checks.md#h
   test scheduled and run ([E92](evidence/e092.md)). Next device approvals,
   each separate: the owner's resumption of the C5/C6 sitting (approved and
   confirmed; part one is E93), the F3 measurement run (staged, not approved,
-  with the bridge rebuild; E94 to E97).
+  with the bridge rebuild; E95 to E98).
 - Decided 2026-11-08, night: the SDK camera-input lane is open, cloud-only
   (the review's decision 1); F4 to F8 are held until S5 answers the
   passthrough question; the owner's helper branch is the lane's code.

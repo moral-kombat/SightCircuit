@@ -449,6 +449,10 @@ provenance and original uncertainty.
 
 [Full evidence](evidence/e093.md). Device report.
 
+### E94: Camera export end to end in the cloud, the fake-backend helper through camera_recognize
+
+[Full evidence](evidence/e094.md). Offline record.
+
 ## Maintaining the evidence
 
 The coordinator checks pending allocations before assigning an evidence ID and adds its record
