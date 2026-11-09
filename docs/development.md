@@ -245,6 +245,7 @@ bash scripts/build_overlay_bridge.sh
 bash scripts/build_shm_reader.sh
 bash scripts/build_capture_supervisor.sh
 bash scripts/build_capture_gpu_check.sh
+bash scripts/build_camera_helper.sh --fake
 QT_QPA_PLATFORM=offscreen .venv-replay/bin/python -m unittest discover -s tests
 uvx ruff@0.14.2 check .
 .venv-replay/bin/python scripts/evaluate_detectors.py --fetch --expect evaluation/seed-expected.json
@@ -255,7 +256,9 @@ python3 scripts/camera_contract_header.py --check
 git diff --check
 ```
 
-Some capture-fixture tests skip unless their corresponding
+The fake camera-helper build drives the Arcturus camera helper from a scenario
+table and never touches a camera; the helper tests build it again into a
+temporary directory. Some capture-fixture tests skip unless their corresponding
 `build_capture_reference.sh --<mode>-fixes` build exists. Missing downloaded
 assets also produce explicit skips. Read the output: a passing suite with skips
 is not the same as CI's required suites passing without skips. CI builds each
@@ -465,6 +468,32 @@ See [Generated HUD contract header](reference/hud-development.md#generated-hud-c
 both contract headers share, `sightcircuit/native_header.py`. The
 [camera recognition guide](guides/camera-recognize.md#the-wire-protocol-camera-export-v1)
 describes the protocol; `tests/test_camera_contract.py` pins the header.
+
+## Camera helper build (lane S, 2026-11-09)
+
+The camera helper is the containment for the Arcturus camera SDK: one native
+helper whose SDK translation unit is the only `.cpp` that includes the vendored
+headers, and whose fake backend lets every mode run in CI without the SDK
+([camera helper reference](reference/camera-helper.md)). Build the fake with:
+
+```bash
+bash scripts/build_camera_helper.sh --fake
+artifacts/camera-helper-fake/sightcircuit-camera-helper-fake --describe
+```
+
+CI runs that command as a named step of the `native` job on both
+architectures and runs `tests/test_camera_helper.py` and
+`tests/test_camera_helper_boundaries.py` without skips there; the tests build
+their own copy into a temporary directory and compile the SDK unit to an
+object against `third_party/arcturus-camera-sdk/`, never linking it. The
+SDK-backed binary is built only by the operator, on aarch64, with
+`bash scripts/build_camera_helper.sh --sdk DIR` against the SDK directory
+Arcturus delivered, outside the work tree; `--check-sdk` verifies such a
+directory anywhere without building. The library `libAV1CameraClient.a` is
+never committed, cached, fetched or built by this repository or its CI
+([THIRD_PARTY](../THIRD_PARTY.md#arcturus-vision-camera-preview-sdk-headers)).
+The device procedure is the [camera probe guide](guides/camera-probe.md);
+nothing here is device evidence.
 
 ## Generated evidence summaries
 
