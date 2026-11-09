@@ -254,7 +254,29 @@ git diff --check
 
 The fake camera-helper build drives the Arcturus camera helper from a scenario
 table and never touches a camera; the helper tests build it again into a
-temporary directory. Some capture-fixture tests skip unless their corresponding
+temporary directory. Besides the metadata modes, the helper has
+`--export-frames`, which delivers BGR3 frames to its parent process over stdout
+as packets of the camera export protocol (version 1; the constants are in
+`tools/camera_export_protocol.hpp`, pinned by `tests/test_camera_export.py`),
+paced at 1 to 10 frames a second by dropping frame sets, for at most 60 seconds
+or 600 frames, and ends on its own when frames stop (the headset removed, by
+inference from a two-second gap) or the camera service reports not ready or
+unavailable (standby). Two pixel paths sit behind one interface
+(`tools/camera_pixels.hpp`): `cpu_linear` maps a linear DMA-BUF and converts
+on the CPU with the fixed-point formula in `tools/camera_ycbcr.hpp`;
+`gpu_convert` imports the buffer into Vulkan by its DRM format modifier and
+converts with the compute shader `tools/camera_convert.comp`, whose SPIR-V is
+embedded in the generated `tools/camera_convert_spirv.hpp` (regenerate with
+`bash scripts/build_camera_helper.sh --shader`, which needs `glslang-tools`).
+The fake build therefore needs the Vulkan headers (`libvulkan-dev`, or the
+pinned checkout `scripts/build_capture_gpu_check.sh` leaves in
+`.cache/vulkan-headers`); the loader itself is opened at run time, never
+linked. The fake backend's `export_*` scenarios serve memfd-backed linear NV12
+and P010 frames with known content, so the export tests prove both paths pixel
+for pixel; the GPU path's test runs only where a software Vulkan driver
+(`mesa-vulkan-drivers`, lavapipe) is installed, as it is in CI, and is skipped
+elsewhere. The mode writes no file: stdout must be a pipe or socket, and a
+pixel leaves the process only through it. Some capture-fixture tests skip unless their corresponding
 `build_capture_reference.sh --<mode>-fixes` build exists. Missing downloaded
 assets also produce explicit skips. Read the output: a passing suite with skips
 is not the same as CI's required suites passing without skips. CI builds each

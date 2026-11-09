@@ -1,12 +1,14 @@
 """Containment of the Arcturus camera SDK in the camera helper.
 
 Which files may include the SDK headers, what the helper sources may never
-contain, the status mapping run against the vendored headers, API drift of the
-SDK translation unit (compiled, never linked) with its symbol allow-list,
-coverage of every vendored enumerator, the helper's own SHA-256, and the build
-script's refusals against fake SDK directories made outside the checkout. None
-of this needs the Client Library; no file named like it is ever created inside
-the checkout.
+contain (and which of them alone may read a buffer: the two pixel paths, and
+the fake's memfd), the status mapping run against the vendored headers, API
+drift of the SDK translation unit (compiled, never linked) with its symbol
+allow-list, coverage of every vendored enumerator, the helper's own SHA-256,
+the embedded compute shader against its source, and the build script's
+refusals against fake SDK directories made outside the checkout. None of this
+needs the Client Library; no file named like it is ever created inside the
+checkout.
 """
 import hashlib
 import json
@@ -15,6 +17,7 @@ from pathlib import Path
 import re
 import shutil
 import stat
+import struct
 import subprocess
 import tempfile
 import unittest
@@ -26,13 +29,31 @@ SCRIPT = ROOT / "scripts/build_camera_helper.sh"
 SDK_HEADERS = ("AV1CameraClient.h", "AV1CameraIPCProtocol.h")
 SDK_INCLUDERS = {"tools/camera_backend_sdk.cpp", "tools/camera_status_map.hpp",
                  "tests/fixtures/camera_status_map_fixture.cpp"}
-HELPER_SOURCES = ("tools/camera_backend.hpp", "tools/camera_backend_sdk.cpp", "tools/camera_backend_fake.cpp",
-                  "tools/camera_status_map.hpp", "tools/camera_helper.cpp", "tools/camera_sha256.hpp")
+METADATA_SOURCES = ("tools/camera_backend.hpp", "tools/camera_backend_sdk.cpp", "tools/camera_status_map.hpp",
+                    "tools/camera_helper.cpp", "tools/camera_sha256.hpp", "tools/camera_export_protocol.hpp",
+                    "tools/camera_ycbcr.hpp", "tools/camera_pixels.hpp")
+PIXEL_SOURCES = ("tools/camera_pixels_cpu.cpp", "tools/camera_pixels_gpu.cpp")
+HELPER_SOURCES = METADATA_SOURCES + PIXEL_SOURCES + ("tools/camera_backend_fake.cpp", "tools/camera_convert_spirv.hpp")
+# Never, in any helper source: the SDK's private transport, control writes, the
+# capture track's names, confirmation bypasses, OpenCV, and every way of writing a
+# file (the lock in camera_helper.cpp is the one O_CREAT, listed below).
 BANNED_TEXT = ("socket(", "sockaddr_un", "kDefaultSocketPath", "av1_external_camera_provider",
                "passthrough_camera.lock", "MessageHeader", "setControls", "ControlsRequest",
-               "redRecordingLedEnabled =", "cameraFd(", "mmap", "DMA_BUF", "vkImport", "VkImportMemoryFdInfo",
-               "--yes", "--no-confirm")
-BANNED_INCLUDE = re.compile(r'#\s*include\s*[<"](?:capture_\w+\.hpp|handcam_proto\.h|vulkan/)')
+               "redRecordingLedEnabled =", "--yes", "--no-confirm", "fopen(", "ofstream", "O_WRONLY", "O_CREAT",
+               "imwrite", "cv::", "opencv")
+# Only the pixel paths read a buffer; only the SDK unit reads a descriptor from the
+# SDK; only the fake creates one (a memfd) and maps it to fill it.
+PIXEL_ONLY_TEXT = ("mmap", "DMA_BUF", "vkImport", "VkImportMemoryFdInfo", "dlopen", "VkDevice")
+ALLOWED_TEXT = {
+    "tools/camera_helper.cpp": {"O_CREAT"},
+    "tools/camera_backend_sdk.cpp": {"cameraFd("},
+    "tools/camera_backend_fake.cpp": {"mmap", "memfd_create"},
+}
+BANNED_INCLUDE = re.compile(r'#\s*include\s*[<"](?:capture_\w+\.hpp|handcam_proto\.h)')
+VULKAN_INCLUDE = re.compile(r'#\s*include\s*[<"]vulkan/')
+CXX11_SOURCES = ("tools/camera_backend.hpp", "tools/camera_status_map.hpp", "tools/camera_sha256.hpp",
+                 "tools/camera_backend_sdk.cpp", "tools/camera_backend_fake.cpp", "tools/camera_export_protocol.hpp",
+                 "tools/camera_ycbcr.hpp", "tools/camera_pixels.hpp", "tools/camera_pixels_cpu.cpp")
 ALLOWED_SYMBOLS = {
     "_ZN15AV1CameraClient7connectEj", "_ZN15AV1CameraClient10disconnectEv", "_ZNK15AV1CameraClient11isConnectedEv",
     "_ZN15AV1CameraClient15getControlStateERN7av1_ipc12ControlStateE", "_ZN15AV1CameraClient14setReaderStateEbb",
@@ -85,13 +106,42 @@ class IncludeAndTextBoundaries(unittest.TestCase):
     def test_helper_sources_contain_no_banned_text(self):
         for relative in HELPER_SOURCES:
             text = (ROOT / relative).read_text()
+            allowed = ALLOWED_TEXT.get(relative, set())
             for banned in BANNED_TEXT:
+                if banned in allowed:
+                    continue
                 with self.subTest(file=relative, text=banned):
                     self.assertNotIn(banned, text)
             with self.subTest(file=relative, text="banned include"):
                 self.assertIsNone(BANNED_INCLUDE.search(text))
             with self.subTest(file=relative, text="environment"):
                 self.assertLessEqual(set(re.findall(r'getenv\("([^"]+)"\)', text)), {"XDG_RUNTIME_DIR"})
+        self.assertEqual((ROOT / "tools/camera_helper.cpp").read_text().count("O_CREAT"), 1)
+
+    def test_only_the_pixel_paths_read_buffers(self):
+        for relative in HELPER_SOURCES:
+            text = (ROOT / relative).read_text()
+            allowed = ALLOWED_TEXT.get(relative, set())
+            if relative not in PIXEL_SOURCES:
+                for banned in PIXEL_ONLY_TEXT + ("cameraFd(", "memfd_create"):
+                    if banned in allowed:
+                        continue
+                    with self.subTest(file=relative, text=banned):
+                        self.assertNotIn(banned, text)
+            with self.subTest(file=relative, text="vulkan include"):
+                self.assertEqual(VULKAN_INCLUDE.search(text) is not None, relative == "tools/camera_pixels_gpu.cpp")
+        for relative in PIXEL_SOURCES:
+            text = (ROOT / relative).read_text()
+            with self.subTest(file=relative):
+                self.assertNotIn("cameraFd(", text)
+                self.assertNotIn("AV1", text)
+                self.assertNotIn("av1_ipc", text)
+        # The SDK unit hands out the descriptor and does nothing else with it.
+        sdk = (ROOT / "tools/camera_backend_sdk.cpp").read_text()
+        self.assertEqual(len(re.findall(r"cameraFd\(", sdk)), 1)
+        for banned in ("mmap", "ioctl", "read(", "pread", "dup("):
+            with self.subTest(text=banned):
+                self.assertNotIn(banned, sdk)
 
     def test_reader_state_is_never_recording(self):
         calls = []
@@ -105,11 +155,31 @@ class IncludeAndTextBoundaries(unittest.TestCase):
         self.assertEqual(set(calls), {"tools/camera_backend_sdk.cpp"})
 
     def test_the_cxx11_files_do_not_include_the_cxx17_lifecycle_header(self):
-        for relative in ("tools/camera_backend.hpp", "tools/camera_status_map.hpp", "tools/camera_sha256.hpp",
-                         "tools/camera_backend_sdk.cpp", "tools/camera_backend_fake.cpp"):
+        for relative in CXX11_SOURCES:
             with self.subTest(file=relative):
                 self.assertNotIn("overlay_lifecycle.hpp", (ROOT / relative).read_text())
         self.assertIn('#include "overlay_lifecycle.hpp"', (ROOT / "tools/camera_helper.cpp").read_text())
+
+    def test_the_embedded_shader_matches_its_source(self):
+        header = (ROOT / "tools/camera_convert_spirv.hpp").read_text()
+        source = (ROOT / "tools/camera_convert.comp").read_bytes()
+        digest = re.search(r'kCameraConvertSourceSha256 = "([0-9a-f]{64})"', header).group(1)
+        self.assertEqual(digest, hashlib.sha256(source).hexdigest(),
+                         "camera_convert.comp changed; run scripts/build_camera_helper.sh --shader")
+        count = int(re.search(r"kCameraConvertSpirvWords = (\d+);", header).group(1))
+        words = [int(word, 16) for word in re.findall(r"0x([0-9a-f]{8})", header.split("= {", 1)[1])]
+        self.assertEqual(len(words), count)
+        self.assertEqual(words[0], 0x07230203)  # the SPIR-V magic
+        self.assertIn(f"kCameraConvertSpirv[{count}]", header)
+        for banned in ("imwrite", "fopen", "#include <vulkan"):
+            self.assertNotIn(banned, header)
+        if shutil.which("spirv-val"):
+            with tempfile.NamedTemporaryFile(suffix=".spv") as module:
+                module.write(struct.pack(f"<{count}I", *words))
+                module.flush()
+                result = subprocess.run(["spirv-val", "--target-env", "vulkan1.1", module.name], capture_output=True,
+                                        text=True, timeout=60)
+                self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_every_vendored_enumerator_is_mapped_or_listed_raw(self):
         headers = "".join((VENDORED / name).read_text() for name in SDK_HEADERS)
@@ -174,6 +244,32 @@ class CompiledBoundaries(unittest.TestCase):
         symbols = subprocess.run(["nm", "-u", "--format=just-symbols", str(obj)], check=True, capture_output=True,
                                  text=True, timeout=30).stdout
         self.assertNotIn("15AV1CameraClient", symbols)
+
+    def test_cpu_pixel_path_compiles_as_cxx11_without_sdk_or_vulkan_symbols(self):
+        obj = self.work / "camera_pixels_cpu.o"
+        self.compile(ROOT / "tools/camera_pixels_cpu.cpp", obj, "-c")
+        symbols = subprocess.run(["nm", "-u", "--format=just-symbols", str(obj)], check=True, capture_output=True,
+                                 text=True, timeout=30).stdout.split()
+        self.assertNotIn("15AV1CameraClient", "".join(symbols))
+        self.assertFalse([symbol for symbol in symbols if symbol.startswith("vk")])
+        self.assertIn("mmap", symbols)
+
+    def test_gpu_pixel_path_references_no_sdk_symbol_and_links_no_vulkan(self):
+        probe = subprocess.run(["g++", "-std=c++17", "-x", "c++", "-fsyntax-only", "-"], input="#include <vulkan/vulkan.h>\n",
+                               capture_output=True, text=True, timeout=60)
+        cached = ROOT / ".cache/vulkan-headers/include"
+        includes = [] if probe.returncode == 0 else [f"-I{cached}"]
+        if probe.returncode and not (cached / "vulkan/vulkan.h").is_file():
+            self.skipTest("Vulkan headers required (libvulkan-dev or scripts/build_capture_gpu_check.sh)")
+        obj = self.work / "camera_pixels_gpu.o"
+        self.compile(ROOT / "tools/camera_pixels_gpu.cpp", obj, *includes, "-c",
+                     flags=["-std=c++17", "-Wall", "-Wextra", "-Wpedantic", "-Werror"])
+        symbols = subprocess.run(["nm", "-u", "--format=just-symbols", str(obj)], check=True, capture_output=True,
+                                 text=True, timeout=30).stdout.split()
+        self.assertNotIn("15AV1CameraClient", "".join(symbols))
+        # The loader is opened at run time: no Vulkan entry point is an undefined symbol.
+        self.assertFalse([symbol for symbol in symbols if symbol.startswith("vk")], symbols)
+        self.assertTrue([symbol for symbol in symbols if symbol.startswith("dlopen")], symbols)
 
     def test_sha256_matches_hashlib(self):
         fixture = self.work / "sha256"

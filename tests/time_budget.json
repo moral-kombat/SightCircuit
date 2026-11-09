@@ -7,6 +7,7 @@
     "test_bounded_worker": 150,
     "test_overlay_bridge": 60,
     "test_camera_helper": 90,
+    "test_camera_export": 90,
     "test_fallback_measure": 60,
     "test_hud_fill": 60,
     "test_mask_fill_evaluation": 45,

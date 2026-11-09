@@ -1,8 +1,11 @@
 // The SDK backend: the only translation unit, with camera_status_map.hpp, that
 // includes the Arcturus SDK headers, and the only SightCircuit code that links
-// libAV1CameraClient.a. It reports metadata and never touches a pixel: no
-// cameraFd, no mapping, no import. It never changes a control and never asks
-// for exclusive access (setReaderState's recording flag is always false).
+// libAV1CameraClient.a. The metadata modes never touch a pixel. The export
+// mode's acquire_lease() hands the helper each camera's borrowed buffer
+// descriptor (the one cameraFd read in the code base) and keeps the frame set
+// until release_lease(); the backend itself never maps or imports a buffer.
+// It never changes a control and never asks for exclusive access
+// (setReaderState's recording flag is always false).
 // C++11, as the SDK headers are; built with -I third_party/arcturus-camera-sdk.
 #include <cstring>
 
@@ -132,8 +135,10 @@ void translate_camera(const av1_ipc::CameraFrame& frame, CameraMeta& meta) {
     meta.width = frame.dmabuf.width;
     meta.height = frame.dmabuf.height;
     meta.drm_format = hex_u32(frame.dmabuf.drmFormat);
+    meta.drm_format_value = frame.dmabuf.drmFormat;
     meta.pixel_format = pixel_format_name(frame.dmabuf.pixelFormat);
     meta.drm_modifier = hex_u64(frame.dmabuf.drmModifier, 16);
+    meta.drm_modifier_value = frame.dmabuf.drmModifier;
     meta.plane_count = frame.dmabuf.planeCount;
     for (uint32_t plane = 0; plane < frame.dmabuf.planeCount && plane < kMaxPlanes; ++plane) {
         meta.planes[plane].offset = frame.dmabuf.planes[plane].offset;
@@ -209,28 +214,7 @@ public:
             note_loss(outcome);
             return outcome;
         }
-        // Check every count before indexing, then copy, then release. Nothing
-        // beyond the checked counts is read; nothing is clamped silently.
-        const av1_ipc::AcquireFrameSetReply& reply = set.metadata();
-        bool valid = reply.cameraCount <= kMaxCameras;
-        for (uint32_t camera = 0; valid && camera < reply.cameraCount; ++camera) {
-            const av1_ipc::CameraFrame& frame = reply.cameras[camera];
-            valid = counts_within_bounds(reply.cameraCount, frame.dmabuf.planeCount, frame.auxJsonSize,
-                                         frame.intrinsics.distortionParamCount) &&
-                    frame.kb4Intrinsics.distortionParamCount <= kMaxDistortionParams;
-        }
-        if (valid) {
-            meta = FrameSetMeta();
-            meta.sequence = reply.sequence;
-            meta.camera_count = reply.cameraCount;
-            meta.pose_valid = reply.pose.poseValid != 0;
-            meta.front_from_head_valid = reply.pose.frontCam0FromHeadValid != 0;
-            meta.front_from_avcam0_valid = reply.pose.frontCam0FromAvCam0Valid != 0;
-            meta.velocity_valid = reply.pose.velocityValid != 0;
-            for (uint32_t camera = 0; camera < reply.cameraCount; ++camera) {
-                translate_camera(reply.cameras[camera], meta.cameras[camera]);
-            }
-        }
+        const bool valid = translate_frame_set(set, meta);
         const AV1CameraClient::Status released = set.release();
         if (!released) {
             record(released);
@@ -240,7 +224,43 @@ public:
         return valid ? Outcome::ok : Outcome::invalid_metadata;
     }
 
+    Outcome acquire_lease(uint32_t timeout_ms, FrameSetLease& lease) {
+        if (held_) return Outcome::helper_error;  // the caller must release first
+        const AV1CameraClient::Status status = client_.acquireFrameSet(held_set_, timeout_ms);
+        record(status);
+        const Outcome outcome = map_status(status, SdkCall::acquire);
+        if (outcome != Outcome::ok) {
+            note_loss(outcome);
+            return outcome;
+        }
+        held_ = true;
+        lease = FrameSetLease();
+        if (!translate_frame_set(held_set_, lease.meta)) return Outcome::invalid_metadata;  // still held; the caller releases
+        for (uint32_t camera = 0; camera < lease.meta.camera_count && camera < kMaxCameras; ++camera) {
+            // Borrowed: all planes of a camera share it; it is never closed here or by the caller.
+            lease.camera_fd[camera] = held_set_.cameraFd(camera);
+        }
+        return Outcome::ok;
+    }
+
+    Outcome release_lease() {
+        if (!held_) return Outcome::ok;
+        held_ = false;
+        const AV1CameraClient::Status released = held_set_.release();
+        if (!released) {
+            record(released);
+            connected_ = false;
+            return Outcome::transport_lost;
+        }
+        last_ = StatusDiagnostics();
+        return Outcome::ok;
+    }
+
     void disconnect() {
+        if (held_) {
+            held_ = false;
+            held_set_.release();  // a lease left over from an error path; the result no longer matters
+        }
         if (connected_) client_.disconnect();
         connected_ = false;
     }
@@ -248,6 +268,31 @@ public:
     const StatusDiagnostics& last_status() const { return last_; }
 
 private:
+    // Check every count before indexing, then copy. Nothing beyond the checked
+    // counts is read; nothing is clamped silently. False means invalid metadata.
+    static bool translate_frame_set(const AV1CameraClient::FrameSet& set, FrameSetMeta& meta) {
+        const av1_ipc::AcquireFrameSetReply& reply = set.metadata();
+        bool valid = reply.cameraCount <= kMaxCameras;
+        for (uint32_t camera = 0; valid && camera < reply.cameraCount; ++camera) {
+            const av1_ipc::CameraFrame& frame = reply.cameras[camera];
+            valid = counts_within_bounds(reply.cameraCount, frame.dmabuf.planeCount, frame.auxJsonSize,
+                                         frame.intrinsics.distortionParamCount) &&
+                    frame.kb4Intrinsics.distortionParamCount <= kMaxDistortionParams;
+        }
+        if (!valid) return false;
+        meta = FrameSetMeta();
+        meta.sequence = reply.sequence;
+        meta.camera_count = reply.cameraCount;
+        meta.pose_valid = reply.pose.poseValid != 0;
+        meta.front_from_head_valid = reply.pose.frontCam0FromHeadValid != 0;
+        meta.front_from_avcam0_valid = reply.pose.frontCam0FromAvCam0Valid != 0;
+        meta.velocity_valid = reply.pose.velocityValid != 0;
+        for (uint32_t camera = 0; camera < reply.cameraCount; ++camera) {
+            translate_camera(reply.cameras[camera], meta.cameras[camera]);
+        }
+        return true;
+    }
+
     void record(const AV1CameraClient::Status& status) {
         last_.status_error = status_error_name(status.error);
         last_.result = status.error == AV1CameraClient::Status::Error::Server ? result_name(status.result)
@@ -262,6 +307,8 @@ private:
     }
 
     AV1CameraClient client_;
+    AV1CameraClient::FrameSet held_set_;  // the export mode's one lease
+    bool held_ = false;
     HelloFacts hello_;
     StatusDiagnostics last_;
     bool connected_;

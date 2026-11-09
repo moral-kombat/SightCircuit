@@ -106,10 +106,10 @@ jobs:
               assert 'Warning:' in result.stderr
           print('Default/invalid invocations do not initialize OpenVR; explicit opt-in preserves runtime diagnostics.')
           PY
-      - name: Install the Linux Vulkan loader for linking
+      - name: Install the Linux Vulkan loader for linking, the headers the camera helper's GPU path compiles against, and the software driver its smoke test runs on
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends libvulkan1
+          sudo apt-get install -y --no-install-recommends libvulkan1 libvulkan-dev mesa-vulkan-drivers
       - name: Build the pinned capture reference without activation
         run: bash scripts/build_capture_reference.sh
       - name: Build the transport-only adaptation and self-test synthetic sockets
@@ -169,7 +169,8 @@ jobs:
             tests/test_capture_import.py tests/test_capture_gpu_resources.py tests/test_capture_provider.py \
             tests/test_capture_provider_check.py tests/test_capture_layer_config.py \
             tests/test_capture_service_lifecycle.py tests/test_capture_layer_trial.py tests/test_supervision.py \
-            tests/test_arcturus_sdk_headers.py tests/test_camera_helper.py tests/test_camera_helper_boundaries.py
+            tests/test_arcturus_sdk_headers.py tests/test_camera_helper.py tests/test_camera_helper_boundaries.py \
+            tests/test_camera_export.py
 
   replay:
     # The decoder-only and the full replay-window environments, each exercised

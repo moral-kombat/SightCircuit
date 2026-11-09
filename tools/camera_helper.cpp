@@ -1,17 +1,25 @@
 // sightcircuit-camera-helper: reports what the Arcturus camera SDK provides,
-// without reading any pixels. The only SightCircuit binary that links the
-// Client Library (through camera_backend_sdk.cpp); the fake build drives the
-// same code from camera_backend_fake.cpp on any architecture.
+// and, in --export-frames, delivers its frames to the parent process. The only
+// SightCircuit binary that links the Client Library (through
+// camera_backend_sdk.cpp); the fake build drives the same code from
+// camera_backend_fake.cpp on any architecture.
 //
 // Modes: --describe (no connect), --hello (connect, handshake and control
-// state; the reader stays off) and --probe-frames N --max-seconds S (metadata
-// of a few frame sets with the reader active, paced well below camera rate).
-// Output is NDJSON on the real stdout; everything else goes to stderr. The
-// confirmation notice goes to the terminal, never to the protocol stream.
+// state; the reader stays off), --probe-frames N --max-seconds S (metadata
+// of a few frame sets with the reader active, paced well below camera rate)
+// and --export-frames (BGR3 frames to the parent over stdout under the camera
+// export protocol, camera_export_protocol.hpp, paced by dropping frame sets).
+// The metadata modes write NDJSON on the real stdout; the export mode writes
+// packets there and nothing else, and every diagnostic record becomes a JSON
+// line on stderr. The confirmation notice goes to the terminal, never to the
+// protocol stream.
 //
-// It never writes a control, never asks for exclusive access, never touches a
-// buffer descriptor and writes no file. C++17: it includes overlay_lifecycle.hpp
-// for stdout isolation and the SIGALRM watchdog.
+// It never writes a control, never asks for exclusive access and writes no
+// file. The metadata modes never touch a buffer descriptor; the export mode
+// reads buffers only through the pixel paths (camera_pixels.hpp) and a pixel
+// leaves the process only through the pipe to its parent. C++17: it includes
+// overlay_lifecycle.hpp for stdout isolation and the SIGALRM watchdog.
+#include <algorithm>
 #include <cerrno>
 #include <cmath>
 #include <csignal>
@@ -33,9 +41,12 @@
 #include <unistd.h>
 
 #include "camera_backend.hpp"
+#include "camera_export_protocol.hpp"
+#include "camera_pixels.hpp"
 #include "overlay_lifecycle.hpp"
 
 namespace lifecycle = sightcircuit_lifecycle;
+namespace export_protocol = sightcircuit_camera_export;
 using namespace sightcircuit_camera;
 
 namespace {
@@ -48,6 +59,15 @@ constexpr uint32_t kFrameTimeoutMs = 50;
 constexpr int kExitRefused = 5;
 constexpr int kExitInvalidArguments = 64;
 constexpr int kExitCancelled = 130;
+// The export mode acquires at camera rate with this server-side timeout and
+// ends the run when no frame set has arrived for the presence gap.
+constexpr uint32_t kExportFrameTimeoutMs = 100;
+constexpr int64_t kPresenceGapNs = 2000000000ll;
+constexpr unsigned kConvertWatchdogSeconds = 10;
+constexpr unsigned kMaxExportFps = 10;
+constexpr unsigned kMaxExportSeconds = 60;
+constexpr unsigned kMaxExportFrames = 600;
+constexpr unsigned kMaxProbeSeconds = 10;
 
 #ifdef SIGHTCIRCUIT_CAMERA_BACKEND_FAKE
 constexpr const char* kBackendName = "fake";
@@ -235,20 +255,39 @@ void write_fd(int fd, const std::string& text) {
         size -= static_cast<std::size_t>(count);
     }
 }
-void note(const std::string& text) { write_fd(STDERR_FILENO, text + "\n"); }
+// Set once --export-frames is parsed: stdout then carries packets only, so
+// records go to stderr as JSON lines and plain notes are wrapped as JSON.
+bool g_export_mode = false;
+JsonObject record(const char* event);
+void note(const std::string& text) {
+    if (g_export_mode) {
+        write_fd(STDERR_FILENO, record("note").str("message", text).done() + "\n");
+        return;
+    }
+    write_fd(STDERR_FILENO, text + "\n");
+}
 
 // ---- arguments -------------------------------------------------------------
 
 struct Options {
-    enum Mode { none, describe, hello, probe };
+    enum Mode { none, describe, hello, probe, export_frames };
     Mode mode = none;
     unsigned frame_sets = 0;
     unsigned max_seconds = 0;
     unsigned interval_ms = 200;
     unsigned timeout_ms = 2000;
+    unsigned fps = 5;
+    unsigned max_frames = 0;
+    std::string camera = "left";        // left, right or both
+    std::string pixel_path = "auto";    // auto, cpu_linear or gpu_convert
     std::string fake_scenario = "ok_linear_nv12";
     bool help = false;
     std::string error;
+
+    bool exports_camera(uint32_t index) const {
+        return camera == "both" || (camera == "left" && index == 0) || (camera == "right" && index == 1);
+    }
+    uint32_t highest_camera_index() const { return camera == "left" ? 0u : 1u; }
 };
 
 bool parse_unsigned(const char* text, unsigned& value) {
@@ -264,7 +303,8 @@ bool parse_unsigned(const char* text, unsigned& value) {
 
 Options parse_arguments(int argc, char** argv) {
     Options options;
-    bool have_max_seconds = false;
+    bool have_max_seconds = false, have_max_frames = false, have_interval = false;
+    bool have_fps = false, have_camera = false, have_pixel_path = false;
     auto set_mode = [&](Options::Mode mode) {
         if (options.mode != Options::none) options.error = "exactly one mode is allowed";
         options.mode = mode;
@@ -289,9 +329,33 @@ Options parse_arguments(int argc, char** argv) {
         } else if (argument == "--probe-frames") {
             set_mode(Options::probe);
             take_value(index, "--probe-frames", options.frame_sets, 1, 50);
+        } else if (argument == "--export-frames") {
+            set_mode(Options::export_frames);
+            g_export_mode = true;
         } else if (argument == "--max-seconds") {
-            if (take_value(index, "--max-seconds", options.max_seconds, 1, 10)) have_max_seconds = true;
+            // The probe's bound (1-10) is checked once the mode is known, below.
+            if (take_value(index, "--max-seconds", options.max_seconds, 1, kMaxExportSeconds)) have_max_seconds = true;
+        } else if (argument == "--max-frames") {
+            if (take_value(index, "--max-frames", options.max_frames, 1, kMaxExportFrames)) have_max_frames = true;
+        } else if (argument == "--fps") {
+            if (take_value(index, "--fps", options.fps, 1, kMaxExportFps)) have_fps = true;
+        } else if (argument == "--camera") {
+            have_camera = true;
+            if (index + 1 >= argc) options.error = "--camera needs left, right or both";
+            else options.camera = argv[++index];
+            if (options.camera != "left" && options.camera != "right" && options.camera != "both") {
+                options.error = "--camera needs left, right or both";
+            }
+        } else if (argument == "--pixel-path") {
+            have_pixel_path = true;
+            if (index + 1 >= argc) options.error = "--pixel-path needs auto, cpu_linear or gpu_convert";
+            else options.pixel_path = argv[++index];
+            if (options.pixel_path != "auto" && options.pixel_path != export_protocol::kPixelPathCpuLinear &&
+                options.pixel_path != export_protocol::kPixelPathGpuConvert) {
+                options.error = "--pixel-path needs auto, cpu_linear or gpu_convert";
+            }
         } else if (argument == "--interval-ms") {
+            have_interval = true;
             take_value(index, "--interval-ms", options.interval_ms, 100, 1000);
         } else if (argument == "--timeout-ms") {
             take_value(index, "--timeout-ms", options.timeout_ms, 1, 10000);
@@ -303,22 +367,41 @@ Options parse_arguments(int argc, char** argv) {
         }
     }
     if (options.help || !options.error.empty()) return options;
-    if (options.mode == Options::none) options.error = "one of --describe, --hello or --probe-frames is required";
-    else if (options.mode == Options::probe && !have_max_seconds) options.error = "--probe-frames needs --max-seconds";
-    else if (options.mode != Options::probe && have_max_seconds) options.error = "--max-seconds applies to --probe-frames";
+    const bool export_only = have_max_frames || have_fps || have_camera || have_pixel_path;
+    if (options.mode == Options::none) {
+        options.error = "one of --describe, --hello, --probe-frames or --export-frames is required";
+    } else if (options.mode == Options::export_frames) {
+        if (!have_max_seconds || !have_max_frames) options.error = "--export-frames needs --max-seconds and --max-frames";
+        else if (have_interval) options.error = "--interval-ms applies to --probe-frames";
+    } else if (export_only) {
+        options.error = "--fps, --max-frames, --camera and --pixel-path apply to --export-frames";
+    } else if (options.mode == Options::probe) {
+        if (!have_max_seconds) options.error = "--probe-frames needs --max-seconds";
+        else if (options.max_seconds > kMaxProbeSeconds) {
+            options.error = "--max-seconds needs an integer between 1 and " + std::to_string(kMaxProbeSeconds);
+        }
+    } else if (have_max_seconds) {
+        options.error = "--max-seconds applies to --probe-frames and --export-frames";
+    }
     return options;
 }
 
 const char* usage_text() {
-    return "sightcircuit-camera-helper: Arcturus camera SDK metadata probe; reads no pixels, writes no file.\n"
+    return "sightcircuit-camera-helper: Arcturus camera SDK metadata probe and frame export; writes no file.\n"
            "  --describe                                  build, backend and SDK release facts; no connect\n"
            "  --hello [--timeout-ms N]                    connect, handshake and control state; reader stays off\n"
            "  --probe-frames N --max-seconds S [--interval-ms M] [--timeout-ms T]\n"
            "                                              metadata of up to N frame sets (1-50) within S seconds (1-10),\n"
-           "                                              one pass per M ms (100-1000, default 200)\n"
+           "                                              one pass per M ms (100-1000, default 200); no pixels are read\n"
+           "  --export-frames --max-seconds S --max-frames N [--fps F] [--camera left|right|both]\n"
+           "                 [--pixel-path auto|cpu_linear|gpu_convert] [--timeout-ms T]\n"
+           "                                              BGR3 frames to the parent over stdout (camera export protocol 1),\n"
+           "                                              at most F per second (1-10, default 5), S seconds (1-60) and\n"
+           "                                              N frames (1-600); stdout must be a pipe; stderr carries JSON lines\n"
            "  --timeout-ms N                              connect timeout, 1-10000 (default 2000)\n"
-           "--hello and --probe-frames ask for confirmation on the terminal and take a lock in $XDG_RUNTIME_DIR.\n"
-           "Output: NDJSON records on stdout (report_kind sightcircuit_camera_helper, schema 1).\n";
+           "--hello, --probe-frames and --export-frames ask for confirmation on the terminal and take a lock in\n"
+           "$XDG_RUNTIME_DIR. Output of the metadata modes: NDJSON records on stdout (report_kind\n"
+           "sightcircuit_camera_helper, schema 1).\n";
 }
 
 // ---- records -----------------------------------------------------------------
@@ -338,10 +421,54 @@ void emit(const JsonObject& object) {
         // Never emit a torn or oversized line; say what happened instead.
         const std::string replacement = record("outcome").str("call", "emit").str("outcome", "helper_error")
             .boolean("retryable", false).str("message", "record exceeded 8 KiB").done() + "\n";
-        if (!lifecycle::write_protocol(replacement)) g_protocol_write_failed = true;
+        if (g_export_mode) write_fd(STDERR_FILENO, replacement);
+        else if (!lifecycle::write_protocol(replacement)) g_protocol_write_failed = true;
         return;
     }
-    if (!lifecycle::write_protocol(line)) g_protocol_write_failed = true;
+    if (g_export_mode) write_fd(STDERR_FILENO, line);
+    else if (!lifecycle::write_protocol(line)) g_protocol_write_failed = true;
+}
+
+// ---- the export packet stream ------------------------------------------------------
+
+void put_u32(std::string& out, uint32_t value) {
+    for (int shift = 0; shift < 32; shift += 8) out += static_cast<char>((value >> shift) & 0xffu);
+}
+
+// A whole packet: prefix, header JSON, payload. Empty when the header is too large.
+std::string packet_bytes(const std::string& header_json, const uint8_t* payload, std::size_t payload_bytes) {
+    if (header_json.size() > export_protocol::kMaxHeaderBytes || payload_bytes > export_protocol::kMaxPayloadBytes) return "";
+    std::string bytes;
+    bytes.reserve(export_protocol::kPacketPrefixBytes + header_json.size() + payload_bytes);
+    bytes.append(export_protocol::kMagic, sizeof export_protocol::kMagic);
+    put_u32(bytes, export_protocol::kProtocolVersion);
+    put_u32(bytes, static_cast<uint32_t>(header_json.size()));
+    put_u32(bytes, static_cast<uint32_t>(payload_bytes));
+    bytes += header_json;
+    if (payload_bytes) bytes.append(reinterpret_cast<const char*>(payload), payload_bytes);
+    return bytes;
+}
+
+// Writes to the protocol descriptor without lifecycle::write_protocol, whose
+// torn-line newline has no place in a packet stream. SIGPIPE is ignored in the
+// export mode, so a vanished parent shows up here as a failed write.
+bool write_packet_bytes(const std::string& bytes) {
+    const char* data = bytes.data();
+    std::size_t size = bytes.size();
+    while (size) {
+        const ssize_t count = ::write(lifecycle::protocol_fd, data, size);
+        if (count < 0 && errno == EINTR) continue;
+        if (count <= 0) return false;
+        data += count;
+        size -= static_cast<std::size_t>(count);
+    }
+    return true;
+}
+
+bool write_packet(const std::string& header_json, const uint8_t* payload, std::size_t payload_bytes) {
+    const std::string bytes = packet_bytes(header_json, payload, payload_bytes);
+    if (bytes.empty()) return false;
+    return write_packet_bytes(bytes);
 }
 
 int exit_code_for(Outcome outcome) {
@@ -373,10 +500,13 @@ const char* outcome_message(Outcome outcome) {
     }
 }
 
+// The export mode reads pixels and hands them to its parent; every other claim
+// holds for every mode. The persistence value says where the output went.
 void add_false_claims(JsonObject& object) {
-    object.boolean("pixels_read", false).boolean("images_saved", false).boolean("controls_written", false)
+    object.boolean("pixels_read", g_export_mode).boolean("images_saved", false).boolean("controls_written", false)
         .boolean("exclusive_control_requested", false).boolean("led_written", false)
-        .raw("camera_data_fields", "[]").str("persistence", "stdout_only");
+        .raw("camera_data_fields", g_export_mode ? "[\"frame_pixels_to_parent\"]" : "[]")
+        .str("persistence", g_export_mode ? "stdout_pipe_to_parent_only" : "stdout_only");
 }
 
 std::string controls_json(const ControlSummary& c) {
@@ -475,9 +605,20 @@ public:
         for (int i = 0; i < kOutcomeCount; ++i) counts_[i] = 0;
     }
 
-    const char* mode_name() const { return options_.mode == Options::probe ? "probe_frames" : "hello"; }
+    const char* mode_name() const {
+        switch (options_.mode) {
+            case Options::probe: return "probe_frames";
+            case Options::export_frames: return "export_frames";
+            default: return "hello";
+        }
+    }
 
+    // The watchdog's pre-built message: a final record, or in the export mode an
+    // "end" packet with reason "watchdog" and the counts at the time it was built.
     std::string watchdog_line() const {
+        if (options_.mode == Options::export_frames) {
+            return packet_bytes(end_header(export_protocol::kEndWatchdog, lifecycle::kWatchdogExitCode, false), nullptr, 0);
+        }
         JsonObject object = record("final");
         object.str("mode", mode_name()).null("outcome").str("reason", "watchdog_expired")
             .integer("exit_code", lifecycle::kWatchdogExitCode).boolean("cleanup_ok", false)
@@ -486,11 +627,20 @@ public:
         return object.done() + "\n";
     }
 
-    // Refused before any SDK call: a final record with the reason and exit code 5.
-    int refuse(const std::string& reason) {
+    // Refused before any SDK call: a final record with the reason and the exit code (5 unless given).
+    int refuse(const std::string& reason, int exit_code = kExitRefused, const std::string& detail = "") {
         reason_ = reason;
-        emit_final(kExitRefused);
-        return kExitRefused;
+        detail_ = detail;
+        emit_final(exit_code);
+        return exit_code;
+    }
+
+    // The export mode's pixel path, opened before any SDK call when it was
+    // named; "auto" opens the CPU path now and decides on the first frame set.
+    bool open_pixel_path(std::string& error) {
+        if (options_.pixel_path == export_protocol::kPixelPathGpuConvert) pixel_path_ = make_gpu_convert_path();
+        else pixel_path_ = make_cpu_linear_path();
+        return pixel_path_->open(error, pixel_path_facts_);
     }
 
     int run() {
@@ -508,7 +658,8 @@ public:
         if (check_stop()) return finish();
         if (!call_set_reader(true)) return finish();
         reader_active_ = reader_activated_ = true;
-        loop();
+        if (options_.mode == Options::export_frames) export_loop();
+        else loop();
         return finish();
     }
 
@@ -651,6 +802,276 @@ private:
         }
     }
 
+    // ---- the export mode --------------------------------------------------------------
+
+    // Releases the held frame set; a failure is transport_lost and ends the run.
+    bool release_lease() {
+        const Outcome outcome = sdk([&] { return backend_.release_lease(); });
+        if (outcome != Outcome::ok) {
+            ++release_failures_;
+            emit_outcome("release", outcome, true);
+            if (outcome_ == Outcome::ok) outcome_ = outcome;
+            end_reason_ = export_protocol::kEndSdkError;
+            return false;
+        }
+        return true;
+    }
+
+    void end_export(const char* reason, const std::string& detail = "") {
+        if (end_reason_.empty()) end_reason_ = reason;
+        if (!detail.empty() && detail_.empty()) detail_ = detail;
+    }
+
+    // "auto" chooses by the first frame set's modifier: linear stays on the CPU
+    // path, anything else opens the GPU path. The chosen path is fixed for the run.
+    bool settle_pixel_path(const FrameSetMeta& meta) {
+        if (pixel_path_settled_) return true;
+        pixel_path_settled_ = true;
+        if (options_.pixel_path != "auto") return true;
+        // The first selected camera's modifier; camera 0's when the selection is absent from the set.
+        uint64_t modifier = meta.camera_count ? meta.cameras[0].drm_modifier_value : 0;
+        for (uint32_t camera = 0; camera < meta.camera_count && camera < kMaxCameras; ++camera) {
+            if (options_.exports_camera(camera)) { modifier = meta.cameras[camera].drm_modifier_value; break; }
+        }
+        if (modifier_is_linear(modifier)) return true;
+        std::string error;
+        pixel_path_ = make_gpu_convert_path();
+        lifecycle::rearm_watchdog(kConvertWatchdogSeconds);
+        const bool opened = pixel_path_->open(error, pixel_path_facts_);
+        lifecycle::disarm_watchdog();
+        if (!opened) {
+            end_export(export_protocol::kEndPixelPathError, "gpu_convert_open_failed:" + error);
+            return false;
+        }
+        return true;
+    }
+
+    void export_loop() {
+        ::signal(SIGPIPE, SIG_IGN);
+        export_started_ns_ = clock_ns(CLOCK_MONOTONIC);
+        // A named pixel path is settled already, so the ready packet goes out
+        // before the first acquire; "auto" writes it once the first frame set
+        // has shown its modifier.
+        if (options_.pixel_path != "auto") {
+            pixel_path_settled_ = true;
+            if (!write_ready()) return;
+        }
+        const int64_t deadline = export_started_ns_ + static_cast<int64_t>(options_.max_seconds) * 1000000000ll;
+        const int64_t interval_ns = 1000000000ll / static_cast<int64_t>(options_.fps);
+        int64_t next_due_ns = export_started_ns_;
+        int64_t last_frame_set_ns = export_started_ns_;
+        Outcome last_retryable = Outcome::ok;
+        bool any_frame_set = false;
+        for (;;) {
+            if (check_stop()) { end_export(export_protocol::kEndStopSignal); return; }
+            if (clock_ns(CLOCK_MONOTONIC) >= deadline) { end_export(export_protocol::kEndMaxSeconds); return; }
+            if (exported_ >= options_.max_frames) { end_export(export_protocol::kEndMaxFrames); return; }
+            ++passes_;
+            FrameSetLease lease;
+            arm_export_watchdog();
+            const Outcome outcome = sdk([&] { return backend_.acquire_lease(kExportFrameTimeoutMs, lease); });
+            const HostClocks clocks = HostClocks::sample();
+            if (outcome_retryable(outcome)) {
+                ++acquire_failures_;
+                last_retryable = outcome;
+                emit_outcome("acquire", outcome, true);
+                if (clocks.monotonic_ns - last_frame_set_ns > kPresenceGapNs) {
+                    // Frames stopped: without a reported reason that is the headset
+                    // coming off (the only observable the SDK offers); a reported
+                    // not-ready or unavailable is the service's standby. Before the
+                    // first frame set the service never served, which is standby too.
+                    const bool removed = any_frame_set && last_retryable == Outcome::no_frame;
+                    end_export(removed ? export_protocol::kEndHeadsetRemoved : export_protocol::kEndStandby,
+                               std::string("no_frame_set_for_ns:") + std::to_string(clocks.monotonic_ns - last_frame_set_ns));
+                    return;
+                }
+                continue;
+            }
+            if (outcome == Outcome::invalid_metadata) {
+                ++acquire_failures_;
+                emit_outcome("acquire", outcome, true);
+                release_lease();
+                outcome_ = outcome;
+                end_export(export_protocol::kEndSdkError, "invalid_metadata");
+                return;
+            }
+            if (outcome != Outcome::ok) {
+                ++acquire_failures_;
+                emit_outcome("acquire", outcome, true);
+                outcome_ = outcome;
+                end_export(export_protocol::kEndSdkError, outcome_name(outcome));
+                return;
+            }
+            // A frame set is held from here until release_lease().
+            any_frame_set = true;
+            last_frame_set_ns = clocks.monotonic_ns;
+            ++frame_sets_;
+            account(lease.meta, clocks);
+            if (!settle_pixel_path(lease.meta)) { release_lease(); return; }
+            if (!ready_written_) {
+                if (!write_ready()) { release_lease(); return; }
+            }
+            if (options_.highest_camera_index() >= lease.meta.camera_count) {
+                release_lease();
+                end_export(export_protocol::kEndSdkError, "camera_missing:" + options_.camera + " needs " +
+                                                               std::to_string(options_.highest_camera_index() + 1) +
+                                                               " cameras, the frame set has " +
+                                                               std::to_string(lease.meta.camera_count));
+                return;
+            }
+            if (clocks.monotonic_ns < next_due_ns) {
+                ++dropped_;
+                ++dropped_since_last_;
+                if (!release_lease()) return;
+                continue;
+            }
+            next_due_ns = std::max(next_due_ns + interval_ns, clocks.monotonic_ns);
+            // Convert every selected camera while the set is held, release, then write.
+            pending_in_set_ = 0;
+            std::vector<std::string> headers;
+            std::vector<BgrImage> images;
+            for (uint32_t camera = 0; camera < lease.meta.camera_count && camera < kMaxCameras; ++camera) {
+                if (!options_.exports_camera(camera)) continue;
+                if (exported_ + headers.size() >= options_.max_frames) break;  // the bound counts frames, not sets
+                SourceFrame source;
+                std::string error;
+                if (!source_frame_from_meta(lease.meta.cameras[camera], lease.camera_fd[camera], source, error)) {
+                    release_lease();
+                    end_export(export_protocol::kEndPixelPathError, "camera_" + std::to_string(camera) + ":" + error);
+                    return;
+                }
+                BgrImage image;
+                lifecycle::rearm_watchdog(kConvertWatchdogSeconds);
+                const bool converted = pixel_path_->convert(source, image, error);
+                lifecycle::disarm_watchdog();
+                if (!converted) {
+                    release_lease();
+                    end_export(export_protocol::kEndPixelPathError, "camera_" + std::to_string(camera) + ":" + error);
+                    return;
+                }
+                headers.push_back(frame_header(lease.meta, camera, clocks, image));
+                images.push_back(std::move(image));
+            }
+            if (!release_lease()) return;
+            for (std::size_t i = 0; i < headers.size(); ++i) {
+                if (!write_packet(headers[i], images[i].pixels.data(), images[i].pixels.size())) {
+                    protocol_lost_ = true;
+                    note("sightcircuit-camera-helper: the protocol stream failed; the parent is gone");
+                    end_export(export_protocol::kEndSdkError, "protocol_write_failed");
+                    return;
+                }
+                ++exported_;
+            }
+            dropped_since_last_ = 0;
+        }
+    }
+
+    void arm_export_watchdog() {
+        // The message carries the counts so far; if a call hangs, the end packet says where it stopped.
+        const std::string message = watchdog_line();
+        if (!message.empty()) lifecycle::set_watchdog(message, watchdog_seconds_);
+        lifecycle::disarm_watchdog();
+    }
+
+    std::string build_json() const {
+        JsonObject object;
+        if (kBuildCommit) object.str("build_commit", kBuildCommit);
+        else object.null("build_commit").str("build_commit_reason", kBuildCommitReason);
+        if (kBuildDirty < 0) object.null("build_dirty");
+        else object.boolean("build_dirty", kBuildDirty != 0);
+        if (kSdkSourceRevision && kSdkAgreementVersion) {
+            object.raw("sdk_release", JsonObject().str("source_revision", kSdkSourceRevision)
+                                          .str("agreement_version", kSdkAgreementVersion).done());
+        } else {
+            object.null("sdk_release");
+        }
+        object.str("compiler", __VERSION__);
+        return object.done();
+    }
+
+    std::string camera_selection_json() const {
+        JsonArray indices;
+        for (uint32_t camera = 0; camera < kMaxCameras; ++camera) {
+            if (options_.exports_camera(camera)) indices.raw(std::to_string(camera));
+        }
+        // avCam0 is taken as the left camera until the device's transforms say otherwise.
+        return JsonObject().str("requested", options_.camera).raw("camera_indices", indices.done())
+            .str("index_mapping", "assumed_avcam0_left").done();
+    }
+
+    bool write_ready() {
+        const HelloFacts& hello = backend_.hello();
+        JsonObject header;
+        header.str("kind", export_protocol::kKindReady).integer("protocol", export_protocol::kProtocolVersion)
+            .str("backend", kBackendName).str("pixel_path", pixel_path_->name()).raw("build", build_json())
+            .raw("delivered_format", JsonObject().str("fourcc", export_protocol::kDeliveredFourcc).done())
+            .raw("camera", camera_selection_json())
+            .raw("limits", JsonObject().unsigned_integer("fps", options_.fps).unsigned_integer("max_seconds", options_.max_seconds)
+                               .unsigned_integer("max_frames", options_.max_frames).done())
+            .unsigned_integer("frame_timeout_ms", kExportFrameTimeoutMs).integer("presence_gap_ns", kPresenceGapNs)
+            .raw("pixel_path_facts", pixel_path_facts_.empty() ? "{}" : pixel_path_facts_)
+            .unsigned_integer("hello_camera_count", hello.camera_count)
+            .str("controls_digest_start", have_start_ ? start_controls_.digest() : "")
+            .integer("monotonic_ns", clock_ns(CLOCK_MONOTONIC)).integer("realtime_ns", clock_ns(CLOCK_REALTIME));
+        if (!write_packet(header.done(), nullptr, 0)) {
+            protocol_lost_ = true;
+            end_export(export_protocol::kEndSdkError, "protocol_write_failed");
+            return false;
+        }
+        ready_written_ = true;
+        return true;
+    }
+
+    std::string frame_header(const FrameSetMeta& meta, uint32_t camera, const HostClocks& clocks, const BgrImage& image) const {
+        const CameraMeta& source = meta.cameras[camera];
+        JsonArray planes;
+        for (uint32_t plane = 0; plane < source.plane_count && plane < kMaxPlanes; ++plane) {
+            planes.raw(JsonObject().unsigned_integer("offset", source.planes[plane].offset)
+                           .unsigned_integer("stride", source.planes[plane].stride)
+                           .unsigned_integer("size", source.planes[plane].size).done());
+        }
+        JsonObject acquisition;
+        acquisition.str("drm_fourcc", source.drm_format).str("modifier", source.drm_modifier)
+            .unsigned_integer("plane_count", source.plane_count).raw("planes", planes.done())
+            .str("pixel_format", source.pixel_format).str("encoding", source.ycbcr_encoding)
+            .str("transfer", source.transfer).str("primaries", source.primaries);
+        JsonObject header;
+        header.str("kind", export_protocol::kKindFrame).unsigned_integer("sequence", exported_ + 1 + pending_in_set_)
+            .unsigned_integer("frame_id", source.frame_id).unsigned_integer("frame_set_sequence", meta.sequence)
+            .unsigned_integer("camera_index", camera).unsigned_integer("camera_count", meta.camera_count)
+            .integer("exposure_ns", source.exposure_timestamp_ns).integer("monotonic_ns", clocks.monotonic_ns)
+            .integer("realtime_ns", clocks.realtime_ns).unsigned_integer("width", image.width)
+            .unsigned_integer("height", image.height).str("fourcc", export_protocol::kDeliveredFourcc)
+            .unsigned_integer("stride_bytes", image.stride_bytes).unsigned_integer("buffer_bytes", image.pixels.size())
+            .str("derivation", pixel_path_->derivation()).raw("acquisition_format", acquisition.done())
+            .unsigned_integer("dropped_since_last", dropped_since_last_);
+        ++pending_in_set_;
+        return header.done();
+    }
+
+    // The end header; the watchdog's copy is built before each call with the counts so far.
+    std::string end_header(const std::string& reason, int exit_code, bool cleanup_ok) const {
+        JsonObject counts;
+        counts.unsigned_integer("exported", exported_).unsigned_integer("dropped", dropped_)
+            .unsigned_integer("acquire_failures", acquire_failures_).unsigned_integer("release_failures", release_failures_)
+            .unsigned_integer("frame_sets", frame_sets_).unsigned_integer("passes", passes_);
+        JsonObject header;
+        header.str("kind", export_protocol::kKindEnd).str("reason", reason).raw("counts", counts.done())
+            .integer("elapsed_ns", export_started_ns_ ? clock_ns(CLOCK_MONOTONIC) - export_started_ns_ : 0)
+            .integer("exit_code", exit_code).boolean("cleanup_ok", cleanup_ok)
+            .str("outcome", outcome_name(outcome_));
+        if (detail_.empty()) header.null("detail");
+        else header.str("detail", detail_);
+        if (have_start_) header.str("controls_digest_start", start_controls_.digest());
+        else header.null("controls_digest_start");
+        if (have_end_) header.str("controls_digest_end", end_controls_.digest());
+        else header.null("controls_digest_end");
+        if (have_start_ && have_end_) header.boolean("controls_changed_during_run", !start_controls_.changed_fields(end_controls_).empty());
+        else header.null("controls_changed_during_run");
+        header.raw("pixel_path_notes", pixel_path_ ? pixel_path_->notes_json() : "{}");
+        return header.done();
+    }
+
     void account(const FrameSetMeta& meta, const HostClocks& after) {
         if (have_last_sequence_ && meta.sequence != last_sequence_ + 1) {
             ++sequence_gaps_;
@@ -701,7 +1122,8 @@ private:
                 }
                 reader_active_ = false;
             }
-            if (options_.mode == Options::probe && have_start_ && !session_lost_ && passes_ > 0) {
+            if ((options_.mode == Options::probe || options_.mode == Options::export_frames) && have_start_ &&
+                !session_lost_ && passes_ > 0) {
                 have_end_ = step_controls("end", end_controls_, false);
             }
         }
@@ -711,9 +1133,23 @@ private:
             lifecycle::disarm_watchdog();
         }
         connected_ = false;
-        if (reason_.empty()) reason_ = outcome_name(outcome_);
         int exit_code = exit_code_for(outcome_);
-        if (exit_code == 0 && g_protocol_write_failed) exit_code = 1;
+        if (options_.mode == Options::export_frames) {
+            if (end_reason_.empty()) end_reason_ = export_protocol::kEndSdkError;
+            if (end_reason_ == export_protocol::kEndStopSignal) exit_code = kExitCancelled;
+            else if (end_reason_ == export_protocol::kEndPixelPathError) exit_code = 1;
+            else if (end_reason_ == export_protocol::kEndSdkError && exit_code == 0) exit_code = 1;
+            else if (end_reason_ != export_protocol::kEndSdkError) exit_code = 0;
+            if (protocol_lost_) exit_code = 1;
+            if (!cleanup_ok_ && exit_code == 0) exit_code = 1;
+            reason_ = end_reason_;
+            if (ready_written_ && !protocol_lost_) {
+                if (!write_packet(end_header(end_reason_, exit_code, cleanup_ok_), nullptr, 0)) exit_code = 1;
+            }
+        } else {
+            if (reason_.empty()) reason_ = outcome_name(outcome_);
+            if (exit_code == 0 && g_protocol_write_failed) exit_code = 1;
+        }
         emit_final(exit_code);
         return exit_code;
     }
@@ -724,8 +1160,15 @@ private:
         if (connect_attempted_) object.str("outcome", outcome_name(outcome_));
         else object.null("outcome");
         object.str("reason", reason_).integer("exit_code", exit_code).boolean("cleanup_ok", cleanup_ok_);
+        if (detail_.empty()) object.null("detail");
+        else object.str("detail", detail_);
         if (stop_signal_.empty()) object.null("stop_signal");
         else object.str("stop_signal", stop_signal_);
+        if (options_.mode == Options::export_frames) {
+            object.unsigned_integer("exported", exported_).unsigned_integer("dropped", dropped_)
+                .unsigned_integer("acquire_failures", acquire_failures_).unsigned_integer("release_failures", release_failures_)
+                .boolean("ready_written", ready_written_).str("pixel_path", pixel_path_ ? pixel_path_->name() : "");
+        }
         JsonObject counts;
         for (int i = 0; i < kOutcomeCount; ++i) counts.unsigned_integer(outcome_name(static_cast<Outcome>(i)), counts_[i]);
         object.raw("outcome_counts", counts.done()).unsigned_integer("passes", passes_)
@@ -799,6 +1242,15 @@ private:
     bool have_last_frame_set_ = false, have_first_retryable_after_ = false;
     int64_t last_frame_set_ns_ = 0, first_retryable_after_ns_ = 0;
     Range exposure_offsets_[3], timestamp_offsets_[3];
+    // The export mode.
+    std::unique_ptr<PixelPath> pixel_path_;
+    std::string pixel_path_facts_;
+    bool pixel_path_settled_ = false;
+    std::string end_reason_, detail_;
+    bool ready_written_ = false, protocol_lost_ = false;
+    int64_t export_started_ns_ = 0;
+    unsigned exported_ = 0, dropped_ = 0, dropped_since_last_ = 0, acquire_failures_ = 0, release_failures_ = 0;
+    mutable unsigned pending_in_set_ = 0;
 };
 
 // ---- process setup, refusals and modes ----------------------------------------
@@ -810,7 +1262,8 @@ int emit_invalid_arguments(const std::string& error) {
     add_false_claims(object);
     emit(object);
     note("sightcircuit-camera-helper: " + error);
-    write_fd(STDERR_FILENO, usage_text());
+    if (g_export_mode) note(usage_text());
+    else write_fd(STDERR_FILENO, usage_text());
     return kExitInvalidArguments;
 }
 
@@ -833,6 +1286,19 @@ int run_describe() {
 }
 
 std::string notice_for(const Options& options) {
+    if (options.mode == Options::export_frames) {
+        const std::string cameras = options.camera == "both" ? "both passthrough cameras" :
+                                    options.camera == "left" ? "the left passthrough camera (avCam0)" :
+                                                               "the right passthrough camera (avCam1)";
+        return "sightcircuit-camera-helper --export-frames: activates this client's frame reader for both passthrough "
+               "cameras and delivers converted BGR images of " + cameras + " to the parent process over stdout, at most " +
+               std::to_string(options.fps) + " per second, for at most " + std::to_string(options.max_seconds) +
+               " seconds or " + std::to_string(options.max_frames) + " frames. This helper saves nothing and writes no "
+               "file; what the parent does with the images, and anything you redirect, falls under the owner's consent "
+               "decision (licence section 3.2). Export stops when frames stop (the headset removed) or the camera "
+               "service reports standby. The red LED is left untouched and no exclusive control is requested. Watch "
+               "passthrough during the run and for 30 seconds afterwards.";
+    }
     if (options.mode == Options::hello) {
         return "sightcircuit-camera-helper --hello: connects to the camera service; the reader stays off; no frames "
                "are read; watch passthrough during the run and for 30 seconds afterwards; this helper writes no file.";
@@ -877,8 +1343,10 @@ bool confirm(const std::string& notice, std::string& reason) {
         return false;
     }
     const int tty = ::open("/dev/tty", O_RDWR | O_NOCTTY | O_CLOEXEC);
-    const int out = tty >= 0 ? tty : STDERR_FILENO;
-    write_fd(out, notice + "\nType yes to continue: ");
+    // Without a controlling terminal the notice goes to stderr: as a JSON line in
+    // the export mode, where stderr carries nothing else.
+    if (tty < 0 && g_export_mode) note(notice + " Type yes to continue.");
+    else write_fd(tty >= 0 ? tty : STDERR_FILENO, notice + "\nType yes to continue: ");
     std::string answer;
     for (;;) {
         char c = 0;
@@ -922,12 +1390,28 @@ int main(int argc, char** argv) {
     Session session(options, *backend);
 
     std::string reason;
+    if (options.mode == Options::export_frames) {
+        // Pixels leave only through a pipe or socket to the parent: never a file, never a terminal.
+        struct stat protocol_stat{};
+        if (::fstat(lifecycle::protocol_fd, &protocol_stat) != 0 ||
+            !(S_ISFIFO(protocol_stat.st_mode) || S_ISSOCK(protocol_stat.st_mode))) {
+            note("sightcircuit-camera-helper: refused: stdout_not_a_pipe (--export-frames writes packets to its parent only)");
+            return session.refuse("stdout_not_a_pipe");
+        }
+    }
     const int lock_fd = take_lock(reason);
     if (lock_fd < 0) {
         note("sightcircuit-camera-helper: refused: " + reason);
         return session.refuse(reason);
     }
     if (!confirm(notice_for(options), reason)) return session.refuse(reason);
+    if (options.mode == Options::export_frames) {
+        std::string error;
+        if (!session.open_pixel_path(error)) {
+            note("sightcircuit-camera-helper: refused: pixel_path_unavailable: " + error);
+            return session.refuse("pixel_path_unavailable", 1, error);
+        }
+    }
 
     // From here on a stop signal is collected between SDK calls, never delivered
     // during one: the mask is set before the first SDK call so library threads
@@ -936,7 +1420,7 @@ int main(int argc, char** argv) {
     pthread_sigmask(SIG_BLOCK, &stops, nullptr);
     // SIGALRM stays deliverable: the watchdog ends a hung call with a pre-built final record.
     const std::string watchdog_line = session.watchdog_line();
-    if (!lifecycle::install_watchdog() || !lifecycle::set_watchdog(watchdog_line, 1)) {
+    if (watchdog_line.empty() || !lifecycle::install_watchdog() || !lifecycle::set_watchdog(watchdog_line, 1)) {
         note("sightcircuit-camera-helper: cannot install the watchdog");
         return session.refuse("watchdog_unavailable");
     }
