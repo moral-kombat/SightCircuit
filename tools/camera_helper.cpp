@@ -70,6 +70,7 @@ constexpr int64_t kPresenceGapNs = 2000000000ll;
 constexpr int64_t kConsumerStallNs = 2000000000ll;
 constexpr int64_t kEndPacketGraceNs = 1000000000ll;
 constexpr const char* kEndReasonConsumerStalled = "consumer_stalled";  // pending in the generated header
+constexpr const char* kPixelPathUndecided = "undecided";  // pending in the generated header: ready before auto chose
 constexpr unsigned kConvertWatchdogSeconds = 10;
 constexpr unsigned kMaxExportFps = 10;
 constexpr unsigned kMaxExportSeconds = 60;
@@ -487,11 +488,11 @@ bool g_protocol_stalled = false;
 bool g_protocol_torn = false;      // a stalled write left a partial line in the pipe
 int64_t g_run_deadline_ns = 0;     // probe loop only; 0 means no run bound applies to writes
 
-// The outcome of one bounded protocol write. stalled: the deadline (or the
-// no-progress bound) passed with the consumer not reading; failed: the
-// descriptor failed (EPIPE: the parent is gone). written_bytes says whether
-// the stream is torn.
-enum class WriteOutcome { ok, stalled, failed };
+// The outcome of one bounded protocol write. deadline: the deadline passed
+// while the consumer was still making progress; stalled: the no-progress bound
+// passed with the consumer not reading; failed: the descriptor failed (EPIPE:
+// the parent is gone). written_bytes says whether the stream is torn.
+enum class WriteOutcome { ok, deadline, stalled, failed };
 struct WriteResult {
     WriteOutcome outcome = WriteOutcome::ok;
     std::size_t written_bytes = 0;
@@ -525,7 +526,12 @@ WriteResult write_protocol_bounded(const char* data, std::size_t size, int64_t d
             break;
         }
         if (ready == 0) {
-            if (remaining <= 0) { result.outcome = WriteOutcome::stalled; break; }
+            if (remaining <= 0) {
+                // No byte for the whole no-progress bound is a stall; otherwise the deadline passed.
+                const bool no_progress = progress_ns > 0 && now - last_progress_ns >= progress_ns;
+                result.outcome = no_progress ? WriteOutcome::stalled : WriteOutcome::deadline;
+                break;
+            }
             continue;
         }
         if ((poll_fd.revents & (POLLERR | POLLHUP)) && !(poll_fd.revents & POLLOUT)) {
@@ -787,13 +793,33 @@ public:
 
     // The export mode's pixel path, opened before any SDK call when it was
     // named; "auto" opens the CPU path now and decides on the first frame set.
+    // Called from run(), after main has blocked the stop signals, so threads a
+    // driver starts here inherit the blocked mask and a stop still ends the run
+    // through the loop with the reader deactivated.
     bool open_pixel_path(std::string& error) {
         if (options_.pixel_path == export_protocol::kPixelPathGpuConvert) pixel_path_ = make_gpu_convert_path();
         else pixel_path_ = make_cpu_linear_path();
-        return pixel_path_->open(error, pixel_path_facts_);
+        if (options_.pixel_path != "auto") pixel_path_settled_ = true;
+        lifecycle::rearm_watchdog(kConvertWatchdogSeconds);
+        const bool opened = pixel_path_->open(error, pixel_path_facts_);
+        lifecycle::disarm_watchdog();
+        return opened;
     }
 
     int run() {
+        if (options_.mode == Options::export_frames) {
+            // The stream is complete for every run that passed the confirmation:
+            // one ready first (with the named path's facts; pixel_path "undecided"
+            // under auto, whose first frame set chooses), one end last.
+            std::string error;
+            const bool opened = open_pixel_path(error);
+            if (!write_ready()) return finish();
+            if (!opened) {
+                note("sightcircuit-camera-helper: the pixel path did not open: " + error);
+                end_export(export_protocol::kEndReasonPixelPathError, "pixel_path_open_failed:" + error);
+                return finish();
+            }
+        }
         if (!step_connect() || stalled()) return finish();
         if (options_.mode == Options::hello) {
             ControlSummary controls;
@@ -987,6 +1013,16 @@ private:
         if (!detail.empty() && detail_.empty()) detail_ = detail;
     }
 
+    // The selected cameras must be in the frame set; otherwise the run ends as sdk_error.
+    bool cameras_present(const FrameSetMeta& meta) {
+        if (options_.highest_camera_index() < meta.camera_count) return true;
+        end_export(export_protocol::kEndReasonSdkError, "camera_missing:--cameras " + options_.cameras + " needs " +
+                                                             std::to_string(options_.highest_camera_index() + 1) +
+                                                             " cameras, the frame set has " +
+                                                             std::to_string(meta.camera_count));
+        return false;
+    }
+
     // "auto" chooses by the first frame set's modifier: linear stays on the CPU
     // path, anything else opens the GPU path. The chosen path is fixed for the run.
     bool settle_pixel_path(const FrameSetMeta& meta) {
@@ -1026,7 +1062,10 @@ private:
     void note_write(const WriteResult& result) {
         if (result.outcome == WriteOutcome::ok) return;
         if (result.written_bytes) stream_torn_ = true;
-        if (result.outcome == WriteOutcome::stalled) {
+        if (result.outcome == WriteOutcome::deadline) {
+            // The run bound passed while the consumer was still reading: the bound ended the run.
+            end_export(export_protocol::kEndReasonMaxSeconds);
+        } else if (result.outcome == WriteOutcome::stalled) {
             consumer_stalled_ = true;
             note("sightcircuit-camera-helper: the parent stopped reading the protocol stream; ending the run");
             end_export(kEndReasonConsumerStalled, "no_progress_for_ns:" + std::to_string(kConsumerStallNs));
@@ -1040,13 +1079,6 @@ private:
     void export_loop() {
         export_started_ns_ = clock_ns(CLOCK_MONOTONIC);
         run_deadline_ns_ = export_started_ns_ + static_cast<int64_t>(options_.max_seconds) * 1000000000ll;
-        // A named pixel path is settled already, so the ready packet goes out
-        // before the first acquire; "auto" writes it once the first frame set
-        // has shown its modifier.
-        if (options_.pixel_path != "auto") {
-            pixel_path_settled_ = true;
-            if (!write_ready()) return;
-        }
         const int64_t deadline = run_deadline_ns_;
         const int64_t interval_ns = 1000000000ll / static_cast<int64_t>(options_.fps);
         int64_t next_due_ns = export_started_ns_;
@@ -1098,18 +1130,19 @@ private:
             last_frame_set_ns = clocks.monotonic_ns;
             ++frame_sets_;
             account(lease.meta, clocks);
-            if (!settle_pixel_path(lease.meta)) { release_lease(); return; }
-            if (!ready_written_) {
-                if (!write_ready()) { release_lease(); return; }
+            if (!pixel_path_settled_) {
+                // auto: the first frame set's modifier decides the path. The set is
+                // released before the GPU path opens (which may take the watchdog's
+                // bound) and is not exported; the next set is.
+                const FrameSetMeta first = lease.meta;
+                if (!release_lease()) return;
+                if (!settle_pixel_path(first)) return;
+                if (!cameras_present(first)) return;
+                ++dropped_;
+                ++dropped_since_last_;
+                continue;
             }
-            if (options_.highest_camera_index() >= lease.meta.camera_count) {
-                release_lease();
-                end_export(export_protocol::kEndReasonSdkError, "camera_missing:--cameras " + options_.cameras + " needs " +
-                                                                     std::to_string(options_.highest_camera_index() + 1) +
-                                                                     " cameras, the frame set has " +
-                                                                     std::to_string(lease.meta.camera_count));
-                return;
-            }
+            if (!cameras_present(lease.meta)) { release_lease(); return; }
             if (clocks.monotonic_ns < next_due_ns) {
                 ++dropped_;
                 ++dropped_since_last_;
@@ -1190,13 +1223,17 @@ private:
             .raw("pixel_path_facts", pixel_path_facts_.empty() ? "{}" : pixel_path_facts_)
             .str("camera_index_mapping", "assumed_avcam0_left")  // until the device's transforms say otherwise
             .unsigned_integer("frame_timeout_ms", kExportFrameTimeoutMs).integer("presence_gap_ns", kPresenceGapNs)
-            .unsigned_integer("hello_camera_count", hello.camera_count)
             .integer("monotonic_ns", clock_ns(CLOCK_MONOTONIC)).integer("realtime_ns", clock_ns(CLOCK_REALTIME));
+        // Written before the connect: the handshake's and the control state's facts are not known yet.
+        if (connected_) build.unsigned_integer("hello_camera_count", hello.camera_count);
+        else build.null("hello_camera_count");
         if (have_start_) build.str("controls_digest_start", start_controls_.digest());
         else build.null("controls_digest_start");
+        // Under auto the first frame set's modifier chooses the path: "undecided" until then.
+        const char* pixel_path = pixel_path_settled_ && pixel_path_ ? pixel_path_->name() : kPixelPathUndecided;
         JsonObject header;
         header.str("kind", export_protocol::kKindReady).integer("protocol", export_protocol::kVersion)
-            .str("backend", kBackendName).str("pixel_path", pixel_path_->name()).raw("build", build.done())
+            .str("backend", kBackendName).str("pixel_path", pixel_path).raw("build", build.done())
             .raw("delivered_format", JsonObject().str("fourcc", export_protocol::kFourcc).done())
             .raw("cameras", cameras_json())
             .raw("limits", JsonObject().unsigned_integer("fps", options_.fps).unsigned_integer("max_seconds", options_.max_seconds)
@@ -1599,7 +1636,8 @@ int main(int argc, char** argv) {
 
     const Options options = parse_arguments(argc, argv);
     if (options.help) {
-        write_fd(STDERR_FILENO, usage_text());
+        if (g_export_mode) note(usage_text());  // the export mode's stderr carries JSON lines only
+        else write_fd(STDERR_FILENO, usage_text());
         return 0;
     }
     if (!options.error.empty()) return emit_invalid_arguments(options.error);
@@ -1630,14 +1668,6 @@ int main(int argc, char** argv) {
     } else if (!confirm(notice_for(options), reason)) {
         return session.refuse(reason);
     }
-    if (options.mode == Options::export_frames) {
-        std::string error;
-        if (!session.open_pixel_path(error)) {
-            note("sightcircuit-camera-helper: refused: pixel_path_unavailable: " + error);
-            return session.refuse("pixel_path_unavailable", 1, error);
-        }
-    }
-
     // From here on a stop signal is collected between SDK calls, never delivered
     // during one: the mask is set before the first SDK call so library threads
     // inherit it, and no handler is installed for these signals.

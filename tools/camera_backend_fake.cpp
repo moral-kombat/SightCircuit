@@ -47,7 +47,7 @@ enum Scenario {
     internal_error_at_controls, server_timeout_at_reader, invalid_argument_at_acquire, bad_timestamps,
     export_nv12, export_nv12_tiny, export_nv12_bt601, export_p010,
     export_removal, export_standby, export_transport_lost, export_ubwc, export_bad_fd,
-    export_hang_in_acquire, export_one_camera,
+    export_hang_in_acquire, export_one_camera, export_bad_plane_size,
     unknown_scenario
 };
 
@@ -73,9 +73,15 @@ const ScenarioName kScenarios[] = {
     {"export_p010", export_p010}, {"export_removal", export_removal}, {"export_standby", export_standby},
     {"export_transport_lost", export_transport_lost}, {"export_ubwc", export_ubwc}, {"export_bad_fd", export_bad_fd},
     {"export_hang_in_acquire", export_hang_in_acquire}, {"export_one_camera", export_one_camera},
+    {"export_bad_plane_size", export_bad_plane_size},
 };
 
-bool is_export(Scenario scenario) { return scenario >= export_nv12 && scenario <= export_one_camera; }
+bool is_export(Scenario scenario) { return scenario >= export_nv12 && scenario <= export_bad_plane_size; }
+
+// The call log keeps its first and last entries and counts the rest, so the
+// final record stays within its line bound on a long run at camera rate.
+const std::size_t kCallLogHead = 24;
+const std::size_t kCallLogTail = 24;
 
 // The export scenarios' frame geometry: one buffer per camera, two planes.
 struct ExportShape {
@@ -191,7 +197,7 @@ public:
 
     Outcome connect(uint32_t timeout_ms) {
         (void)timeout_ms;
-        calls_.push_back("connect");
+        record_call("connect");
         switch (scenario_) {
             case protocol_too_new: return server("Result_ClientProtocolTooNew", Outcome::protocol_mismatch);
             case protocol_too_old: return server("Result_ClientProtocolTooOld", Outcome::protocol_mismatch);
@@ -227,7 +233,7 @@ public:
     const HelloFacts& hello() const { return hello_; }
 
     Outcome control_state(ControlSummary& summary) {
-        calls_.push_back("control_state");
+        record_call("control_state");
         if (lost_) return client("NotConnected", 0, "not connected", Outcome::transport_lost);
         ++control_reads_;
         if (scenario_ == permission_denied) return server("Result_PermissionDenied", Outcome::permission_denied);
@@ -266,7 +272,7 @@ public:
     }
 
     Outcome set_reader(bool active) {
-        calls_.push_back(active ? "set_reader:true" : "set_reader:false");
+        record_call(active ? "set_reader:true" : "set_reader:false");
         if (lost_) return client("NotConnected", 0, "not connected", Outcome::transport_lost);
         if (active && scenario_ == permission_denied_at_reader) {
             return server("Result_PermissionDenied", Outcome::permission_denied);
@@ -278,13 +284,13 @@ public:
     }
 
     Outcome acquire(uint32_t timeout_ms, FrameSetMeta& meta) {
-        calls_.push_back("acquire");
+        record_call("acquire");
         if (lost_) return client("NotConnected", 0, "not connected", Outcome::transport_lost);
         const unsigned pass = ++acquires_;
         switch (scenario_) {
             case invalid_argument_at_acquire: return client("InvalidArgument", 0, "invalid argument", Outcome::helper_error);
             case hang_in_acquire: hang_forever(); break;
-            case hang_in_release: calls_.push_back("release"); hang_forever(); break;
+            case hang_in_release: record_call("release"); hang_forever(); break;
             case slow_ok: sleep_ms(timeout_ms > 300 ? 300 : timeout_ms + 250); break;
             case server_timeout_then_ok:
                 if (pass <= 2) return server("Result_Timeout", Outcome::no_frame);
@@ -337,7 +343,7 @@ public:
             if (outcome == Outcome::ok) held_ = true;
             return outcome;
         }
-        calls_.push_back("acquire");
+        record_call("acquire");
         if (lost_) return client("NotConnected", 0, "not connected", Outcome::helper_error);
         const unsigned pass = ++acquires_;
         switch (scenario_) {
@@ -381,16 +387,30 @@ public:
     Outcome release_lease() {
         if (!held_) return success();
         held_ = false;
-        calls_.push_back("release");
+        record_call("release");
         return success();
     }
 
-    void disconnect() { calls_.push_back("disconnect"); }
+    void disconnect() { record_call("disconnect"); }
 
     const StatusDiagnostics& last_status() const { return last_; }
-    const std::vector<std::string>* call_log() const { return &calls_; }
+    const std::vector<std::string>* call_log() const {
+        log_view_ = head_calls_;
+        if (omitted_calls_) log_view_.push_back("..." + std::to_string(omitted_calls_) + " calls omitted...");
+        log_view_.insert(log_view_.end(), tail_calls_.begin(), tail_calls_.end());
+        return &log_view_;
+    }
 
 private:
+    void record_call(const std::string& name) {
+        if (head_calls_.size() < kCallLogHead) { head_calls_.push_back(name); return; }
+        if (tail_calls_.size() == kCallLogTail) {
+            tail_calls_.erase(tail_calls_.begin());
+            ++omitted_calls_;
+        }
+        tail_calls_.push_back(name);
+    }
+
     Outcome success() {
         last_ = StatusDiagnostics();
         return Outcome::ok;
@@ -485,6 +505,7 @@ private:
             frame.planes[1].offset = frame.planes[0].size;
             frame.planes[1].stride = shape.stride;
             frame.planes[1].size = shape.stride * (shape.height / 2);
+            if (scenario_ == export_bad_plane_size) frame.planes[1].size = shape.stride * (shape.height / 2) - shape.stride;
             frame.texture_bounds_valid = true;
             frame.intrinsics_valid = true;
             frame.camera_model = "kb4";
@@ -526,7 +547,9 @@ private:
     int memfd_[kMaxCameras];
     HelloFacts hello_;
     StatusDiagnostics last_;
-    std::vector<std::string> calls_;
+    std::vector<std::string> head_calls_, tail_calls_;
+    std::size_t omitted_calls_ = 0;
+    mutable std::vector<std::string> log_view_;
 };
 
 } // namespace

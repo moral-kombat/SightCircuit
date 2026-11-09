@@ -273,6 +273,7 @@ private:
         if (foreign_queue_extension_) extensions.push_back(kForeignQueueExtension);
         // The format list is core from 1.2; on a 1.1 device the extension carries it.
         if (format_list_extension_ && properties_.apiVersion < VK_API_VERSION_1_2) extensions.push_back(kFormatListExtension);
+        format_list_available_ = properties_.apiVersion >= VK_API_VERSION_1_2 || format_list_extension_;
         VkPhysicalDeviceSamplerYcbcrConversionFeatures ycbcr{};
         ycbcr.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_YCBCR_CONVERSION_FEATURES;
         VkPhysicalDeviceFeatures2 features{};
@@ -316,7 +317,8 @@ private:
                        std::to_string(VK_VERSION_PATCH(properties_.apiVersion)) + "\",\"driver_version\":" +
                        std::to_string(properties_.driverVersion) + ",\"queue_family\":" + std::to_string(queue_family_) +
                        ",\"import\":\"" + (modifier_extension_ ? "drm_format_modifier" : "linear_copy_fallback") +
-                       "\",\"sampler_ycbcr_conversion_feature\":" + (ycbcr.samplerYcbcrConversion ? "true" : "false") +
+                       "\",\"image_format_list\":" + (format_list_available_ ? "true" : "false") +
+                       ",\"sampler_ycbcr_conversion_feature\":" + (ycbcr.samplerYcbcrConversion ? "true" : "false") +
                        ",\"device_extensions\":" + extension_list + ",\"shader_source_sha256\":\"" +
                        kCameraConvertSourceSha256 + "\",\"chroma_siting\":\"nearest\",\"fixed_point_bits\":16}";
         return true;
@@ -543,7 +545,7 @@ private:
         format_list.pViewFormats = view_formats;
         VkPhysicalDeviceImageDrmFormatModifierInfoEXT modifier_query{};
         modifier_query.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_DRM_FORMAT_MODIFIER_INFO_EXT;
-        modifier_query.pNext = &format_list;
+        if (format_list_available_) modifier_query.pNext = &format_list;
         modifier_query.drmFormatModifier = frame.drm_modifier;
         modifier_query.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         VkPhysicalDeviceExternalImageFormatInfo external_query{};
@@ -583,7 +585,7 @@ private:
         }
         VkImageDrmFormatModifierExplicitCreateInfoEXT explicit_layout{};
         explicit_layout.sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT;
-        explicit_layout.pNext = &format_list;
+        if (format_list_available_) explicit_layout.pNext = &format_list;
         explicit_layout.drmFormatModifier = frame.drm_modifier;
         explicit_layout.drmFormatModifierPlaneCount = frame.plane_count;
         explicit_layout.pPlaneLayouts = layouts;
@@ -619,6 +621,11 @@ private:
             error = "plane_stride_not_texel_aligned";
             return false;
         }
+        // The same plane checks as the CPU path, before any copy: each plane holds its
+        // rows at its stride, and each plane lies within the descriptor.
+        const uint64_t luma_needed = static_cast<uint64_t>(frame.planes[0].stride) * (frame.height - 1) + row_bytes;
+        const uint64_t chroma_needed = static_cast<uint64_t>(frame.planes[1].stride) * (frame.height / 2 - 1) + row_bytes;
+        if (frame.planes[0].size < luma_needed || frame.planes[1].size < chroma_needed) { error = "plane_size_too_small"; return false; }
         uint64_t fd_size = 0;
         if (!descriptor_size(frame.fd, fd_size, error)) return false;
         for (uint32_t plane = 0; plane < 2; ++plane) {
@@ -655,7 +662,7 @@ private:
         format_list.viewFormatCount = 2;
         format_list.pViewFormats = view_formats;
         VkImageCreateInfo info = base_image_info(frame, formats);
-        info.pNext = &format_list;
+        if (format_list_available_) info.pNext = &format_list;
         info.tiling = VK_IMAGE_TILING_OPTIMAL;
         info.usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         result = api_.vkCreateImage(device_, &info, nullptr, &resources.image);
@@ -959,6 +966,7 @@ private:
     VkQueue queue_ = VK_NULL_HANDLE;
     uint32_t queue_family_ = 0;
     bool modifier_extension_ = false, foreign_queue_extension_ = false, format_list_extension_ = false;
+    bool format_list_available_ = false;
     VkDescriptorSetLayout set_layout_ = VK_NULL_HANDLE;
     VkPipelineLayout pipeline_layout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;

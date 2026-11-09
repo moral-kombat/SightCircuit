@@ -25,7 +25,7 @@ std::string with_errno(const char* what) {
 
 class CpuLinearPath : public PixelPath {
 public:
-    CpuLinearPath() : sync_unsupported_(false), sync_note_() {}
+    CpuLinearPath() : sync_unsupported_(false), sync_rejected_(false) {}
 
     const char* name() const { return sightcircuit_camera_export::kPixelPathCpuLinear; }
     const char* derivation() const { return sightcircuit_camera_export::kDerivationCpuConverted; }
@@ -94,27 +94,30 @@ public:
     }
 
     std::string notes_json() const {
-        return std::string("{\"dma_buf_sync\":\"") + (sync_unsupported_ ? "not_supported_by_descriptor" : "used") + "\"}";
+        const char* state = sync_rejected_ ? "rejected_einval" : sync_unsupported_ ? "not_supported_by_descriptor" : "used";
+        return std::string("{\"dma_buf_sync\":\"") + state + "\"}";
     }
 
 private:
     static uint32_t read_u16(const uint8_t* p) { return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8); }
 
     // A descriptor that is not a DMA-BUF (the fake backend's memfd) answers
-    // ENOTTY; that is recorded and reading goes on without a cache sync. Any
-    // other failure is an error.
+    // ENOTTY, and a DMA-BUF exporter that rejects the request answers EINVAL;
+    // each is recorded in the notes and reading goes on without a cache sync.
+    // Any other failure is an error.
     bool sync(int fd, uint64_t flags, std::string& error) {
         struct dma_buf_sync request;
         std::memset(&request, 0, sizeof request);
         request.flags = flags;
         if (::ioctl(fd, DMA_BUF_IOCTL_SYNC, &request) == 0) return true;
-        if (errno == ENOTTY || errno == EINVAL) { sync_unsupported_ = true; return true; }
+        if (errno == ENOTTY) { sync_unsupported_ = true; return true; }
+        if (errno == EINVAL) { sync_rejected_ = true; return true; }
         error = with_errno("dma_buf_sync_failed");
         return false;
     }
 
     bool sync_unsupported_;
-    std::string sync_note_;
+    bool sync_rejected_;
 };
 
 } // namespace
