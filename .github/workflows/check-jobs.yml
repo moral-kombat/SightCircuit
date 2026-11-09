@@ -47,7 +47,7 @@ jobs:
           python -m pip install ruff==0.14.2
           ruff check .
       - name: Check shell syntax
-        run: bash -n scripts/setup.sh scripts/setup_replay.sh scripts/setup_window.sh scripts/compile_locks.sh scripts/build_openvr_tool.sh scripts/build_overlay_bridge.sh
+        run: bash -n scripts/setup.sh scripts/setup_replay.sh scripts/setup_window.sh scripts/compile_locks.sh scripts/build_openvr_tool.sh scripts/build_overlay_bridge.sh scripts/build_camera_helper.sh
       - name: Fail if the generated HUD contract header differs from the Python contract
         run: python3 scripts/hud_contract_header.py --check
       - name: Build the native overlay bridge
@@ -106,6 +106,9 @@ jobs:
               assert 'Warning:' in result.stderr
           print('Default/invalid invocations do not initialize OpenVR; explicit opt-in preserves runtime diagnostics.')
           PY
+      - name: Build the camera helper's fake backend (the tests compile its SDK unit to an object; nothing links the SDK)
+        # The Arcturus Client Library is never fetched, cached, built or linked here (docs/reference/camera-helper.md).
+        run: bash scripts/build_camera_helper.sh --fake
       - name: Install the Linux Vulkan loader for linking
         run: |
           sudo apt-get update -qq
@@ -169,7 +172,7 @@ jobs:
             tests/test_capture_import.py tests/test_capture_gpu_resources.py tests/test_capture_provider.py \
             tests/test_capture_provider_check.py tests/test_capture_layer_config.py \
             tests/test_capture_service_lifecycle.py tests/test_capture_layer_trial.py tests/test_supervision.py \
-            tests/test_arcturus_sdk_headers.py
+            tests/test_arcturus_sdk_headers.py tests/test_camera_helper.py tests/test_camera_helper_boundaries.py
 
   replay:
     # The decoder-only and the full replay-window environments, each exercised
