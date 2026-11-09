@@ -686,7 +686,13 @@ class CameraHelperTests(unittest.TestCase):
         self.assertEqual(code, 5, err)
         self.assertEqual(records[-1]["reason"], "runtime_dir_invalid")
         self.assertEqual(records[-1]["fake_calls"], [])
-        self.assertFalse((foreign / "sightcircuit-camera-helper.lock").exists())
+        try:
+            created = (foreign / "sightcircuit-camera-helper.lock").exists()
+        except PermissionError:
+            # The directory is not searchable by this user, so the helper, which ran as the same
+            # user, could not have created a file in it either.
+            created = False
+        self.assertFalse(created)
 
     def unread_pipe_run(self, args, scenario, pipe_bytes, drain_after):
         """Run the helper with stdout a pipe of pipe_bytes that nobody reads for drain_after seconds."""
