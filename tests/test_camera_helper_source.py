@@ -49,7 +49,7 @@ class RunExportTests(unittest.TestCase):
         frames = []
         extra = ("--fake-scenario", scenario) if scenario else ()
         report = camera_helper.run_export(self.binary, limits, cameras, on_frame=on_frame or frames.append,
-                                          extra_args=extra, timeout=timeout, stop=stop)
+                                          extra_args=extra, timeout=timeout, stop=stop, confirmed=True)
         return report, frames
 
     def test_a_bounded_run_exports_every_frame_and_confirms_cleanup(self):
@@ -69,7 +69,12 @@ class RunExportTests(unittest.TestCase):
         self.assertEqual(report["helper"]["path"], str(self.binary.resolve()))
         self.assertEqual(len(report["helper"]["sha256"]), 64)
         self.assertEqual(report["helper"]["arguments"],
-                         ["--export-frames", "--fps", "10", "--max-seconds", "3", "--max-frames", "5", "--cameras", "0,1"])
+                         ["--export-frames", "--fps", "10", "--max-seconds", "3", "--max-frames", "5", "--cameras", "0,1",
+                          "--parent-confirmed"])
+        self.assertTrue(report["helper"]["parent_confirmed"])
+        self.assertEqual([frame.metadata["frame_set_sequence"] for frame in frames], [1, 1, 2, 2, 3])
+        self.assertEqual((report["stream"]["ready"]["confirmation"], report["stream"]["end"]["confirmation"]),
+                         ("parent", "parent"))
         self.assertEqual(report["diagnostics"]["line_count"], 2)
         self.assertEqual([line["event"] for line in report["diagnostics"]["lines"]], ["ready", "final"])
         self.assertEqual(report["diagnostics"]["non_json_lines"], 0)
@@ -88,7 +93,7 @@ class RunExportTests(unittest.TestCase):
     def test_one_camera_and_a_large_frame(self):
         frames = []
         report = camera_helper.run_export(self.binary, {"fps": 10, "max_seconds": 5, "max_frames": 2}, (1,),
-                                          on_frame=frames.append,
+                                          on_frame=frames.append, confirmed=True,
                                           extra_args=("--width", "1920", "--height", "1080", "--stride", "5760"))
         self.assertEqual(report["status"], "exported")
         self.assertEqual([frame.source for frame in frames], ["arcturus_camera_right"] * 2)
@@ -123,6 +128,15 @@ class RunExportTests(unittest.TestCase):
         self.assertEqual((report["status"], report["reason"]), ("refused", "stream_ended_without_end"))
         self.assertEqual(len(frames), 5)
         self.assertTrue(report["cleanup_ok"])
+
+    def test_without_the_parents_confirmation_the_helper_refuses_and_nothing_is_exported(self):
+        frames = []
+        report = camera_helper.run_export(self.binary, LIMITS, (0, 1), on_frame=frames.append)
+        self.assertEqual((report["status"], report["reason"], report["helper_exit_code"]), ("error", "helper_exit_code", 5))
+        self.assertFalse(report["helper"]["parent_confirmed"])
+        self.assertNotIn("--parent-confirmed", report["helper"]["arguments"])
+        self.assertEqual(report["diagnostics"]["lines"][-1]["reason"], "confirmation_required")
+        self.assertEqual(frames, [])
 
     def test_a_helper_that_refuses_or_exits_silently_is_its_failure_not_the_streams(self):
         report, _ = self.run_export("refuse")
@@ -315,6 +329,8 @@ class CommandLineTests(unittest.TestCase):
                                                       ("--fake-scenario", "x")),
                          ["/h", "--export-frames", "--fps", "5", "--max-seconds", "30", "--max-frames", "300",
                           "--cameras", "0", "--fake-scenario", "x"])
+        self.assertEqual(camera_helper.helper_command("/h", {"fps": 5, "max_seconds": 30, "max_frames": 300}, (0, 1),
+                                                      confirmed=True)[-3:], ["--cameras", "0,1", "--parent-confirmed"])
         self.assertEqual(camera_helper.check_limits({"max_frames": 1, "fps": 1, "max_seconds": 1}),
                          {"fps": 1, "max_seconds": 1, "max_frames": 1})
         self.assertEqual(camera_helper.check_cameras([0, 1]), (0, 1))

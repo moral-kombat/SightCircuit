@@ -5,8 +5,9 @@ validates every byte of framing and every header field against the contract:
 the prefix (magic, version, size bounds), the header (UTF-8, one JSON object
 without duplicate keys, exactly the fields of its kind with their types and
 bounds), the payload size, and the stream rules (``ready`` first and once,
-``end`` last and once, consecutive sequences from 1 within ``max_frames``, a
-camera the ``ready`` selected, the derivation of the declared pixel path,
+``end`` last and once, consecutive sequences from 1 within ``max_frames``,
+frame sets numbered from 1 without gaps with each camera at most once per set,
+a camera the ``ready`` selected, the derivation of the declared pixel path,
 ``buffer_bytes`` = ``stride_bytes`` x ``height`` = ``payload_bytes``, the
 ``end`` counts matching the frames read, and the ``ready`` limits equal to the
 ones requested). The first violation raises ``ExportRefused`` with a named
@@ -35,7 +36,7 @@ REASONS = (
     "invalid_field:<path>", "ready_payload_not_empty", "end_payload_not_empty", "limits_differ_from_requested",
     "stride_too_small", "buffer_bytes_mismatch", "payload_bytes_mismatch", "sequence_not_consecutive",
     "sequence_beyond_max_frames", "camera_not_selected", "derivation_mismatch", "exported_count_mismatch",
-    "read_failed",
+    "frame_set_sequence_not_consecutive", "frame_set_camera_repeated", "read_failed",
 )
 
 
@@ -165,6 +166,8 @@ class ExportReader:
         self.dropped_total = 0
         self.camera_frames = {index: 0 for index in contract.CAMERA_INDICES}
         self.last_sequence = 0
+        self.last_set = 0  # The frame set of the last frame, and the cameras seen in it.
+        self.set_cameras = set()
         self.refusal = None
         self.complete = False
 
@@ -311,6 +314,17 @@ class ExportReader:
         if header["derivation"] != contract.DERIVATIONS[self.ready["pixel_path"]]:
             raise self._refuse("derivation_mismatch",
                                f"packet {index}: derivation {header['derivation']} does not match {self.ready['pixel_path']}")
+        frame_set = header["frame_set_sequence"]
+        if frame_set == self.last_set:
+            if header["camera_index"] in self.set_cameras:
+                raise self._refuse("frame_set_camera_repeated",
+                                   f"packet {index}: camera {header['camera_index']} appears twice in frame set {frame_set}")
+            self.set_cameras.add(header["camera_index"])
+        elif frame_set == self.last_set + 1:
+            self.last_set, self.set_cameras = frame_set, {header["camera_index"]}
+        else:
+            raise self._refuse("frame_set_sequence_not_consecutive",
+                               f"packet {index}: frame_set_sequence {frame_set} after {self.last_set}")
         self.last_sequence = header["sequence"]
         self.frames_read += 1
         self.camera_frames[header["camera_index"]] += 1
@@ -355,6 +369,7 @@ def frame_of(packet, ready):
               "minimum_buffer_bytes": header["stride_bytes"] * header["height"]}
     metadata = {"acquisition_format": header["acquisition_format"], "derivation": header["derivation"],
                 "camera_index": header["camera_index"], "frame_id": header["frame_id"],
+                "frame_set_sequence": header["frame_set_sequence"],
                 "exposure_ns": header["exposure_ns"], "realtime_ns": header["realtime_ns"],
                 "dropped_since_last": header["dropped_since_last"], "pixel_path": ready["pixel_path"],
                 "backend": ready["backend"], "export_packet": packet.index}

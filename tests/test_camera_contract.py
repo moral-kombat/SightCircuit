@@ -35,7 +35,13 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(contract.KINDS, ("ready", "frame", "end"))
         self.assertEqual(contract.FOURCC, "BGR3")
         self.assertEqual(contract.END_REASONS, ("max_seconds", "max_frames", "stop_signal", "headset_removed",
-                                                "standby", "sdk_error", "pixel_path_error", "watchdog"))
+                                                "standby", "sdk_error", "pixel_path_error", "watchdog",
+                                                "consumer_stalled"))
+        self.assertEqual(contract.CONFIRMATIONS, ("parent", "terminal"))
+        self.assertEqual(contract.PARENT_CONFIRMED_FLAG, "--parent-confirmed")
+        self.assertTrue(contract.EXPORT_NOTICE.startswith("sightcircuit-camera-helper --export-frames:"))
+        self.assertIn("Camera Data", contract.EXPORT_NOTICE)
+        self.assertIn("30 seconds afterwards", contract.EXPORT_NOTICE)
         self.assertTrue(set(contract.BOUNDED_END_REASONS) <= set(contract.END_REASONS))
         self.assertEqual(contract.DERIVATIONS, {"cpu_linear": "cpu_converted", "gpu_convert": "gpu_converted"})
         self.assertEqual(tuple(contract.DERIVATIONS), contract.PIXEL_PATHS)
@@ -54,12 +60,14 @@ class ContractTests(unittest.TestCase):
                 self.assertEqual(len(names), len(set(names)))
                 self.assertEqual(contract.HEADERS[kind][0].choices, (kind,))
         self.assertEqual(contract.field_names("ready"),
-                         ("kind", "protocol", "backend", "pixel_path", "build", "delivered_format", "cameras", "limits"))
+                         ("kind", "protocol", "backend", "pixel_path", "build", "delivered_format", "cameras", "limits",
+                          "confirmation"))
         self.assertEqual(contract.field_names("frame"),
-                         ("kind", "sequence", "frame_id", "camera_index", "exposure_ns", "monotonic_ns", "realtime_ns",
-                          "width", "height", "fourcc", "stride_bytes", "buffer_bytes", "derivation",
-                          "acquisition_format", "dropped_since_last"))
-        self.assertEqual(contract.field_names("end"), ("kind", "reason", "counts", "elapsed_ns", "digests"))
+                         ("kind", "sequence", "frame_set_sequence", "frame_id", "camera_index", "exposure_ns",
+                          "monotonic_ns", "realtime_ns", "width", "height", "fourcc", "stride_bytes", "buffer_bytes",
+                          "derivation", "acquisition_format", "dropped_since_last"))
+        self.assertEqual(contract.field_names("end"),
+                         ("kind", "reason", "counts", "elapsed_ns", "digests", "confirmation"))
 
     def test_field_kinds_are_the_documented_ones(self):
         kinds = set()
@@ -90,7 +98,8 @@ class HeaderTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIn(f" {name}[] = {value};" if value.startswith('"') else f" {name} = {value};", text)
         for value in (*contract.END_REASONS, *contract.PIXEL_FORMATS, *contract.ENCODINGS, *contract.TRANSFERS,
-                      *contract.PRIMARIES, *contract.BACKENDS, *contract.PIXEL_PATHS, *contract.DERIVATIONS.values()):
+                      *contract.PRIMARIES, *contract.BACKENDS, *contract.PIXEL_PATHS, *contract.DERIVATIONS.values(),
+                      *contract.CONFIRMATIONS, contract.PARENT_CONFIRMED_FLAG, contract.EXPORT_NOTICE):
             with self.subTest(value=value):
                 self.assertIn(f'"{value}";', text)
         for kind in contract.KINDS:

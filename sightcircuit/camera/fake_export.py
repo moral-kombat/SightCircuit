@@ -33,19 +33,28 @@ def encode(header, payload=b"", *, magic=contract.MAGIC, version=contract.VERSIO
     return prefix + text + payload
 
 
-def ready_header(*, limits=LIMITS, cameras=(0, 1), pixel_path="cpu_linear", backend="fake", **overrides):
+def frame_set_of(sequence, cameras=(0, 1)):
+    """The frame set of frame ``sequence`` when the cameras alternate: both cameras of a set, then the next set."""
+    return (sequence - 1) // len(cameras) + 1
+
+
+def ready_header(*, limits=LIMITS, cameras=(0, 1), pixel_path="cpu_linear", backend="fake", confirmation="parent",
+                 **overrides):
     header = {"kind": "ready", "protocol": contract.VERSION, "backend": backend, "pixel_path": pixel_path,
               "build": dict(BUILD), "delivered_format": {"fourcc": contract.FOURCC}, "cameras": list(cameras),
-              "limits": dict(limits)}
+              "limits": dict(limits), "confirmation": confirmation}
     header.update(overrides)
     return header
 
 
 def frame_header(sequence, *, width=WIDTH, height=HEIGHT, stride=STRIDE, camera_index=None, derivation="cpu_converted",
-                 monotonic_ns=None, dropped=0, **overrides):
+                 monotonic_ns=None, dropped=0, frame_set_sequence=None, **overrides):
+    """A frame header; without ``frame_set_sequence`` the two-camera alternation is assumed (``frame_set_of``)."""
     index = (sequence - 1) % 2 if camera_index is None else camera_index
+    frame_set = frame_set_of(sequence) if frame_set_sequence is None else frame_set_sequence
     monotonic = EXPORT_RATE_MONOTONIC_START_NS + sequence * 200_000_000 if monotonic_ns is None else monotonic_ns
-    header = {"kind": "frame", "sequence": sequence, "frame_id": 1000 + sequence, "camera_index": index,
+    header = {"kind": "frame", "sequence": sequence, "frame_set_sequence": frame_set, "frame_id": 1000 + sequence,
+              "camera_index": index,
               "exposure_ns": monotonic - 3_000_000, "monotonic_ns": monotonic, "realtime_ns": 1_762_650_000_000_000_000 + sequence,
               "width": width, "height": height, "fourcc": contract.FOURCC, "stride_bytes": stride,
               "buffer_bytes": stride * height, "derivation": derivation,
@@ -54,10 +63,10 @@ def frame_header(sequence, *, width=WIDTH, height=HEIGHT, stride=STRIDE, camera_
     return header
 
 
-def end_header(exported, *, reason="max_frames", dropped=0, **overrides):
+def end_header(exported, *, reason="max_frames", dropped=0, confirmation="parent", **overrides):
     header = {"kind": "end", "reason": reason,
               "counts": {"exported": exported, "dropped": dropped, "acquire_failures": 0, "release_failures": 0},
-              "elapsed_ns": 1_234_567_890, "digests": dict(DIGESTS)}
+              "elapsed_ns": 1_234_567_890, "digests": dict(DIGESTS), "confirmation": confirmation}
     header.update(overrides)
     return header
 
@@ -81,7 +90,8 @@ def valid_stream(frames=LIMITS["max_frames"], *, limits=LIMITS, cameras=(0, 1), 
     derivation = contract.DERIVATIONS[pixel_path]
     parts = [encode(ready_header(limits=limits, cameras=cameras, pixel_path=pixel_path))]
     for sequence in range(1, frames + 1):
-        parts.append(frame_packet(sequence, camera_index=cameras[(sequence - 1) % len(cameras)], derivation=derivation))
+        parts.append(frame_packet(sequence, camera_index=cameras[(sequence - 1) % len(cameras)], derivation=derivation,
+                                  frame_set_sequence=frame_set_of(sequence, cameras)))
     parts.append(encode(end_header(frames, reason=reason)))
     return b"".join(parts)
 
@@ -164,6 +174,8 @@ INVALID = {
     "ready_limits_frames": (lambda: _ready(limits=dict(LIMITS, max_frames=601)), "invalid_field:limits.max_frames"),
     "ready_limits_missing": (lambda: _ready(limits={"fps": 5, "max_seconds": 2}), "missing_field:limits.max_frames"),
     "ready_payload": (lambda: encode(ready_header(), b"x"), "ready_payload_not_empty"),
+    "ready_confirmation": (lambda: _ready(confirmation="flag"), "invalid_field:confirmation"),
+    "ready_confirmation_missing": (lambda: encode(_without(ready_header(), "confirmation")), "missing_field:confirmation"),
     "ready_limits_differ": (lambda: valid_stream(limits=dict(LIMITS, max_frames=5)), "limits_differ_from_requested"),
     # Frame fields.
     "frame_missing_field": (lambda: _ready() + encode(_without(frame_header(1, camera_index=0), "monotonic_ns"),
@@ -215,9 +227,24 @@ INVALID = {
                            "sequence_not_consecutive"),
     "frame_sequence_repeated": (lambda: _ready() + frame_packet(1, camera_index=0) + frame_packet(1, camera_index=0),
                                 "sequence_not_consecutive"),
-    "frame_beyond_max_frames": (lambda: _ready() + b"".join(frame_packet(sequence, camera_index=0)
+    "frame_beyond_max_frames": (lambda: _ready() + b"".join(frame_packet(sequence, camera_index=0, frame_set_sequence=sequence)
                                                            for sequence in range(1, LIMITS["max_frames"] + 2)),
                                 "sequence_beyond_max_frames"),
+    # Frame sets.
+    "frame_set_zero": (lambda: _ready() + frame_packet(1, camera_index=0, frame_set_sequence=0),
+                       "invalid_field:frame_set_sequence"),
+    "frame_set_starts_at_two": (lambda: _ready() + frame_packet(1, camera_index=0, frame_set_sequence=2),
+                                "frame_set_sequence_not_consecutive"),
+    "frame_set_skips": (lambda: _ready() + frame_packet(1, camera_index=0, frame_set_sequence=1) +
+                        frame_packet(2, camera_index=1, frame_set_sequence=3), "frame_set_sequence_not_consecutive"),
+    "frame_set_regresses": (lambda: _ready() + frame_packet(1, camera_index=0, frame_set_sequence=1) +
+                            frame_packet(2, camera_index=1, frame_set_sequence=2) +
+                            frame_packet(3, camera_index=0, frame_set_sequence=1), "frame_set_sequence_not_consecutive"),
+    "frame_set_camera_repeated": (lambda: _ready() + frame_packet(1, camera_index=0, frame_set_sequence=1) +
+                                  frame_packet(2, camera_index=0, frame_set_sequence=1), "frame_set_camera_repeated"),
+    "frame_set_third_member": (lambda: _ready() + frame_packet(1, camera_index=0, frame_set_sequence=1) +
+                               frame_packet(2, camera_index=1, frame_set_sequence=1) +
+                               frame_packet(3, camera_index=0, frame_set_sequence=1), "frame_set_camera_repeated"),
     "frame_camera_not_selected": (lambda: _ready(cameras=(0,)) + frame_packet(1, camera_index=1), "camera_not_selected"),
     "frame_derivation_mismatch": (lambda: _ready(pixel_path="gpu_convert") + frame_packet(1, camera_index=0),
                                   "derivation_mismatch"),
@@ -232,6 +259,7 @@ INVALID = {
     "end_digests_too_many": (lambda: _ready() + encode(end_header(0, digests={f"d{i}": "0" * 64 for i in range(17)})),
                              "invalid_field:digests"),
     "end_payload": (lambda: _ready() + encode(end_header(0), b"x"), "end_payload_not_empty"),
+    "end_confirmation": (lambda: _ready() + encode(end_header(0, confirmation="yes")), "invalid_field:confirmation"),
     "end_exported_mismatch": (lambda: _ready() + frame_packet(1, camera_index=0) + encode(end_header(2)),
                               "exported_count_mismatch"),
 }

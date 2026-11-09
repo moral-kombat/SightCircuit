@@ -47,9 +47,19 @@ and no preview, still or other file is written.
 
 ## What the command does
 
-1. Loads the detector (`--detector`, MobileNet-SSD by default) before anything
+1. Asks for the informed start on its own terminal (owner decision
+   2026-11-09): prints the helper's export notice verbatim
+   (`contract.EXPORT_NOTICE`, the same text the generated header gives the
+   helper) with the run's bounds, requires an interactive stdin (otherwise
+   `confirmation_requires_terminal`, nothing launched) and the operator's
+   exact typed `yes` (anything else is `confirmation_declined`); no flag,
+   environment variable or piped answer stands in. The report records
+   `confirmation: operator_terminal`, and the helper is launched with
+   `--parent-confirmed`, which it accepts only with `--export-frames`; its
+   `ready` and `end` headers then say `confirmation: parent`.
+2. Loads the detector (`--detector`, MobileNet-SSD by default) before anything
    is launched; a missing model ends the run `error`.
-2. Launches the helper binary named with `--helper`, in `--export-frames` mode
+3. Launches the helper binary named with `--helper`, in `--export-frames` mode
    with `--fps`, `--max-seconds`, `--max-frames` and `--cameras`, through the
    supervision primitive (`sightcircuit.runtime.supervision.supervise_owned`):
    an owned session, a deadline of the time bound plus ten seconds, SIGTERM
@@ -58,17 +68,17 @@ and no preview, still or other file is written.
    checkout is refused unless it is under the ignored `artifacts/` directory,
    where `scripts/build_camera_helper.sh` writes, so no tracked file can be
    run as the helper.
-3. Reads the helper's stdout with the strict export reader
+4. Reads the helper's stdout with the strict export reader
    (`sightcircuit/camera/export_reader.py`), which refuses the stream on the
    first violation of the contract with a named reason and then stops the
    helper. The helper's stderr (JSON diagnostic lines) is collected into the
    report, bounded to 256 lines of at most 8 KiB, and never printed raw.
-4. Keeps the latest validated frame in a one-frame slot and processes it on a
+5. Keeps the latest validated frame in a one-frame slot and processes it on a
    second thread: conversion to at most 960 pixels on the longer side (the
    detectors' processing bound), the one-second input age limit (a frame whose
    acquisition is older is counted `stale_inputs_skipped`), then the detector.
    A frame replaced before it was processed counts as `pending_frames_replaced`.
-5. Ends when the helper ends on its bound (`max_frames` or `max_seconds`), and
+6. Ends when the helper ends on its bound (`max_frames` or `max_seconds`), and
    reports.
 
 Ctrl+C or SIGTERM cancels: the primitive sends the helper SIGTERM, which the
@@ -102,7 +112,8 @@ Expect `report_kind: camera_recognition`, `status: recognized`, exit 0 and
 on its bound. Other statuses: `no_frames` (nothing processed; `reason` says
 whether every frame was stale), `refused` (the stream violated the contract;
 `reason` names the rule), `helper_ended_early` (the helper's own `end` reason:
-`headset_removed`, `standby`, `sdk_error`, `pixel_path_error`, `watchdog`),
+`headset_removed`, `standby`, `sdk_error`, `pixel_path_error`, `watchdog`,
+`consumer_stalled`),
 `cancelled`, `timed_out`, `stopped`, `error` (a helper that exited non-zero,
 a failing detector, an unusable helper path) and `cleanup_failed`. Every
 status but `recognized` exits 1, a cancellation 128 + signal.
@@ -128,7 +139,8 @@ standard library only. Expect `status: validated` and exit 0.
 | `detector`, `threshold` | The model (`name`, `runtime`, class count) and the score threshold (`POC_THRESHOLD` by default) |
 | `frames_received`, `frames_processed`, `stale_inputs_skipped`, `pending_frames_replaced` | Frames the reader delivered; frames the detector saw; frames older than `maximum_input_observation_age_ms` (1000) at processing; frames replaced in the latest slot |
 | `labels_seen` | Every label detected in the run |
-| `detections` | One record per processed frame: `sequence`, `source_id` (`arcturus_camera_left` or `_right`), `camera_index`, `frame_id`, `observed_ns` (the helper's host monotonic clock at acquisition), `input_age_ms`, `processing_ms`, `inference_ms`, `labels`, up to 20 `detections` (`label`, `confidence`, `box_xyxy` in `detector_input_pixels`), `detection_count`, `native_size`, `detector_input_size`; Camera Data |
+| `confirmation` | `operator_terminal` once the typed answer was given on this command's terminal; `null` when the run was refused before launch |
+| `detections` | One record per processed frame: `sequence`, `frame_set_sequence` (the acquired set; both cameras of a set share it), `source_id` (`arcturus_camera_left` or `_right`), `camera_index`, `frame_id`, `observed_ns` (the helper's host monotonic clock at acquisition), `input_age_ms`, `processing_ms`, `inference_ms`, `labels`, up to 20 `detections` (`label`, `confidence`, `box_xyxy` in `detector_input_pixels`), `detection_count`, `native_size`, `detector_input_size`; Camera Data |
 | `last_result` | The last record of `detections` |
 | `inference_ms`, `processing_ms`, `input_age_ms` | Count, sample size, nearest-rank p50 and p95 and the maximum, as the pipeline statistics report them |
 | `inference_p95_budget_ms`, `inference_p95_within_budget` | `LIVE_INFERENCE_P95_BUDGET_MS` (200) and whether this run's p95 met it; which machine ran it is the report's business, so a cloud figure is never a Frame figure |
@@ -144,13 +156,15 @@ The helper's stdout is a sequence of packets and nothing else. A packet is a
 the payload size), then the header (UTF-8 JSON, one object, at most 16384
 bytes), then the payload (at most 33554432 bytes). The header's `kind` is
 `ready` (first, once; backend, pixel path, build facts, the delivered format
-`BGR3`, the camera selection and the limits in force; no payload), `frame`
-(sequence from 1 without gaps, frame id, camera index, exposure and host
+`BGR3`, the camera selection, the limits in force and how the start was
+confirmed, `parent` or `terminal`; no payload), `frame` (sequence from 1
+without gaps, the frame set it belongs to, numbered from 1 without gaps with
+each camera at most once per set, frame id, camera index, exposure and host
 clocks, width, height, `BGR3`, stride and buffer size equal to the payload,
 derivation, the acquisition format with its DRM FourCC, modifier, planes,
 pixel format, encoding, transfer and primaries, and the frames dropped since
-the last) or `end` (last, once; the reason, counts, elapsed time and digests;
-no payload). The helper's stderr carries JSON diagnostic lines only.
+the last) or `end` (last, once; the reason, counts, elapsed time, digests and
+the confirmation; no payload). The helper's stderr carries JSON diagnostic lines only.
 
 `sightcircuit/camera/contract.py` is the protocol as data: the prefix layout,
 the bounds, the exact fields of each kind with types and bounds, the end

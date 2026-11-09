@@ -54,19 +54,39 @@ class StandInDetector:
         return DetectionResult((Detection(self.label, 0.91, box),), self.inference_ms)
 
 
-def run_main(argv):
-    with mock.patch("sys.stdout") as stdout, mock.patch("sys.stderr"):  # argparse usage text stays out of the test log.
+class Terminal:
+    """A stand-in for the operator's terminal: ``isatty`` as given, one typed line."""
+
+    def __init__(self, answer="yes\n", interactive=True):
+        self.answer, self.interactive = answer, interactive
+        self.reads = 0
+
+    def isatty(self):
+        return self.interactive
+
+    def readline(self):
+        self.reads += 1
+        return self.answer
+
+
+def run_main(argv, terminal=None):
+    """Run ``main`` with stdout captured as the report and stdin as ``terminal`` (an operator typing ``yes``)."""
+    terminal = Terminal() if terminal is None else terminal
+    with mock.patch("sys.stdout") as stdout, mock.patch("sys.stderr") as stderr, mock.patch("sys.stdin", terminal):
         code = command.main(argv)
     text = "".join(call.args[0] for call in stdout.write.call_args_list)
-    return code, json.loads(text)
+    notice = "".join(call.args[0] for call in stderr.write.call_args_list)
+    return code, json.loads(text), notice
 
 
 class ValidateModeTests(unittest.TestCase):
     def test_validate_runs_the_reader_over_every_fake_stream_without_a_helper_or_detector(self):
+        terminal = Terminal(interactive=False)
         with mock.patch.object(command, "create_detector", side_effect=AssertionError("no detector in validate")), \
                 mock.patch.object(command.camera_helper, "run_export", side_effect=AssertionError("no helper")):
-            code, report = run_main(["--validate"])
+            code, report, notice = run_main(["--validate"], terminal)
         self.assertEqual(code, 0)
+        self.assertEqual((terminal.reads, notice), (0, ""))  # Validate mode asks for no confirmation.
         self.assertEqual((report["report_kind"], report["mode"], report["status"]),
                          ("camera_recognition", "validate", "validated"))
         self.assertTrue(report["valid_stream"]["ok"])
@@ -97,7 +117,7 @@ class ValidateModeTests(unittest.TestCase):
     def test_validate_writes_the_report_only_to_a_new_json_path_the_operator_names(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "validate.json"
-            code, report = run_main(["--validate", "--report", str(path)])
+            code, report, _ = run_main(["--validate", "--report", str(path)])
             self.assertEqual(code, 0)
             saved = json.loads(path.read_text())
             self.assertEqual(saved["status"], "validated")
@@ -105,11 +125,11 @@ class ValidateModeTests(unittest.TestCase):
             self.assertTrue(saved["camera_data"]["report_saved_by_operator"])
             self.assertEqual(report["camera_data"]["report_path"], str(path))
             self.assertEqual(sorted(entry.name for entry in Path(temporary).iterdir()), ["validate.json"])
-            code, report = run_main(["--validate", "--report", str(path)])  # Never overwritten.
+            code, report, _ = run_main(["--validate", "--report", str(path)])  # Never overwritten.
             self.assertEqual(code, 1)
             self.assertIn("new .json path", report["report_error"])
             self.assertEqual(saved, json.loads(path.read_text()))
-            code, report = run_main(["--validate", "--report", str(Path(temporary) / "report.txt")])
+            code, report, _ = run_main(["--validate", "--report", str(Path(temporary) / "report.txt")])
             self.assertEqual(code, 1)
             self.assertEqual(sorted(entry.name for entry in Path(temporary).iterdir()), ["validate.json"])
 
@@ -141,11 +161,36 @@ class ArgumentTests(unittest.TestCase):
                 run_main(base + argv)
             self.assertEqual(caught.exception.code, 2)
 
+    def test_the_informed_start_needs_a_terminal_and_the_exact_typed_answer(self):
+        base = ["--allow-camera-input", "--helper", "/nonexistent/helper", "--seconds", "1", "--max-frames", "1"]
+        cases = ((Terminal(interactive=False), "confirmation_requires_terminal"),
+                 (Terminal(answer="no\n"), "confirmation_declined"), (Terminal(answer="YES\n"), "confirmation_declined"),
+                 (Terminal(answer="yes please\n"), "confirmation_declined"), (Terminal(answer=""), "confirmation_unavailable"))
+        for terminal, reason in cases:
+            with self.subTest(reason=reason), \
+                    mock.patch.object(command, "create_detector", side_effect=AssertionError("loaded without consent")), \
+                    mock.patch.object(command.camera_helper, "run_export", side_effect=AssertionError("launched")):
+                code, report, notice = run_main(base, terminal)
+            self.assertEqual((code, report["status"], report["reason"]), (1, "error", reason))
+            self.assertIsNone(report["confirmation"])
+            self.assertEqual(report["seconds_requested"], 1)
+            if terminal.interactive:
+                self.assertTrue(notice.startswith(contract.EXPORT_NOTICE + "\n"), notice[:80])
+                self.assertIn("Bounds: 1 frames, 1 seconds, 5 frames a second, cameras 0,1.", notice)
+        # The answer may carry the newline and trailing blanks the helper also strips, and nothing else.
+        self.assertIsNone(command.confirm_on_terminal({"fps": 5, "max_seconds": 1, "max_frames": 1}, (0,),
+                                                      stdin=Terminal(answer="yes \r\n"), output=mock.Mock()))
+        self.assertEqual(command.confirm_on_terminal({"fps": 5, "max_seconds": 1, "max_frames": 1}, (0,),
+                                                     stdin=Terminal(answer=" yes\n"), output=mock.Mock()),
+                         "confirmation_declined")
+        self.assertIn("Camera Data", contract.EXPORT_NOTICE)
+
     def test_a_missing_helper_is_an_error_report_before_any_detector_loads(self):
         with mock.patch.object(command, "create_detector", return_value=StandInDetector()):
-            code, report = run_main(["--allow-camera-input", "--helper", "/nonexistent/helper", "--seconds", "1",
-                                     "--max-frames", "1"])
+            code, report, _ = run_main(["--allow-camera-input", "--helper", "/nonexistent/helper", "--seconds", "1",
+                                        "--max-frames", "1"])
         self.assertEqual(code, 1)
+        self.assertEqual(report["confirmation"], "operator_terminal")
         self.assertEqual((report["status"], report["reason"]), ("error", "helper_not_found"))
         self.assertEqual(report["capture"]["status"], "error")
         self.assertEqual(report["frames_processed"], 0)
@@ -154,7 +199,7 @@ class ArgumentTests(unittest.TestCase):
     def test_a_tracked_file_is_refused_as_the_helper(self):
         tracked = ROOT / "scripts/camera_recognize.py"
         with mock.patch.object(command, "create_detector", return_value=StandInDetector()):
-            code, report = run_main(["--allow-camera-input", "--helper", str(tracked), "--seconds", "1", "--max-frames", "1"])
+            code, report, _ = run_main(["--allow-camera-input", "--helper", str(tracked), "--seconds", "1", "--max-frames", "1"])
         self.assertEqual((code, report["status"], report["reason"]), (1, "error", "helper_inside_work_tree"))
 
     def test_a_detector_that_cannot_load_ends_the_run_before_the_helper(self):
@@ -206,7 +251,9 @@ class RecognitionTests(unittest.TestCase):
 
     def test_a_bounded_run_detects_on_every_exported_frame_and_reports_as_the_mirror_does(self):
         detector = StandInDetector(inference_ms=12.5)
-        report = command.recognize(self.binary, LIMITS, (0, 1), detector_factory=lambda: detector)
+        report = command.recognize(self.binary, LIMITS, (0, 1), detector_factory=lambda: detector, confirmed=True)
+        self.assertEqual(report["confirmation"], "operator_terminal")
+        self.assertEqual([record["frame_set_sequence"] for record in report["detections"]], [1, 1, 2, 2, 3])
         self.assertEqual((report["status"], report["exit_code"], report["cleanup_ok"]), ("recognized", 0, True))
         self.assertEqual((report["frames_received"], report["frames_processed"]), (5, 5))
         self.assertEqual((report["stale_inputs_skipped"], report["pending_frames_replaced"]), (0, 0))
@@ -247,7 +294,7 @@ class RecognitionTests(unittest.TestCase):
     def test_large_frames_are_converted_to_at_most_960_pixels(self):
         detector = StandInDetector()
         report = command.recognize(self.binary, {"fps": 10, "max_seconds": 5, "max_frames": 2}, (0,),
-                                   detector_factory=lambda: detector,
+                                   detector_factory=lambda: detector, confirmed=True,
                                    extra_args=("--width", "1920", "--height", "1080", "--stride", "5760"))
         self.assertEqual(report["status"], "recognized")
         self.assertEqual(detector.shapes[0], (540, 960, 3))
@@ -263,7 +310,7 @@ class RecognitionTests(unittest.TestCase):
                 return super().detect(bgr, threshold)
         detector = Slow()
         report = command.recognize(self.binary, {"fps": 10, "max_seconds": 5, "max_frames": 8}, (0, 1),
-                                   detector_factory=lambda: detector)
+                                   detector_factory=lambda: detector, confirmed=True)
         self.assertEqual(report["status"], "recognized")
         self.assertEqual(report["frames_received"], 8)
         self.assertLess(report["frames_processed"], 8)
@@ -274,7 +321,7 @@ class RecognitionTests(unittest.TestCase):
     def test_stale_frames_are_skipped_not_detected(self):
         detector = StandInDetector()
         report = command.recognize(self.binary, {"fps": 10, "max_seconds": 3, "max_frames": 3}, (0,),
-                                   detector_factory=lambda: detector,
+                                   detector_factory=lambda: detector, confirmed=True,
                                    extra_args=("--fake-scenario", "stale_clock"))
         self.assertEqual((report["status"], report["reason"]), ("no_frames", "all_exported_frames_stale"))
         self.assertEqual((report["frames_received"], report["stale_inputs_skipped"], report["frames_processed"]), (3, 3, 0))
@@ -284,23 +331,26 @@ class RecognitionTests(unittest.TestCase):
 
     def test_a_refused_stream_and_an_early_helper_end_keep_their_names(self):
         report = command.recognize(self.binary, fake_export.LIMITS, (0, 1), detector_factory=StandInDetector,
-                                   extra_args=("--fake-scenario", "invalid:frame_sequence_gap"))
+                                   confirmed=True, extra_args=("--fake-scenario", "invalid:frame_sequence_gap"))
         self.assertEqual((report["status"], report["reason"], report["exit_code"]),
                          ("refused", "sequence_not_consecutive", 1))
         # The frame before the gap was delivered; the catalogue's synthetic clocks make it stale, so it is skipped.
         self.assertEqual(report["frames_received"], 1)
         self.assertEqual(report["frames_processed"] + report["stale_inputs_skipped"], 1)
         report = command.recognize(self.binary, LIMITS, (0, 1), detector_factory=StandInDetector,
-                                   extra_args=("--fake-scenario", "headset_removed"))
+                                   confirmed=True, extra_args=("--fake-scenario", "headset_removed"))
         self.assertEqual((report["status"], report["reason"]), ("helper_ended_early", "headset_removed"))
         self.assertEqual(report["frames_processed"], 2)
+        # Without the parent's confirmation the helper refuses; the command reports the helper's exit, not a stream fault.
+        report = command.recognize(self.binary, LIMITS, (0, 1), detector_factory=StandInDetector)
+        self.assertEqual((report["status"], report["reason"], report["confirmation"]), ("error", "helper_exit_code", None))
 
     def test_a_failing_detector_ends_the_run_error_and_stops_the_helper(self):
         class Broken(StandInDetector):
             def detect(self, bgr, threshold):
                 raise RuntimeError("model broke")
         report = command.recognize(self.binary, {"fps": 5, "max_seconds": 30, "max_frames": 300}, (0, 1),
-                                   detector_factory=Broken, timeout=40)
+                                   detector_factory=Broken, timeout=40, confirmed=True)
         self.assertEqual((report["status"], report["reason"]), ("error", "processing_failed"))
         self.assertIn("model broke", report["error"])
         self.assertIn(report["capture"]["status"], ("stopped", "exported"))
@@ -311,7 +361,7 @@ class RecognitionTests(unittest.TestCase):
         timer.start()
         self.addCleanup(timer.cancel)
         report = command.recognize(self.binary, {"fps": 4, "max_seconds": 30, "max_frames": 300}, (0, 1),
-                                   detector_factory=StandInDetector, timeout=40)
+                                   detector_factory=StandInDetector, timeout=40, confirmed=True)
         self.assertEqual((report["status"], report["reason"], report["signal"]), ("cancelled", "signal", signal.SIGTERM))
         self.assertEqual(report["exit_code"], 128 + signal.SIGTERM)
         self.assertTrue(report["cleanup_ok"])
@@ -320,10 +370,15 @@ class RecognitionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary, \
                 mock.patch.object(command, "create_detector", return_value=StandInDetector()):
             path = Path(temporary) / "run.json"
-            code, report = run_main(["--allow-camera-input", "--helper", str(self.binary), "--seconds", "3",
-                                     "--max-frames", "4", "--fps", "10", "--cameras", "0", "--report", str(path)])
+            terminal = Terminal()
+            code, report, notice = run_main(["--allow-camera-input", "--helper", str(self.binary), "--seconds", "3",
+                                             "--max-frames", "4", "--fps", "10", "--cameras", "0", "--report", str(path)],
+                                            terminal)
             self.assertEqual(code, 0, report)
             self.assertEqual(report["status"], "recognized")
+            self.assertEqual((terminal.reads, report["confirmation"]), (1, "operator_terminal"))
+            self.assertTrue(notice.startswith(contract.EXPORT_NOTICE))
+            self.assertTrue(report["capture"]["helper"]["parent_confirmed"])
             self.assertEqual(report["frames_processed"], 4)
             self.assertEqual(report["cameras_requested"], [0])
             self.assertEqual(report["detector"], {"name": "stand-in", "runtime": "none", "classes": 1})

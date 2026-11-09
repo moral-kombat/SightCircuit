@@ -1,7 +1,8 @@
 """The stand-in for ``sightcircuit-camera-helper --export-frames``: a producer of valid and invalid export streams.
 
 Run as a program with the helper's export arguments (``--export-frames --fps F
---max-seconds S --max-frames M --cameras 0,1``) it writes a camera export v1
+--max-seconds S --max-frames M --cameras 0,1 --parent-confirmed``; without the
+confirmation flag it refuses with exit 5 as the helper does) it writes a camera export v1
 stream on stdout and JSON diagnostic lines on stderr, paced at ``fps`` with
 real host clocks, ending on the frame or time bound (or on SIGTERM/SIGINT
 with reason ``stop_signal`` and exit 130, as the helper does). ``--fake-scenario``
@@ -94,6 +95,7 @@ def parse(argv):
     parser.add_argument("--max-seconds", type=int)
     parser.add_argument("--max-frames", type=int)
     parser.add_argument("--cameras", default="0,1")
+    parser.add_argument("--parent-confirmed", action="store_true")
     parser.add_argument("--fake-scenario", default="valid")
     parser.add_argument("--width", type=int, default=fake_export.WIDTH)
     parser.add_argument("--height", type=int, default=fake_export.HEIGHT)
@@ -120,7 +122,7 @@ def main(argv=None):
         emit(fake_export.INVALID[scenario.split(":", 1)[1]][0]())
         note("final", reason="fake_invalid_stream", scenario=scenario)
         return 0
-    if scenario == "refuse":
+    if scenario == "refuse" or not args.parent_confirmed:  # As the helper: no informed start, no export.
         note("final", reason="confirmation_required", exit_code=EXIT_REFUSED)
         return EXIT_REFUSED
     if scenario == "silent_exit":
@@ -147,6 +149,7 @@ def main(argv=None):
         stale = 5_000_000_000 if scenario == "stale_clock" else 0  # Acquired five seconds ago: older than the input limit.
         header = fake_export.frame_header(exported, width=args.width, height=args.height, stride=stride,
                                           camera_index=cameras[(exported - 1) % len(cameras)],
+                                          frame_set_sequence=fake_export.frame_set_of(exported, cameras),
                                           monotonic_ns=time.monotonic_ns() - stale)
         emit(fake_export.encode(header, fake_export.pixels(exported, args.width, args.height, stride)))
         if scenario == "headset_removed" and exported == 2:

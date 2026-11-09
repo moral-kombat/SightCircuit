@@ -72,7 +72,10 @@ def _sections():
          [(f"kDerivationOf{native_header.camel(path)}", "char[]", derivation)
           for path, derivation in contract.DERIVATIONS.items()] +
          _names("EndReason", contract.END_REASONS) +
-         [("kBoundedEndReasons", "char[]", ",".join(contract.BOUNDED_END_REASONS))]),
+         [("kBoundedEndReasons", "char[]", ",".join(contract.BOUNDED_END_REASONS))] +
+         _names("Confirmation", contract.CONFIRMATIONS) +
+         [("kParentConfirmedFlag", "char[]", contract.PARENT_CONFIRMED_FLAG),
+          ("kExportNotice", "char[]", contract.EXPORT_NOTICE)]),
         ("Frames: delivered format, bounds, cameras",
          [("kFourcc", "char[]", contract.FOURCC), ("kMaxSide", UINT32, contract.MAX_SIDE),
           ("kMaxPlanes", UINT32, contract.MAX_PLANES), ("kCameraCount", UINT32, len(contract.CAMERA_INDICES)),

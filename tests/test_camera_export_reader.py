@@ -45,6 +45,10 @@ class ValidStreamTests(unittest.TestCase):
         self.assertEqual(frame.metadata["derivation"], "cpu_converted")
         self.assertEqual(frame.metadata["camera_index"], 0)
         self.assertEqual(frame.metadata["frame_id"], 1001)
+        self.assertEqual([frame.metadata["frame_set_sequence"] for frame in frames], [1, 1, 2, 2, 3, 3])
+        self.assertEqual(report_sets := {(f.metadata["frame_set_sequence"], f.metadata["camera_index"]) for f in frames},
+                         {(1, 0), (1, 1), (2, 0), (2, 1), (3, 0), (3, 1)})
+        self.assertEqual(len(report_sets), 6)
         self.assertEqual(frame.metadata["pixel_path"], "cpu_linear")
         self.assertEqual(frame.metadata["backend"], "fake")
         self.assertEqual(frame.metadata["export_packet"], 2)
@@ -69,7 +73,9 @@ class ValidStreamTests(unittest.TestCase):
         reader, frames = read_all(fake_export.valid_stream(3, cameras=(1,), pixel_path="gpu_convert",
                                                            reason="max_seconds"))
         self.assertEqual([frame.source for frame in frames], ["arcturus_camera_right"] * 3)
+        self.assertEqual([frame.metadata["frame_set_sequence"] for frame in frames], [1, 2, 3])
         self.assertEqual(frames[0].metadata["derivation"], "gpu_converted")
+        self.assertEqual((reader.ready["confirmation"], reader.end["confirmation"]), ("parent", "parent"))
         self.assertEqual(reader.report()["end"]["reason"], "max_seconds")
 
     def test_requested_limits_are_optional_and_zero_frames_is_complete(self):
@@ -147,19 +153,20 @@ class InvalidStreamTests(unittest.TestCase):
 
 class FieldTests(unittest.TestCase):
     def test_booleans_floats_and_wrong_types_are_refused(self):
-        field = contract.HEADERS["frame"][1]  # sequence
+        fields = {field.name: field for field in contract.HEADERS["frame"]}
+        field = fields["sequence"]
         for value in (True, 1.0, "1", None, [1], 0, contract.LIMITS["max_frames"][1] + 1):
             with self.subTest(value=value), self.assertRaises(ExportRefused):
                 check_field(field, value, "sequence")
         check_field(field, 1, "sequence")
         check_field(field, contract.LIMITS["max_frames"][1], "sequence")
-        enum = contract.HEADERS["frame"][3]  # camera_index
+        enum = fields["camera_index"]
         with self.assertRaises(ExportRefused):
             check_field(enum, False, "camera_index")  # False == 0 but is not an int choice.
         check_field(enum, 0, "camera_index")
 
     def test_scalars_object_accepts_one_level_of_nesting_only(self):
-        build = contract.HEADERS["ready"][4]
+        build = {field.name: field for field in contract.HEADERS["ready"]}["build"]
         check_field(build, {"a": 1, "b": "x", "c": None, "d": True, "e": {"f": 2}}, "build")
         for value in ({"a": {"b": {"c": 1}}}, {"a": 1.5}, {"a": [1]}, {"": 1}, {"a": "x" * 257}, "x"):
             with self.subTest(value=value), self.assertRaises(ExportRefused):

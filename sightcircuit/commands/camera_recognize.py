@@ -1,6 +1,11 @@
 """Bounded CPU recognition from frames the Arcturus camera helper exports, without display.
 
-The fourteenth command. ``sources.camera_helper.run_export`` launches the
+The fourteenth command. The informed start is the command's (owner decision
+2026-11-09): it prints the helper's export notice verbatim on its terminal,
+requires an interactive stdin and the operator's exact typed ``yes`` (no flag,
+variable or piped answer), and only then launches the helper with
+``--parent-confirmed``; the report records ``confirmation``
+``operator_terminal``. ``sources.camera_helper.run_export`` launches the
 ``sightcircuit-camera-helper`` binary the operator names (``--helper``) in
 ``--export-frames`` mode under the supervision primitive, with the same
 limits the command enforces (``--seconds`` at most 30 and ``--max-frames`` at
@@ -79,6 +84,8 @@ GATE_STATEMENT = ("Confirmed use outside the live-input gate (owner decision 202
 SCOPE = ("Bounded recognition on frames the camera helper exported; camera identity, clocks and the pixel path are "
          "what the helper declares; no display, no preview, no still; a device run needs the owner's approval")
 TIMINGS = ("input_age_ms", "processing_ms", "inference_ms")
+CONFIRMATION_ANSWER = "yes"
+OPERATOR_TERMINAL = "operator_terminal"  # The report's ``confirmation`` once the operator typed the answer here.
 
 
 def new_report(mode):
@@ -96,7 +103,8 @@ def new_report(mode):
 
 def frame_record(frame, result, image, input_age_ms, processing_ms):
     """One per-frame result: identity, timings, labels and up to ``MAX_LISTED_DETECTIONS`` boxes in detector pixels."""
-    return {"sequence": frame.sequence, "source_id": frame.source, "camera_index": frame.metadata.get("camera_index"),
+    return {"sequence": frame.sequence, "frame_set_sequence": frame.metadata.get("frame_set_sequence"),
+            "source_id": frame.source, "camera_index": frame.metadata.get("camera_index"),
             "frame_id": frame.metadata.get("frame_id"), "observed_ns": frame.observed_ns,
             "input_age_ms": round(input_age_ms, 3), "processing_ms": round(processing_ms, 3),
             "inference_ms": round(result.inference_ms, 3), "labels": result.labels,
@@ -151,8 +159,37 @@ class Processor(threading.Thread):
         return {name: sample.report() for name, sample in self.timings.items()}
 
 
+def confirm_on_terminal(limits, cameras, *, stdin=None, output=None):
+    """The informed start (owner decision 2026-11-09): print the helper's export notice and read the typed answer.
+
+    The notice (``contract.EXPORT_NOTICE``, verbatim) and the run's bounds go
+    to ``output`` (stderr, never the report stream); the answer is read from
+    ``stdin``, which must be an interactive terminal, and must be exactly
+    ``yes``. No flag, variable or piped text stands in for it. Returns
+    ``None`` when confirmed, else the named refusal:
+    ``confirmation_requires_terminal``, ``confirmation_unavailable`` (end of
+    input) or ``confirmation_declined``.
+    """
+    stdin = sys.stdin if stdin is None else stdin
+    output = sys.stderr if output is None else output
+    try:
+        interactive = stdin.isatty()
+    except (AttributeError, ValueError):
+        interactive = False
+    if not interactive:
+        return "confirmation_requires_terminal"
+    output.write(contract.EXPORT_NOTICE + "\n")
+    output.write(f"Bounds: {limits['max_frames']} frames, {limits['max_seconds']} seconds, {limits['fps']} frames a "
+                 f"second, cameras {','.join(str(index) for index in cameras)}.\nType {CONFIRMATION_ANSWER} to continue: ")
+    output.flush()
+    answer = stdin.readline()
+    if not answer:
+        return "confirmation_unavailable"
+    return None if answer.rstrip("\r\n \t") == CONFIRMATION_ANSWER else "confirmation_declined"
+
+
 def recognize(binary, limits, cameras, *, threshold=POC_THRESHOLD, detector=DEFAULT_DETECTOR, detector_factory=None,
-              extra_args=(), stop=None, timeout=None):
+              extra_args=(), stop=None, timeout=None, confirmed=False):
     """One bounded run: load the detector, export frames through the helper, detect on the latest; return the report.
 
     ``detector`` names a ``DETECTORS`` entry; an injected ``detector_factory``
@@ -161,9 +198,12 @@ def recognize(binary, limits, cameras, *, threshold=POC_THRESHOLD, detector=DEFA
     cleanup confirmed) when at least one frame was processed and the helper
     ended on its bound; else the source's status (``no_frames``, ``refused``,
     ``helper_ended_early``, ``cancelled``, ``timed_out``, ``stopped``,
-    ``error``), or ``cleanup_failed``.
+    ``error``), or ``cleanup_failed``. ``confirmed`` is the terminal
+    confirmation's result (``confirm_on_terminal``), passed to the helper as
+    ``--parent-confirmed``; the report's ``confirmation`` names it.
     """
     report = new_report("recognize")
+    report["confirmation"] = OPERATOR_TERMINAL if confirmed else None
     report.update(seconds_requested=limits.get("max_seconds"), max_frames_requested=limits.get("max_frames"),
                   fps_requested=limits.get("fps"), cameras_requested=list(cameras), threshold=threshold,
                   detector_requested=detector if detector_factory is None else None, phase="loading_detector")
@@ -181,7 +221,7 @@ def recognize(binary, limits, cameras, *, threshold=POC_THRESHOLD, detector=DEFA
     started = time.monotonic()
     try:
         captured = camera_helper.run_export(binary, limits, cameras, on_frame=slot.put, stop=stop, extra_args=extra_args,
-                                            timeout=timeout)
+                                            timeout=timeout, confirmed=confirmed)
     finally:
         slot.close()
         processor.join(PROCESSOR_JOIN_SECONDS)
@@ -302,10 +342,16 @@ def main(argv=None):
             parser.error("--helper, --seconds and --max-frames are required")
         limits = {"fps": args.fps, "max_seconds": args.seconds, "max_frames": args.max_frames}
         report = new_report("recognize")
+        report.update(confirmation=None, seconds_requested=args.seconds, max_frames_requested=args.max_frames,
+                      fps_requested=args.fps, cameras_requested=list(args.cameras))
         with guard.sigterm_cancels():
             try:
-                report = recognize(args.helper, limits, args.cameras, threshold=args.threshold, detector=args.detector,
-                                   extra_args=args.helper_arg)
+                refusal = confirm_on_terminal(limits, args.cameras)
+                if refusal is not None:  # Nothing is launched and no model is loaded without the typed answer.
+                    report.update(status="error", reason=refusal, phase="closed")
+                else:
+                    report = recognize(args.helper, limits, args.cameras, threshold=args.threshold,
+                                       detector=args.detector, extra_args=args.helper_arg, confirmed=True)
             except guard.CANCELLATION as error:
                 guard.cancelled(report, error)
     if args.report is not None:  # The operator's explicit action to save Camera Data; the file names itself.

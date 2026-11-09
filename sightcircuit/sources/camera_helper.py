@@ -142,11 +142,12 @@ def check_cameras(cameras):
     return selected
 
 
-def helper_command(path, limits, cameras, extra=()):
-    """The helper's argument vector: ``--export-frames`` with the limits and the camera selection."""
+def helper_command(path, limits, cameras, extra=(), *, confirmed=False):
+    """The helper's argument vector: ``--export-frames`` with the limits and the camera selection, then the
+    parent's confirmation flag when the operator confirmed on the parent's terminal (``contract.PARENT_CONFIRMED_FLAG``)."""
     return [path, EXPORT_FLAG, "--fps", str(limits["fps"]), "--max-seconds", str(limits["max_seconds"]),
             "--max-frames", str(limits["max_frames"]), "--cameras", ",".join(str(index) for index in cameras),
-            *[str(item) for item in extra]]
+            *([contract.PARENT_CONFIRMED_FLAG] if confirmed else []), *[str(item) for item in extra]]
 
 
 class Diagnostics(threading.Thread):
@@ -271,7 +272,7 @@ def _validate_launch(candidate, returncode):
     candidate["helper_exit_code"] = returncode
 
 
-def run_export(binary, limits, cameras, *, on_frame, stop=None, extra_args=(), timeout=None):
+def run_export(binary, limits, cameras, *, on_frame, stop=None, extra_args=(), timeout=None, confirmed=False):
     """Export frames from the helper at ``binary`` until its bound; return the source report.
 
     ``limits`` is ``{fps, max_seconds, max_frames}``, passed to the helper and
@@ -280,7 +281,10 @@ def run_export(binary, limits, cameras, *, on_frame, stop=None, extra_args=(), t
     reader thread and must not block for long; an exception from it stops the
     helper and ends the run ``error``. ``stop``, when given, is a
     ``threading.Event`` the caller may set to end the helper early
-    (``stopped``). ``extra_args`` follow the contract arguments (a fake
+    (``stopped``). ``confirmed`` says the operator typed the confirmation on
+    this process's terminal, which the helper is told with
+    ``--parent-confirmed``; without it the helper refuses the export.
+    ``extra_args`` follow the contract arguments (a fake
     build's ``--fake-scenario``). The deadline is ``timeout`` or
     ``max_seconds`` + ``LAUNCH_MARGIN_SECONDS``. Statuses: ``exported``,
     ``no_frames``, ``refused`` (the reader's reason), ``helper_ended_early``
@@ -296,8 +300,9 @@ def run_export(binary, limits, cameras, *, on_frame, stop=None, extra_args=(), t
     except (SightCircuitError, ValueError) as error:
         report.update(status="error", reason=getattr(error, "reason", str(error)), error=str(error))
         return report
-    command = helper_command(path, limits, cameras, extra_args)
-    report.update(helper={"path": path, "sha256": helper_digest(path), "arguments": command[1:]},
+    command = helper_command(path, limits, cameras, extra_args, confirmed=confirmed)
+    report.update(helper={"path": path, "sha256": helper_digest(path), "arguments": command[1:],
+                          "parent_confirmed": bool(confirmed)},
                   limits=limits, cameras=list(cameras), status="launching")
     stop = threading.Event() if stop is None else stop
     frames_read, frames_write = os.pipe()
