@@ -64,8 +64,9 @@ constexpr int kExitCancelled = 130;
 // ends the run when no frame set has arrived for the presence gap.
 constexpr uint32_t kExportFrameTimeoutMs = 100;
 constexpr int64_t kPresenceGapNs = 2000000000ll;
-// A protocol write that makes no progress for this long means the parent stopped
-// reading: the run ends (consumer_stalled) instead of holding the camera.
+// A packet write that makes no progress for this long means the parent stopped
+// reading: the run ends (consumer_stalled) instead of holding the camera. The
+// metadata modes bound their records with kProtocolWriteBudgetMs instead.
 constexpr int64_t kConsumerStallNs = 2000000000ll;
 constexpr int64_t kEndPacketGraceNs = 1000000000ll;
 constexpr const char* kEndReasonConsumerStalled = "consumer_stalled";  // pending in the generated header
@@ -108,9 +109,33 @@ constexpr const char* kSdkAgreementVersion = nullptr;
 
 // ---- a small JSON writer -------------------------------------------------
 
+// The length of the well-formed UTF-8 sequence starting at text[index], or 0 when the bytes
+// there are not one (an unexpected lead or continuation byte, an overlong form, a surrogate,
+// a code point past U+10FFFF, or a truncated sequence).
+std::size_t utf8_sequence_length(const std::string& text, std::size_t index) {
+    const unsigned char lead = static_cast<unsigned char>(text[index]);
+    std::size_t length = 0;
+    unsigned char second_min = 0x80, second_max = 0xbf;
+    if (lead >= 0xc2 && lead <= 0xdf) length = 2;
+    else if (lead >= 0xe0 && lead <= 0xef) { length = 3; if (lead == 0xe0) second_min = 0xa0; if (lead == 0xed) second_max = 0x9f; }
+    else if (lead >= 0xf0 && lead <= 0xf4) { length = 4; if (lead == 0xf0) second_min = 0x90; if (lead == 0xf4) second_max = 0x8f; }
+    else return 0;
+    if (index + length > text.size()) return 0;
+    const unsigned char second = static_cast<unsigned char>(text[index + 1]);
+    if (second < second_min || second > second_max) return 0;
+    for (std::size_t i = 2; i < length; ++i) {
+        const unsigned char c = static_cast<unsigned char>(text[index + i]);
+        if (c < 0x80 || c > 0xbf) return 0;
+    }
+    return length;
+}
+
+// Control characters are escaped; well-formed UTF-8 passes through unchanged; a byte that is
+// not part of a well-formed sequence becomes U+FFFD, so every line stays valid JSON.
 std::string json_quote(const std::string& text) {
     std::string out = "\"";
-    for (unsigned char c : text) {
+    for (std::size_t index = 0; index < text.size();) {
+        const unsigned char c = static_cast<unsigned char>(text[index]);
         switch (c) {
             case '"': out += "\\\""; break;
             case '\\': out += "\\\\"; break;
@@ -118,14 +143,21 @@ std::string json_quote(const std::string& text) {
             case '\r': out += "\\r"; break;
             case '\t': out += "\\t"; break;
             default:
-                if (c < 0x20 || c >= 0x7f) {
+                if (c < 0x20 || c == 0x7f) {
                     char escaped[8];
                     std::snprintf(escaped, sizeof escaped, "\\u%04x", static_cast<unsigned>(c));
                     out += escaped;
-                } else {
+                } else if (c < 0x80) {
                     out += static_cast<char>(c);
+                } else if (const std::size_t length = utf8_sequence_length(text, index)) {
+                    out.append(text, index, length);
+                    index += length;
+                    continue;
+                } else {
+                    out += "\\ufffd";
                 }
         }
+        ++index;
     }
     out += '"';
     return out;
@@ -441,7 +473,92 @@ const char* usage_text() {
 
 // ---- records -----------------------------------------------------------------
 
+// Protocol writes are bounded, so a consumer that stopped reading cannot hold the helper past
+// the run bound with the reader active. Each record waits at most kProtocolWriteBudgetMs for
+// the pipe to drain, and in probe mode never past the run deadline; the final record waits
+// kFinalWriteBudgetMs, so a consumer that resumes still receives it. A write that does not
+// complete marks the protocol stalled: the session ends (reason protocol_stalled, outcome
+// helper_error), the reader is deactivated and nothing but the final record is written.
+constexpr unsigned kProtocolWriteBudgetMs = 1000;
+constexpr unsigned kFinalWriteBudgetMs = 5000;
+constexpr std::size_t kProtocolChunkBytes = 4096;  // PIPE_BUF: a chunk this size completes once poll() reports room
 bool g_protocol_write_failed = false;
+bool g_protocol_stalled = false;
+bool g_protocol_torn = false;      // a stalled write left a partial line in the pipe
+int64_t g_run_deadline_ns = 0;     // probe loop only; 0 means no run bound applies to writes
+
+// The outcome of one bounded protocol write. stalled: the deadline (or the
+// no-progress bound) passed with the consumer not reading; failed: the
+// descriptor failed (EPIPE: the parent is gone). written_bytes says whether
+// the stream is torn.
+enum class WriteOutcome { ok, stalled, failed };
+struct WriteResult {
+    WriteOutcome outcome = WriteOutcome::ok;
+    std::size_t written_bytes = 0;
+};
+
+// The helper's one protocol writer, for the metadata modes' records and the
+// export mode's packets alike: chunked, each chunk written only after poll()
+// reports room, partial writes continued, EINTR and EAGAIN retried, never past
+// deadline_ns and, with progress_ns > 0, never longer than progress_ns without
+// a byte going through. mark_line arms the watchdog's torn-line newline, which
+// has a place in an NDJSON stream and none in a packet stream.
+WriteResult write_protocol_bounded(const char* data, std::size_t size, int64_t deadline_ns, int64_t progress_ns,
+                                   bool mark_line) {
+    WriteResult result;
+    int64_t last_progress_ns = clock_ns(CLOCK_MONOTONIC);
+    if (mark_line) lifecycle::emitting = 1;
+    while (size) {
+        const int64_t now = clock_ns(CLOCK_MONOTONIC);
+        int64_t until = deadline_ns;
+        if (progress_ns > 0 && last_progress_ns + progress_ns < until) until = last_progress_ns + progress_ns;
+        const int64_t remaining = until - now;
+        const int64_t remaining_ms = (remaining + 999999) / 1000000;  // rounded up; re-checked each turn
+        const int wait_ms = remaining <= 0 ? 0 : static_cast<int>(remaining_ms < 1000 ? remaining_ms : 1000);
+        pollfd poll_fd{};
+        poll_fd.fd = lifecycle::protocol_fd;
+        poll_fd.events = POLLOUT;
+        const int ready = ::poll(&poll_fd, 1, wait_ms);
+        if (ready < 0) {
+            if (errno == EINTR) continue;
+            result.outcome = WriteOutcome::failed;
+            break;
+        }
+        if (ready == 0) {
+            if (remaining <= 0) { result.outcome = WriteOutcome::stalled; break; }
+            continue;
+        }
+        if ((poll_fd.revents & (POLLERR | POLLHUP)) && !(poll_fd.revents & POLLOUT)) {
+            result.outcome = WriteOutcome::failed;
+            break;
+        }
+        const std::size_t chunk = size < kProtocolChunkBytes ? size : kProtocolChunkBytes;
+        const ssize_t count = ::write(lifecycle::protocol_fd, data, chunk);
+        if (count < 0 && (errno == EINTR || errno == EAGAIN)) continue;
+        if (count <= 0) { result.outcome = WriteOutcome::failed; break; }
+        data += count;
+        size -= static_cast<std::size_t>(count);
+        result.written_bytes += static_cast<std::size_t>(count);
+        last_progress_ns = clock_ns(CLOCK_MONOTONIC);
+    }
+    if (mark_line) lifecycle::emitting = 0;
+    return result;
+}
+
+// One NDJSON line of the metadata modes, within its budget. False when the
+// deadline passed or the descriptor failed; a partial line is noted as torn.
+bool write_protocol_line(const std::string& line, int64_t deadline_ns) {
+    const WriteResult result = write_protocol_bounded(line.data(), line.size(), deadline_ns, 0, true);
+    if (result.outcome != WriteOutcome::ok && result.written_bytes) g_protocol_torn = true;
+    return result.outcome == WriteOutcome::ok;
+}
+
+int64_t write_deadline(bool final) {
+    const int64_t now = clock_ns(CLOCK_MONOTONIC);
+    int64_t deadline = now + static_cast<int64_t>(final ? kFinalWriteBudgetMs : kProtocolWriteBudgetMs) * 1000000ll;
+    if (!final && g_run_deadline_ns && g_run_deadline_ns < deadline) deadline = g_run_deadline_ns;
+    return deadline;
+}
 
 JsonObject record(const char* event) {
     JsonObject object;
@@ -450,18 +567,25 @@ JsonObject record(const char* event) {
     return object;
 }
 
-void emit(const JsonObject& object) {
-    const std::string line = object.done() + "\n";
+void emit(const JsonObject& object, bool final = false) {
+    if (g_protocol_stalled && !final) return;  // one stall ends the run; only the final record follows
+    std::string line = object.done() + "\n";
     if (line.size() > kMaxLineBytes) {
         // Never emit a torn or oversized line; say what happened instead.
-        const std::string replacement = record("outcome").str("call", "emit").str("outcome", "helper_error")
+        line = record("outcome").str("call", "emit").str("outcome", "helper_error")
             .boolean("retryable", false).str("message", "record exceeded 8 KiB").done() + "\n";
-        if (g_export_mode) write_fd(STDERR_FILENO, replacement);
-        else if (!lifecycle::write_protocol(replacement)) g_protocol_write_failed = true;
+        if (g_export_mode) write_fd(STDERR_FILENO, line);
+        else if (!write_protocol_line(line, write_deadline(final))) { g_protocol_write_failed = true; g_protocol_stalled = true; }
         return;
     }
-    if (g_export_mode) write_fd(STDERR_FILENO, line);
-    else if (!lifecycle::write_protocol(line)) g_protocol_write_failed = true;
+    if (g_export_mode) { write_fd(STDERR_FILENO, line); return; }  // the export mode's records are stderr diagnostics
+    const int64_t deadline = write_deadline(final);
+    // A line torn by an earlier stall is terminated first, so the final record parses on its own.
+    if (final && g_protocol_torn && write_protocol_line("\n", deadline)) g_protocol_torn = false;
+    if (!write_protocol_line(line, deadline)) {
+        g_protocol_write_failed = true;
+        g_protocol_stalled = true;
+    }
 }
 
 // ---- the export packet stream ------------------------------------------------------
@@ -484,64 +608,15 @@ std::string packet_bytes(const std::string& header_json, const uint8_t* payload,
     return bytes;
 }
 
-// The outcome of a protocol write. A stall means the parent stopped reading:
-// the descriptor is non-blocking in the export mode and the write waited for
-// progress until its deadline. written_bytes says whether the stream is torn.
-enum class WriteOutcome { ok, stalled, failed };
-struct WriteResult {
-    WriteOutcome outcome = WriteOutcome::ok;
-    std::size_t written_bytes = 0;
-};
-
-// Writes to the protocol descriptor without lifecycle::write_protocol, whose
-// torn-line newline has no place in a packet stream. SIGPIPE is ignored (main),
-// so a vanished parent shows up here as a failed write. The write never waits
-// past deadline_ns (CLOCK_MONOTONIC), nor longer than kConsumerStallNs without
-// a byte going through.
-WriteResult write_packet_bytes(const std::string& bytes, int64_t deadline_ns) {
-    WriteResult result;
-    const char* data = bytes.data();
-    std::size_t size = bytes.size();
-    int64_t last_progress_ns = clock_ns(CLOCK_MONOTONIC);
-    while (size) {
-        const ssize_t count = ::write(lifecycle::protocol_fd, data, size);
-        if (count > 0) {
-            data += count;
-            size -= static_cast<std::size_t>(count);
-            result.written_bytes += static_cast<std::size_t>(count);
-            last_progress_ns = clock_ns(CLOCK_MONOTONIC);
-            continue;
-        }
-        if (count < 0 && errno == EINTR) continue;
-        if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-            const int64_t now = clock_ns(CLOCK_MONOTONIC);
-            const int64_t stall_deadline = last_progress_ns + kConsumerStallNs;
-            const int64_t until = deadline_ns < stall_deadline ? deadline_ns : stall_deadline;
-            if (now >= until) { result.outcome = WriteOutcome::stalled; return result; }
-            pollfd waiting{};
-            waiting.fd = lifecycle::protocol_fd;
-            waiting.events = POLLOUT;
-            const int64_t remaining_ms = (until - now + 999999) / 1000000;
-            const int polled = ::poll(&waiting, 1, static_cast<int>(remaining_ms > 1000 ? 1000 : remaining_ms));
-            if (polled < 0 && errno != EINTR) { result.outcome = WriteOutcome::failed; return result; }
-            if (polled > 0 && (waiting.revents & (POLLERR | POLLHUP)) && !(waiting.revents & POLLOUT)) {
-                result.outcome = WriteOutcome::failed;
-                return result;
-            }
-            continue;
-        }
-        result.outcome = WriteOutcome::failed;  // EPIPE or another error: the parent is gone
-        return result;
-    }
-    return result;
-}
-
+// A packet through the same writer as the records: never past deadline_ns, and
+// never longer than kConsumerStallNs without a byte going through. A packet is
+// not a line, so the watchdog's torn-line newline is not armed for it.
 WriteResult write_packet(const std::string& header_json, const uint8_t* payload, std::size_t payload_bytes,
                          int64_t deadline_ns) {
     const std::string bytes = packet_bytes(header_json, payload, payload_bytes);
     WriteResult result;
     if (bytes.empty()) { result.outcome = WriteOutcome::failed; return result; }
-    return write_packet_bytes(bytes, deadline_ns);
+    return write_protocol_bounded(bytes.data(), bytes.size(), deadline_ns, kConsumerStallNs, false);
 }
 
 int exit_code_for(Outcome outcome) {
@@ -672,9 +747,11 @@ struct FormatKey {
 
 class Session {
 public:
+    // The alarm covers one acquire at its full socket timeout (the command timeout plus the frame
+    // timeout) followed by the release at the command timeout, plus one second of margin.
     Session(const Options& options, CameraBackend& backend)
         : options_(options), backend_(backend),
-          watchdog_seconds_(static_cast<unsigned>(std::ceil((options.timeout_ms + kFrameTimeoutMs) / 1000.0)) + 1) {
+          watchdog_seconds_(static_cast<unsigned>(std::ceil((2.0 * options.timeout_ms + kFrameTimeoutMs) / 1000.0)) + 1) {
         for (int i = 0; i < kOutcomeCount; ++i) counts_[i] = 0;
     }
 
@@ -717,7 +794,7 @@ public:
     }
 
     int run() {
-        if (!step_connect()) return finish();
+        if (!step_connect() || stalled()) return finish();
         if (options_.mode == Options::hello) {
             ControlSummary controls;
             if (step_controls("hello", controls)) {
@@ -726,7 +803,7 @@ public:
             }
             return finish();
         }
-        if (!step_controls("start", start_controls_)) return finish();
+        if (!step_controls("start", start_controls_) || stalled()) return finish();
         have_start_ = true;
         if (check_stop()) return finish();
         if (!call_set_reader(true)) return finish();
@@ -737,6 +814,17 @@ public:
     }
 
 private:
+    // A protocol write that did not complete ends the run: the consumer is gone or stalled, and
+    // the reader must not stay active for it.
+    bool stalled() {
+        if (!g_protocol_stalled) return false;
+        if (reason_.empty()) {
+            outcome_ = Outcome::helper_error;
+            reason_ = "protocol_stalled";
+        }
+        return true;
+    }
+
     bool check_stop() {
         if (!stop_signal_.empty()) return true;
         const int signal = pending_stop();
@@ -823,7 +911,9 @@ private:
     void loop() {
         const int64_t started = clock_ns(CLOCK_MONOTONIC);
         const int64_t deadline = started + static_cast<int64_t>(options_.max_seconds) * 1000000000ll;
+        g_run_deadline_ns = deadline;  // record writes never wait past the run bound
         for (;;) {
+            if (stalled()) return;
             if (check_stop()) return;
             if (frame_sets_ >= options_.frame_sets) return;
             const int64_t pass_started = clock_ns(CLOCK_MONOTONIC);
@@ -852,8 +942,10 @@ private:
                 object.raw("cameras", cameras.done()).raw("host_clocks_before", before.json())
                     .raw("host_clocks_after", after.json());
                 emit(object);
+                if (stalled()) return;
             } else if (outcome_retryable(outcome)) {
                 emit_outcome("acquire", outcome, true);
+                if (stalled()) return;
                 if (have_last_frame_set_ && !have_first_retryable_after_) {
                     first_retryable_after_ns_ = after.monotonic_ns;
                     have_first_retryable_after_ = true;
@@ -919,17 +1011,18 @@ private:
         return true;
     }
 
-    // Every protocol write of the run waits at most until the run's deadline, and
-    // never longer than the stall bound without progress.
-    int64_t write_deadline() const {
+    // Every packet write of the run waits at most until the run's deadline; the
+    // writer's no-progress bound (kConsumerStallNs) applies within that.
+    int64_t export_write_deadline() const {
         const int64_t now = clock_ns(CLOCK_MONOTONIC);
         const int64_t stall = now + kConsumerStallNs;
         return run_deadline_ns_ && run_deadline_ns_ < stall ? run_deadline_ns_ : stall;
     }
 
-    // Records a write that did not complete: a stall ends the run as
-    // consumer_stalled, a failure as sdk_error (protocol_write_failed); either
-    // way no further packet is attempted on a torn stream.
+    // Records a packet write that did not complete: a stall (the shared writer's
+    // deadline or no-progress bound passed) ends the run as consumer_stalled, a
+    // failure as sdk_error (protocol_write_failed); either way no further packet
+    // is attempted on a torn stream.
     void note_write(const WriteResult& result) {
         if (result.outcome == WriteOutcome::ok) return;
         if (result.written_bytes) stream_torn_ = true;
@@ -945,9 +1038,6 @@ private:
     }
 
     void export_loop() {
-        // Non-blocking, so a parent that stops reading cannot hold the camera past the bounds.
-        const int flags = ::fcntl(lifecycle::protocol_fd, F_GETFL);
-        if (flags >= 0) ::fcntl(lifecycle::protocol_fd, F_SETFL, flags | O_NONBLOCK);
         export_started_ns_ = clock_ns(CLOCK_MONOTONIC);
         run_deadline_ns_ = export_started_ns_ + static_cast<int64_t>(options_.max_seconds) * 1000000000ll;
         // A named pixel path is settled already, so the ready packet goes out
@@ -1057,7 +1147,7 @@ private:
             ++frame_set_sequence_;
             for (std::size_t i = 0; i < headers.size(); ++i) {
                 const WriteResult written = write_packet(headers[i], images[i].pixels.data(), images[i].pixels.size(),
-                                                         write_deadline());
+                                                         export_write_deadline());
                 if (written.outcome != WriteOutcome::ok) { note_write(written); return; }
                 ++exported_;
             }
@@ -1112,7 +1202,7 @@ private:
             .raw("limits", JsonObject().unsigned_integer("fps", options_.fps).unsigned_integer("max_seconds", options_.max_seconds)
                                .unsigned_integer("max_frames", options_.max_frames).done())
             .str("confirmation", options_.confirmation());
-        const WriteResult written = write_packet(header.done(), nullptr, 0, write_deadline());
+        const WriteResult written = write_packet(header.done(), nullptr, 0, export_write_deadline());
         if (written.outcome != WriteOutcome::ok) { note_write(written); return false; }
         ready_written_ = true;
         return true;
@@ -1175,14 +1265,25 @@ private:
         }
         last_sequence_ = meta.sequence;
         have_last_sequence_ = true;
-        for (uint32_t camera = 0; camera < meta.camera_count && camera < kMaxCameras; ++camera) {
+        for (uint32_t camera = 0; camera < kMaxCameras && camera < meta.camera_count; ++camera) {
             const CameraMeta& frame = meta.cameras[camera];
-            const int64_t timestamp_ns = static_cast<int64_t>(frame.timestamp_seconds * 1e9);
+            // Server-supplied timestamps are data: a non-finite or out-of-range timestamp_seconds, or a
+            // difference that would overflow, is counted in invalid_timestamps and takes no part in the ranges.
+            const double scaled = frame.timestamp_seconds * 1e9;
+            const bool timestamp_ok = std::isfinite(scaled) && scaled > -9.2e18 && scaled < 9.2e18;
+            const int64_t timestamp_ns = timestamp_ok ? static_cast<int64_t>(scaled) : 0;
             const int64_t host[3] = {after.monotonic_ns, after.boottime_ns, after.realtime_ns};
+            bool invalid = !timestamp_ok;
             for (int clock = 0; clock < 3; ++clock) {
-                exposure_offsets_[clock].add(host[clock] - frame.exposure_timestamp_ns);
-                timestamp_offsets_[clock].add(host[clock] - timestamp_ns);
+                int64_t difference = 0;
+                if (__builtin_sub_overflow(host[clock], frame.exposure_timestamp_ns, &difference)) invalid = true;
+                else exposure_offsets_[clock].add(difference);
+                if (timestamp_ok) {
+                    if (__builtin_sub_overflow(host[clock], timestamp_ns, &difference)) invalid = true;
+                    else timestamp_offsets_[clock].add(difference);
+                }
             }
+            if (invalid) ++invalid_timestamps_;
             const FormatKey key = FormatKey::of(frame);
             if (!have_format_[camera]) {
                 first_format_[camera] = key;
@@ -1226,6 +1327,9 @@ private:
             lifecycle::disarm_watchdog();
         }
         connected_ = false;
+        g_run_deadline_ns = 0;  // the final record has its own, longer budget
+        stalled();
+        if (reason_.empty()) reason_ = outcome_name(outcome_);
         int exit_code = exit_code_for(outcome_);
         if (options_.mode == Options::export_frames) {
             if (end_reason_.empty()) end_reason_ = export_protocol::kEndReasonSdkError;
@@ -1292,6 +1396,7 @@ private:
                                                 .raw("after_minus_timestamp_seconds_ns", timestamp_offsets_[clock].json())
                                                 .done());
         }
+        offsets.unsigned_integer("invalid_timestamps", invalid_timestamps_);
         object.raw("clock_offsets", offsets.done());
         if (have_start_ && have_end_) {
             const std::vector<std::string> changed = start_controls_.changed_fields(end_controls_);
@@ -1314,7 +1419,7 @@ private:
             for (const std::string& call : *calls) array.str(call);
             object.raw("fake_calls", array.done());
         }
-        emit(object);
+        emit(object, true);
     }
 
     const Options& options_;
@@ -1353,6 +1458,7 @@ private:
     uint64_t frame_set_sequence_ = 0;
     unsigned exported_ = 0, dropped_ = 0, dropped_since_last_ = 0, acquire_failures_ = 0, release_failures_ = 0;
     mutable unsigned pending_in_set_ = 0;
+    unsigned invalid_timestamps_ = 0;
 };
 
 // ---- process setup, refusals and modes ----------------------------------------
@@ -1414,11 +1520,20 @@ std::string notice_for(const Options& options) {
            "passthrough during the run and for 30 seconds afterwards.";
 }
 
-// The lock keeps one helper per runtime directory; never /tmp.
+// The lock keeps one helper per runtime directory; never /tmp. The directory must be what a
+// runtime directory is: an absolute path to an existing directory owned by this user with
+// mode 0700; anything else (a relative path would put the lock in the working directory) is
+// refused as runtime_dir_invalid.
 int take_lock(std::string& reason) {
     const char* directory = std::getenv("XDG_RUNTIME_DIR");
     if (!directory || !*directory) {
         reason = "runtime_dir_missing";
+        return -1;
+    }
+    struct stat status {};
+    if (directory[0] != '/' || ::stat(directory, &status) != 0 || !S_ISDIR(status.st_mode) ||
+        status.st_uid != ::getuid() || (status.st_mode & 07777) != 0700) {
+        reason = "runtime_dir_invalid";
         return -1;
     }
     const std::string path = std::string(directory) + "/sightcircuit-camera-helper.lock";

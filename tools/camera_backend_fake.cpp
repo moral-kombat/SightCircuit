@@ -14,6 +14,7 @@
 #include <cerrno>
 #include <cstring>
 #include <ctime>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -42,6 +43,8 @@ enum Scenario {
     format_changes, controls_change_mid_run, sequence_gap,
     bad_camera_count, bad_plane_count,
     hang_in_acquire, hang_in_release,
+    permission_denied_at_connect, out_of_memory_at_connect, invalid_metadata_at_connect, calibration_oversized,
+    internal_error_at_controls, server_timeout_at_reader, invalid_argument_at_acquire, bad_timestamps,
     export_nv12, export_nv12_tiny, export_nv12_bt601, export_p010,
     export_removal, export_standby, export_transport_lost, export_ubwc, export_bad_fd,
     export_hang_in_acquire, export_one_camera,
@@ -62,6 +65,10 @@ const ScenarioName kScenarios[] = {
     {"sequence_gap", sequence_gap},
     {"bad_camera_count", bad_camera_count}, {"bad_plane_count", bad_plane_count},
     {"hang_in_acquire", hang_in_acquire}, {"hang_in_release", hang_in_release},
+    {"permission_denied_at_connect", permission_denied_at_connect}, {"out_of_memory_at_connect", out_of_memory_at_connect},
+    {"invalid_metadata_at_connect", invalid_metadata_at_connect}, {"calibration_oversized", calibration_oversized},
+    {"internal_error_at_controls", internal_error_at_controls}, {"server_timeout_at_reader", server_timeout_at_reader},
+    {"invalid_argument_at_acquire", invalid_argument_at_acquire}, {"bad_timestamps", bad_timestamps},
     {"export_nv12", export_nv12}, {"export_nv12_tiny", export_nv12_tiny}, {"export_nv12_bt601", export_nv12_bt601},
     {"export_p010", export_p010}, {"export_removal", export_removal}, {"export_standby", export_standby},
     {"export_transport_lost", export_transport_lost}, {"export_ubwc", export_ubwc}, {"export_bad_fd", export_bad_fd},
@@ -191,6 +198,8 @@ public:
             case already_connected: return server("Result_ClientAlreadyConnected", Outcome::camera_busy);
             case provider_unreachable:
                 return client("Transport", ECONNREFUSED, "connection refused", Outcome::provider_unreachable);
+            case permission_denied_at_connect: return server("Result_PermissionDenied", Outcome::permission_denied);
+            case out_of_memory_at_connect: return client("OutOfMemory", ENOMEM, "out of memory", Outcome::helper_error);
             default: break;
         }
         hello_ = HelloFacts();
@@ -200,6 +209,18 @@ public:
         hello_.offline_cal_size = kFakeOfflineCalSize;
         hello_.offline_cal_size_within_bound = true;
         hello_.offline_cal_sha256 = sha256_hex(kFakeOfflineCal, kFakeOfflineCalSize);
+        // The handshake succeeded but its facts fail the bounds check, as the SDK backend reports them:
+        // the hello record carries what was read, the outcome is invalid_metadata, the session is closed.
+        if (scenario_ == invalid_metadata_at_connect) {
+            hello_.camera_count = 3;
+            return client("None", 0, "", Outcome::invalid_metadata);
+        }
+        if (scenario_ == calibration_oversized) {
+            hello_.offline_cal_size = kMaxOfflineCalBytes + 1;
+            hello_.offline_cal_size_within_bound = false;
+            hello_.offline_cal_sha256.clear();
+            return client("None", 0, "", Outcome::invalid_metadata);
+        }
         return success();
     }
 
@@ -207,9 +228,10 @@ public:
 
     Outcome control_state(ControlSummary& summary) {
         calls_.push_back("control_state");
-        if (lost_) return client("NotConnected", 0, "not connected", Outcome::helper_error);
+        if (lost_) return client("NotConnected", 0, "not connected", Outcome::transport_lost);
         ++control_reads_;
         if (scenario_ == permission_denied) return server("Result_PermissionDenied", Outcome::permission_denied);
+        if (scenario_ == internal_error_at_controls) return server("Result_InternalError", Outcome::helper_error);
         summary = ControlSummary();
         summary.supported_controls = "0x00000000000047ff";
         summary.current_controls = "0x0000000000000004";
@@ -245,19 +267,22 @@ public:
 
     Outcome set_reader(bool active) {
         calls_.push_back(active ? "set_reader:true" : "set_reader:false");
-        if (lost_) return client("NotConnected", 0, "not connected", Outcome::helper_error);
+        if (lost_) return client("NotConnected", 0, "not connected", Outcome::transport_lost);
         if (active && scenario_ == permission_denied_at_reader) {
             return server("Result_PermissionDenied", Outcome::permission_denied);
         }
         if (active && scenario_ == resource_denied) return server("Result_ResourceDenied", Outcome::camera_busy);
+        // A server timeout on a command other than acquire is not "no frame": it is a helper error.
+        if (active && scenario_ == server_timeout_at_reader) return server("Result_Timeout", Outcome::helper_error);
         return success();
     }
 
     Outcome acquire(uint32_t timeout_ms, FrameSetMeta& meta) {
         calls_.push_back("acquire");
-        if (lost_) return client("NotConnected", 0, "not connected", Outcome::helper_error);
+        if (lost_) return client("NotConnected", 0, "not connected", Outcome::transport_lost);
         const unsigned pass = ++acquires_;
         switch (scenario_) {
+            case invalid_argument_at_acquire: return client("InvalidArgument", 0, "invalid argument", Outcome::helper_error);
             case hang_in_acquire: hang_forever(); break;
             case hang_in_release: calls_.push_back("release"); hang_forever(); break;
             case slow_ok: sleep_ms(timeout_ms > 300 ? 300 : timeout_ms + 250); break;
@@ -292,6 +317,14 @@ public:
             default: break;
         }
         fill_frame_set(pass, meta);
+        if (scenario_ == bad_timestamps) {
+            // Timestamps the server could send and the helper must not compute with: a NaN seconds
+            // value and an exposure timestamp whose difference from any host clock overflows.
+            for (uint32_t camera = 0; camera < 2; ++camera) {
+                meta.cameras[camera].timestamp_seconds = std::numeric_limits<double>::quiet_NaN();
+                meta.cameras[camera].exposure_timestamp_ns = std::numeric_limits<int64_t>::min();
+            }
+        }
         return success();
     }
 
