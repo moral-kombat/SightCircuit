@@ -341,9 +341,21 @@ class RecognitionTests(unittest.TestCase):
 
 class StandInProgramTests(unittest.TestCase):
     def test_the_stand_in_refuses_the_wrong_arguments_as_the_helper_does(self):
-        with mock.patch("sys.stderr"):
-            self.assertEqual(fake_camera_export.main(["--probe-frames", "1"]), 64)
-            self.assertEqual(fake_camera_export.main(["--export-frames", "--fps", "1"]), 64)
+        # In a child: the stand-in blocks stop signals for its process as the helper does, which a test process
+        # must never inherit (every later signal test would hang).
+        import subprocess
+        with tempfile.TemporaryDirectory() as temporary:
+            binary = fake_camera_export.install(temporary)
+            for arguments in (["--probe-frames", "1"], ["--export-frames", "--fps", "1"]):
+                with self.subTest(arguments=arguments):
+                    completed = subprocess.run([str(binary), *arguments], capture_output=True, timeout=60)
+                    self.assertEqual(completed.returncode, 64)
+                    # argparse writes its own usage line first; the stand-in's record is the last line.
+                    self.assertEqual(json.loads(completed.stderr.splitlines()[-1])["reason"], "invalid_arguments")
+                    self.assertEqual(completed.stdout, b"")
+
+    def test_no_camera_test_leaves_stop_signals_blocked_in_this_process(self):
+        self.assertEqual(signal.pthread_sigmask(signal.SIG_BLOCK, set()) & {signal.SIGINT, signal.SIGTERM}, set())
 
     def test_the_catalogue_limits_are_within_the_contract(self):
         for name, (low, high) in contract.LIMITS.items():

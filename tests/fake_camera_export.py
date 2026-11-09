@@ -105,13 +105,14 @@ def parse(argv):
 
 
 def main(argv=None):
-    # As the helper, stop signals are collected, never delivered to the default disposition; the deaf scenario ignores them.
-    stopper = Stopper(deaf="hang_deaf" in (sys.argv[1:] if argv is None else argv))
     args = parse(sys.argv[1:] if argv is None else argv)
     if args is None or not args.export_frames or None in (args.fps, args.max_seconds, args.max_frames):
         note("final", reason="invalid_arguments", exit_code=EXIT_INVALID_ARGUMENTS)
         return EXIT_INVALID_ARGUMENTS
     scenario = args.fake_scenario
+    # As the helper, stop signals are collected, never delivered to the default disposition; the deaf scenario ignores
+    # them. The mask changes this process: run as a program only (the tests exec the installed file).
+    stopper = Stopper(deaf=scenario == "hang_deaf")
     limits = {"fps": args.fps, "max_seconds": args.max_seconds, "max_frames": args.max_frames}
     cameras = tuple(int(item) for item in args.cameras.split(","))
     stride = args.stride or args.width * 3 + 8
