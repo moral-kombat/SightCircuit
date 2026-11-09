@@ -223,9 +223,24 @@ this lane before the owner's gate classification.
 | S4 | Phase A on the Frame: connect, handshake and control state with the reader never activated; the wearer watches passthrough during the run and for 30 s after | S, device | S3, approval |
 | S5 | Phase B on the Frame: the reader active for at most 10 s, metadata for a few frame sets, the passthrough observation repeated with headset removal; answers linear or UBWC, standby behaviour and the passthrough question that holds F4 to F8 | S, device | S4, approval |
 
-Later steps (the Python camera contract, the acquisition module, the pixel
-path, a camera source, bounded recognition without display) follow lane F and
-the owner's gate and consent decisions; none is scheduled.
+On 2026-11-09 (02:40Z) the owner set the goal of a working proof of concept
+using the helper: camera frames from the SDK reaching the detectors in a
+bounded run without display, the [E48](evidence/e048.md) pattern on the camera
+route. The items below were added for it; S6 and S7 proceed in parallel with
+S1 to S3 and depend on no device result (the pixel path's UBWC branch is
+unverified until S5 answers linear or UBWC). The later steps of the review's
+migration plan (the acquisition module and the replay, identity and frame-set
+findings) follow lane F and are not scheduled.
+
+| Item | Work | Size | Depends on |
+| --- | --- | --- | --- |
+| S6 | The helper's `--export-frames` mode: BGR3 frames to the parent over stdout under the camera export protocol (version 1: `SCCF` packets, a `ready`, `frame` and `end` header vocabulary, bounded sizes), paced at 1 to 10 frames a second for at most 60 s or 600 frames; two pixel paths behind one interface, `cpu_linear` (mmap of linear DMA-BUF planes and a tested YCbCr conversion) and `gpu_convert` (Vulkan import by DRM modifier and conversion, allowed to adapt the frozen capture track's import code); ends on headset removal or standby; never writes a pixel anywhere; the fake backend serves memfd-backed linear frames for the tests | L | S1, S2 |
+| S7 | The Python side: the camera contract as data with a generated C++ header pinned by a test, a strict export-stream reader producing `Frame`s, a `camera_helper` source launching the helper through the runtime primitive, and `camera_recognize`, the fourteenth command: bounded recognition without display, structured as `mirror_recognize`, at most 30 s and 300 frames, a validate mode against a fake producer, labels, boxes and timings in the report and never pixels; a guide | M | none (tests use a fake producer) |
+| S8 | Pixel path on the Frame without saving: `--export-frames` into the reader's validate path, counts and timings only, the passthrough observation as in S5 | S, device | S5, S6, S7, approval |
+| S9 | Bounded camera recognition on the Frame: one `camera_recognize` run of at most 30 s on the chair scene, no display, counts, labels, boxes and timings in the report; the proof of concept the owner asked for | S, device | S8, approval |
+
+Evidence identifiers for S4 to S9 are allocated when each is approved (E94
+to E97 stay reserved for F3).
 
 #### Progress (2026-11-07, evening)
 
@@ -306,18 +321,25 @@ handler on the main thread ([checks reference](reference/development-checks.md#h
   with the bridge rebuild; E94 to E97).
 - Decided 2026-11-08, night: the SDK camera-input lane is open, cloud-only
   (the review's decision 1); F4 to F8 are held until S5 answers the
-  passthrough question; the owner's helper branch is the lane's code. Still
-  open from the [review's list](history/2026-11-09-arcturus-sdk-input-review.md#owner-decisions-in-priority-order),
-  in its order: the passthrough rule (approve Phase A and Phase B separately,
-  define disturbance, accept that any disturbance stops the track); the gate
-  classification of the no-pixel probe modes and of bounded recognition
-  without display; the presence source for section 3.2; consent (which data
-  classes may be saved locally or published, and whether Arcturus-app
-  rehearsal recordings count as Camera Data); the camera-activity LED; whether
-  frozen capture-track import code may be adapted, and the long-term status of
-  the private camera routes and mirror input; the helper's toolchain (host
-  compiler or the vendor's Steam Runtime image). None blocks S1 to S3; the
-  passthrough rule and the toolchain block S4.
+  passthrough question; the owner's helper branch is the lane's code.
+- Decided 2026-11-09 (02:45Z), from the [review's list](history/2026-11-09-arcturus-sdk-input-review.md#owner-decisions-in-priority-order)
+  and recorded in [scope](poc-scope.md#architecture-decisions-2026-11-07):
+  the passthrough rule (each phase approved separately; any wearer-visible
+  passthrough change during a probe or in the 30 s after it is a disturbance,
+  and one disturbance stops the SDK track until the owner reopens it); the
+  gate classification (the no-pixel probe modes and bounded camera recognition
+  without display are confirmed uses outside the live-input gate, the E48
+  pattern; every gate stays closed); the frozen capture track's import code
+  may be adapted into the SDK helper where it helps, the track itself staying
+  paused; consent (counts, labels, boxes, timings and format metadata may be
+  saved locally and published; no pixels, stills, previews or calibration data
+  anywhere; the red LED untouched). Still open, none blocking S1 to S9: the
+  presence source for the agreement's section 3.2 (operator-attended bounded
+  runs are the interim), whether Arcturus-app rehearsal recordings count as
+  Camera Data, the long-term status of the private camera routes and mirror
+  input, and the toolchain beyond the host compiler the build script uses.
+  Next device approvals on this lane, each separate, after the S1 to S3 PRs
+  merge: S4, then S5, then S8, then S9.
 - The Frame rebooted into SteamOS 0.5.8 ([E85](evidence/e085.md)); a Frame
   manager session exists and the "Frame update check" scheduled task was
   rebound to it on 2026-11-07, with the old task left disabled as a record.
