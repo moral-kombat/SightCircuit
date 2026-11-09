@@ -7,7 +7,8 @@ without duplicate keys, exactly the fields of its kind with their types and
 bounds), the payload size, and the stream rules (``ready`` first and once,
 ``end`` last and once, consecutive sequences from 1 within ``max_frames``,
 frame sets numbered from 1 without gaps with each camera at most once per set,
-a camera the ``ready`` selected, the derivation of the declared pixel path,
+a camera the ``ready`` selected, the derivation of the declared pixel path
+(no frame at all after a ``ready`` whose pixel path is ``undecided``),
 ``buffer_bytes`` = ``stride_bytes`` x ``height`` = ``payload_bytes``, the
 ``end`` counts matching the frames read, and the ``ready`` limits equal to the
 ones requested). The first violation raises ``ExportRefused`` with a named
@@ -36,7 +37,7 @@ REASONS = (
     "invalid_field:<path>", "ready_payload_not_empty", "end_payload_not_empty", "limits_differ_from_requested",
     "stride_too_small", "buffer_bytes_mismatch", "payload_bytes_mismatch", "sequence_not_consecutive",
     "sequence_beyond_max_frames", "camera_not_selected", "derivation_mismatch", "exported_count_mismatch",
-    "frame_set_sequence_not_consecutive", "frame_set_camera_repeated", "read_failed",
+    "frame_set_sequence_not_consecutive", "frame_set_camera_repeated", "frame_after_undecided_ready", "read_failed",
 )
 
 
@@ -296,6 +297,8 @@ class ExportReader:
         except ExportRefused as error:
             raise self._refuse(error.reason, f"packet {packet.index}: {error}") from None
         index = packet.index
+        if self.ready["pixel_path"] == contract.PIXEL_PATH_UNDECIDED:
+            raise self._refuse("frame_after_undecided_ready", f"packet {index}: a frame follows a ready whose pixel path is undecided")
         if header["stride_bytes"] < header["width"] * 3:
             raise self._refuse("stride_too_small", f"packet {index}: stride_bytes is below width x 3")
         if header["buffer_bytes"] != header["stride_bytes"] * header["height"]:

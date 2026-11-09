@@ -45,6 +45,10 @@ class ContractTests(unittest.TestCase):
         self.assertTrue(set(contract.BOUNDED_END_REASONS) <= set(contract.END_REASONS))
         self.assertEqual(contract.DERIVATIONS, {"cpu_linear": "cpu_converted", "gpu_convert": "gpu_converted"})
         self.assertEqual(tuple(contract.DERIVATIONS), contract.PIXEL_PATHS)
+        self.assertEqual(contract.PIXEL_PATH_UNDECIDED, "undecided")
+        self.assertNotIn(contract.PIXEL_PATH_UNDECIDED, contract.DERIVATIONS)
+        ready = {field.name: field for field in contract.HEADERS["ready"]}
+        self.assertEqual(ready["pixel_path"].choices, ("cpu_linear", "gpu_convert", "undecided"))
         self.assertEqual(contract.LIMITS, {"fps": (1, 10), "max_seconds": (1, 60), "max_frames": (1, 600)})
         self.assertEqual(contract.MAX_SIDE, 4096)
         self.assertEqual(contract.source_id(0), "arcturus_camera_left")
@@ -99,7 +103,8 @@ class HeaderTests(unittest.TestCase):
                 self.assertIn(f" {name}[] = {value};" if value.startswith('"') else f" {name} = {value};", text)
         for value in (*contract.END_REASONS, *contract.PIXEL_FORMATS, *contract.ENCODINGS, *contract.TRANSFERS,
                       *contract.PRIMARIES, *contract.BACKENDS, *contract.PIXEL_PATHS, *contract.DERIVATIONS.values(),
-                      *contract.CONFIRMATIONS, contract.PARENT_CONFIRMED_FLAG, contract.EXPORT_NOTICE):
+                      *contract.CONFIRMATIONS, contract.PARENT_CONFIRMED_FLAG, contract.EXPORT_NOTICE,
+                      contract.PIXEL_PATH_UNDECIDED):
             with self.subTest(value=value):
                 self.assertIn(f'"{value}";', text)
         for kind in contract.KINDS:

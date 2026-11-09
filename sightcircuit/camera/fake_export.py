@@ -96,6 +96,12 @@ def valid_stream(frames=LIMITS["max_frames"], *, limits=LIMITS, cameras=(0, 1), 
     return b"".join(parts)
 
 
+def undecided_stream(reason="watchdog", *, limits=LIMITS, cameras=(0, 1)):
+    """A run the helper ended before choosing a pixel path: an undecided ``ready``, then ``end``, no frame."""
+    return (encode(ready_header(limits=limits, cameras=cameras, pixel_path=contract.PIXEL_PATH_UNDECIDED)) +
+            encode(end_header(0, reason=reason)))
+
+
 def _stream(*packets):
     return b"".join(packets)
 
@@ -248,6 +254,8 @@ INVALID = {
     "frame_camera_not_selected": (lambda: _ready(cameras=(0,)) + frame_packet(1, camera_index=1), "camera_not_selected"),
     "frame_derivation_mismatch": (lambda: _ready(pixel_path="gpu_convert") + frame_packet(1, camera_index=0),
                                   "derivation_mismatch"),
+    "frame_after_undecided_ready": (lambda: _ready(pixel_path=contract.PIXEL_PATH_UNDECIDED) +
+                                    frame_packet(1, camera_index=0), "frame_after_undecided_ready"),
     # End fields and rules.
     "end_missing_field": (lambda: _ready() + encode(_without(end_header(0), "digests")), "missing_field:digests"),
     "end_unexpected_field": (lambda: _ready() + encode(end_header(0, exit_code=0)), "unexpected_field:exit_code"),

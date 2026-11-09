@@ -78,6 +78,15 @@ class ValidStreamTests(unittest.TestCase):
         self.assertEqual((reader.ready["confirmation"], reader.end["confirmation"]), ("parent", "parent"))
         self.assertEqual(reader.report()["end"]["reason"], "max_seconds")
 
+    def test_an_undecided_ready_is_complete_only_with_no_frame(self):
+        reader, frames = read_all(fake_export.undecided_stream())
+        self.assertEqual(frames, [])
+        report = reader.report()
+        self.assertEqual((report["status"], report["ready"]["pixel_path"], report["end"]["reason"]),
+                         ("complete", "undecided", "watchdog"))
+        reader, frames = read_all(fake_export.undecided_stream(reason="headset_removed"))
+        self.assertEqual(reader.report()["end"]["reason"], "headset_removed")
+
     def test_requested_limits_are_optional_and_zero_frames_is_complete(self):
         reader, frames = read_all(fake_export.valid_stream(0), limits=None)
         self.assertEqual(frames, [])

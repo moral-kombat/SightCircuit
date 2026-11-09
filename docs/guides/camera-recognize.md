@@ -157,7 +157,9 @@ the payload size), then the header (UTF-8 JSON, one object, at most 16384
 bytes), then the payload (at most 33554432 bytes). The header's `kind` is
 `ready` (first, once; backend, pixel path, build facts, the delivered format
 `BGR3`, the camera selection, the limits in force and how the start was
-confirmed, `parent` or `terminal`; no payload), `frame` (sequence from 1
+confirmed, `parent` or `terminal`; no payload; a pixel path of `undecided`
+means the helper ended the run before choosing one, and no frame may follow),
+`frame` (sequence from 1
 without gaps, the frame set it belongs to, numbered from 1 without gaps with
 each camera at most once per set, frame id, camera index, exposure and host
 clocks, width, height, `BGR3`, stride and buffer size equal to the payload,

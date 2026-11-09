@@ -272,6 +272,15 @@ def validate(limits=fake_export.LIMITS):
         valid = dict(reader.report(), frames=0, ok=False, refused=error.reason)
     for key in ("ready", "end"):
         valid.pop(key, None)
+    reader = ExportReader(io.BytesIO(fake_export.undecided_stream()), limits=limits)
+    try:
+        undecided_frames = len(list(reader.frames()))
+        undecided = dict(reader.report(), frames=undecided_frames, ok=reader.report()["status"] == "complete" and
+                         undecided_frames == 0)
+    except ExportRefused as error:
+        undecided = dict(reader.report(), frames=0, ok=False, refused=error.reason)
+    for key in ("ready", "end"):
+        undecided.pop(key, None)
     invalid = {}
     for name, (build, expected) in fake_export.INVALID.items():
         reader = ExportReader(io.BytesIO(build()), limits=limits)
@@ -283,9 +292,10 @@ def validate(limits=fake_export.LIMITS):
             observed = error.reason
         invalid[name] = {"expected": expected, "observed": observed, "ok": observed == expected}
     failures = sorted(name for name, result in invalid.items() if not result["ok"])
-    report.update(valid_stream=valid, invalid_streams=invalid, invalid_stream_count=len(invalid),
-                  invalid_streams_failed=failures, frames_received=valid["frames"], frames_processed=0,
-                  status="validated" if valid["ok"] and not failures else "validation_failed")
+    report.update(valid_stream=valid, undecided_stream=undecided, invalid_streams=invalid,
+                  invalid_stream_count=len(invalid), invalid_streams_failed=failures, frames_received=valid["frames"],
+                  frames_processed=0,
+                  status="validated" if valid["ok"] and undecided["ok"] and not failures else "validation_failed")
     report["exit_code"] = 0 if report["status"] == "validated" else 1
     return report
 

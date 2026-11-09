@@ -16,7 +16,8 @@ and no packet, ``silent_exit`` exits 2 with nothing, ``wrong_limits`` echoes
 other limits in ``ready``, ``stderr_noise`` adds non-JSON and many JSON lines
 on stderr, ``exit_failure`` ends normally but exits 1, ``headset_removed``
 ends early with that reason, ``stale_clock`` stamps every frame five
-seconds in the past. The tests install it as an executable file
+seconds in the past, ``undecided`` writes a ready with pixel path
+``undecided`` and an end of reason ``watchdog`` with no frame. The tests install it as an executable file
 outside the checkout and point ``camera_helper.run_export`` at it. Never a
 camera, never the SDK.
 """
@@ -127,6 +128,10 @@ def main(argv=None):
         return EXIT_REFUSED
     if scenario == "silent_exit":
         return 2
+    if scenario == "undecided":
+        emit(fake_export.undecided_stream(limits=limits, cameras=cameras))
+        note("final", reason="watchdog", exported=0, exit_code=0)
+        return 0
     note("ready", backend="fake", limits=limits)
     echoed = dict(limits, max_frames=limits["max_frames"] + 1) if scenario == "wrong_limits" else limits
     emit(fake_export.encode(fake_export.ready_header(limits=echoed, cameras=cameras)))

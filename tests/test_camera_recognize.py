@@ -92,6 +92,8 @@ class ValidateModeTests(unittest.TestCase):
         self.assertTrue(report["valid_stream"]["ok"])
         self.assertEqual(report["valid_stream"]["frames"], fake_export.LIMITS["max_frames"])
         self.assertEqual(report["invalid_stream_count"], len(fake_export.INVALID))
+        self.assertTrue(report["undecided_stream"]["ok"])
+        self.assertEqual(report["undecided_stream"]["frames"], 0)
         self.assertEqual(report["invalid_streams_failed"], [])
         self.assertTrue(all(result["ok"] and result["expected"] == result["observed"]
                             for result in report["invalid_streams"].values()))

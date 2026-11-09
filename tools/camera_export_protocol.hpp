@@ -29,13 +29,14 @@ constexpr char kAcquisitionFormatFields[] = "drm_fourcc,modifier,plane_count,pla
 constexpr char kPlaneFields[] = "offset,stride,size";
 constexpr char kLimitFields[] = "fps,max_seconds,max_frames";
 constexpr char kCountFields[] = "exported,dropped,acquire_failures,release_failures";
-constexpr char kStreamRules[] = "ready_first,ready_once,end_last,end_once,sequence_consecutive_from_1,sequence_within_max_frames,camera_in_ready_cameras,derivation_matches_pixel_path,buffer_bytes_is_stride_times_height,payload_bytes_is_buffer_bytes,stride_at_least_width_times_3,ready_payload_empty,end_payload_empty,end_exported_equals_frames,limits_equal_requested,frame_set_sequence_consecutive_from_1,frame_set_cameras_distinct";
+constexpr char kStreamRules[] = "ready_first,ready_once,end_last,end_once,sequence_consecutive_from_1,sequence_within_max_frames,camera_in_ready_cameras,derivation_matches_pixel_path,buffer_bytes_is_stride_times_height,payload_bytes_is_buffer_bytes,stride_at_least_width_times_3,ready_payload_empty,end_payload_empty,end_exported_equals_frames,limits_equal_requested,frame_set_sequence_consecutive_from_1,frame_set_cameras_distinct,no_frame_after_undecided_ready";
 
 // Vocabulary: backends, pixel paths and their derivations, end reasons
 constexpr char kBackendFake[] = "fake";
 constexpr char kBackendSdk[] = "sdk";
 constexpr char kPixelPathCpuLinear[] = "cpu_linear";
 constexpr char kPixelPathGpuConvert[] = "gpu_convert";
+constexpr char kPixelPathUndecided[] = "undecided";
 constexpr char kDerivationCpuConverted[] = "cpu_converted";
 constexpr char kDerivationGpuConverted[] = "gpu_converted";
 constexpr char kDerivationOfCpuLinear[] = "cpu_converted";
@@ -90,5 +91,5 @@ constexpr std::uint32_t kMinFrames = 1;
 constexpr std::uint32_t kMaxFrames = 600;
 
 // SHA-256 of every value above; the helper may report it in ready.build.
-constexpr char kContractDigest[] = "d459e6bc34bac7022d0ef0b89deb768a8e208467c7efa0ad0de118714296bf2d";
+constexpr char kContractDigest[] = "4553fa4af27c7b5220d0024c6ad85c5e13bba7a20052b03b4cf1b6e0127a891c";
 } // namespace sightcircuit_camera_export

@@ -49,6 +49,9 @@ MAX_PLANES = 4
 KIND_READY, KIND_FRAME, KIND_END = KINDS = ("ready", "frame", "end")
 BACKENDS = ("fake", "sdk")
 PIXEL_PATHS = ("cpu_linear", "gpu_convert")
+# A ``ready`` whose run ends before the helper chose a path (a watchdog, standby or headset removal before the first
+# frame set under ``--pixel-path auto``): every run still writes one ready first and one end last, and no frame may follow.
+PIXEL_PATH_UNDECIDED = "undecided"
 # Which derivation a frame of each pixel path declares.
 DERIVATIONS = {"cpu_linear": "cpu_converted", "gpu_convert": "gpu_converted"}
 END_REASONS = ("max_seconds", "max_frames", "stop_signal", "headset_removed", "standby", "sdk_error",
@@ -142,7 +145,7 @@ HEADERS = {
         _enum("kind", (KIND_READY,)),
         _int("protocol", VERSION, VERSION),
         _enum("backend", BACKENDS),
-        _enum("pixel_path", PIXEL_PATHS),
+        _enum("pixel_path", (*PIXEL_PATHS, PIXEL_PATH_UNDECIDED)),
         Field("build", "scalars", 0, 32),
         Field("delivered_format", "object", fields=(_enum("fourcc", (FOURCC,)),)),
         Field("cameras", "array", 1, len(CAMERA_INDICES), items=_enum("camera", CAMERA_INDICES)),
@@ -183,7 +186,7 @@ STREAM_RULES = (
     "sequence_within_max_frames", "camera_in_ready_cameras", "derivation_matches_pixel_path",
     "buffer_bytes_is_stride_times_height", "payload_bytes_is_buffer_bytes", "stride_at_least_width_times_3",
     "ready_payload_empty", "end_payload_empty", "end_exported_equals_frames", "limits_equal_requested",
-    "frame_set_sequence_consecutive_from_1", "frame_set_cameras_distinct",
+    "frame_set_sequence_consecutive_from_1", "frame_set_cameras_distinct", "no_frame_after_undecided_ready",
 )
 
 

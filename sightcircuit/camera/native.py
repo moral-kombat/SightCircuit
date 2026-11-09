@@ -68,6 +68,7 @@ def _sections():
           ("kStreamRules", "char[]", ",".join(contract.STREAM_RULES))]),
         ("Vocabulary: backends, pixel paths and their derivations, end reasons",
          _names("Backend", contract.BACKENDS) + _names("PixelPath", contract.PIXEL_PATHS) +
+         [("kPixelPathUndecided", "char[]", contract.PIXEL_PATH_UNDECIDED)] +
          _names("Derivation", tuple(contract.DERIVATIONS.values())) +
          [(f"kDerivationOf{native_header.camel(path)}", "char[]", derivation)
           for path, derivation in contract.DERIVATIONS.items()] +

@@ -153,6 +153,13 @@ class RunExportTests(unittest.TestCase):
         self.assertEqual(report["stream"]["status"], "complete")
         self.assertEqual(len(frames), 5)
 
+    def test_a_run_ended_before_the_pixel_path_was_chosen_is_the_helpers_early_end(self):
+        report, frames = self.run_export("undecided")
+        self.assertEqual((report["status"], report["reason"], report["frames_read"]), ("helper_ended_early", "watchdog", 0))
+        self.assertEqual(report["stream"]["ready"]["pixel_path"], "undecided")
+        self.assertTrue(report["cleanup_ok"])
+        self.assertEqual(frames, [])
+
     def test_an_early_end_reason_is_reported_as_the_helpers(self):
         report, frames = self.run_export("headset_removed")
         self.assertEqual((report["status"], report["reason"]), ("helper_ended_early", "headset_removed"))
