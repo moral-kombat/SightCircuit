@@ -37,14 +37,19 @@ together.
 
 ## Status
 
-These headers are reference material for interface review only. No SightCircuit
-code includes them yet, no build script links the Client Library, and nothing
-here enables camera access. The live image input gate in
+Two files include these headers: `tools/camera_backend_sdk.cpp`, the camera
+helper's SDK translation unit, and `tools/camera_status_map.hpp`, its status
+mapping (`tests/test_camera_helper_boundaries.py` keeps that list closed).
+`scripts/build_camera_helper.sh --sdk DIR` links a locally supplied Client
+Library on aarch64 only, into ignored `artifacts/`, after verifying `DIR`
+against its release manifest and these copies; CI builds only the fake backend
+(`--fake`). The helper reads metadata only: nothing reads pixels, enables camera
+access by default or changes a gate. The live image input gate in
 [`sightcircuit/gates.py`](../../sightcircuit/gates.py) stays closed. Any camera
 feature built on this SDK is also subject to section 3 of the agreement. That
 section covers informed camera use, explicit consent before saving or sending
 Camera Data (which the agreement defines to include detections), stopping image
 processing when the headset is removed, and not using private or internal
 camera APIs. See the [current work order](../../docs/live-capture.md#current-work-order)
-for integration status. Dedicated camera capture remains deferred there until
-the owner decides otherwise.
+for integration status: the SDK camera-input lane is open cloud-only, and each
+device probe needs its own approval from the owner.
