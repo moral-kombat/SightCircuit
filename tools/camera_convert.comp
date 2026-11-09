@@ -1,0 +1,63 @@
+// The gpu_convert pixel path's compute shader: full-range YCbCr (NV12 or P010,
+// read through per-plane unsigned-integer views) to BGR3 rows in a storage
+// buffer, with the fixed-point formula of camera_ycbcr.hpp, so the GPU and CPU
+// paths deliver identical bytes. One work item converts four horizontal
+// pixels (twelve bytes, three words); rows are padded to whole groups.
+// Compiled into camera_convert_spirv.hpp by scripts/build_camera_helper.sh --shader.
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform usampler2D luma;
+layout(set = 0, binding = 1) uniform usampler2D chroma;
+layout(set = 0, binding = 2, std430) writeonly buffer Output { uint words[]; } bgr;
+
+layout(push_constant) uniform Params {
+    uint width;
+    uint height;
+    uint stride_words;   // bytes per output row / 4
+    uint sample_shift;   // 0 for 8-bit samples, 6 for P010's high-bit 10-bit samples
+    uint sample_max;     // 255 or 1023
+    int cr_r;            // Q16 coefficients, as camera_ycbcr.hpp lists them
+    int cb_g;
+    int cr_g;
+    int cb_b;
+} params;
+
+uint channel(int accumulator) {
+    accumulator += 32768;
+    if (accumulator < 0) return 0u;
+    uint value = uint(accumulator) >> 16;
+    if (value > params.sample_max) value = params.sample_max;
+    if (params.sample_max == 255u) return value;
+    return (value * 255u + 511u) / 1023u;
+}
+
+void main() {
+    uint group = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    if (y >= params.height || group * 4u >= params.width) return;
+    uint bytes[12];
+    int half_value = int((params.sample_max + 1u) / 2u);
+    for (uint k = 0u; k < 4u; ++k) {
+        uint x = group * 4u + k;
+        if (x < params.width) {
+            int luma_sample = int(texelFetch(luma, ivec2(int(x), int(y)), 0).r >> params.sample_shift) << 16;
+            uvec2 pair = texelFetch(chroma, ivec2(int(x >> 1), int(y >> 1)), 0).rg >> params.sample_shift;
+            int d_cb = int(pair.r) - half_value;
+            int d_cr = int(pair.g) - half_value;
+            bytes[k * 3u + 0u] = channel(luma_sample + params.cb_b * d_cb);
+            bytes[k * 3u + 1u] = channel(luma_sample + params.cb_g * d_cb + params.cr_g * d_cr);
+            bytes[k * 3u + 2u] = channel(luma_sample + params.cr_r * d_cr);
+        } else {
+            bytes[k * 3u + 0u] = 0u;
+            bytes[k * 3u + 1u] = 0u;
+            bytes[k * 3u + 2u] = 0u;
+        }
+    }
+    uint base = y * params.stride_words + group * 3u;
+    for (uint word = 0u; word < 3u; ++word) {
+        bgr.words[base + word] = bytes[word * 4u] | (bytes[word * 4u + 1u] << 8) | (bytes[word * 4u + 2u] << 16) |
+                                 (bytes[word * 4u + 3u] << 24);
+    }
+}

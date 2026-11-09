@@ -43,8 +43,11 @@ mapping (`tests/test_camera_helper_boundaries.py` keeps that list closed).
 `scripts/build_camera_helper.sh --sdk DIR` links a locally supplied Client
 Library on aarch64 only, into ignored `artifacts/`, after verifying `DIR`
 against its release manifest and these copies; CI builds only the fake backend
-(`--fake`). The helper reads metadata only: nothing reads pixels, enables camera
-access by default or changes a gate. The live image input gate in
+(`--fake`). The helper's metadata modes read no pixels; its `--export-frames`
+mode reads frames through the SDK's borrowed buffer descriptors and delivers
+them only to its parent process over a pipe, never to a file (see
+[development](../../docs/development.md#run-the-development-checks)). Nothing
+enables camera access by default or changes a gate. The live image input gate in
 [`sightcircuit/gates.py`](../../sightcircuit/gates.py) stays closed. Any camera
 feature built on this SDK is also subject to section 3 of the agreement. That
 section covers informed camera use, explicit consent before saving or sending

@@ -217,6 +217,8 @@ struct CameraMeta {
     std::string drm_format = "0x00000000";  // raw FourCC
     std::string pixel_format = "unknown";    // nv12, nv12_ubwc, p010, p010_ubwc or unknown
     std::string drm_modifier = "0x0000000000000000";
+    uint32_t drm_format_value = 0;           // the same two facts as numbers, for the pixel paths
+    uint64_t drm_modifier_value = 0;
     uint32_t plane_count = 0;
     PlaneMeta planes[kMaxPlanes];
     bool texture_bounds_valid = false;
@@ -240,6 +242,17 @@ struct FrameSetMeta {
     CameraMeta cameras[kMaxCameras];
 };
 
+// A held frame set: its metadata and one borrowed buffer descriptor per camera
+// (-1 when the backend has none). The descriptors are never closed by the
+// caller and are used only between acquire_lease() and release_lease().
+struct FrameSetLease {
+    FrameSetMeta meta;
+    int camera_fd[kMaxCameras];
+    FrameSetLease() {
+        for (uint32_t camera = 0; camera < kMaxCameras; ++camera) camera_fd[camera] = -1;
+    }
+};
+
 // The last SDK status, as names: no SDK types cross this interface.
 struct StatusDiagnostics {
     std::string status_error = "None";
@@ -261,6 +274,14 @@ public:
     // the metadata and releases before returning. A failed release is
     // transport_lost. The backend never holds a lease after returning.
     virtual Outcome acquire(uint32_t timeout_ms, FrameSetMeta& meta) = 0;
+    // The export mode's two-step form: acquire and keep the frame set, so the
+    // caller may read its buffers through the borrowed descriptors in
+    // lease.camera_fd, which stay valid until release_lease() returns. At most
+    // one lease is held at a time; release_lease() must follow every
+    // successful acquire_lease() before the next acquire. A failed release is
+    // transport_lost. The metadata is validated as acquire() validates it.
+    virtual Outcome acquire_lease(uint32_t timeout_ms, FrameSetLease& lease) = 0;
+    virtual Outcome release_lease() = 0;
     virtual void disconnect() = 0;
     virtual const StatusDiagnostics& last_status() const = 0;
     // The fake's ordered record of calls; null for the SDK backend.
