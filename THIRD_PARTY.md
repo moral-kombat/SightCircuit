@@ -3,7 +3,10 @@
 The repository's MIT license covers original SightCircuit code and documentation.
 Dependencies, reused code and downloaded fixtures retain their upstream terms.
 No model weights, images or SDK binaries are bundled. The protocol header and
-adaptation patches identified below are the bundled capture-project code.
+adaptation patches identified below are the bundled capture-project code. The
+two public headers of the Arcturus Vision Camera Preview SDK and its license
+agreement are bundled under that agreement's header terms; its Client Library
+is not.
 
 ## Development fixtures
 
@@ -74,6 +77,27 @@ luma shared-memory layout. The adaptation patches below include upstream
 source context/deletions; no upstream capture binary, installer, driver
 or hand-tracking model is bundled or activated. The controlled producer is
 original test code, not a camera source.
+
+## Arcturus Vision Camera Preview SDK headers
+
+[third_party/arcturus-camera-sdk/AV1CameraClient.h](third_party/arcturus-camera-sdk/AV1CameraClient.h)
+and [AV1CameraIPCProtocol.h](third_party/arcturus-camera-sdk/AV1CameraIPCProtocol.h)
+are copied unmodified from the Arcturus Vision Camera Preview SDK release at
+source revision `536217ebbc0456df5db53658409b048cdd272785`, which the project
+owner obtained directly from Arcturus after accepting the
+[developer license agreement](third_party/arcturus-camera-sdk/AV1CameraSDK-LICENSE.md)
+(version 2026-11-08). Section 2 of that agreement permits redistributing the
+public headers with the agreement and their copyright notices preserved, so the
+agreement is included beside them; it, not this repository's MIT license,
+governs these files. Checksums and [provenance](third_party/arcturus-camera-sdk/README.md)
+are recorded with the files.
+
+The SDK's Client Library, `libAV1CameraClient.a`, is not bundled, cached or
+fetched by this repository or CI; anyone building against it obtains their own
+copy from Arcturus. The SDK's README, release manifest, CMake module, Docker
+build files and examples are not copied. No SightCircuit code includes the
+headers yet, and any camera feature built on the SDK is subject to section 3 of
+the agreement.
 
 ## Capture reference build dependencies
 
@@ -194,8 +218,8 @@ above. No upload-performance or device-compatibility claim is made.
 
 The [camera guide](docs/steam-frame-camera.md) links Valve's OpenVR SDK, Arcturus's
 Spirula fork and community capture/reconstruction projects. Those links provide
-research context. Apart from the protocol header and patches above, their code
-and binaries have not been vendored. Consult their licenses and preserve attribution when
+research context. Apart from the protocol header, the Arcturus SDK headers and
+the patches above, their code and binaries have not been vendored. Consult their licenses and preserve attribution when
 integrating any implementation.
 
 The 2026-11-04 documentation pass cites further sources as third-party claims,
