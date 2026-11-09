@@ -106,6 +106,9 @@ jobs:
               assert 'Warning:' in result.stderr
           print('Default/invalid invocations do not initialize OpenVR; explicit opt-in preserves runtime diagnostics.')
           PY
+      - name: Build the camera helper's fake backend (the tests compile its SDK unit to an object; nothing links the SDK)
+        # The Arcturus Client Library is never fetched, cached, built or linked here (docs/reference/camera-helper.md).
+        run: bash scripts/build_camera_helper.sh --fake
       - name: Install the Linux Vulkan loader for linking
         run: |
           sudo apt-get update -qq
