@@ -30,22 +30,14 @@ SCRIPT = ROOT / "scripts/build_camera_helper.sh"
 PROTOCOL_HEADER = ROOT / "tools/camera_export_protocol.hpp"
 MAGIC = b"SCCF"
 PREFIX = struct.Struct("<4sIII")
-# The generated header's end reasons, plus the one the planner added on 2026-11-09 (the regenerated header follows).
-HEADER_END_REASONS = {"max_seconds", "max_frames", "stop_signal", "headset_removed", "standby", "sdk_error",
-                      "pixel_path_error", "watchdog"}
-END_REASONS = HEADER_END_REASONS | {"consumer_stalled"}
-# The exact header fields of each kind, as the generated contract header lists them (kReadyFields and so on) ...
-HEADER_READY_KEYS = ("kind", "protocol", "backend", "pixel_path", "build", "delivered_format", "cameras", "limits")
-HEADER_FRAME_KEYS = ("kind", "sequence", "frame_id", "camera_index", "exposure_ns", "monotonic_ns", "realtime_ns", "width",
-                     "height", "fourcc", "stride_bytes", "buffer_bytes", "derivation", "acquisition_format",
-                     "dropped_since_last")
-HEADER_END_KEYS = ("kind", "reason", "counts", "elapsed_ns", "digests")
-# ... and the fields the planner added to the contract on 2026-11-09, emitted ahead of the regenerated header:
-# `confirmation` (ready and end: "terminal" or "parent") and `frame_set_sequence` (frame). When the regenerated
-# header lands, these move into the HEADER_* tuples in the header's order.
-READY_KEYS = HEADER_READY_KEYS + ("confirmation",)
-FRAME_KEYS = HEADER_FRAME_KEYS[:3] + ("frame_set_sequence",) + HEADER_FRAME_KEYS[3:]
-END_KEYS = HEADER_END_KEYS + ("confirmation",)
+END_REASONS = {"max_seconds", "max_frames", "stop_signal", "headset_removed", "standby", "sdk_error",
+               "pixel_path_error", "watchdog", "consumer_stalled"}
+# The exact header fields of each kind, as the generated contract header lists them (kReadyFields and so on).
+READY_KEYS = ("kind", "protocol", "backend", "pixel_path", "build", "delivered_format", "cameras", "limits", "confirmation")
+FRAME_KEYS = ("kind", "sequence", "frame_set_sequence", "frame_id", "camera_index", "exposure_ns", "monotonic_ns",
+              "realtime_ns", "width", "height", "fourcc", "stride_bytes", "buffer_bytes", "derivation",
+              "acquisition_format", "dropped_since_last")
+END_KEYS = ("kind", "reason", "counts", "elapsed_ns", "digests", "confirmation")
 ACQUISITION_KEYS = ("drm_fourcc", "modifier", "plane_count", "planes", "pixel_format", "encoding", "transfer", "primaries")
 COUNT_KEYS = ("exported", "dropped", "acquire_failures", "release_failures")
 # The run facts the helper puts under ready.build beyond --describe's (scalars, as the contract allows).
@@ -161,9 +153,9 @@ class ProtocolConstantsTests(unittest.TestCase):
         self.assertEqual((numbers["kPrefixMagicOffset"], numbers["kPrefixVersionOffset"], numbers["kPrefixHeaderBytesOffset"],
                           numbers["kPrefixPayloadBytesOffset"]), (0, 4, 8, 12))
         self.assertEqual((strings["kKindReady"], strings["kKindFrame"], strings["kKindEnd"]), ("ready", "frame", "end"))
-        self.assertEqual(tuple(strings["kReadyFields"].split(",")), HEADER_READY_KEYS)
-        self.assertEqual(tuple(strings["kFrameFields"].split(",")), HEADER_FRAME_KEYS)
-        self.assertEqual(tuple(strings["kEndFields"].split(",")), HEADER_END_KEYS)
+        self.assertEqual(tuple(strings["kReadyFields"].split(",")), READY_KEYS)
+        self.assertEqual(tuple(strings["kFrameFields"].split(",")), FRAME_KEYS)
+        self.assertEqual(tuple(strings["kEndFields"].split(",")), END_KEYS)
         self.assertEqual(tuple(strings["kAcquisitionFormatFields"].split(",")), ACQUISITION_KEYS)
         self.assertEqual(tuple(strings["kCountFields"].split(",")), COUNT_KEYS)
         self.assertEqual(strings["kPlaneFields"], "offset,stride,size")
@@ -172,8 +164,10 @@ class ProtocolConstantsTests(unittest.TestCase):
         self.assertEqual((strings["kPixelPathCpuLinear"], strings["kPixelPathGpuConvert"]), ("cpu_linear", "gpu_convert"))
         self.assertEqual((strings["kDerivationCpuConverted"], strings["kDerivationGpuConverted"]), ("cpu_converted", "gpu_converted"))
         self.assertEqual({strings[f"kEndReason{name}"] for name in ("MaxSeconds", "MaxFrames", "StopSignal", "HeadsetRemoved",
-                                                                     "Standby", "SdkError", "PixelPathError", "Watchdog")},
-                         HEADER_END_REASONS)
+                                                                     "Standby", "SdkError", "PixelPathError", "Watchdog",
+                                                                     "ConsumerStalled")},
+                         END_REASONS)
+        self.assertEqual(strings["kPixelPathUndecided"], "undecided")
         self.assertEqual((numbers["kMinFps"], numbers["kMaxFps"], numbers["kMinSeconds"], numbers["kMaxSeconds"],
                           numbers["kMinFrames"], numbers["kMaxFrames"]), (1, 10, 1, 60, 1, 600))
         self.assertEqual((numbers["kMaxSide"], numbers["kMaxPlanes"], numbers["kCameraCount"]), (4096, 4, 2))

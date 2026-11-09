@@ -69,8 +69,6 @@ constexpr int64_t kPresenceGapNs = 2000000000ll;
 // metadata modes bound their records with kProtocolWriteBudgetMs instead.
 constexpr int64_t kConsumerStallNs = 2000000000ll;
 constexpr int64_t kEndPacketGraceNs = 1000000000ll;
-constexpr const char* kEndReasonConsumerStalled = "consumer_stalled";  // pending in the generated header
-constexpr const char* kPixelPathUndecided = "undecided";  // pending in the generated header: ready before auto chose
 constexpr unsigned kConvertWatchdogSeconds = 10;
 constexpr unsigned kMaxExportFps = 10;
 constexpr unsigned kMaxExportSeconds = 60;
@@ -1068,7 +1066,7 @@ private:
         } else if (result.outcome == WriteOutcome::stalled) {
             consumer_stalled_ = true;
             note("sightcircuit-camera-helper: the parent stopped reading the protocol stream; ending the run");
-            end_export(kEndReasonConsumerStalled, "no_progress_for_ns:" + std::to_string(kConsumerStallNs));
+            end_export(export_protocol::kEndReasonConsumerStalled, "no_progress_for_ns:" + std::to_string(kConsumerStallNs));
         } else {
             protocol_lost_ = true;
             note("sightcircuit-camera-helper: the protocol stream failed; the parent is gone");
@@ -1230,7 +1228,7 @@ private:
         if (have_start_) build.str("controls_digest_start", start_controls_.digest());
         else build.null("controls_digest_start");
         // Under auto the first frame set's modifier chooses the path: "undecided" until then.
-        const char* pixel_path = pixel_path_settled_ && pixel_path_ ? pixel_path_->name() : kPixelPathUndecided;
+        const char* pixel_path = pixel_path_settled_ && pixel_path_ ? pixel_path_->name() : export_protocol::kPixelPathUndecided;
         JsonObject header;
         header.str("kind", export_protocol::kKindReady).integer("protocol", export_protocol::kVersion)
             .str("backend", kBackendName).str("pixel_path", pixel_path).raw("build", build.done())
@@ -1260,7 +1258,7 @@ private:
             .str("transfer", source.transfer).str("primaries", source.primaries);
         JsonObject header;
         header.str("kind", export_protocol::kKindFrame).unsigned_integer("sequence", exported_ + 1 + pending_in_set_)
-            .unsigned_integer("frame_id", source.frame_id).unsigned_integer("frame_set_sequence", frame_set_sequence_ + 1)
+            .unsigned_integer("frame_set_sequence", frame_set_sequence_ + 1).unsigned_integer("frame_id", source.frame_id)
             .unsigned_integer("camera_index", camera)
             .integer("exposure_ns", source.exposure_timestamp_ns).integer("monotonic_ns", clocks.monotonic_ns)
             .integer("realtime_ns", clocks.realtime_ns).unsigned_integer("width", image.width)
@@ -1371,7 +1369,7 @@ private:
         if (options_.mode == Options::export_frames) {
             if (end_reason_.empty()) end_reason_ = export_protocol::kEndReasonSdkError;
             if (end_reason_ == export_protocol::kEndReasonStopSignal) exit_code = kExitCancelled;
-            else if (end_reason_ == export_protocol::kEndReasonPixelPathError || end_reason_ == kEndReasonConsumerStalled) exit_code = 1;
+            else if (end_reason_ == export_protocol::kEndReasonPixelPathError || end_reason_ == export_protocol::kEndReasonConsumerStalled) exit_code = 1;
             else if (end_reason_ == export_protocol::kEndReasonSdkError && exit_code == 0) exit_code = 1;
             else if (end_reason_ != export_protocol::kEndReasonSdkError) exit_code = 0;
             if (protocol_lost_) exit_code = 1;

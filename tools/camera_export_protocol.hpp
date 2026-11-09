@@ -22,20 +22,21 @@ constexpr std::uint32_t kMaxPayloadBytes = 33554432;
 constexpr char kKindReady[] = "ready";
 constexpr char kKindFrame[] = "frame";
 constexpr char kKindEnd[] = "end";
-constexpr char kReadyFields[] = "kind,protocol,backend,pixel_path,build,delivered_format,cameras,limits";
-constexpr char kFrameFields[] = "kind,sequence,frame_id,camera_index,exposure_ns,monotonic_ns,realtime_ns,width,height,fourcc,stride_bytes,buffer_bytes,derivation,acquisition_format,dropped_since_last";
-constexpr char kEndFields[] = "kind,reason,counts,elapsed_ns,digests";
+constexpr char kReadyFields[] = "kind,protocol,backend,pixel_path,build,delivered_format,cameras,limits,confirmation";
+constexpr char kFrameFields[] = "kind,sequence,frame_set_sequence,frame_id,camera_index,exposure_ns,monotonic_ns,realtime_ns,width,height,fourcc,stride_bytes,buffer_bytes,derivation,acquisition_format,dropped_since_last";
+constexpr char kEndFields[] = "kind,reason,counts,elapsed_ns,digests,confirmation";
 constexpr char kAcquisitionFormatFields[] = "drm_fourcc,modifier,plane_count,planes,pixel_format,encoding,transfer,primaries";
 constexpr char kPlaneFields[] = "offset,stride,size";
 constexpr char kLimitFields[] = "fps,max_seconds,max_frames";
 constexpr char kCountFields[] = "exported,dropped,acquire_failures,release_failures";
-constexpr char kStreamRules[] = "ready_first,ready_once,end_last,end_once,sequence_consecutive_from_1,sequence_within_max_frames,camera_in_ready_cameras,derivation_matches_pixel_path,buffer_bytes_is_stride_times_height,payload_bytes_is_buffer_bytes,stride_at_least_width_times_3,ready_payload_empty,end_payload_empty,end_exported_equals_frames,limits_equal_requested";
+constexpr char kStreamRules[] = "ready_first,ready_once,end_last,end_once,sequence_consecutive_from_1,sequence_within_max_frames,camera_in_ready_cameras,derivation_matches_pixel_path,buffer_bytes_is_stride_times_height,payload_bytes_is_buffer_bytes,stride_at_least_width_times_3,ready_payload_empty,end_payload_empty,end_exported_equals_frames,limits_equal_requested,frame_set_sequence_consecutive_from_1,frame_set_cameras_distinct,no_frame_after_undecided_ready";
 
 // Vocabulary: backends, pixel paths and their derivations, end reasons
 constexpr char kBackendFake[] = "fake";
 constexpr char kBackendSdk[] = "sdk";
 constexpr char kPixelPathCpuLinear[] = "cpu_linear";
 constexpr char kPixelPathGpuConvert[] = "gpu_convert";
+constexpr char kPixelPathUndecided[] = "undecided";
 constexpr char kDerivationCpuConverted[] = "cpu_converted";
 constexpr char kDerivationGpuConverted[] = "gpu_converted";
 constexpr char kDerivationOfCpuLinear[] = "cpu_converted";
@@ -48,7 +49,12 @@ constexpr char kEndReasonStandby[] = "standby";
 constexpr char kEndReasonSdkError[] = "sdk_error";
 constexpr char kEndReasonPixelPathError[] = "pixel_path_error";
 constexpr char kEndReasonWatchdog[] = "watchdog";
+constexpr char kEndReasonConsumerStalled[] = "consumer_stalled";
 constexpr char kBoundedEndReasons[] = "max_seconds,max_frames,stop_signal";
+constexpr char kConfirmationParent[] = "parent";
+constexpr char kConfirmationTerminal[] = "terminal";
+constexpr char kParentConfirmedFlag[] = "--parent-confirmed";
+constexpr char kExportNotice[] = "sightcircuit-camera-helper --export-frames: activates this client's frame reader for the selected passthrough cameras and exports their frames, within the frame and time bounds shown below, to the parent process, which runs object detection on them. Detections are Camera Data: the parent saves counts, labels, boxes and timings only to the report you name, and no image is saved or shown anywhere. No camera control is written and the recording LED is untouched. The export ends on its bound, on a stop signal, when the headset is removed or on standby. Watch passthrough during the run and for 30 seconds afterwards. Type yes to continue.";
 
 // Frames: delivered format, bounds, cameras
 constexpr char kFourcc[] = "BGR3";
@@ -85,5 +91,5 @@ constexpr std::uint32_t kMinFrames = 1;
 constexpr std::uint32_t kMaxFrames = 600;
 
 // SHA-256 of every value above; the helper may report it in ready.build.
-constexpr char kContractDigest[] = "a912ff82d19a9693aeb61a2eb45b8bb5403c88f6e1563b8cb9c6f0a60a0ba92d";
+constexpr char kContractDigest[] = "4553fa4af27c7b5220d0024c6ad85c5e13bba7a20052b03b4cf1b6e0127a891c";
 } // namespace sightcircuit_camera_export

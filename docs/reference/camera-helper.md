@@ -157,10 +157,6 @@ every other fact of a run is in the stderr `final` record.
 | `frame` | `sequence` (from 1, consecutive per run), `frame_id` (the SDK's), `frame_set_sequence` (from 1 per run, one per exported frame set, the same on both cameras of a set), `camera_index`, `exposure_ns`, `monotonic_ns` and `realtime_ns` (host clocks at acquisition), `width`, `height`, `fourcc` `BGR3`, `stride_bytes` (`ceil(width/4)*12`, rows padded to whole four-pixel groups; `width*3` at 2464), `buffer_bytes` (`stride_bytes*height`, the payload size), `derivation` (`cpu_converted` or `gpu_converted`), `acquisition_format` (`drm_fourcc`, `modifier` as hex, `plane_count`, `planes`, `pixel_format`, `encoding`, `transfer`, `primaries`), `dropped_since_last` (frame sets released without export since the previous exported set; the same value on both packets of one set, camera 0 first). |
 | `end` (last, once) | `reason`, `counts` (`exported`, `dropped`, `acquire_failures`, `release_failures`), `elapsed_ns`, `digests` (`controls_start`, `controls_end` and `offline_cal`, each present when it was read), `confirmation`. The exit code, `cleanup_ok`, `detail`, `frame_sets`, `passes`, `pixel_path_notes`, `stream_torn` and `end_packet_written` are in the stderr `final` record. |
 
-`confirmation` and `frame_set_sequence` are the fields the planner added to
-the contract on 2026-11-09; the helper emits them ahead of the regenerated
-header, whose field lists `tests/test_camera_export.py` compares with the
-header as generated plus these additions.
 
 The run acquires at camera rate with a 100 ms server timeout, releases every
 frame set promptly and exports one when its pacing interval (1/F) has

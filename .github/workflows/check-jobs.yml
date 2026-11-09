@@ -50,6 +50,8 @@ jobs:
         run: bash -n scripts/setup.sh scripts/setup_replay.sh scripts/setup_window.sh scripts/compile_locks.sh scripts/build_openvr_tool.sh scripts/build_overlay_bridge.sh scripts/build_camera_helper.sh
       - name: Fail if the generated HUD contract header differs from the Python contract
         run: python3 scripts/hud_contract_header.py --check
+      - name: Fail if the generated camera export header differs from the Python contract
+        run: python3 scripts/camera_contract_header.py --check
       - name: Build the native overlay bridge
         run: bash scripts/build_overlay_bridge.sh
       - name: Check the bridge source under -Werror
@@ -174,7 +176,8 @@ jobs:
             tests/test_capture_provider_check.py tests/test_capture_layer_config.py \
             tests/test_capture_service_lifecycle.py tests/test_capture_layer_trial.py tests/test_supervision.py \
             tests/test_arcturus_sdk_headers.py tests/test_camera_helper.py tests/test_camera_helper_boundaries.py \
-            tests/test_camera_export.py
+            tests/test_camera_export.py \
+            tests/test_camera_contract.py tests/test_camera_export_reader.py tests/test_camera_helper_source.py
 
   replay:
     # The decoder-only and the full replay-window environments, each exercised
@@ -222,7 +225,9 @@ jobs:
             tests/test_agent_enforcement_check.py \
             tests/test_mirror_session.py tests/test_hud_fill.py tests/test_mask_fill_evaluation.py \
             tests/test_run_context_sensors.py tests/test_hud_prediction.py \
-            tests/test_seed_pin.py tests/test_observer_scene_seed.py
+            tests/test_seed_pin.py tests/test_observer_scene_seed.py \
+            tests/test_camera_contract.py tests/test_camera_export_reader.py tests/test_camera_helper_source.py \
+            tests/test_camera_recognize.py
       - name: Verify links, compatibility anchors and generated summaries
         run: |
           python scripts/check_docs.py
