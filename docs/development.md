@@ -262,8 +262,11 @@ the S7 camera contract generates, taken as is and pinned by
 `tests/test_camera_export.py`),
 paced at 1 to 10 frames a second by dropping frame sets, for at most 60 seconds
 or 600 frames, and ends on its own when frames stop (the headset removed, by
-inference from a two-second gap) or the camera service reports not ready or
-unavailable (standby). Two pixel paths sit behind one interface
+inference from a two-second gap), when the camera service reports not ready or
+unavailable (standby), or when the parent stops reading the pipe for two
+seconds (`consumer_stalled`; the writes are non-blocking and deadline-aware).
+The typed confirmation may be given by the parent process with
+`--parent-confirmed`, in this mode only. Two pixel paths sit behind one interface
 (`tools/camera_pixels.hpp`): `cpu_linear` maps a linear DMA-BUF and converts
 on the CPU with the fixed-point formula in `tools/camera_ycbcr.hpp`;
 `gpu_convert` imports the buffer into Vulkan by its DRM format modifier and

@@ -66,7 +66,7 @@ None of these is pinned by the checkpoint manifest; no gate, pinned file or
 | `--describe` | Build and release facts (`build_commit`, `build_dirty`, `sdk_release` with the source revision and agreement version of an `--sdk` build, or null for the fake, the compiler). No connect, no lock, no confirmation, no runtime directory needed. |
 | `--hello [--timeout-ms N]` | Connect and the mandatory handshake, one read of the control state, disconnect. The reader stays off. |
 | `--probe-frames N --max-seconds S [--interval-ms M] [--timeout-ms T]` | As `--hello`, then the reader is enabled with `recording` false and up to N frame sets (1 to 50) are acquired within S seconds (1 to 10), one pass per M ms (100 to 1000, default 200), each released before the next pass; the control state is read again at the end to show whether anything changed during the run; the reader is disabled and the session closed. |
-| `--export-frames --max-seconds S --max-frames N [--fps F] [--cameras C] [--pixel-path P] [--timeout-ms T]` | As `--probe-frames`, but each held frame set's selected cameras are converted to BGR3 and written to the parent as packets ([below](#the-export-mode-s6)); S is 1 to 60, N 1 to 600 frames, F 1 to 10 a second (default 5), C the camera indices `0` (default), `1` or `0,1`, P `auto` (default), `cpu_linear` or `gpu_convert`. |
+| `--export-frames --max-seconds S --max-frames N [--fps F] [--cameras C] [--pixel-path P] [--timeout-ms T] [--parent-confirmed]` | As `--probe-frames`, but each held frame set's selected cameras are converted to BGR3 and written to the parent as packets ([below](#the-export-mode-s6)); S is 1 to 60, N 1 to 600 frames, F 1 to 10 a second (default 5), C the camera indices `0` (default), `1` or `0,1`, P `auto` (default), `cpu_linear` or `gpu_convert`. `--parent-confirmed` (this mode only) records that the parent process gave the confirmation. |
 
 `--hello`, `--probe-frames` and `--export-frames` first take a lock, `sightcircuit-camera-helper.lock`
 in `$XDG_RUNTIME_DIR` (never `/tmp`; without the variable the run is refused),
@@ -132,9 +132,14 @@ every other fact of a run is in the stderr `final` record.
 
 | Kind | Header |
 | --- | --- |
-| `ready` (first, once) | `protocol` 1, `backend`, `pixel_path` (`cpu_linear` or `gpu_convert`), `build` (scalars: the `--describe` facts, the contract digest, `pixel_path_facts` with the GPU path's device, extensions and import strategy, `camera_index_mapping` (`avCam0` is taken as left until the transforms say otherwise), `frame_timeout_ms`, `presence_gap_ns`, `hello_camera_count`, `controls_digest_start`, host clocks), `delivered_format` `{"fourcc":"BGR3"}`, `cameras` (the selected indices), `limits` (`fps`, `max_seconds`, `max_frames`, as requested). With a named pixel path it precedes the first acquire; with `auto` it follows the first frame set, whose modifier chooses the path. |
-| `frame` | `sequence` (from 1, consecutive per run), `frame_id` (the SDK's), `camera_index`, `exposure_ns`, `monotonic_ns` and `realtime_ns` (host clocks at acquisition), `width`, `height`, `fourcc` `BGR3`, `stride_bytes` (`ceil(width/4)*12`, rows padded to whole four-pixel groups; `width*3` at 2464), `buffer_bytes` (`stride_bytes*height`, the payload size), `derivation` (`cpu_converted` or `gpu_converted`), `acquisition_format` (`drm_fourcc`, `modifier` as hex, `plane_count`, `planes`, `pixel_format`, `encoding`, `transfer`, `primaries`), `dropped_since_last` (frame sets released without export since the previous exported set; the same value on both packets of one set, which share a `frame_id` family and arrive consecutively, camera 0 first). |
-| `end` (last, once) | `reason`, `counts` (`exported`, `dropped`, `acquire_failures`, `release_failures`), `elapsed_ns`, `digests` (`controls_start`, `controls_end` and `offline_cal`, each present when it was read). The exit code, `cleanup_ok`, `detail`, `frame_sets`, `passes` and `pixel_path_notes` are in the stderr `final` record. |
+| `ready` (first, once) | `protocol` 1, `backend`, `pixel_path` (`cpu_linear` or `gpu_convert`), `build` (scalars: the `--describe` facts, the contract digest, `pixel_path_facts` with the GPU path's device, extensions and import strategy, `camera_index_mapping` (`avCam0` is taken as left until the transforms say otherwise), `frame_timeout_ms`, `presence_gap_ns`, `hello_camera_count`, `controls_digest_start`, host clocks), `delivered_format` `{"fourcc":"BGR3"}`, `cameras` (the selected indices), `limits` (`fps`, `max_seconds`, `max_frames`, as requested), `confirmation` (`terminal` or `parent`). With a named pixel path it precedes the first acquire; with `auto` it follows the first frame set, whose modifier chooses the path. |
+| `frame` | `sequence` (from 1, consecutive per run), `frame_id` (the SDK's), `frame_set_sequence` (from 1 per run, one per exported frame set, the same on both cameras of a set), `camera_index`, `exposure_ns`, `monotonic_ns` and `realtime_ns` (host clocks at acquisition), `width`, `height`, `fourcc` `BGR3`, `stride_bytes` (`ceil(width/4)*12`, rows padded to whole four-pixel groups; `width*3` at 2464), `buffer_bytes` (`stride_bytes*height`, the payload size), `derivation` (`cpu_converted` or `gpu_converted`), `acquisition_format` (`drm_fourcc`, `modifier` as hex, `plane_count`, `planes`, `pixel_format`, `encoding`, `transfer`, `primaries`), `dropped_since_last` (frame sets released without export since the previous exported set; the same value on both packets of one set, camera 0 first). |
+| `end` (last, once) | `reason`, `counts` (`exported`, `dropped`, `acquire_failures`, `release_failures`), `elapsed_ns`, `digests` (`controls_start`, `controls_end` and `offline_cal`, each present when it was read), `confirmation`. The exit code, `cleanup_ok`, `detail`, `frame_sets`, `passes`, `pixel_path_notes`, `stream_torn` and `end_packet_written` are in the stderr `final` record. |
+
+`confirmation` and `frame_set_sequence` are the fields the planner added to
+the contract on 2026-11-09; the helper emits them ahead of the regenerated
+header, whose field lists `tests/test_camera_export.py` compares with the
+header as generated plus these additions.
 
 The run acquires at camera rate with a 100 ms server timeout, releases every
 frame set promptly and exports one when its pacing interval (1/F) has
@@ -143,9 +148,22 @@ elapsed, dropping the others. It ends with `max_seconds` or `max_frames`
 `headset_removed` or `standby` (exit 0), `sdk_error` (the outcome's exit
 code, 1 at least), `pixel_path_error` (exit 1, the frame set released first)
 or `watchdog` (exit 124, the pre-built end packet with the counts at the time
-the hung call began). The informed start is the same typed `yes` as the other
-modes, in the one `confirm()` call; the owner's decision on how a supervised
-run (standard input not a terminal) gives it is pending, and no flag skips it. The public headers offer no presence signal, so the
+the hung call began), or `consumer_stalled` (exit 1): the protocol descriptor
+is non-blocking in this mode and every write waits at most until the run's
+deadline and never longer than two seconds without a byte going through, so a
+parent that stops reading cannot hold the camera past the bounds; the reader
+is deactivated and the end control state read as in every other end, the end
+packet is attempted for one second more, and the stderr `final` record says
+whether the stream was torn mid-packet (`stream_torn`) and whether the end
+packet went out (`end_packet_written`). The informed start is the typed `yes`
+of the other modes, in the one `confirm()` call, or, by the owner's decision
+of 2026-11-09, the parent's: `--parent-confirmed`, accepted with
+`--export-frames` only (every other mode refuses it as invalid arguments),
+skips the terminal prompt, still writes the mode's notice as a stderr JSON
+line, and is recorded as `confirmation: "parent"` in the `ready` and `end`
+headers (`"terminal"` otherwise). No environment variable and no other flag
+stands in for the prompt; the boundaries test keeps the helper's flag list
+closed. The public headers offer no presence signal, so the
 agreement's stop is inferred from frames: when no frame set has arrived for
 two seconds the run ends, `headset_removed` if the service kept answering
 with server timeouts after frames had flowed (frames stopped without a

@@ -30,14 +30,23 @@ SCRIPT = ROOT / "scripts/build_camera_helper.sh"
 PROTOCOL_HEADER = ROOT / "tools/camera_export_protocol.hpp"
 MAGIC = b"SCCF"
 PREFIX = struct.Struct("<4sIII")
-END_REASONS = {"max_seconds", "max_frames", "stop_signal", "headset_removed", "standby", "sdk_error",
-               "pixel_path_error", "watchdog"}
-# The exact header fields of each kind, as the generated contract header lists them (kReadyFields and so on).
-READY_KEYS = ("kind", "protocol", "backend", "pixel_path", "build", "delivered_format", "cameras", "limits")
-FRAME_KEYS = ("kind", "sequence", "frame_id", "camera_index", "exposure_ns", "monotonic_ns", "realtime_ns", "width",
-              "height", "fourcc", "stride_bytes", "buffer_bytes", "derivation", "acquisition_format", "dropped_since_last")
+# The generated header's end reasons, plus the one the planner added on 2026-11-09 (the regenerated header follows).
+HEADER_END_REASONS = {"max_seconds", "max_frames", "stop_signal", "headset_removed", "standby", "sdk_error",
+                      "pixel_path_error", "watchdog"}
+END_REASONS = HEADER_END_REASONS | {"consumer_stalled"}
+# The exact header fields of each kind, as the generated contract header lists them (kReadyFields and so on) ...
+HEADER_READY_KEYS = ("kind", "protocol", "backend", "pixel_path", "build", "delivered_format", "cameras", "limits")
+HEADER_FRAME_KEYS = ("kind", "sequence", "frame_id", "camera_index", "exposure_ns", "monotonic_ns", "realtime_ns", "width",
+                     "height", "fourcc", "stride_bytes", "buffer_bytes", "derivation", "acquisition_format",
+                     "dropped_since_last")
+HEADER_END_KEYS = ("kind", "reason", "counts", "elapsed_ns", "digests")
+# ... and the fields the planner added to the contract on 2026-11-09, emitted ahead of the regenerated header:
+# `confirmation` (ready and end: "terminal" or "parent") and `frame_set_sequence` (frame). When the regenerated
+# header lands, these move into the HEADER_* tuples in the header's order.
+READY_KEYS = HEADER_READY_KEYS + ("confirmation",)
+FRAME_KEYS = HEADER_FRAME_KEYS[:3] + ("frame_set_sequence",) + HEADER_FRAME_KEYS[3:]
+END_KEYS = HEADER_END_KEYS + ("confirmation",)
 ACQUISITION_KEYS = ("drm_fourcc", "modifier", "plane_count", "planes", "pixel_format", "encoding", "transfer", "primaries")
-END_KEYS = ("kind", "reason", "counts", "elapsed_ns", "digests")
 COUNT_KEYS = ("exported", "dropped", "acquire_failures", "release_failures")
 # The run facts the helper puts under ready.build beyond --describe's (scalars, as the contract allows).
 BUILD_KEYS = {"build_commit", "build_dirty", "sdk_release", "compiler", "contract_digest", "pixel_path_facts",
@@ -152,9 +161,9 @@ class ProtocolConstantsTests(unittest.TestCase):
         self.assertEqual((numbers["kPrefixMagicOffset"], numbers["kPrefixVersionOffset"], numbers["kPrefixHeaderBytesOffset"],
                           numbers["kPrefixPayloadBytesOffset"]), (0, 4, 8, 12))
         self.assertEqual((strings["kKindReady"], strings["kKindFrame"], strings["kKindEnd"]), ("ready", "frame", "end"))
-        self.assertEqual(tuple(strings["kReadyFields"].split(",")), READY_KEYS)
-        self.assertEqual(tuple(strings["kFrameFields"].split(",")), FRAME_KEYS)
-        self.assertEqual(tuple(strings["kEndFields"].split(",")), END_KEYS)
+        self.assertEqual(tuple(strings["kReadyFields"].split(",")), HEADER_READY_KEYS)
+        self.assertEqual(tuple(strings["kFrameFields"].split(",")), HEADER_FRAME_KEYS)
+        self.assertEqual(tuple(strings["kEndFields"].split(",")), HEADER_END_KEYS)
         self.assertEqual(tuple(strings["kAcquisitionFormatFields"].split(",")), ACQUISITION_KEYS)
         self.assertEqual(tuple(strings["kCountFields"].split(",")), COUNT_KEYS)
         self.assertEqual(strings["kPlaneFields"], "offset,stride,size")
@@ -164,7 +173,7 @@ class ProtocolConstantsTests(unittest.TestCase):
         self.assertEqual((strings["kDerivationCpuConverted"], strings["kDerivationGpuConverted"]), ("cpu_converted", "gpu_converted"))
         self.assertEqual({strings[f"kEndReason{name}"] for name in ("MaxSeconds", "MaxFrames", "StopSignal", "HeadsetRemoved",
                                                                      "Standby", "SdkError", "PixelPathError", "Watchdog")},
-                         END_REASONS)
+                         HEADER_END_REASONS)
         self.assertEqual((numbers["kMinFps"], numbers["kMaxFps"], numbers["kMinSeconds"], numbers["kMaxSeconds"],
                           numbers["kMinFrames"], numbers["kMaxFrames"]), (1, 10, 1, 60, 1, 600))
         self.assertEqual((numbers["kMaxSide"], numbers["kMaxPlanes"], numbers["kCameraCount"]), (4096, 4, 2))
@@ -266,6 +275,14 @@ class CameraExportTests(unittest.TestCase):
         packets = parse_packets(out) if out else []
         return code, packets, records
 
+    def export_parent_confirmed(self, scenario, *extra, max_seconds=8, max_frames=4, fps=10, timeout=30):
+        """As the Python supervisor runs it: stdin is /dev/null and the parent gives the confirmation."""
+        args = ["--export-frames", "--max-seconds", max_seconds, "--max-frames", max_frames, "--fps", fps,
+                "--parent-confirmed", *extra]
+        process = self.start(args, scenario, tty=False)
+        code, out, records = self.finish(process, timeout)
+        return code, parse_packets(out) if out else [], records
+
     @staticmethod
     def final(records):
         finals = [record for record in records if record["event"] == "final"]
@@ -288,6 +305,8 @@ class CameraExportTests(unittest.TestCase):
         self.assertEqual(ready["delivered_format"], {"fourcc": "BGR3"})
         self.assertEqual(ready["cameras"], list(camera_indices))
         self.assertEqual(tuple(ready["limits"]), ("fps", "max_seconds", "max_frames"))
+        self.assertIn(ready["confirmation"], ("terminal", "parent"))
+        self.assertEqual(end["confirmation"], ready["confirmation"])
         build = ready["build"]
         self.assertEqual(set(build), BUILD_KEYS | ({"build_commit_reason"} if build["build_commit"] is None else set()))
         self.assertIsNone(build["sdk_release"])
@@ -309,10 +328,17 @@ class CameraExportTests(unittest.TestCase):
             self.assertRegex(digest, r"^[0-9a-f]{64}$")
         derivation = "gpu_converted" if pixel_path == "gpu_convert" else "cpu_converted"
         sequence = 0
+        last_set = 0
         for header, payload in packets[1:-1]:
             sequence += 1
             self.assertEqual(tuple(header), FRAME_KEYS)
             self.assertEqual(header["sequence"], sequence)
+            # One frame set per exported set, from 1, the same on both cameras of a set.
+            self.assertIn(header["frame_set_sequence"], (last_set, last_set + 1))
+            self.assertGreaterEqual(header["frame_set_sequence"], 1)
+            if header["frame_set_sequence"] == last_set:
+                self.assertEqual(header["camera_index"], 1)
+            last_set = header["frame_set_sequence"]
             self.assertIn(header["camera_index"], camera_indices)
             self.assertEqual(header["fourcc"], "BGR3")
             self.assertEqual(header["derivation"], derivation)
@@ -358,8 +384,10 @@ class CameraExportTests(unittest.TestCase):
                 self.assertEqual(end["digests"]["controls_end"], end["digests"]["controls_start"])
                 frames = packets[1:-1]
                 self.assertEqual([header["camera_index"] for header, _ in frames], [0, 1, 0, 1])
+                self.assertEqual([header["frame_set_sequence"] for header, _ in frames], [1, 1, 2, 2])
                 self.assertEqual(frames[0][0]["frame_id"] // 10, frames[1][0]["frame_id"] // 10)  # one frame set
                 self.assertLess(frames[1][0]["frame_id"] // 10, frames[2][0]["frame_id"] // 10)
+                self.assertEqual(ready["confirmation"], "terminal")
                 for header, payload in frames:
                     self.check_pixels(scenario, header, payload)
                 final = self.final(records)
@@ -594,6 +622,84 @@ class CameraExportTests(unittest.TestCase):
         _, end = self.check_stream(packets, "export_nv12")
         self.assertEqual(end["counts"]["exported"], 2)
 
+    def test_the_parent_may_give_the_confirmation_in_the_export_mode_only(self):
+        code, packets, records = self.export_parent_confirmed("export_nv12", "--cameras", "0,1", "--pixel-path", "cpu_linear",
+                                                               max_frames=4)
+        self.assertEqual(code, 0, records[-1] if records else None)
+        ready, end = self.check_stream(packets, "export_nv12", camera_indices=(0, 1))
+        self.assertEqual((ready["confirmation"], end["confirmation"]), ("parent", "parent"))
+        for header, payload in packets[1:-1]:
+            self.check_pixels("export_nv12", header, payload)
+        final = self.final(records)
+        self.assertEqual((final["confirmation"], final["reason"], final["exported"]), ("parent", "max_frames", 4))
+        # The notice is still recorded, as a JSON line, with the parent named as the confirming party.
+        notices = [record["message"] for record in records if record["event"] == "note"]
+        self.assertTrue(any("licence section 3.2" in message and "parent process" in message for message in notices), notices)
+        self.assertEqual(final["fake_calls"][:3], ["connect", "control_state", "set_reader:true"])
+        # Nowhere else: every other mode refuses the flag before any prompt or connect.
+        for args in (["--hello", "--parent-confirmed"], ["--probe-frames", 1, "--max-seconds", 2, "--parent-confirmed"],
+                     ["--describe", "--parent-confirmed"], ["--parent-confirmed"]):
+            with self.subTest(args=args):
+                result = subprocess.run([str(self.binary), *map(str, args)], stdin=subprocess.DEVNULL, capture_output=True,
+                                        env=self.env, timeout=20)
+                self.assertEqual(result.returncode, 64)
+                record = json.loads(result.stdout.decode().splitlines()[0])
+                self.assertEqual(record["reason"], "invalid_arguments")
+        self.assertEqual(os.listdir(self.runtime.name), ["sightcircuit-camera-helper.lock"])
+
+    def test_a_parent_that_stops_reading_ends_the_run_within_the_bound(self):
+        """The pipe is left unread: the writes stall, and the run ends as consumer_stalled with the reader off."""
+        process = self.start(["--export-frames", "--max-seconds", 20, "--max-frames", 600, "--fps", 10, "--cameras", "0,1",
+                              "--pixel-path", "cpu_linear", "--parent-confirmed"], "export_nv12", tty=False)
+        started = time.monotonic()
+        try:
+            code = process.wait(timeout=12)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
+            self.fail("the helper kept running against an unread pipe")
+        elapsed = time.monotonic() - started
+        with process.stdout, process.stderr:
+            out = process.stdout.read()
+            err = process.stderr.read()
+        self.assertLess(elapsed, 8)  # a 64 KiB pipe fills within a second; the stall bound is two seconds
+        self.assertEqual(code, 1)
+        records = [json.loads(line) for line in err.decode().splitlines() if line.strip()]
+        final = self.final(records)
+        self.assertEqual((final["reason"], final["consumer_stalled"], final["exit_code"]), ("consumer_stalled", True, 1))
+        self.assertEqual(final["detail"], "no_progress_for_ns:2000000000")
+        self.assertIs(final["cleanup_ok"], True)
+        self.assertIs(final["reader_deactivated"], True)
+        self.assertEqual(final["fake_calls"][-3:], ["set_reader:false", "control_state", "disconnect"])
+        self.assertGreaterEqual(final["exported"], 1)
+        # What reached the pipe: a ready, whole frames and, unless a frame was torn, the end packet.
+        offset = 0
+        kinds = []
+        torn = False
+        while offset < len(out):
+            if len(out) - offset < PREFIX.size:
+                torn = True
+                break
+            magic, version, header_bytes, payload_bytes = PREFIX.unpack_from(out, offset)
+            self.assertEqual((magic, version), (MAGIC, 1))
+            if offset + PREFIX.size + header_bytes + payload_bytes > len(out):
+                torn = True
+                break
+            kinds.append(json.loads(out[offset + PREFIX.size:offset + PREFIX.size + header_bytes])["kind"])
+            offset += PREFIX.size + header_bytes + payload_bytes
+        self.assertEqual(kinds[0], "ready")
+        self.assertEqual(torn, final["stream_torn"])
+        if torn:
+            self.assertIs(final["end_packet_written"], False)
+            self.assertNotIn("end", kinds)
+        else:
+            self.assertIs(final["end_packet_written"], True)
+            self.assertEqual(kinds[-1], "end")
+            packets = parse_packets(out)
+            self.assertEqual(packets[-1][0]["reason"], "consumer_stalled")
+            self.assertEqual(packets[-1][0]["counts"]["exported"], final["exported"])
+        self.assertEqual(kinds.count("frame"), final["exported"])
+
     # -- refusals and bounds --------------------------------------------------------------------
 
     def test_refusals_write_no_packet_and_one_stderr_final(self):
@@ -641,6 +747,7 @@ class CameraExportTests(unittest.TestCase):
             base + ["--cameras", "0,1,"], base + ["--cameras", ",1"], base + ["--cameras", "0, 1"], base + ["--camera", "0"],
             base + ["--pixel-path", "magic"], base + ["--pixel-path"], base + ["--pixel-path", "cpu"],
             base + ["--interval-ms", 200], base + ["--probe-frames", 1], base + ["--hello"], base + ["--describe"],
+            base + ["--parent-confirmed", "yes"], base + ["--yes"], base + ["--no-confirm"],
             base + ["--timeout-ms", 0], base + ["--timeout-ms", 10001], base + ["--fake-scenario", "no_such_scenario"],
             base + ["--unknown"],
         )

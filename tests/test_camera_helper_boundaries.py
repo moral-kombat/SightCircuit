@@ -143,6 +143,24 @@ class IncludeAndTextBoundaries(unittest.TestCase):
             with self.subTest(text=banned):
                 self.assertNotIn(banned, sdk)
 
+    # Every "--flag" literal the helper parses. The only flag that stands in for the typed
+    # confirmation is --parent-confirmed (the owner's decision of 2026-11-09, export mode only).
+    HELPER_FLAGS = {"--help", "--describe", "--hello", "--probe-frames", "--export-frames", "--max-seconds", "--max-frames",
+                    "--fps", "--cameras", "--pixel-path", "--interval-ms", "--timeout-ms", "--fake-scenario",
+                    "--parent-confirmed"}
+
+    def test_the_helper_parses_only_the_listed_flags(self):
+        text = (ROOT / "tools/camera_helper.cpp").read_text()
+        parsed = set(re.findall(r'argument == "(--[a-z-]+)"', text))
+        self.assertEqual(parsed, self.HELPER_FLAGS)
+        literals = set(re.findall(r'"(--[a-z][a-z-]*)', text))
+        self.assertLessEqual(literals, self.HELPER_FLAGS, literals - self.HELPER_FLAGS)
+        self.assertNotIn("getenv", text.replace('getenv("XDG_RUNTIME_DIR")', ""))
+        # The flag is accepted only with --export-frames, and nothing else skips confirm().
+        self.assertIn('options.error = "--parent-confirmed applies to --export-frames"', text)
+        self.assertEqual(text.count("confirm(notice_for(options), reason)"), 1)
+        self.assertEqual(text.count("options.parent_confirmed)"), 2)  # the parse check and the one branch in main
+
     def test_reader_state_is_never_recording(self):
         calls = []
         for relative in HELPER_SOURCES:
