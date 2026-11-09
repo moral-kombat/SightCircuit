@@ -35,6 +35,7 @@ SIGHTCIRCUIT_PYTHON=python3.12 bash scripts/setup_window.sh   # .venv-replay: re
 bash scripts/setup.sh                                        # .venv: smoke check (needs uv)
 bash scripts/build_overlay_bridge.sh && bash scripts/build_shm_reader.sh
 bash scripts/build_capture_supervisor.sh && bash scripts/build_capture_gpu_check.sh
+bash scripts/build_camera_helper.sh                          # fake backend only; the SDK unit is syntax-checked
 ```
 
 Qt needs the apt libraries even offscreen. Fixtures and models download from

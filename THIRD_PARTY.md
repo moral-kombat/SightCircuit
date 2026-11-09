@@ -95,9 +95,13 @@ are recorded with the files.
 The SDK's Client Library, `libAV1CameraClient.a`, is not bundled, cached or
 fetched by this repository or CI; anyone building against it obtains their own
 copy from Arcturus. The SDK's README, release manifest, CMake module, Docker
-build files and examples are not copied. No SightCircuit code includes the
-headers yet, and any camera feature built on the SDK is subject to section 3 of
-the agreement.
+build files and examples are not copied. The one SightCircuit source that
+includes the headers is `tools/camera_helper_sdk.cpp`, the SDK translation unit
+of the [camera helper](docs/reference/camera-helper.md); CI syntax-checks it
+against the vendored headers and never links it, and `scripts/build_camera_helper.sh`
+links the SDK-backed helper only against a Client Library the operator names
+locally. Any camera feature built on the SDK is subject to section 3 of the
+agreement.
 
 ## Capture reference build dependencies
 

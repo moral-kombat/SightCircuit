@@ -242,6 +242,7 @@ bash scripts/build_overlay_bridge.sh
 bash scripts/build_shm_reader.sh
 bash scripts/build_capture_supervisor.sh
 bash scripts/build_capture_gpu_check.sh
+bash scripts/build_camera_helper.sh
 QT_QPA_PLATFORM=offscreen .venv-replay/bin/python -m unittest discover -s tests
 uvx ruff@0.14.2 check .
 .venv-replay/bin/python scripts/evaluate_detectors.py --fetch --expect evaluation/seed-expected.json
@@ -452,6 +453,33 @@ See [Native VR panel build and validation](reference/hud-development.md#native-v
 ### Generated HUD contract header
 
 See [Generated HUD contract header](reference/hud-development.md#generated-hud-contract-header).
+
+## Camera helper build (lane G, 2026-11-09)
+
+The camera helper is the containment for the Arcturus camera SDK: one native
+helper whose SDK translation unit is the only SightCircuit source that includes
+the vendored headers, and whose fake backend lets every mode run in CI without
+the SDK ([camera helper reference](reference/camera-helper.md)). Build it with:
+
+```bash
+bash scripts/build_camera_helper.sh
+artifacts/camera-helper/sightcircuit-camera-helper-fake --validate
+```
+
+The script always builds the fake-backend binary and syntax-checks the SDK unit
+against `third_party/arcturus-camera-sdk/` with `-fsyntax-only`; CI does
+exactly that on both architectures and runs `tests/test_camera_helper.py`
+without skips in the `native` job. The SDK-backed binary,
+`sightcircuit-camera-helper-sdk`, is linked only when the operator names a
+local copy of the Client Library (`--client-library PATH` or
+`SIGHTCIRCUIT_AV1_CLIENT_LIBRARY`); the script refuses a path inside the work
+tree, a missing file, a non-archive or an archive of another architecture, and
+never downloads. The library `libAV1CameraClient.a` is never committed, cached,
+fetched or built by this repository or its CI
+([THIRD_PARTY](../THIRD_PARTY.md#arcturus-vision-camera-preview-sdk-headers)).
+This revision has the `--validate` and `--help` modes only; the modes that
+connect are the lane's step 2, each device probe separately approved. Nothing
+here is device evidence.
 
 ## Generated evidence summaries
 

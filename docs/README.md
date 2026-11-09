@@ -49,6 +49,9 @@ Each device guide describes prerequisites, operating limits, and shutdown.
   budget is exhausted.
 - [Camera interfaces and research](steam-frame-camera.md) — mirror input,
   dedicated capture constraints, and pinned upstream sources.
+- [Camera helper](reference/camera-helper.md) — the containment for the
+  Arcturus camera SDK: one SDK translation unit, a fake backend for CI, an
+  operator-only build against the Client Library; cloud work, no device steps.
 - [Agent-on-Frame design](agent-on-frame.md) and
   [third-party attribution](../THIRD_PARTY.md).
 

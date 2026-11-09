@@ -37,9 +37,12 @@ together.
 
 ## Status
 
-These headers are reference material for interface review only. No SightCircuit
-code includes them yet, no build script links the Client Library, and nothing
-here enables camera access. The live image input gate in
+One SightCircuit source includes these headers: `tools/camera_helper_sdk.cpp`,
+the SDK translation unit of the [camera helper](../../docs/reference/camera-helper.md),
+which CI syntax-checks against them and never links. `scripts/build_camera_helper.sh`
+links the SDK-backed helper only when an operator names a local copy of the
+Client Library outside the work tree; nothing here enables camera access, and
+the helper's modes in this revision initialise nothing. The live image input gate in
 [`sightcircuit/gates.py`](../../sightcircuit/gates.py) stays closed. Any camera
 feature built on this SDK is also subject to section 3 of the agreement. That
 section covers informed camera use, explicit consent before saving or sending
