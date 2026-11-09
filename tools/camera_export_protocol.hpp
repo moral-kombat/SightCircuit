@@ -80,10 +80,10 @@ constexpr char kSha256HexPattern[] = "[0-9a-f]{64}";
 constexpr std::uint32_t kMinFps = 1;
 constexpr std::uint32_t kMaxFps = 10;
 constexpr std::uint32_t kMinSeconds = 1;
-constexpr std::uint32_t kMaxSeconds = 30;
+constexpr std::uint32_t kMaxSeconds = 60;
 constexpr std::uint32_t kMinFrames = 1;
-constexpr std::uint32_t kMaxFrames = 300;
+constexpr std::uint32_t kMaxFrames = 600;
 
 // SHA-256 of every value above; the helper may report it in ready.build.
-constexpr char kContractDigest[] = "b68001a383ba748230e5c5ef444a9b837d53a686ab003802b45a544cdab118a6";
+constexpr char kContractDigest[] = "a912ff82d19a9693aeb61a2eb45b8bb5403c88f6e1563b8cb9c6f0a60a0ba92d";
 } // namespace sightcircuit_camera_export

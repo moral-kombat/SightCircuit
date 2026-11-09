@@ -65,8 +65,9 @@ U32_MAX = 2**32 - 1
 U64_MAX = 2**64 - 1
 I64_MIN, I64_MAX = -2**63, 2**63 - 1
 
-# The run limits the helper accepts (``--fps``, ``--max-seconds``, ``--max-frames``) and echoes in ``ready``.
-LIMITS = {"fps": (1, 10), "max_seconds": (1, 30), "max_frames": (1, 300)}
+# The run limits the helper accepts (``--fps``, ``--max-seconds``, ``--max-frames``) and echoes in ``ready``: the
+# helper's own bounds (work-order item S6). ``camera_recognize`` asks for at most 30 s and 300 frames (item S7).
+LIMITS = {"fps": (1, 10), "max_seconds": (1, 60), "max_frames": (1, 600)}
 
 
 @dataclass(frozen=True)

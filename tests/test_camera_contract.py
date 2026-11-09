@@ -39,7 +39,7 @@ class ContractTests(unittest.TestCase):
         self.assertTrue(set(contract.BOUNDED_END_REASONS) <= set(contract.END_REASONS))
         self.assertEqual(contract.DERIVATIONS, {"cpu_linear": "cpu_converted", "gpu_convert": "gpu_converted"})
         self.assertEqual(tuple(contract.DERIVATIONS), contract.PIXEL_PATHS)
-        self.assertEqual(contract.LIMITS, {"fps": (1, 10), "max_seconds": (1, 30), "max_frames": (1, 300)})
+        self.assertEqual(contract.LIMITS, {"fps": (1, 10), "max_seconds": (1, 60), "max_frames": (1, 600)})
         self.assertEqual(contract.MAX_SIDE, 4096)
         self.assertEqual(contract.source_id(0), "arcturus_camera_left")
         self.assertEqual(contract.source_id(1), "arcturus_camera_right")
@@ -85,7 +85,7 @@ class HeaderTests(unittest.TestCase):
         text = native.header_text()
         for name, value in (("kMagic", '"SCCF"'), ("kVersion", "1"), ("kPrefixBytes", "16"),
                             ("kMaxHeaderBytes", "16384"), ("kMaxPayloadBytes", "33554432"), ("kFourcc", '"BGR3"'),
-                            ("kMaxSide", "4096"), ("kMaxFrames", "300"), ("kMaxSeconds", "30"), ("kMaxFps", "10"),
+                            ("kMaxSide", "4096"), ("kMaxFrames", "600"), ("kMaxSeconds", "60"), ("kMaxFps", "10"),
                             ("kMinFps", "1"), ("kCameraCount", "2"), ("kSourceIdLeft", '"arcturus_camera_left"')):
             with self.subTest(name=name):
                 self.assertIn(f" {name}[] = {value};" if value.startswith('"') else f" {name} = {value};", text)
@@ -116,7 +116,7 @@ class HeaderTests(unittest.TestCase):
             header = Path(temporary) / "camera_export_protocol.hpp"
             header.write_text(HEADER.read_text())
             self.assertEqual(command.main(["--check", "--header", str(header)]), 0)
-            header.write_text(header.read_text().replace("kMaxFrames = 300", "kMaxFrames = 301"))
+            header.write_text(header.read_text().replace("kMaxFrames = 600", "kMaxFrames = 601"))
             self.assertEqual(command.main(["--check", "--header", str(header)]), 1)
             self.assertEqual(command.main(["--write", "--header", str(header)]), 0)
             self.assertEqual(header.read_text(), native.header_text())

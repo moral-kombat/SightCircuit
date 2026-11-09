@@ -70,7 +70,8 @@ helper collects between SDK calls and answers with an `end` packet of reason
 
 Both bounds are required and both are checked by the helper and the command:
 `--seconds` is at most 30, `--max-frames` at most 300, `--fps` at most 10
-(default 5). `--allow-camera-input` is the opt-in, named like the observer's
+(default 5). The helper's own bounds are wider (60 seconds, 600 frames,
+work-order item S6); the command never asks for more than its own. `--allow-camera-input` is the opt-in, named like the observer's
 flags; without it nothing is launched.
 
 ```bash
@@ -145,8 +146,8 @@ no payload). The helper's stderr carries JSON diagnostic lines only.
 `sightcircuit/camera/contract.py` is the protocol as data: the prefix layout,
 the bounds, the exact fields of each kind with types and bounds, the end
 reasons, the format vocabulary (the helper's spelling of the SDK enumerators)
-and the run limits (`fps` 1 to 10, `max_seconds` 1 to 30, `max_frames` 1 to
-300). `python3 scripts/camera_contract_header.py --write` generates
+and the helper's run limits (`fps` 1 to 10, `max_seconds` 1 to 60,
+`max_frames` 1 to 600, the bounds of work-order item S6). `python3 scripts/camera_contract_header.py --write` generates
 `tools/camera_export_protocol.hpp` for the helper and `--check` fails when it
 is stale (CI runs it; `tests/test_camera_contract.py` pins it). The reader
 enforces every rule and names its refusals (`export_reader.REASONS`).

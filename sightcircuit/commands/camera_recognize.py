@@ -54,9 +54,10 @@ from sightcircuit.runtime import guard
 from sightcircuit.sources import camera_helper
 
 REPORT_KIND = "camera_recognition"
-MAX_SECONDS = contract.LIMITS["max_seconds"][1]
-MAX_FRAMES = contract.LIMITS["max_frames"][1]
+# The command's bounds (work-order item S7), inside the helper's own (``contract.LIMITS``: 60 s, 600 frames).
+MAX_SECONDS, MAX_FRAMES = 30, 300
 MAX_FPS = contract.LIMITS["fps"][1]
+assert MAX_SECONDS <= contract.LIMITS["max_seconds"][1] and MAX_FRAMES <= contract.LIMITS["max_frames"][1]
 DEFAULT_FPS = 5
 MAX_LISTED_DETECTIONS = 20
 PROCESSOR_JOIN_SECONDS = 15.0

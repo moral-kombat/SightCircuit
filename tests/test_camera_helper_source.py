@@ -203,8 +203,8 @@ class RunExportTests(unittest.TestCase):
         self.assertTrue(report["cleanup_ok"])
 
     def test_limits_and_cameras_are_checked_before_launch(self):
-        for limits in ({"fps": 11, "max_seconds": 1, "max_frames": 1}, {"fps": 1, "max_seconds": 31, "max_frames": 1},
-                       {"fps": 1, "max_seconds": 1, "max_frames": 301}, {"fps": 1, "max_seconds": 1},
+        for limits in ({"fps": 11, "max_seconds": 1, "max_frames": 1}, {"fps": 1, "max_seconds": 61, "max_frames": 1},
+                       {"fps": 1, "max_seconds": 1, "max_frames": 601}, {"fps": 1, "max_seconds": 1},
                        {"fps": True, "max_seconds": 1, "max_frames": 1}, "fast"):
             with self.subTest(limits=limits):
                 report = camera_helper.run_export(self.binary, limits, (0,), on_frame=lambda frame: None)
@@ -319,7 +319,7 @@ class CommandLineTests(unittest.TestCase):
                          {"fps": 1, "max_seconds": 1, "max_frames": 1})
         self.assertEqual(camera_helper.check_cameras([0, 1]), (0, 1))
         self.assertEqual(camera_helper.helper_command("/h", camera_helper.check_limits(
-            {name: high for name, (_, high) in contract.LIMITS.items()}), (0, 1))[3::2][:3], ["10", "30", "300"])
+            {name: high for name, (_, high) in contract.LIMITS.items()}), (0, 1))[3::2][:3], ["10", "60", "600"])
 
 
 if __name__ == "__main__":

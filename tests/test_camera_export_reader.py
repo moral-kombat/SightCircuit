@@ -148,11 +148,11 @@ class InvalidStreamTests(unittest.TestCase):
 class FieldTests(unittest.TestCase):
     def test_booleans_floats_and_wrong_types_are_refused(self):
         field = contract.HEADERS["frame"][1]  # sequence
-        for value in (True, 1.0, "1", None, [1], 0, 301):
+        for value in (True, 1.0, "1", None, [1], 0, contract.LIMITS["max_frames"][1] + 1):
             with self.subTest(value=value), self.assertRaises(ExportRefused):
                 check_field(field, value, "sequence")
         check_field(field, 1, "sequence")
-        check_field(field, 300, "sequence")
+        check_field(field, contract.LIMITS["max_frames"][1], "sequence")
         enum = contract.HEADERS["frame"][3]  # camera_index
         with self.assertRaises(ExportRefused):
             check_field(enum, False, "camera_index")  # False == 0 but is not an int choice.

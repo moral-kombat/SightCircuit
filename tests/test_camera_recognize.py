@@ -124,8 +124,10 @@ class ArgumentTests(unittest.TestCase):
                 run_main(argv)
             self.assertEqual(caught.exception.code, 2)
 
-    def test_the_bounds_are_the_contracts(self):
+    def test_the_bounds_are_the_work_orders_inside_the_helpers(self):
         self.assertEqual((command.MAX_SECONDS, command.MAX_FRAMES, command.MAX_FPS), (30, 300, 10))
+        self.assertLessEqual(command.MAX_SECONDS, contract.LIMITS["max_seconds"][1])
+        self.assertLessEqual(command.MAX_FRAMES, contract.LIMITS["max_frames"][1])
         base = ["--allow-camera-input", "--helper", "/h"]
         for argv in (["--seconds", "31", "--max-frames", "1"], ["--seconds", "0", "--max-frames", "1"],
                      ["--seconds", "1", "--max-frames", "301"], ["--seconds", "1", "--max-frames", "0"],
