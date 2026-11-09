@@ -271,7 +271,8 @@ unavailable (standby), or when the parent stops reading the pipe for two
 seconds (`consumer_stalled`; the writes are non-blocking and deadline-aware).
 The typed confirmation may be given by the parent process with
 `--parent-confirmed`, in this mode only. Every run that passes the
-confirmation writes one `ready` packet first and one `end` packet last. Two pixel paths sit behind one interface
+confirmation writes one `ready` packet first and one `end` packet last, and
+frames only after a `ready` that names the pixel path. Two pixel paths sit behind one interface
 (`tools/camera_pixels.hpp`): `cpu_linear` maps a linear DMA-BUF and converts
 on the CPU with the fixed-point formula in `tools/camera_ycbcr.hpp`;
 `gpu_convert` imports the buffer into Vulkan by its DRM format modifier and

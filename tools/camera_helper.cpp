@@ -771,7 +771,9 @@ public:
     // "end" packet with reason "watchdog" and the counts at the time it was built.
     std::string watchdog_line() const {
         if (options_.mode == Options::export_frames) {
-            return packet_bytes(end_header(export_protocol::kEndReasonWatchdog), nullptr, 0);
+            // Before the ready went out, the watchdog's message carries it too, so the stream stays complete.
+            const std::string end = packet_bytes(end_header(export_protocol::kEndReasonWatchdog), nullptr, 0);
+            return ready_written_ ? end : packet_bytes(ready_header(), nullptr, 0) + end;
         }
         JsonObject object = record("final");
         object.str("mode", mode_name()).null("outcome").str("reason", "watchdog_expired")
@@ -807,12 +809,13 @@ public:
     int run() {
         if (options_.mode == Options::export_frames) {
             // The stream is complete for every run that passed the confirmation:
-            // one ready first (with the named path's facts; pixel_path "undecided"
-            // under auto, whose first frame set chooses), one end last.
+            // one ready first, one end last, frames only after a ready that names
+            // the pixel path. The ready waits until the path is known and the
+            // connect has given its facts (export_loop, or the first frame set
+            // under auto); a run that ends before then gets a ready, "undecided"
+            // if the path was never chosen, right before its end (finish).
             std::string error;
-            const bool opened = open_pixel_path(error);
-            if (!write_ready()) return finish();
-            if (!opened) {
+            if (!open_pixel_path(error)) {
                 note("sightcircuit-camera-helper: the pixel path did not open: " + error);
                 end_export(export_protocol::kEndReasonPixelPathError, "pixel_path_open_failed:" + error);
                 return finish();
@@ -890,6 +893,7 @@ private:
             return false;
         }
         connected_ = true;
+        hello_known_ = true;
         const HelloFacts& hello = backend_.hello();
         JsonObject object = record("hello");
         object.unsigned_integer("protocol_version", hello.protocol_version)
@@ -1077,6 +1081,8 @@ private:
     void export_loop() {
         export_started_ns_ = clock_ns(CLOCK_MONOTONIC);
         run_deadline_ns_ = export_started_ns_ + static_cast<int64_t>(options_.max_seconds) * 1000000000ll;
+        // A named path is known, and the connect has given its facts: the ready goes out now.
+        if (pixel_path_settled_ && !write_ready()) return;
         const int64_t deadline = run_deadline_ns_;
         const int64_t interval_ns = 1000000000ll / static_cast<int64_t>(options_.fps);
         int64_t next_due_ns = export_started_ns_;
@@ -1135,6 +1141,7 @@ private:
                 const FrameSetMeta first = lease.meta;
                 if (!release_lease()) return;
                 if (!settle_pixel_path(first)) return;
+                if (!write_ready()) return;  // the path is known now: the ready names it
                 if (!cameras_present(first)) return;
                 ++dropped_;
                 ++dropped_since_last_;
@@ -1205,6 +1212,13 @@ private:
     // run's other facts (the pixel path's device, the pacing constants, the
     // start digest) are scalars under build, which the contract leaves open.
     bool write_ready() {
+        const WriteResult written = write_packet(ready_header(), nullptr, 0, export_write_deadline());
+        if (written.outcome != WriteOutcome::ok) { note_write(written); return false; }
+        ready_written_ = true;
+        return true;
+    }
+
+    std::string ready_header() const {
         const HelloFacts& hello = backend_.hello();
         JsonObject build;
         if (kBuildCommit) build.str("build_commit", kBuildCommit);
@@ -1222,12 +1236,12 @@ private:
             .str("camera_index_mapping", "assumed_avcam0_left")  // until the device's transforms say otherwise
             .unsigned_integer("frame_timeout_ms", kExportFrameTimeoutMs).integer("presence_gap_ns", kPresenceGapNs)
             .integer("monotonic_ns", clock_ns(CLOCK_MONOTONIC)).integer("realtime_ns", clock_ns(CLOCK_REALTIME));
-        // Written before the connect: the handshake's and the control state's facts are not known yet.
-        if (connected_) build.unsigned_integer("hello_camera_count", hello.camera_count);
+        // Null when the run ended before the connect gave these facts.
+        if (hello_known_) build.unsigned_integer("hello_camera_count", hello.camera_count);
         else build.null("hello_camera_count");
         if (have_start_) build.str("controls_digest_start", start_controls_.digest());
         else build.null("controls_digest_start");
-        // Under auto the first frame set's modifier chooses the path: "undecided" until then.
+        // "undecided" only in a ready that an early end writes before auto chose the path; a frame never follows it.
         const char* pixel_path = pixel_path_settled_ && pixel_path_ ? pixel_path_->name() : export_protocol::kPixelPathUndecided;
         JsonObject header;
         header.str("kind", export_protocol::kKindReady).integer("protocol", export_protocol::kVersion)
@@ -1237,10 +1251,7 @@ private:
             .raw("limits", JsonObject().unsigned_integer("fps", options_.fps).unsigned_integer("max_seconds", options_.max_seconds)
                                .unsigned_integer("max_frames", options_.max_frames).done())
             .str("confirmation", options_.confirmation());
-        const WriteResult written = write_packet(header.done(), nullptr, 0, export_write_deadline());
-        if (written.outcome != WriteOutcome::ok) { note_write(written); return false; }
-        ready_written_ = true;
-        return true;
+        return header.done();
     }
 
     std::string frame_header(const FrameSetMeta& meta, uint32_t camera, const HostClocks& clocks, const BgrImage& image) const {
@@ -1375,6 +1386,15 @@ private:
             if (protocol_lost_) exit_code = 1;
             if (!cleanup_ok_ && exit_code == 0) exit_code = 1;
             reason_ = end_reason_;
+            // A run that ended before its ready (a refused connect, no frame set before
+            // standby, removal or a stall, a pixel path that did not open) writes the
+            // ready now, "undecided" when the path was never chosen, then its end.
+            if (!ready_written_ && !protocol_lost_ && !stream_torn_) {
+                const WriteResult written = write_packet(ready_header(), nullptr, 0,
+                                                         clock_ns(CLOCK_MONOTONIC) + kEndPacketGraceNs);
+                ready_written_ = written.outcome == WriteOutcome::ok;
+                if (!ready_written_) exit_code = 1;
+            }
             if (ready_written_ && !protocol_lost_ && !stream_torn_) {
                 const WriteResult written = write_packet(end_header(end_reason_), nullptr, 0,
                                                          clock_ns(CLOCK_MONOTONIC) + kEndPacketGraceNs);
@@ -1464,7 +1484,7 @@ private:
     Outcome outcome_ = Outcome::ok;
     std::string reason_;
     std::string stop_signal_;
-    bool connect_attempted_ = false, connected_ = false, reader_active_ = false, reader_activated_ = false;
+    bool connect_attempted_ = false, connected_ = false, hello_known_ = false, reader_active_ = false, reader_activated_ = false;
     bool session_lost_ = false;
     bool cleanup_ok_ = true;
     std::string reader_deactivated_ = "true";

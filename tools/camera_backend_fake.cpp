@@ -47,7 +47,7 @@ enum Scenario {
     internal_error_at_controls, server_timeout_at_reader, invalid_argument_at_acquire, bad_timestamps,
     export_nv12, export_nv12_tiny, export_nv12_bt601, export_p010,
     export_removal, export_standby, export_transport_lost, export_ubwc, export_bad_fd,
-    export_hang_in_acquire, export_one_camera, export_bad_plane_size,
+    export_hang_in_acquire, export_one_camera, export_bad_plane_size, export_never_ready,
     unknown_scenario
 };
 
@@ -73,10 +73,10 @@ const ScenarioName kScenarios[] = {
     {"export_p010", export_p010}, {"export_removal", export_removal}, {"export_standby", export_standby},
     {"export_transport_lost", export_transport_lost}, {"export_ubwc", export_ubwc}, {"export_bad_fd", export_bad_fd},
     {"export_hang_in_acquire", export_hang_in_acquire}, {"export_one_camera", export_one_camera},
-    {"export_bad_plane_size", export_bad_plane_size},
+    {"export_bad_plane_size", export_bad_plane_size}, {"export_never_ready", export_never_ready},
 };
 
-bool is_export(Scenario scenario) { return scenario >= export_nv12 && scenario <= export_bad_plane_size; }
+bool is_export(Scenario scenario) { return scenario >= export_nv12 && scenario <= export_never_ready; }
 
 // The call log keeps its first and last entries and counts the rest, so the
 // final record stays within its line bound on a long run at camera rate.
@@ -360,6 +360,9 @@ public:
                     return server("Result_Unavailable", Outcome::unavailable);
                 }
                 break;
+            case export_never_ready:  // the service never serves a frame set
+                sleep_ms(16);
+                return server("Result_NotReady", Outcome::not_ready);
             case export_transport_lost:
                 if (delivered_ >= 4) {
                     lost_ = true;

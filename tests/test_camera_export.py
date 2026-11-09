@@ -285,11 +285,13 @@ class CameraExportTests(unittest.TestCase):
 
     # -- schema ------------------------------------------------------------------------
 
-    def check_stream(self, packets, scenario=None, camera_indices=(0,), pixel_path="cpu_linear", auto=False):
+    def check_stream(self, packets, scenario=None, camera_indices=(0,), pixel_path="cpu_linear", undecided=False,
+                     controls_read=True):
         """One ready first, one end last, frames in between, each with exactly the contract's fields in its order.
 
-        Under ``auto`` the ready packet precedes the first frame set, so it says ``undecided``; the frames'
-        ``derivation`` names the path the first set chose (``pixel_path``).
+        The ready names the pixel path; ``undecided`` is the ready of a run that ended under ``auto`` before its
+        first frame set chose the path, and no frame follows it. ``controls_read`` says whether the start control
+        state had been read when the ready went out (the handshake's camera count is known once the connect succeeded).
         """
         self.assertGreaterEqual(len(packets), 2, packets)
         ready, end = packets[0][0], packets[-1][0]
@@ -299,7 +301,9 @@ class CameraExportTests(unittest.TestCase):
         self.assertEqual(tuple(ready), READY_KEYS)
         self.assertEqual(ready["protocol"], 1)
         self.assertEqual(ready["backend"], "fake")
-        self.assertEqual(ready["pixel_path"], "undecided" if auto else pixel_path)
+        self.assertEqual(ready["pixel_path"], "undecided" if undecided else pixel_path)
+        if undecided:
+            self.assertEqual(len(packets), 2, "a frame never follows an undecided ready")
         self.assertEqual(ready["delivered_format"], {"fourcc": "BGR3"})
         self.assertEqual(ready["cameras"], list(camera_indices))
         self.assertEqual(tuple(ready["limits"]), ("fps", "max_seconds", "max_frames"))
@@ -308,10 +312,13 @@ class CameraExportTests(unittest.TestCase):
         build = ready["build"]
         self.assertEqual(set(build), BUILD_KEYS | ({"build_commit_reason"} if build["build_commit"] is None else set()))
         self.assertIsNone(build["sdk_release"])
-        self.assertEqual(build["pixel_path_facts"]["path"], "cpu_linear" if auto else pixel_path)
-        # The ready packet precedes the connect: the handshake's facts are not known yet.
-        self.assertIsNone(build["controls_digest_start"])
-        self.assertIsNone(build["hello_camera_count"])
+        self.assertEqual(build["pixel_path_facts"]["path"], "cpu_linear" if undecided else pixel_path)
+        self.assertEqual(build["hello_camera_count"], 2)
+        if controls_read:
+            self.assertRegex(build["controls_digest_start"], r"^[0-9a-f]{64}$")
+            self.assertEqual(end["digests"]["controls_start"], build["controls_digest_start"])
+        else:
+            self.assertIsNone(build["controls_digest_start"])
         self.assertRegex(build["contract_digest"], r"^[0-9a-f]{64}$")
         for value in build.values():  # scalars, or objects of scalars: no arrays anywhere
             for scalar in (value.values() if isinstance(value, dict) else [value]):
@@ -405,8 +412,8 @@ class CameraExportTests(unittest.TestCase):
     def test_auto_picks_the_cpu_path_for_a_linear_buffer(self):
         code, packets, records = self.export("export_nv12", max_frames=1)
         self.assertEqual(code, 0)
-        ready, end = self.check_stream(packets, "export_nv12", auto=True)
-        self.assertEqual(ready["pixel_path"], "undecided")
+        ready, end = self.check_stream(packets, "export_nv12")
+        self.assertEqual(ready["pixel_path"], "cpu_linear")  # named by the ready, once the first set chose it
         self.assertEqual(ready["cameras"], [0])
         self.assertEqual(ready["build"]["camera_index_mapping"], "assumed_avcam0_left")
         self.assertEqual(ready["limits"], {"fps": 10, "max_seconds": 8, "max_frames": 1})
@@ -482,14 +489,14 @@ class CameraExportTests(unittest.TestCase):
     def test_max_frames_and_max_seconds_end_the_run(self):
         code, packets, _ = self.export("export_nv12", "--cameras", "0,1", max_frames=3)
         self.assertEqual(code, 0)
-        _, end = self.check_stream(packets, "export_nv12", camera_indices=(0, 1), auto=True)
+        _, end = self.check_stream(packets, "export_nv12", camera_indices=(0, 1))
         self.assertEqual((end["reason"], end["counts"]["exported"]), ("max_frames", 3))
         self.assertEqual([header["camera_index"] for header, _ in packets[1:-1]], [0, 1, 0])
         started = time.monotonic()
         code, packets, _ = self.export("export_nv12", max_seconds=1, max_frames=600, fps=1)
         elapsed = time.monotonic() - started
         self.assertEqual(code, 0)
-        _, end = self.check_stream(packets, "export_nv12", auto=True)
+        _, end = self.check_stream(packets, "export_nv12")
         self.assertEqual(end["reason"], "max_seconds")
         self.assertIn(end["counts"]["exported"], (1, 2))
         self.assertGreaterEqual(end["elapsed_ns"], 1_000_000_000)
@@ -502,7 +509,7 @@ class CameraExportTests(unittest.TestCase):
     def test_headset_removal_and_standby_end_the_export(self):
         code, packets, records = self.export("export_removal", max_frames=50)
         self.assertEqual(code, 0)
-        _, end = self.check_stream(packets, "export_nv12", auto=True)
+        _, end = self.check_stream(packets, "export_nv12")
         self.assertEqual(end["reason"], "headset_removed")
         self.assertGreaterEqual(end["counts"]["exported"], 1)
         self.assertGreater(end["counts"]["acquire_failures"], 5)
@@ -517,7 +524,7 @@ class CameraExportTests(unittest.TestCase):
 
         code, packets, records = self.export("export_standby", max_frames=50)
         self.assertEqual(code, 0)
-        _, end = self.check_stream(packets, "export_nv12", auto=True)
+        _, end = self.check_stream(packets, "export_nv12")
         self.assertEqual(end["reason"], "standby")
         self.assertGreaterEqual(end["counts"]["exported"], 1)
         self.assertRegex(self.final(records)["detail"], r"^no_frame_set_for_ns:\d+$")
@@ -548,15 +555,15 @@ class CameraExportTests(unittest.TestCase):
                 self.assertEqual(final["fake_calls"][-3:], ["set_reader:false", "control_state", "disconnect"])
 
     def test_the_watchdog_ends_a_hung_acquire_with_an_end_packet(self):
-        for pixel_path, ready_path in (("cpu_linear", "cpu_linear"), ("auto", "undecided")):
+        for pixel_path, undecided in (("cpu_linear", False), ("auto", True)):
             with self.subTest(pixel_path=pixel_path):
                 started = time.monotonic()
                 code, packets, records = self.export("export_hang_in_acquire", "--pixel-path", pixel_path, "--timeout-ms", 1,
                                                      max_seconds=5, max_frames=5, timeout=20)
                 self.assertEqual(code, 124)
                 self.assertLess(time.monotonic() - started, 8)
-                self.assertEqual([header["kind"] for header, _ in packets], ["ready", "end"])
-                self.assertEqual(packets[0][0]["pixel_path"], ready_path)
+                # The watchdog's pre-built message carries the ready too when none went out yet (auto).
+                self.check_stream(packets, undecided=undecided)
                 end = packets[-1][0]
                 self.assertEqual(tuple(end), END_KEYS)
                 self.assertEqual(end["reason"], "watchdog")
@@ -595,8 +602,8 @@ class CameraExportTests(unittest.TestCase):
                 self.assertEqual(calls[calls.index("acquire") + 1], "release")
                 self.assertEqual(calls[-3:], ["set_reader:false", "control_state", "disconnect"])
         # A tiled buffer under auto needs the GPU path, and this runner's driver (if any) cannot import
-        # the Adreno modifier: either the path does not open or the import is refused, never a wrong frame.
-        # The stream is complete either way: the ready (undecided) first, the end last.
+        # the Adreno modifier: either the path does not open (the ready is then "undecided") or the import
+        # is refused (the ready names gpu_convert), never a wrong frame. The stream is complete either way.
         code, packets, records = self.export("export_ubwc")
         self.assertEqual(code, 1)
         final = self.final(records)
@@ -604,7 +611,8 @@ class CameraExportTests(unittest.TestCase):
         self.assertTrue(final["detail"].startswith(("gpu_convert_open_failed:", "camera_0:modifier_import_unsupported_by_device:",
                                                     "camera_0:modifier_unknown_to_driver:")), final["detail"])
         self.assertEqual(final["exported"], 0)
-        _, end = self.check_stream(packets, auto=True)
+        opened = not final["detail"].startswith("gpu_convert_open_failed:")
+        _, end = self.check_stream(packets, pixel_path="gpu_convert", undecided=not opened)
         self.assertEqual(end["reason"], "pixel_path_error")
         # The first frame set was released before the GPU path was opened.
         calls = final["fake_calls"]
@@ -639,8 +647,32 @@ class CameraExportTests(unittest.TestCase):
         self.assertEqual(end["counts"]["exported"], 0)
         code, packets, records = self.export("export_one_camera", "--cameras", "0,1")  # auto: the same end, after the first set
         self.assertEqual(code, 1)
-        _, end = self.check_stream(packets, camera_indices=(0, 1), auto=True)
+        _, end = self.check_stream(packets, camera_indices=(0, 1))
         self.assertEqual(end["reason"], "sdk_error")
+
+    def test_a_run_that_ends_before_its_path_is_chosen_still_writes_ready_then_end(self):
+        """Frames come only after a ready that names the path; an early end gets a ready (undecided under auto) and an end."""
+        # The service never serves a frame set: standby after the presence gap, no frame, exit 0.
+        for pixel_path, undecided in (("auto", True), ("cpu_linear", False)):
+            with self.subTest(case="never_ready", pixel_path=pixel_path):
+                code, packets, records = self.export_parent_confirmed("export_never_ready", "--pixel-path", pixel_path,
+                                                                       max_frames=50)
+                self.assertEqual(code, 0)
+                _, end = self.check_stream(packets, pixel_path="cpu_linear", undecided=undecided)
+                self.assertEqual((end["reason"], end["counts"]["exported"]), ("standby", 0))
+                self.assertGreater(end["counts"]["acquire_failures"], 10)
+                self.assertEqual(self.final(records)["reason"], "standby")
+        # The connect's control read is refused: no frame set, exit 2, and the connect's facts stay null.
+        for pixel_path, undecided in (("auto", True), ("cpu_linear", False)):
+            with self.subTest(case="permission_denied", pixel_path=pixel_path):
+                code, packets, records = self.export_parent_confirmed("permission_denied", "--pixel-path", pixel_path)
+                self.assertEqual(code, 2)
+                _, end = self.check_stream(packets, pixel_path="cpu_linear", undecided=undecided, controls_read=False)
+                self.assertEqual(end["reason"], "sdk_error")
+                self.assertEqual(end["digests"], {"offline_cal": end["digests"]["offline_cal"]})
+                final = self.final(records)
+                self.assertEqual((final["outcome"], final["exit_code"]), ("permission_denied", 2))
+                self.assertEqual(final["fake_calls"], ["connect", "control_state", "disconnect"])
         code, packets, _ = self.export("export_one_camera", "--pixel-path", "cpu_linear", max_frames=2)
         self.assertEqual(code, 0)
         _, end = self.check_stream(packets, "export_nv12")
