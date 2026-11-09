@@ -130,15 +130,19 @@ PY
 fi
 
 # The gpu_convert pixel path includes <vulkan/vulkan.h>: the system header, or the
-# checkout scripts/build_capture_gpu_check.sh pins. The loader is dlopen()ed at run time.
+# checkout scripts/build_capture_gpu_check.sh pins. The loader is dlopen()ed at run
+# time. Checked only where a compile follows: --check-sdk needs no compiler input.
 vulkan_includes=()
-if ! printf '#include <vulkan/vulkan.h>\n' | "$sightcircuit_compiler" -std=c++17 -x c++ -fsyntax-only - >/dev/null 2>&1; then
+find_vulkan_headers() {
+    if printf '#include <vulkan/vulkan.h>\n' | "$sightcircuit_compiler" -std=c++17 -x c++ -fsyntax-only - >/dev/null 2>&1; then
+        return 0
+    fi
     if [ -f "$sightcircuit_root/.cache/vulkan-headers/include/vulkan/vulkan.h" ]; then
         vulkan_includes=("-I$sightcircuit_root/.cache/vulkan-headers/include")
-    else
-        refuse "the Vulkan headers are missing: install libvulkan-dev, or run scripts/build_capture_gpu_check.sh once to fetch the pinned checkout into .cache/vulkan-headers"
+        return 0
     fi
-fi
+    refuse "the Vulkan headers are missing: install libvulkan-dev, or run scripts/build_capture_gpu_check.sh once to fetch the pinned checkout into .cache/vulkan-headers"
+}
 helper_units=("$sightcircuit_tools/camera_helper.cpp" "$sightcircuit_tools/camera_pixels_cpu.cpp" "$sightcircuit_tools/camera_pixels_gpu.cpp")
 
 # The checkout's identity, recorded in --describe and build-report.json.
@@ -170,6 +174,7 @@ sdk_symbols() {
 }
 
 if [ "$mode" = fake ]; then
+    find_vulkan_headers
     fake_out="${out_dir:-$sightcircuit_root/artifacts/camera-helper-fake}"
     mkdir -p -- "$fake_out"
     fake_binary="$fake_out/sightcircuit-camera-helper-fake"
@@ -252,6 +257,7 @@ fi
 [ "$(uname -m)" = aarch64 ] \
     || refuse "the Client Library is Linux ARM64 only; build on aarch64 (this machine is $(uname -m)). --check-sdk verifies an SDK directory anywhere."
 
+find_vulkan_headers
 sightcircuit_build="$sightcircuit_root/artifacts/camera-helper"
 mkdir -p -- "$sightcircuit_build"
 helper_binary="$sightcircuit_build/sightcircuit-camera-helper"
