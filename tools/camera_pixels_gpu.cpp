@@ -154,7 +154,7 @@ public:
     ~GpuConvertPath() override { close(); }
 
     const char* name() const override { return sightcircuit_camera_export::kPixelPathGpuConvert; }
-    const char* derivation() const override { return sightcircuit_camera_export::kDerivationGpu; }
+    const char* derivation() const override { return sightcircuit_camera_export::kDerivationGpuConverted; }
 
     bool open(std::string& error, std::string& diagnostics_json) override {
         if (!load_loader(error)) return false;
@@ -305,11 +305,10 @@ private:
         api_.vkGetMemoryFdPropertiesKHR = reinterpret_cast<PFN_vkGetMemoryFdPropertiesKHR>(
             api_.get_instance_proc_addr(instance_, "vkGetMemoryFdPropertiesKHR"));
         if (!api_.vkGetMemoryFdPropertiesKHR) { error = "vkGetMemoryFdPropertiesKHR_missing"; return false; }
-        std::string extension_list = "[";
-        for (std::size_t i = 0; i < extensions.size(); ++i) {
-            extension_list += (i ? ",\"" : "\"") + std::string(extensions[i]) + "\"";
-        }
-        extension_list += "]";
+        // A comma-joined string, not an array: the facts travel as scalars under the ready packet's build.
+        std::string extension_list = "\"";
+        for (std::size_t i = 0; i < extensions.size(); ++i) extension_list += (i ? "," : "") + std::string(extensions[i]);
+        extension_list += "\"";
         diagnostics_ = std::string("{\"path\":\"gpu_convert\",\"device_name\":\"") + escape(properties_.deviceName) +
                        "\",\"device_type\":" + std::to_string(static_cast<int>(properties_.deviceType)) +
                        ",\"api_version\":\"" + std::to_string(VK_VERSION_MAJOR(properties_.apiVersion)) + "." +

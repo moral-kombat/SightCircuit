@@ -28,7 +28,7 @@ public:
     CpuLinearPath() : sync_unsupported_(false), sync_note_() {}
 
     const char* name() const { return sightcircuit_camera_export::kPixelPathCpuLinear; }
-    const char* derivation() const { return sightcircuit_camera_export::kDerivationCpu; }
+    const char* derivation() const { return sightcircuit_camera_export::kDerivationCpuConverted; }
 
     bool open(std::string& error, std::string& diagnostics_json) {
         (void)error;

@@ -13,12 +13,13 @@
 #include <vector>
 
 #include "camera_backend.hpp"
+#include "camera_export_protocol.hpp"
 #include "camera_ycbcr.hpp"
 
 namespace sightcircuit_camera {
 
-// The largest frame either path converts; the protocol's payload bound is checked separately.
-const uint32_t kMaxSourceDimension = 8192;
+// The largest frame either path converts: the contract's side bound; the payload bound is checked separately.
+const uint32_t kMaxSourceDimension = sightcircuit_camera_export::kMaxSide;
 
 enum class SourceFormat { nv12, p010 };
 

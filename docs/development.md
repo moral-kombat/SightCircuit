@@ -255,9 +255,11 @@ git diff --check
 The fake camera-helper build drives the Arcturus camera helper from a scenario
 table and never touches a camera; the helper tests build it again into a
 temporary directory. Besides the metadata modes, the helper has
-`--export-frames`, which delivers BGR3 frames to its parent process over stdout
-as packets of the camera export protocol (version 1; the constants are in
-`tools/camera_export_protocol.hpp`, pinned by `tests/test_camera_export.py`),
+`--export-frames`, which delivers BGR3 frames of the cameras named by
+`--cameras 0|1|0,1` to its parent process over stdout as packets of the camera
+export protocol (version 1; `tools/camera_export_protocol.hpp` is the header
+the S7 camera contract generates, taken as is and pinned by
+`tests/test_camera_export.py`),
 paced at 1 to 10 frames a second by dropping frame sets, for at most 60 seconds
 or 600 frames, and ends on its own when frames stop (the headset removed, by
 inference from a two-second gap) or the camera service reports not ready or

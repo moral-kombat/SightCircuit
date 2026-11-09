@@ -32,17 +32,17 @@ MAGIC = b"SCCF"
 PREFIX = struct.Struct("<4sIII")
 END_REASONS = {"max_seconds", "max_frames", "stop_signal", "headset_removed", "standby", "sdk_error",
                "pixel_path_error", "watchdog"}
-READY_KEYS = {"kind", "protocol", "backend", "pixel_path", "build", "delivered_format", "camera", "limits",
-              "frame_timeout_ms", "presence_gap_ns", "pixel_path_facts", "hello_camera_count", "controls_digest_start",
-              "monotonic_ns", "realtime_ns"}
-FRAME_KEYS = {"kind", "sequence", "frame_id", "frame_set_sequence", "camera_index", "camera_count", "exposure_ns",
-              "monotonic_ns", "realtime_ns", "width", "height", "fourcc", "stride_bytes", "buffer_bytes", "derivation",
-              "acquisition_format", "dropped_since_last"}
-ACQUISITION_KEYS = {"drm_fourcc", "modifier", "plane_count", "planes", "pixel_format", "encoding", "transfer",
-                    "primaries"}
-END_KEYS = {"kind", "reason", "counts", "elapsed_ns", "exit_code", "cleanup_ok", "outcome", "detail",
-            "controls_digest_start", "controls_digest_end", "controls_changed_during_run", "pixel_path_notes"}
-COUNT_KEYS = {"exported", "dropped", "acquire_failures", "release_failures", "frame_sets", "passes"}
+# The exact header fields of each kind, as the generated contract header lists them (kReadyFields and so on).
+READY_KEYS = ("kind", "protocol", "backend", "pixel_path", "build", "delivered_format", "cameras", "limits")
+FRAME_KEYS = ("kind", "sequence", "frame_id", "camera_index", "exposure_ns", "monotonic_ns", "realtime_ns", "width",
+              "height", "fourcc", "stride_bytes", "buffer_bytes", "derivation", "acquisition_format", "dropped_since_last")
+ACQUISITION_KEYS = ("drm_fourcc", "modifier", "plane_count", "planes", "pixel_format", "encoding", "transfer", "primaries")
+END_KEYS = ("kind", "reason", "counts", "elapsed_ns", "digests")
+COUNT_KEYS = ("exported", "dropped", "acquire_failures", "release_failures")
+# The run facts the helper puts under ready.build beyond --describe's (scalars, as the contract allows).
+BUILD_KEYS = {"build_commit", "build_dirty", "sdk_release", "compiler", "contract_digest", "pixel_path_facts",
+              "camera_index_mapping", "frame_timeout_ms", "presence_gap_ns", "hello_camera_count", "monotonic_ns",
+              "realtime_ns", "controls_digest_start"}
 # The fake's export scenarios: (pixel format, encoding, width, height).
 SHAPES = {"export_nv12": ("nv12", "bt709", 62, 32), "export_nv12_tiny": ("nv12", "bt709", 8, 4),
           "export_nv12_bt601": ("nv12", "bt601", 62, 32), "export_p010": ("p010", "bt2020", 62, 32)}
@@ -141,23 +141,38 @@ def software_vulkan_present():
 
 class ProtocolConstantsTests(unittest.TestCase):
     def test_the_protocol_header_pins_camera_export_v1(self):
+        """The generated header (sightcircuit.camera.contract, S7) carries the values this module tests against."""
         text = PROTOCOL_HEADER.read_text()
-        self.assertIn("const char kMagic[4] = {'S', 'C', 'C', 'F'};", text)
-        constants = dict(re.findall(r"const (?:uint32_t|std::size_t) (\w+) = (\d+);", text))
-        self.assertEqual(constants, {"kProtocolVersion": "1", "kPacketPrefixBytes": "16", "kMaxHeaderBytes": "16384",
-                                     "kMaxPayloadBytes": "33554432"})
-        strings = dict(re.findall(r'const char\* const (\w+) = "([^"]+)";', text))
-        self.assertEqual(strings, {
-            "kKindReady": "ready", "kKindFrame": "frame", "kKindEnd": "end", "kDeliveredFourcc": "BGR3",
-            "kPixelPathCpuLinear": "cpu_linear", "kPixelPathGpuConvert": "gpu_convert",
-            "kDerivationCpu": "cpu_converted", "kDerivationGpu": "gpu_converted",
-            "kEndMaxSeconds": "max_seconds", "kEndMaxFrames": "max_frames", "kEndStopSignal": "stop_signal",
-            "kEndHeadsetRemoved": "headset_removed", "kEndStandby": "standby", "kEndSdkError": "sdk_error",
-            "kEndPixelPathError": "pixel_path_error", "kEndWatchdog": "watchdog",
-        })
-        # Constants only: no function, no class, no include beyond the two integer headers.
-        self.assertNotIn("(", text.split("namespace sightcircuit_camera_export {", 1)[1].replace("// ", ""))
-        self.assertEqual(re.findall(r"#include <(\w+)>", text), ["cstddef", "cstdint"])
+        strings = dict(re.findall(r"constexpr char (\w+)\[\] = \"([^\"]*)\";", text))
+        numbers = {name: int(value) for name, value in re.findall(r"constexpr std::uint32_t (\w+) = (\d+);", text)}
+        self.assertEqual(strings["kMagic"], "SCCF")
+        self.assertEqual(strings["kProtocol"], "camera-export/1")
+        self.assertEqual((numbers["kVersion"], numbers["kPrefixBytes"], numbers["kMaxHeaderBytes"], numbers["kMaxPayloadBytes"]),
+                         (1, 16, 16384, 33554432))
+        self.assertEqual((numbers["kPrefixMagicOffset"], numbers["kPrefixVersionOffset"], numbers["kPrefixHeaderBytesOffset"],
+                          numbers["kPrefixPayloadBytesOffset"]), (0, 4, 8, 12))
+        self.assertEqual((strings["kKindReady"], strings["kKindFrame"], strings["kKindEnd"]), ("ready", "frame", "end"))
+        self.assertEqual(tuple(strings["kReadyFields"].split(",")), READY_KEYS)
+        self.assertEqual(tuple(strings["kFrameFields"].split(",")), FRAME_KEYS)
+        self.assertEqual(tuple(strings["kEndFields"].split(",")), END_KEYS)
+        self.assertEqual(tuple(strings["kAcquisitionFormatFields"].split(",")), ACQUISITION_KEYS)
+        self.assertEqual(tuple(strings["kCountFields"].split(",")), COUNT_KEYS)
+        self.assertEqual(strings["kPlaneFields"], "offset,stride,size")
+        self.assertEqual(strings["kLimitFields"], "fps,max_seconds,max_frames")
+        self.assertEqual(strings["kFourcc"], "BGR3")
+        self.assertEqual((strings["kPixelPathCpuLinear"], strings["kPixelPathGpuConvert"]), ("cpu_linear", "gpu_convert"))
+        self.assertEqual((strings["kDerivationCpuConverted"], strings["kDerivationGpuConverted"]), ("cpu_converted", "gpu_converted"))
+        self.assertEqual({strings[f"kEndReason{name}"] for name in ("MaxSeconds", "MaxFrames", "StopSignal", "HeadsetRemoved",
+                                                                     "Standby", "SdkError", "PixelPathError", "Watchdog")},
+                         END_REASONS)
+        self.assertEqual((numbers["kMinFps"], numbers["kMaxFps"], numbers["kMinSeconds"], numbers["kMaxSeconds"],
+                          numbers["kMinFrames"], numbers["kMaxFrames"]), (1, 10, 1, 60, 1, 600))
+        self.assertEqual((numbers["kMaxSide"], numbers["kMaxPlanes"], numbers["kCameraCount"]), (4096, 4, 2))
+        self.assertRegex(strings["kContractDigest"], r"^[0-9a-f]{64}$")
+        # Constants only: no function, no class, no include beyond <cstdint>.
+        body = text.split("namespace sightcircuit_camera_export {", 1)[1]
+        self.assertFalse(re.search(r"\b(class|struct|inline|return)\b", body))
+        self.assertEqual(re.findall(r"#include <(\w+)>", text), ["cstdint"])
 
     def test_the_reference_coefficients_match_the_header(self):
         header = (ROOT / "tools/camera_ycbcr.hpp").read_text()
@@ -260,36 +275,43 @@ class CameraExportTests(unittest.TestCase):
     # -- schema ------------------------------------------------------------------------
 
     def check_stream(self, packets, scenario=None, camera_indices=(0,), pixel_path="cpu_linear"):
-        """One ready first, one end last, frames in between with the pinned header vocabulary."""
+        """One ready first, one end last, frames in between, each with exactly the contract's fields in its order."""
         self.assertGreaterEqual(len(packets), 2, packets)
         ready, end = packets[0][0], packets[-1][0]
         self.assertEqual(ready["kind"], "ready")
         self.assertEqual(end["kind"], "end")
         self.assertEqual([header["kind"] for header, _ in packets[1:-1]], ["frame"] * (len(packets) - 2))
-        self.assertEqual(set(ready), READY_KEYS)
+        self.assertEqual(tuple(ready), READY_KEYS)
         self.assertEqual(ready["protocol"], 1)
         self.assertEqual(ready["backend"], "fake")
         self.assertEqual(ready["pixel_path"], pixel_path)
         self.assertEqual(ready["delivered_format"], {"fourcc": "BGR3"})
-        self.assertEqual(ready["camera"]["camera_indices"], list(camera_indices))
-        self.assertEqual(set(ready["limits"]), {"fps", "max_seconds", "max_frames"})
-        self.assertIn("build_commit", ready["build"])
-        self.assertIn("compiler", ready["build"])
-        self.assertIsNone(ready["build"]["sdk_release"])
-        self.assertEqual(ready["pixel_path_facts"]["path"], pixel_path)
+        self.assertEqual(ready["cameras"], list(camera_indices))
+        self.assertEqual(tuple(ready["limits"]), ("fps", "max_seconds", "max_frames"))
+        build = ready["build"]
+        self.assertEqual(set(build), BUILD_KEYS | ({"build_commit_reason"} if build["build_commit"] is None else set()))
+        self.assertIsNone(build["sdk_release"])
+        self.assertEqual(build["pixel_path_facts"]["path"], pixel_path)
+        self.assertRegex(build["controls_digest_start"], r"^[0-9a-f]{64}$")
+        self.assertRegex(build["contract_digest"], r"^[0-9a-f]{64}$")
+        for value in build.values():  # scalars, or objects of scalars: no arrays anywhere
+            for scalar in (value.values() if isinstance(value, dict) else [value]):
+                self.assertIsInstance(scalar, (str, int, bool, type(None)), build)
         self.assertEqual(packets[0][1], b"")
         self.assertEqual(packets[-1][1], b"")
-        self.assertEqual(set(end), END_KEYS)
+        self.assertEqual(tuple(end), END_KEYS)
         self.assertIn(end["reason"], END_REASONS)
-        self.assertEqual(set(end["counts"]), COUNT_KEYS)
+        self.assertEqual(tuple(end["counts"]), COUNT_KEYS)
         self.assertEqual(end["counts"]["exported"], len(packets) - 2)
-        self.assertEqual(end["controls_digest_start"], ready["controls_digest_start"])
-        self.assertRegex(ready["controls_digest_start"], r"^[0-9a-f]{64}$")
+        self.assertEqual(end["digests"]["controls_start"], build["controls_digest_start"])
+        self.assertLessEqual(set(end["digests"]), {"controls_start", "controls_end", "offline_cal"})
+        for digest in end["digests"].values():
+            self.assertRegex(digest, r"^[0-9a-f]{64}$")
         derivation = "gpu_converted" if pixel_path == "gpu_convert" else "cpu_converted"
         sequence = 0
         for header, payload in packets[1:-1]:
             sequence += 1
-            self.assertEqual(set(header), FRAME_KEYS)
+            self.assertEqual(tuple(header), FRAME_KEYS)
             self.assertEqual(header["sequence"], sequence)
             self.assertIn(header["camera_index"], camera_indices)
             self.assertEqual(header["fourcc"], "BGR3")
@@ -297,7 +319,7 @@ class CameraExportTests(unittest.TestCase):
             self.assertGreaterEqual(header["stride_bytes"], header["width"] * 3)
             self.assertEqual(header["buffer_bytes"], header["stride_bytes"] * header["height"])
             self.assertEqual(len(payload), header["buffer_bytes"])
-            self.assertEqual(set(header["acquisition_format"]), ACQUISITION_KEYS)
+            self.assertEqual(tuple(header["acquisition_format"]), ACQUISITION_KEYS)
             self.assertEqual(header["acquisition_format"]["plane_count"], len(header["acquisition_format"]["planes"]))
             self.assertRegex(header["acquisition_format"]["modifier"], r"^0x[0-9a-f]{16}$")
             self.assertGreater(header["monotonic_ns"], header["exposure_ns"])
@@ -328,19 +350,21 @@ class CameraExportTests(unittest.TestCase):
     def test_cpu_linear_converts_nv12_and_p010_exactly_in_every_encoding(self):
         for scenario in ("export_nv12", "export_nv12_bt601", "export_p010"):
             with self.subTest(scenario=scenario):
-                code, packets, records = self.export(scenario, "--camera", "both", "--pixel-path", "cpu_linear")
+                code, packets, records = self.export(scenario, "--cameras", "0,1", "--pixel-path", "cpu_linear")
                 self.assertEqual(code, 0)
                 ready, end = self.check_stream(packets, scenario, camera_indices=(0, 1))
                 self.assertEqual(end["reason"], "max_frames")
                 self.assertEqual(end["counts"]["exported"], 4)
+                self.assertEqual(end["digests"]["controls_end"], end["digests"]["controls_start"])
                 frames = packets[1:-1]
                 self.assertEqual([header["camera_index"] for header, _ in frames], [0, 1, 0, 1])
-                self.assertEqual(frames[0][0]["frame_set_sequence"], frames[1][0]["frame_set_sequence"])
-                self.assertLess(frames[1][0]["frame_set_sequence"], frames[2][0]["frame_set_sequence"])
+                self.assertEqual(frames[0][0]["frame_id"] // 10, frames[1][0]["frame_id"] // 10)  # one frame set
+                self.assertLess(frames[1][0]["frame_id"] // 10, frames[2][0]["frame_id"] // 10)
                 for header, payload in frames:
                     self.check_pixels(scenario, header, payload)
-                self.assertEqual(end["pixel_path_notes"], {"dma_buf_sync": "not_supported_by_descriptor"})
                 final = self.final(records)
+                self.assertEqual(final["pixel_path_notes"], {"dma_buf_sync": "not_supported_by_descriptor"})
+                self.assertEqual(final["cameras"], [0, 1])
                 self.assertEqual((final["reason"], final["exported"], final["pixel_path"]), ("max_frames", 4, "cpu_linear"))
                 self.assertIs(final["cleanup_ok"], True)
                 self.assertIs(final["reader_deactivated"], True)
@@ -356,7 +380,8 @@ class CameraExportTests(unittest.TestCase):
         self.assertEqual(code, 0)
         ready, end = self.check_stream(packets, "export_nv12")
         self.assertEqual(ready["pixel_path"], "cpu_linear")
-        self.assertEqual(ready["camera"], {"requested": "left", "camera_indices": [0], "index_mapping": "assumed_avcam0_left"})
+        self.assertEqual(ready["cameras"], [0])
+        self.assertEqual(ready["build"]["camera_index_mapping"], "assumed_avcam0_left")
         self.assertEqual(ready["limits"], {"fps": 10, "max_seconds": 8, "max_frames": 1})
         self.check_pixels("export_nv12", *packets[1])
 
@@ -401,9 +426,10 @@ class CameraExportTests(unittest.TestCase):
     # -- pacing and bounds ------------------------------------------------------------------
 
     def test_pacing_drops_frame_sets_and_counts_them(self):
-        code, packets, _ = self.export("export_nv12", "--pixel-path", "cpu_linear", fps=5, max_frames=3)
+        code, packets, records = self.export("export_nv12", "--pixel-path", "cpu_linear", fps=5, max_frames=3)
         self.assertEqual(code, 0)
         ready, end = self.check_stream(packets, "export_nv12")
+        final = self.final(records)
         frames = [header for header, _ in packets[1:-1]]
         self.assertEqual(frames[0]["dropped_since_last"], 0)
         # The fake runs at about 60 Hz; at 5 frames a second about eleven sets fall between exports.
@@ -411,18 +437,19 @@ class CameraExportTests(unittest.TestCase):
             self.assertGreaterEqual(header["dropped_since_last"], 5, header)
             self.assertLessEqual(header["dropped_since_last"], 20, header)
         self.assertEqual(end["counts"]["dropped"], sum(header["dropped_since_last"] for header in frames))
-        self.assertEqual(end["counts"]["frame_sets"], end["counts"]["dropped"] + 3)
-        self.assertEqual(end["counts"]["passes"], end["counts"]["frame_sets"])
+        self.assertEqual(final["frame_sets"], end["counts"]["dropped"] + 3)
+        self.assertEqual(final["passes"], final["frame_sets"])
+        self.assertEqual(final["dropped"], end["counts"]["dropped"])
         self.assertGreaterEqual(end["elapsed_ns"], 350_000_000)
         self.assertLess(end["elapsed_ns"], 1_500_000_000)
         self.assertGreater(frames[1]["monotonic_ns"] - frames[0]["monotonic_ns"], 150_000_000)
         self.assertLess(frames[1]["frame_id"] // 10 - frames[0]["frame_id"] // 10 - 1, 21)
 
     def test_max_frames_and_max_seconds_end_the_run(self):
-        code, packets, _ = self.export("export_nv12", "--camera", "both", max_frames=3)
+        code, packets, _ = self.export("export_nv12", "--cameras", "0,1", max_frames=3)
         self.assertEqual(code, 0)
         _, end = self.check_stream(packets, "export_nv12", camera_indices=(0, 1))
-        self.assertEqual((end["reason"], end["counts"]["exported"], end["exit_code"]), ("max_frames", 3, 0))
+        self.assertEqual((end["reason"], end["counts"]["exported"]), ("max_frames", 3))
         self.assertEqual([header["camera_index"] for header, _ in packets[1:-1]], [0, 1, 0])
         started = time.monotonic()
         code, packets, _ = self.export("export_nv12", max_seconds=1, max_frames=600, fps=1)
@@ -445,10 +472,10 @@ class CameraExportTests(unittest.TestCase):
         self.assertEqual(end["reason"], "headset_removed")
         self.assertGreaterEqual(end["counts"]["exported"], 1)
         self.assertGreater(end["counts"]["acquire_failures"], 5)
-        self.assertRegex(end["detail"], r"^no_frame_set_for_ns:\d+$")
-        self.assertGreater(int(end["detail"].split(":")[1]), 2_000_000_000)
-        self.assertEqual(end["outcome"], "ok")
         final = self.final(records)
+        self.assertRegex(final["detail"], r"^no_frame_set_for_ns:\d+$")
+        self.assertGreater(int(final["detail"].split(":")[1]), 2_000_000_000)
+        self.assertEqual(final["outcome"], "ok")
         self.assertEqual(final["reason"], "headset_removed")
         self.assertIs(final["cleanup_ok"], True)
         self.assertIs(final["reader_deactivated"], True)
@@ -459,7 +486,7 @@ class CameraExportTests(unittest.TestCase):
         _, end = self.check_stream(packets, "export_nv12")
         self.assertEqual(end["reason"], "standby")
         self.assertGreaterEqual(end["counts"]["exported"], 1)
-        self.assertRegex(end["detail"], r"^no_frame_set_for_ns:\d+$")
+        self.assertRegex(self.final(records)["detail"], r"^no_frame_set_for_ns:\d+$")
         self.assertEqual(self.final(records)["outcome_counts"]["unavailable"], end["counts"]["acquire_failures"])
 
     def test_stop_signals_end_cleanly_with_the_end_packet_last(self):
@@ -476,7 +503,7 @@ class CameraExportTests(unittest.TestCase):
                 self.assertEqual(code, 130)
                 packets = parse_packets(out)
                 _, end = self.check_stream(packets, "export_nv12")
-                self.assertEqual((end["reason"], end["exit_code"]), ("stop_signal", 130))
+                self.assertEqual(end["reason"], "stop_signal")
                 self.assertGreaterEqual(end["counts"]["exported"], 1)
                 final = self.final(records)
                 self.assertEqual((final["reason"], final["stop_signal"]), ("stop_signal", stop.name))
@@ -493,19 +520,22 @@ class CameraExportTests(unittest.TestCase):
                 self.assertLess(time.monotonic() - started, 8)
                 self.assertEqual([header["kind"] for header, _ in packets], kinds)
                 end = packets[-1][0]
-                self.assertEqual((end["reason"], end["exit_code"]), ("watchdog", 124))
-                self.assertIs(end["cleanup_ok"], False)
+                self.assertEqual(tuple(end), END_KEYS)
+                self.assertEqual(end["reason"], "watchdog")
                 self.assertEqual(end["counts"]["exported"], 0)
-                self.assertEqual(end["counts"]["passes"], 1)
+                self.assertEqual(end["counts"]["acquire_failures"], 0)
+                self.assertIn("controls_start", end["digests"])
                 self.assertFalse([record for record in records if record["event"] == "final"])
 
     def test_transport_loss_and_bad_metadata_end_with_sdk_error(self):
         code, packets, records = self.export("export_transport_lost", "--pixel-path", "cpu_linear", max_frames=50)
         self.assertEqual(code, 1)
         _, end = self.check_stream(packets, "export_nv12")
-        self.assertEqual((end["reason"], end["detail"], end["outcome"], end["exit_code"]), ("sdk_error", "transport_lost", "transport_lost", 1))
+        self.assertEqual(end["reason"], "sdk_error")
         self.assertEqual(end["counts"]["exported"], 1)
+        self.assertNotIn("controls_end", end["digests"])  # the session was lost before the end read
         final = self.final(records)
+        self.assertEqual((final["detail"], final["outcome"], final["exit_code"]), ("transport_lost", "transport_lost", 1))
         self.assertIs(final["cleanup_ok"], False)
         self.assertEqual(final["reader_deactivated"], "session_closed")
         self.assertEqual(final["fake_calls"][-1], "disconnect")
@@ -518,9 +548,10 @@ class CameraExportTests(unittest.TestCase):
                 code, packets, records = self.export(scenario, *extra)
                 self.assertEqual(code, 1)
                 _, end = self.check_stream(packets)
-                self.assertEqual((end["reason"], end["detail"], end["exit_code"]), ("pixel_path_error", detail, 1))
+                self.assertEqual(end["reason"], "pixel_path_error")
                 self.assertEqual(end["counts"]["exported"], 0)
                 final = self.final(records)
+                self.assertEqual((final["reason"], final["detail"], final["exit_code"]), ("pixel_path_error", detail, 1))
                 self.assertIs(final["cleanup_ok"], True)
                 calls = final["fake_calls"]
                 self.assertEqual(calls[calls.index("acquire") + 1], "release")
@@ -539,21 +570,24 @@ class CameraExportTests(unittest.TestCase):
             self.assertEqual(packets[0][0]["pixel_path"], "gpu_convert")
 
     def test_camera_selection(self):
-        code, packets, _ = self.export("export_nv12", "--camera", "right", "--pixel-path", "cpu_linear", max_frames=2)
+        code, packets, _ = self.export("export_nv12", "--cameras", "1", "--pixel-path", "cpu_linear", max_frames=2)
         self.assertEqual(code, 0)
         ready, end = self.check_stream(packets, "export_nv12", camera_indices=(1,))
-        self.assertEqual(ready["camera"]["requested"], "right")
         for header, payload in packets[1:-1]:
             self.assertEqual(header["camera_index"], 1)
             self.assertEqual(header["frame_id"] % 10, 1)
             self.check_pixels("export_nv12", header, payload)
-        code, packets, records = self.export("export_one_camera", "--camera", "right", "--pixel-path", "cpu_linear")
+        code, packets, _ = self.export("export_nv12", "--cameras", "1,0", "--pixel-path", "cpu_linear", max_frames=2)
+        self.assertEqual(code, 0)
+        ready, _ = self.check_stream(packets, "export_nv12", camera_indices=(0, 1))
+        self.assertEqual([header["camera_index"] for header, _ in packets[1:-1]], [0, 1])
+        code, packets, records = self.export("export_one_camera", "--cameras", "1", "--pixel-path", "cpu_linear")
         self.assertEqual(code, 1)
         _, end = self.check_stream(packets, camera_indices=(1,))
         self.assertEqual(end["reason"], "sdk_error")
-        self.assertTrue(end["detail"].startswith("camera_missing:right"), end["detail"])
+        self.assertTrue(self.final(records)["detail"].startswith("camera_missing:--cameras 1"), self.final(records)["detail"])
         self.assertEqual(end["counts"]["exported"], 0)
-        code, packets, _ = self.export("export_one_camera", "--camera", "both", "--pixel-path", "cpu_linear")
+        code, packets, _ = self.export("export_one_camera", "--cameras", "0,1", "--pixel-path", "cpu_linear")
         self.assertEqual(code, 1)
         code, packets, _ = self.export("export_one_camera", "--pixel-path", "cpu_linear", max_frames=2)
         self.assertEqual(code, 0)
@@ -603,7 +637,8 @@ class CameraExportTests(unittest.TestCase):
             ["--export-frames", "--max-seconds", 0, "--max-frames", 3], ["--export-frames", "--max-seconds", 61, "--max-frames", 3],
             ["--export-frames", "--max-seconds", 2, "--max-frames", 0], ["--export-frames", "--max-seconds", 2, "--max-frames", 601],
             base + ["--fps", 0], base + ["--fps", 11], base + ["--fps", "5.0"], base + ["--fps"],
-            base + ["--camera", "middle"], base + ["--camera"], base + ["--camera", "LEFT"],
+            base + ["--cameras", "2"], base + ["--cameras"], base + ["--cameras", "left"], base + ["--cameras", "0,0"],
+            base + ["--cameras", "0,1,"], base + ["--cameras", ",1"], base + ["--cameras", "0, 1"], base + ["--camera", "0"],
             base + ["--pixel-path", "magic"], base + ["--pixel-path"], base + ["--pixel-path", "cpu"],
             base + ["--interval-ms", 200], base + ["--probe-frames", 1], base + ["--hello"], base + ["--describe"],
             base + ["--timeout-ms", 0], base + ["--timeout-ms", 10001], base + ["--fake-scenario", "no_such_scenario"],
@@ -621,7 +656,7 @@ class CameraExportTests(unittest.TestCase):
         self.assertEqual(list(Path(self.runtime.name).iterdir()), [])
         # The export-only arguments are refused on the metadata modes, which keep NDJSON on stdout.
         for args in (["--probe-frames", 1, "--max-seconds", 2, "--fps", 2], ["--hello", "--max-frames", 1],
-                     ["--hello", "--camera", "left"], ["--describe", "--pixel-path", "auto"],
+                     ["--hello", "--cameras", "0"], ["--describe", "--pixel-path", "auto"],
                      ["--probe-frames", 1, "--max-seconds", 11]):
             with self.subTest(args=args):
                 result = subprocess.run([str(self.binary), *map(str, args)], stdin=subprocess.DEVNULL, capture_output=True,
@@ -631,7 +666,7 @@ class CameraExportTests(unittest.TestCase):
                 self.assertEqual(record["reason"], "invalid_arguments")
 
     def test_the_mode_writes_no_file_anywhere(self):
-        code, packets, _ = self.export("export_nv12", "--camera", "both", "--pixel-path", "cpu_linear", max_frames=6)
+        code, packets, _ = self.export("export_nv12", "--cameras", "0,1", "--pixel-path", "cpu_linear", max_frames=6)
         self.assertEqual(code, 0)
         self.assertEqual(len(packets), 8)
         self.assertEqual(os.listdir(self.cwd.name), [])
@@ -654,20 +689,20 @@ class CameraExportTests(unittest.TestCase):
     def test_gpu_convert_imports_a_memfd_through_vulkan_and_matches_the_cpu_path(self):
         for scenario in ("export_nv12", "export_p010", "export_nv12_bt601"):
             with self.subTest(scenario=scenario):
-                code, packets, records = self.export(scenario, "--camera", "both", "--pixel-path", "gpu_convert", max_frames=2)
+                code, packets, records = self.export(scenario, "--cameras", "0,1", "--pixel-path", "gpu_convert", max_frames=2)
                 self.assertEqual(code, 0, self.final(records) if records else None)
                 ready, end = self.check_stream(packets, scenario, camera_indices=(0, 1), pixel_path="gpu_convert")
-                facts = ready["pixel_path_facts"]
+                facts = ready["build"]["pixel_path_facts"]
                 self.assertIn(facts["import"], ("drm_format_modifier", "linear_copy_fallback"))
                 self.assertTrue(facts["device_name"])
-                self.assertIn("VK_EXT_external_memory_dma_buf", facts["device_extensions"])
+                self.assertIn("VK_EXT_external_memory_dma_buf", facts["device_extensions"].split(","))
                 self.assertEqual(facts["shader_source_sha256"],
                                  hashlib.sha256((ROOT / "tools/camera_convert.comp").read_bytes()).hexdigest())
                 for header, payload in packets[1:-1]:
                     self.assertEqual(header["derivation"], "gpu_converted")
                     self.check_pixels(scenario, header, payload)
-                self.assertEqual(end["pixel_path_notes"]["frames_imported"], 2)
-                self.assertEqual(end["pixel_path_notes"]["import"], facts["import"])
+                notes = self.final(records)["pixel_path_notes"]
+                self.assertEqual((notes["frames_imported"], notes["import"]), (2, facts["import"]))
         # The first frame set of a run has the same content on either path: the bytes agree exactly.
         _, gpu, _ = self.export("export_nv12", "--pixel-path", "gpu_convert", max_frames=1)
         _, cpu, _ = self.export("export_nv12", "--pixel-path", "cpu_linear", max_frames=1)

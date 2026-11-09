@@ -278,17 +278,38 @@ struct Options {
     unsigned timeout_ms = 2000;
     unsigned fps = 5;
     unsigned max_frames = 0;
-    std::string camera = "left";        // left, right or both
+    std::string cameras = "0";          // --cameras: 0, 1 or 0,1 (camera indices, as the contract names them)
+    bool camera_selected[kMaxCameras] = {true, false};
     std::string pixel_path = "auto";    // auto, cpu_linear or gpu_convert
     std::string fake_scenario = "ok_linear_nv12";
     bool help = false;
     std::string error;
 
-    bool exports_camera(uint32_t index) const {
-        return camera == "both" || (camera == "left" && index == 0) || (camera == "right" && index == 1);
+    bool exports_camera(uint32_t index) const { return index < kMaxCameras && camera_selected[index]; }
+    uint32_t highest_camera_index() const {
+        uint32_t highest = 0;
+        for (uint32_t index = 0; index < kMaxCameras; ++index) if (camera_selected[index]) highest = index;
+        return highest;
     }
-    uint32_t highest_camera_index() const { return camera == "left" ? 0u : 1u; }
 };
+
+// "0", "1" or "0,1" (either order, no repeats): the selected camera indices.
+bool parse_cameras(const std::string& text, bool selected[kMaxCameras]) {
+    for (uint32_t index = 0; index < kMaxCameras; ++index) selected[index] = false;
+    if (text.empty() || text.size() > 3) return false;
+    std::size_t start = 0;
+    while (start <= text.size()) {
+        const std::size_t comma = text.find(',', start);
+        const std::string item = text.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+        if (item.size() != 1 || item[0] < '0' || item[0] >= static_cast<char>('0' + kMaxCameras)) return false;
+        const uint32_t index = static_cast<uint32_t>(item[0] - '0');
+        if (selected[index]) return false;
+        selected[index] = true;
+        if (comma == std::string::npos) break;
+        start = comma + 1;
+    }
+    return true;
+}
 
 bool parse_unsigned(const char* text, unsigned& value) {
     if (!text || !*text || std::strlen(text) > 7) return false;
@@ -339,13 +360,11 @@ Options parse_arguments(int argc, char** argv) {
             if (take_value(index, "--max-frames", options.max_frames, 1, kMaxExportFrames)) have_max_frames = true;
         } else if (argument == "--fps") {
             if (take_value(index, "--fps", options.fps, 1, kMaxExportFps)) have_fps = true;
-        } else if (argument == "--camera") {
+        } else if (argument == "--cameras") {
             have_camera = true;
-            if (index + 1 >= argc) options.error = "--camera needs left, right or both";
-            else options.camera = argv[++index];
-            if (options.camera != "left" && options.camera != "right" && options.camera != "both") {
-                options.error = "--camera needs left, right or both";
-            }
+            if (index + 1 >= argc) options.error = "--cameras needs 0, 1 or 0,1";
+            else options.cameras = argv[++index];
+            if (!parse_cameras(options.cameras, options.camera_selected)) options.error = "--cameras needs 0, 1 or 0,1";
         } else if (argument == "--pixel-path") {
             have_pixel_path = true;
             if (index + 1 >= argc) options.error = "--pixel-path needs auto, cpu_linear or gpu_convert";
@@ -374,7 +393,7 @@ Options parse_arguments(int argc, char** argv) {
         if (!have_max_seconds || !have_max_frames) options.error = "--export-frames needs --max-seconds and --max-frames";
         else if (have_interval) options.error = "--interval-ms applies to --probe-frames";
     } else if (export_only) {
-        options.error = "--fps, --max-frames, --camera and --pixel-path apply to --export-frames";
+        options.error = "--fps, --max-frames, --cameras and --pixel-path apply to --export-frames";
     } else if (options.mode == Options::probe) {
         if (!have_max_seconds) options.error = "--probe-frames needs --max-seconds";
         else if (options.max_seconds > kMaxProbeSeconds) {
@@ -393,7 +412,7 @@ const char* usage_text() {
            "  --probe-frames N --max-seconds S [--interval-ms M] [--timeout-ms T]\n"
            "                                              metadata of up to N frame sets (1-50) within S seconds (1-10),\n"
            "                                              one pass per M ms (100-1000, default 200); no pixels are read\n"
-           "  --export-frames --max-seconds S --max-frames N [--fps F] [--camera left|right|both]\n"
+           "  --export-frames --max-seconds S --max-frames N [--fps F] [--cameras 0|1|0,1]\n"
            "                 [--pixel-path auto|cpu_linear|gpu_convert] [--timeout-ms T]\n"
            "                                              BGR3 frames to the parent over stdout (camera export protocol 1),\n"
            "                                              at most F per second (1-10, default 5), S seconds (1-60) and\n"
@@ -439,9 +458,9 @@ void put_u32(std::string& out, uint32_t value) {
 std::string packet_bytes(const std::string& header_json, const uint8_t* payload, std::size_t payload_bytes) {
     if (header_json.size() > export_protocol::kMaxHeaderBytes || payload_bytes > export_protocol::kMaxPayloadBytes) return "";
     std::string bytes;
-    bytes.reserve(export_protocol::kPacketPrefixBytes + header_json.size() + payload_bytes);
-    bytes.append(export_protocol::kMagic, sizeof export_protocol::kMagic);
-    put_u32(bytes, export_protocol::kProtocolVersion);
+    bytes.reserve(export_protocol::kPrefixBytes + header_json.size() + payload_bytes);
+    bytes.append(export_protocol::kMagic, 4);
+    put_u32(bytes, export_protocol::kVersion);
     put_u32(bytes, static_cast<uint32_t>(header_json.size()));
     put_u32(bytes, static_cast<uint32_t>(payload_bytes));
     bytes += header_json;
@@ -617,7 +636,7 @@ public:
     // "end" packet with reason "watchdog" and the counts at the time it was built.
     std::string watchdog_line() const {
         if (options_.mode == Options::export_frames) {
-            return packet_bytes(end_header(export_protocol::kEndWatchdog, lifecycle::kWatchdogExitCode, false), nullptr, 0);
+            return packet_bytes(end_header(export_protocol::kEndReasonWatchdog), nullptr, 0);
         }
         JsonObject object = record("final");
         object.str("mode", mode_name()).null("outcome").str("reason", "watchdog_expired")
@@ -811,7 +830,7 @@ private:
             ++release_failures_;
             emit_outcome("release", outcome, true);
             if (outcome_ == Outcome::ok) outcome_ = outcome;
-            end_reason_ = export_protocol::kEndSdkError;
+            end_reason_ = export_protocol::kEndReasonSdkError;
             return false;
         }
         return true;
@@ -840,7 +859,7 @@ private:
         const bool opened = pixel_path_->open(error, pixel_path_facts_);
         lifecycle::disarm_watchdog();
         if (!opened) {
-            end_export(export_protocol::kEndPixelPathError, "gpu_convert_open_failed:" + error);
+            end_export(export_protocol::kEndReasonPixelPathError, "gpu_convert_open_failed:" + error);
             return false;
         }
         return true;
@@ -862,9 +881,9 @@ private:
         Outcome last_retryable = Outcome::ok;
         bool any_frame_set = false;
         for (;;) {
-            if (check_stop()) { end_export(export_protocol::kEndStopSignal); return; }
-            if (clock_ns(CLOCK_MONOTONIC) >= deadline) { end_export(export_protocol::kEndMaxSeconds); return; }
-            if (exported_ >= options_.max_frames) { end_export(export_protocol::kEndMaxFrames); return; }
+            if (check_stop()) { end_export(export_protocol::kEndReasonStopSignal); return; }
+            if (clock_ns(CLOCK_MONOTONIC) >= deadline) { end_export(export_protocol::kEndReasonMaxSeconds); return; }
+            if (exported_ >= options_.max_frames) { end_export(export_protocol::kEndReasonMaxFrames); return; }
             ++passes_;
             FrameSetLease lease;
             arm_export_watchdog();
@@ -880,7 +899,7 @@ private:
                     // not-ready or unavailable is the service's standby. Before the
                     // first frame set the service never served, which is standby too.
                     const bool removed = any_frame_set && last_retryable == Outcome::no_frame;
-                    end_export(removed ? export_protocol::kEndHeadsetRemoved : export_protocol::kEndStandby,
+                    end_export(removed ? export_protocol::kEndReasonHeadsetRemoved : export_protocol::kEndReasonStandby,
                                std::string("no_frame_set_for_ns:") + std::to_string(clocks.monotonic_ns - last_frame_set_ns));
                     return;
                 }
@@ -891,14 +910,14 @@ private:
                 emit_outcome("acquire", outcome, true);
                 release_lease();
                 outcome_ = outcome;
-                end_export(export_protocol::kEndSdkError, "invalid_metadata");
+                end_export(export_protocol::kEndReasonSdkError, "invalid_metadata");
                 return;
             }
             if (outcome != Outcome::ok) {
                 ++acquire_failures_;
                 emit_outcome("acquire", outcome, true);
                 outcome_ = outcome;
-                end_export(export_protocol::kEndSdkError, outcome_name(outcome));
+                end_export(export_protocol::kEndReasonSdkError, outcome_name(outcome));
                 return;
             }
             // A frame set is held from here until release_lease().
@@ -912,10 +931,10 @@ private:
             }
             if (options_.highest_camera_index() >= lease.meta.camera_count) {
                 release_lease();
-                end_export(export_protocol::kEndSdkError, "camera_missing:" + options_.camera + " needs " +
-                                                               std::to_string(options_.highest_camera_index() + 1) +
-                                                               " cameras, the frame set has " +
-                                                               std::to_string(lease.meta.camera_count));
+                end_export(export_protocol::kEndReasonSdkError, "camera_missing:--cameras " + options_.cameras + " needs " +
+                                                                     std::to_string(options_.highest_camera_index() + 1) +
+                                                                     " cameras, the frame set has " +
+                                                                     std::to_string(lease.meta.camera_count));
                 return;
             }
             if (clocks.monotonic_ns < next_due_ns) {
@@ -936,7 +955,7 @@ private:
                 std::string error;
                 if (!source_frame_from_meta(lease.meta.cameras[camera], lease.camera_fd[camera], source, error)) {
                     release_lease();
-                    end_export(export_protocol::kEndPixelPathError, "camera_" + std::to_string(camera) + ":" + error);
+                    end_export(export_protocol::kEndReasonPixelPathError, "camera_" + std::to_string(camera) + ":" + error);
                     return;
                 }
                 BgrImage image;
@@ -945,7 +964,7 @@ private:
                 lifecycle::disarm_watchdog();
                 if (!converted) {
                     release_lease();
-                    end_export(export_protocol::kEndPixelPathError, "camera_" + std::to_string(camera) + ":" + error);
+                    end_export(export_protocol::kEndReasonPixelPathError, "camera_" + std::to_string(camera) + ":" + error);
                     return;
                 }
                 headers.push_back(frame_header(lease.meta, camera, clocks, image));
@@ -956,7 +975,7 @@ private:
                 if (!write_packet(headers[i], images[i].pixels.data(), images[i].pixels.size())) {
                     protocol_lost_ = true;
                     note("sightcircuit-camera-helper: the protocol stream failed; the parent is gone");
-                    end_export(export_protocol::kEndSdkError, "protocol_write_failed");
+                    end_export(export_protocol::kEndReasonSdkError, "protocol_write_failed");
                     return;
                 }
                 ++exported_;
@@ -972,49 +991,48 @@ private:
         lifecycle::disarm_watchdog();
     }
 
-    std::string build_json() const {
-        JsonObject object;
-        if (kBuildCommit) object.str("build_commit", kBuildCommit);
-        else object.null("build_commit").str("build_commit_reason", kBuildCommitReason);
-        if (kBuildDirty < 0) object.null("build_dirty");
-        else object.boolean("build_dirty", kBuildDirty != 0);
-        if (kSdkSourceRevision && kSdkAgreementVersion) {
-            object.raw("sdk_release", JsonObject().str("source_revision", kSdkSourceRevision)
-                                          .str("agreement_version", kSdkAgreementVersion).done());
-        } else {
-            object.null("sdk_release");
-        }
-        object.str("compiler", __VERSION__);
-        return object.done();
-    }
-
-    std::string camera_selection_json() const {
+    std::string cameras_json() const {
         JsonArray indices;
         for (uint32_t camera = 0; camera < kMaxCameras; ++camera) {
             if (options_.exports_camera(camera)) indices.raw(std::to_string(camera));
         }
-        // avCam0 is taken as the left camera until the device's transforms say otherwise.
-        return JsonObject().str("requested", options_.camera).raw("camera_indices", indices.done())
-            .str("index_mapping", "assumed_avcam0_left").done();
+        return indices.done();
     }
 
+    // The ready packet carries exactly the contract's fields (kReadyFields). The
+    // run's other facts (the pixel path's device, the pacing constants, the
+    // start digest) are scalars under build, which the contract leaves open.
     bool write_ready() {
         const HelloFacts& hello = backend_.hello();
-        JsonObject header;
-        header.str("kind", export_protocol::kKindReady).integer("protocol", export_protocol::kProtocolVersion)
-            .str("backend", kBackendName).str("pixel_path", pixel_path_->name()).raw("build", build_json())
-            .raw("delivered_format", JsonObject().str("fourcc", export_protocol::kDeliveredFourcc).done())
-            .raw("camera", camera_selection_json())
-            .raw("limits", JsonObject().unsigned_integer("fps", options_.fps).unsigned_integer("max_seconds", options_.max_seconds)
-                               .unsigned_integer("max_frames", options_.max_frames).done())
-            .unsigned_integer("frame_timeout_ms", kExportFrameTimeoutMs).integer("presence_gap_ns", kPresenceGapNs)
+        JsonObject build;
+        if (kBuildCommit) build.str("build_commit", kBuildCommit);
+        else build.null("build_commit").str("build_commit_reason", kBuildCommitReason);
+        if (kBuildDirty < 0) build.null("build_dirty");
+        else build.boolean("build_dirty", kBuildDirty != 0);
+        if (kSdkSourceRevision && kSdkAgreementVersion) {
+            build.raw("sdk_release", JsonObject().str("source_revision", kSdkSourceRevision)
+                                         .str("agreement_version", kSdkAgreementVersion).done());
+        } else {
+            build.null("sdk_release");
+        }
+        build.str("compiler", __VERSION__).str("contract_digest", export_protocol::kContractDigest)
             .raw("pixel_path_facts", pixel_path_facts_.empty() ? "{}" : pixel_path_facts_)
+            .str("camera_index_mapping", "assumed_avcam0_left")  // until the device's transforms say otherwise
+            .unsigned_integer("frame_timeout_ms", kExportFrameTimeoutMs).integer("presence_gap_ns", kPresenceGapNs)
             .unsigned_integer("hello_camera_count", hello.camera_count)
-            .str("controls_digest_start", have_start_ ? start_controls_.digest() : "")
             .integer("monotonic_ns", clock_ns(CLOCK_MONOTONIC)).integer("realtime_ns", clock_ns(CLOCK_REALTIME));
+        if (have_start_) build.str("controls_digest_start", start_controls_.digest());
+        else build.null("controls_digest_start");
+        JsonObject header;
+        header.str("kind", export_protocol::kKindReady).integer("protocol", export_protocol::kVersion)
+            .str("backend", kBackendName).str("pixel_path", pixel_path_->name()).raw("build", build.done())
+            .raw("delivered_format", JsonObject().str("fourcc", export_protocol::kFourcc).done())
+            .raw("cameras", cameras_json())
+            .raw("limits", JsonObject().unsigned_integer("fps", options_.fps).unsigned_integer("max_seconds", options_.max_seconds)
+                               .unsigned_integer("max_frames", options_.max_frames).done());
         if (!write_packet(header.done(), nullptr, 0)) {
             protocol_lost_ = true;
-            end_export(export_protocol::kEndSdkError, "protocol_write_failed");
+            end_export(export_protocol::kEndReasonSdkError, "protocol_write_failed");
             return false;
         }
         ready_written_ = true;
@@ -1036,11 +1054,10 @@ private:
             .str("transfer", source.transfer).str("primaries", source.primaries);
         JsonObject header;
         header.str("kind", export_protocol::kKindFrame).unsigned_integer("sequence", exported_ + 1 + pending_in_set_)
-            .unsigned_integer("frame_id", source.frame_id).unsigned_integer("frame_set_sequence", meta.sequence)
-            .unsigned_integer("camera_index", camera).unsigned_integer("camera_count", meta.camera_count)
+            .unsigned_integer("frame_id", source.frame_id).unsigned_integer("camera_index", camera)
             .integer("exposure_ns", source.exposure_timestamp_ns).integer("monotonic_ns", clocks.monotonic_ns)
             .integer("realtime_ns", clocks.realtime_ns).unsigned_integer("width", image.width)
-            .unsigned_integer("height", image.height).str("fourcc", export_protocol::kDeliveredFourcc)
+            .unsigned_integer("height", image.height).str("fourcc", export_protocol::kFourcc)
             .unsigned_integer("stride_bytes", image.stride_bytes).unsigned_integer("buffer_bytes", image.pixels.size())
             .str("derivation", pixel_path_->derivation()).raw("acquisition_format", acquisition.done())
             .unsigned_integer("dropped_since_last", dropped_since_last_);
@@ -1048,26 +1065,23 @@ private:
         return header.done();
     }
 
-    // The end header; the watchdog's copy is built before each call with the counts so far.
-    std::string end_header(const std::string& reason, int exit_code, bool cleanup_ok) const {
+    // The end header: exactly the contract's fields (kEndFields). The digests are
+    // the ones the other modes end with, each present only when it was read; the
+    // exit code, cleanup state, detail and pixel-path notes are in the stderr
+    // final record. The watchdog's copy is built before each call with the counts so far.
+    std::string end_header(const std::string& reason) const {
         JsonObject counts;
         counts.unsigned_integer("exported", exported_).unsigned_integer("dropped", dropped_)
-            .unsigned_integer("acquire_failures", acquire_failures_).unsigned_integer("release_failures", release_failures_)
-            .unsigned_integer("frame_sets", frame_sets_).unsigned_integer("passes", passes_);
+            .unsigned_integer("acquire_failures", acquire_failures_).unsigned_integer("release_failures", release_failures_);
+        JsonObject digests;
+        if (have_start_) digests.str("controls_start", start_controls_.digest());
+        if (have_end_) digests.str("controls_end", end_controls_.digest());
+        const HelloFacts& hello = backend_.hello();
+        if (!hello.offline_cal_sha256.empty()) digests.str("offline_cal", hello.offline_cal_sha256);
         JsonObject header;
         header.str("kind", export_protocol::kKindEnd).str("reason", reason).raw("counts", counts.done())
             .integer("elapsed_ns", export_started_ns_ ? clock_ns(CLOCK_MONOTONIC) - export_started_ns_ : 0)
-            .integer("exit_code", exit_code).boolean("cleanup_ok", cleanup_ok)
-            .str("outcome", outcome_name(outcome_));
-        if (detail_.empty()) header.null("detail");
-        else header.str("detail", detail_);
-        if (have_start_) header.str("controls_digest_start", start_controls_.digest());
-        else header.null("controls_digest_start");
-        if (have_end_) header.str("controls_digest_end", end_controls_.digest());
-        else header.null("controls_digest_end");
-        if (have_start_ && have_end_) header.boolean("controls_changed_during_run", !start_controls_.changed_fields(end_controls_).empty());
-        else header.null("controls_changed_during_run");
-        header.raw("pixel_path_notes", pixel_path_ ? pixel_path_->notes_json() : "{}");
+            .raw("digests", digests.done());
         return header.done();
     }
 
@@ -1134,16 +1148,16 @@ private:
         connected_ = false;
         int exit_code = exit_code_for(outcome_);
         if (options_.mode == Options::export_frames) {
-            if (end_reason_.empty()) end_reason_ = export_protocol::kEndSdkError;
-            if (end_reason_ == export_protocol::kEndStopSignal) exit_code = kExitCancelled;
-            else if (end_reason_ == export_protocol::kEndPixelPathError) exit_code = 1;
-            else if (end_reason_ == export_protocol::kEndSdkError && exit_code == 0) exit_code = 1;
-            else if (end_reason_ != export_protocol::kEndSdkError) exit_code = 0;
+            if (end_reason_.empty()) end_reason_ = export_protocol::kEndReasonSdkError;
+            if (end_reason_ == export_protocol::kEndReasonStopSignal) exit_code = kExitCancelled;
+            else if (end_reason_ == export_protocol::kEndReasonPixelPathError) exit_code = 1;
+            else if (end_reason_ == export_protocol::kEndReasonSdkError && exit_code == 0) exit_code = 1;
+            else if (end_reason_ != export_protocol::kEndReasonSdkError) exit_code = 0;
             if (protocol_lost_) exit_code = 1;
             if (!cleanup_ok_ && exit_code == 0) exit_code = 1;
             reason_ = end_reason_;
             if (ready_written_ && !protocol_lost_) {
-                if (!write_packet(end_header(end_reason_, exit_code, cleanup_ok_), nullptr, 0)) exit_code = 1;
+                if (!write_packet(end_header(end_reason_), nullptr, 0)) exit_code = 1;
             }
         } else {
             if (reason_.empty()) reason_ = outcome_name(outcome_);
@@ -1166,7 +1180,9 @@ private:
         if (options_.mode == Options::export_frames) {
             object.unsigned_integer("exported", exported_).unsigned_integer("dropped", dropped_)
                 .unsigned_integer("acquire_failures", acquire_failures_).unsigned_integer("release_failures", release_failures_)
-                .boolean("ready_written", ready_written_).str("pixel_path", pixel_path_ ? pixel_path_->name() : "");
+                .boolean("ready_written", ready_written_).str("pixel_path", pixel_path_ ? pixel_path_->name() : "")
+                .raw("pixel_path_facts", pixel_path_facts_.empty() ? "{}" : pixel_path_facts_)
+                .raw("pixel_path_notes", pixel_path_ ? pixel_path_->notes_json() : "{}").raw("cameras", cameras_json());
         }
         JsonObject counts;
         for (int i = 0; i < kOutcomeCount; ++i) counts.unsigned_integer(outcome_name(static_cast<Outcome>(i)), counts_[i]);
@@ -1286,9 +1302,9 @@ int run_describe() {
 
 std::string notice_for(const Options& options) {
     if (options.mode == Options::export_frames) {
-        const std::string cameras = options.camera == "both" ? "both passthrough cameras" :
-                                    options.camera == "left" ? "the left passthrough camera (avCam0)" :
-                                                               "the right passthrough camera (avCam1)";
+        const std::string cameras = options.exports_camera(0) && options.exports_camera(1) ? "both passthrough cameras" :
+                                    options.exports_camera(0) ? "passthrough camera 0 (avCam0, reported as left)" :
+                                                                "passthrough camera 1 (avCam1, reported as right)";
         return "sightcircuit-camera-helper --export-frames: activates this client's frame reader for both passthrough "
                "cameras and delivers converted BGR images of " + cameras + " to the parent process over stdout, at most " +
                std::to_string(options.fps) + " per second, for at most " + std::to_string(options.max_seconds) +
