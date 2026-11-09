@@ -456,6 +456,32 @@ See [Native VR panel build and validation](reference/hud-development.md#native-v
 
 See [Generated HUD contract header](reference/hud-development.md#generated-hud-contract-header).
 
+## Camera helper build (lane S, 2026-11-09)
+
+The camera helper is the containment for the Arcturus camera SDK: one native
+helper whose SDK translation unit is the only `.cpp` that includes the vendored
+headers, and whose fake backend lets every mode run in CI without the SDK
+([camera helper reference](reference/camera-helper.md)). Build the fake with:
+
+```bash
+bash scripts/build_camera_helper.sh --fake
+artifacts/camera-helper-fake/sightcircuit-camera-helper-fake --describe
+```
+
+CI runs that command as a named step of the `native` job on both
+architectures and runs `tests/test_camera_helper.py` and
+`tests/test_camera_helper_boundaries.py` without skips there; the tests build
+their own copy into a temporary directory and compile the SDK unit to an
+object against `third_party/arcturus-camera-sdk/`, never linking it. The
+SDK-backed binary is built only by the operator, on aarch64, with
+`bash scripts/build_camera_helper.sh --sdk DIR` against the SDK directory
+Arcturus delivered, outside the work tree; `--check-sdk` verifies such a
+directory anywhere without building. The library `libAV1CameraClient.a` is
+never committed, cached, fetched or built by this repository or its CI
+([THIRD_PARTY](../THIRD_PARTY.md#arcturus-vision-camera-preview-sdk-headers)).
+The device procedure is the [camera probe guide](guides/camera-probe.md);
+nothing here is device evidence.
+
 ## Generated evidence summaries
 
 See [Generated evidence summaries](reference/development-checks.md#generated-evidence-summaries).
