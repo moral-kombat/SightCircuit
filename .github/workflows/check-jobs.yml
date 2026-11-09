@@ -168,7 +168,8 @@ jobs:
             tests/test_shm_capture_check.py tests/test_mirror_check.py tests/test_capture_publication.py \
             tests/test_capture_import.py tests/test_capture_gpu_resources.py tests/test_capture_provider.py \
             tests/test_capture_provider_check.py tests/test_capture_layer_config.py \
-            tests/test_capture_service_lifecycle.py tests/test_capture_layer_trial.py tests/test_supervision.py
+            tests/test_capture_service_lifecycle.py tests/test_capture_layer_trial.py tests/test_supervision.py \
+            tests/test_arcturus_sdk_headers.py
 
   replay:
     # The decoder-only and the full replay-window environments, each exercised
