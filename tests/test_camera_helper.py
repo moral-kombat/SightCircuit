@@ -8,6 +8,7 @@ The confirmation prompt is answered through a pseudo-terminal, as an operator
 would, and each test gets its own ``XDG_RUNTIME_DIR`` for the lock.
 """
 import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -508,6 +509,169 @@ class CameraHelperTests(unittest.TestCase):
                 self.assertIs(final["cleanup_ok"], False)
                 self.assertIsNone(final["outcome"])
                 self.assertEqual(self.events(records)[:2], ["hello", "controls"])
+
+    # -- the planner's review of the merged helper (follow-up fixes) ---------------
+
+    def test_a_stalled_consumer_ends_the_run_inside_the_bound(self):
+        # Finding 1: with stdout a small pipe nobody reads, the run continued past --max-seconds with
+        # the reader active until the pipe was drained. Now a record write waits at most one second,
+        # never past the run bound; the stall ends the run with the reader deactivated; the final
+        # record waits up to five seconds for a reader that resumes, and is dropped otherwise. The
+        # pipe holds two pages, so the stall lands inside the probe loop, after the reader is on
+        # (a one-page pipe reads as unwritable after any write at all).
+        f_setpipe_sz = 1031
+        for drain_after in (5.0, None):
+            with self.subTest(drain_after=drain_after):
+                master, slave = pty.openpty()
+                read_end, write_end = os.pipe()
+                fcntl.fcntl(write_end, f_setpipe_sz, 8192)
+                started = time.monotonic()
+                process = subprocess.Popen([str(self.binary), "--probe-frames", "50", "--max-seconds", "4",
+                                            "--interval-ms", "100", "--fake-scenario", "ok_linear_nv12"],
+                                           stdin=slave, stdout=write_end, stderr=subprocess.PIPE, env=self.env,
+                                           start_new_session=True)
+                os.close(slave)
+                os.close(write_end)
+                process.pty_master = master
+                self.addCleanup(self.reap, process)
+                self.answer(process)
+                if drain_after is None:
+                    process.wait(timeout=20)  # the stall at about one second, then the final record's budget
+                    self.assertLess(time.monotonic() - started, 12)
+                else:
+                    time.sleep(drain_after)
+                    self.assertIsNone(process.poll())  # past the bound: waiting on the final record, not acquiring
+                data = b""
+                while True:
+                    chunk = os.read(read_end, 65536)
+                    if not chunk:
+                        break
+                    data += chunk
+                os.close(read_end)
+                process.wait(timeout=20)
+                process.stderr.close()
+                self.assertEqual(process.returncode, 1)
+                records, unparseable = [], 0
+                for line in data.decode(errors="replace").splitlines():
+                    try:
+                        records.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        unparseable += 1
+                self.assertLessEqual(unparseable, 1)  # at most the line the stall tore
+                self.assertEqual(self.events(records)[:2], ["hello", "controls"])
+                self.assertLessEqual(self.events(records).count("frame_set"), 3)
+                if drain_after is None:
+                    self.assertNotIn("final", self.events(records))
+                else:
+                    final = records[-1]
+                    self.assertEqual(final["event"], "final")
+                    self.assertEqual((final["reason"], final["outcome"], final["exit_code"]),
+                                     ("protocol_stalled", "helper_error", 1))
+                    self.assertIs(final["cleanup_ok"], True)
+                    self.assertIs(final["reader_activated"], True)
+                    self.assertIs(final["reader_deactivated"], True)
+                    self.assertEqual(final["fake_calls"][-3:], ["set_reader:false", "control_state", "disconnect"])
+                    self.assertLessEqual(final["frame_sets"], 3)
+                    self.assertLess(final["passes"], 10)  # the stall, not the bound, ended the loop
+
+    def test_every_status_class_reaches_helper_error(self):
+        # Finding 2: a server InternalError, a server timeout on a call other than acquire, and the
+        # client's InvalidArgument and OutOfMemory end as helper_error, exit 1, with the SDK status named.
+        cases = (
+            ("internal_error_at_controls", ["--hello"], "control_state", "Server", "Result_InternalError",
+             ["connect", "control_state", "disconnect"]),
+            ("server_timeout_at_reader", None, "set_reader:true", "Server", "Result_Timeout",
+             ["connect", "control_state", "set_reader:true", "disconnect"]),
+            ("invalid_argument_at_acquire", None, "acquire", "InvalidArgument", "Result_Success",
+             ["connect", "control_state", "set_reader:true", "acquire", "set_reader:false", "control_state", "disconnect"]),
+            ("out_of_memory_at_connect", ["--hello"], "connect", "OutOfMemory", "Result_Success", ["connect", "disconnect"]),
+        )
+        for scenario, args, call, status_error, result, calls in cases:
+            with self.subTest(scenario=scenario):
+                if args:
+                    code, records, _ = self.run_helper(args, scenario)
+                else:
+                    code, records, _ = self.probe(scenario, frame_sets=2)
+                self.assertEqual(code, 1)
+                outcome = [record for record in records if record["event"] == "outcome"][-1]
+                self.assertEqual((outcome["call"], outcome["outcome"], outcome["retryable"]), (call, "helper_error", False))
+                self.assertEqual((outcome["status_error"], outcome["result"]), (status_error, result))
+                self.assertEqual(records[-1]["outcome"], "helper_error")
+                self.assertEqual(records[-1]["outcome_counts"]["helper_error"], 1)
+                self.assertEqual(records[-1]["fake_calls"], calls)
+
+    def test_connect_time_invalid_metadata_reports_the_handshake_then_closes(self):
+        # Finding 2: a handshake whose facts fail the bounds check (three cameras; a calibration larger
+        # than the bound, reported with a null digest) ends invalid_metadata, exit 1, reader never on.
+        code, records, _ = self.run_helper(["--hello"], "invalid_metadata_at_connect")
+        self.assertEqual(code, 1)
+        self.assertEqual(self.events(records), ["hello", "outcome", "final"])
+        self.assertEqual(records[0]["camera_count"], 3)
+        self.assertEqual((records[1]["call"], records[1]["outcome"]), ("connect", "invalid_metadata"))
+        self.assertEqual(records[-1]["outcome"], "invalid_metadata")
+        self.assertEqual(records[-1]["fake_calls"], ["connect", "disconnect"])
+        code, records, _ = self.probe("calibration_oversized")
+        self.assertEqual(code, 1)
+        self.assertEqual(self.events(records), ["hello", "outcome", "final"])
+        self.assertIs(records[0]["offline_cal_size_within_bound"], False)
+        self.assertIsNone(records[0]["offline_cal_sha256"])
+        self.assertGreater(records[0]["offline_cal_size"], 8192)
+        self.assertIs(records[-1]["reader_activated"], False)
+
+    def test_permission_denied_at_connect(self):
+        code, records, _ = self.run_helper(["--hello"], "permission_denied_at_connect")
+        self.assertEqual(code, 2)
+        self.assertEqual(self.events(records), ["outcome", "final"])
+        self.assertEqual((records[0]["call"], records[0]["outcome"], records[0]["result"]),
+                         ("connect", "permission_denied", "Result_PermissionDenied"))
+        self.assertEqual(records[-1]["fake_calls"], ["connect", "disconnect"])
+
+    def test_bad_timestamps_are_counted_not_computed(self):
+        # Finding 4: a NaN timestamp_seconds and an exposure timestamp whose difference from a host clock
+        # overflows take no part in the clock offsets; each such camera is counted in invalid_timestamps.
+        code, records, _ = self.probe("bad_timestamps", frame_sets=2)
+        self.assertEqual(code, 0)
+        final = records[-1]
+        self.assertEqual(final["clock_offsets"]["invalid_timestamps"], 4)
+        for clock in ("monotonic", "boottime", "realtime"):
+            self.assertIsNone(final["clock_offsets"][clock]["after_minus_exposure_timestamp_ns"])
+            self.assertIsNone(final["clock_offsets"][clock]["after_minus_timestamp_seconds_ns"])
+        frame_set = [record for record in records if record["event"] == "frame_set"][0]
+        self.assertIsNone(frame_set["cameras"][0]["timestamp_seconds"])
+        self.assertEqual(frame_set["cameras"][0]["exposure_timestamp_ns"], -2 ** 63)
+        code, records, _ = self.probe("ok_linear_nv12", frame_sets=1)
+        self.assertEqual(records[-1]["clock_offsets"]["invalid_timestamps"], 0)
+
+    def test_runtime_dir_must_be_an_absolute_private_directory(self):
+        # Finding 5: a relative value put the lock in the working directory; a shared, foreign, absent
+        # or non-directory path is no runtime directory either. All refuse before any SDK call.
+        relative = "relative-runtime-dir"
+        shared = Path(self.runtime.name) / "shared"
+        shared.mkdir()
+        os.chmod(shared, 0o755)
+        regular = Path(self.runtime.name) / "file"
+        regular.write_text("")
+        for value in (relative, str(shared), str(regular), str(Path(self.runtime.name) / "absent")):
+            with self.subTest(value=value):
+                code, records, err = self.run_helper(["--hello"], "ok_linear_nv12",
+                                                     env=dict(self.env, XDG_RUNTIME_DIR=value))
+                self.assertEqual(code, 5, err)
+                self.assertEqual(records[-1]["reason"], "runtime_dir_invalid")
+                self.assertEqual(records[-1]["fake_calls"], [])
+        self.assertFalse((ROOT / relative).exists())
+        self.assertFalse(Path(relative).exists())
+        self.assertEqual(sorted(path.name for path in Path(self.runtime.name).iterdir()), ["file", "shared"])
+
+    def test_utf8_passes_through_the_records_and_bad_bytes_are_replaced(self):
+        # Finding 6: the bytes of a UTF-8 sequence are no longer escaped one by one as Latin-1 code
+        # points; a byte that is not part of a well-formed sequence becomes U+FFFD, so the line parses.
+        code, records, _ = self.run_helper(["--unknown-é"], tty=False)
+        self.assertEqual(code, 64)
+        self.assertEqual(records[0]["detail"], "unknown argument: --unknown-é")
+        result = subprocess.run([str(self.binary), b"--bad-\xff\xfe"], stdin=subprocess.DEVNULL, capture_output=True,
+                                env=self.env, timeout=10)
+        self.assertEqual(result.returncode, 64)
+        self.assertEqual(json.loads(result.stdout)["detail"], "unknown argument: --bad-��")
 
     def test_line_limits_hold(self):
         _, records, _ = self.probe("ok_linear_nv12", frame_sets=2)
