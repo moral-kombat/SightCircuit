@@ -113,7 +113,12 @@ The runner is the suite's entry point and does two more things there:
   measured on the x86 cloud container over ten runs (the real validation
   bridge end to end, a fake marker bridge driven for several seconds of
   cycles, and the marker decode on fixture frames), with about twice the
-  margin; the ceiling is a cloud measurement, not a Frame one.
+  margin; the ceiling is a cloud measurement, not a Frame one. Added
+  2026-11-09 (lane G, step 1): `test_camera_helper` 45 s, from about 9 s
+  measured on the x86 cloud container (three compiles: the SDK unit to an
+  object and with `-fsyntax-only`, the fake-backend fixture, and the build
+  script's refused and stub-link paths, which rebuild the fake binary), with
+  about five times margin; a cloud measurement, not a Frame one.
 - Before the tests run it normalises SIGINT for the suite's children. A test
   process started with SIGINT ignored (a background job of a shell without job
   control) passes that ignore to every subprocess the tests signal, so the

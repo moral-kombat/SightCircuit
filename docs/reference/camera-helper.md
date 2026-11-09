@@ -145,8 +145,8 @@ on parent death.
 | no arguments | 3 | `event: not_run`, `error: choose_a_mode` |
 | `--help` | 0 | the usage text, not JSON |
 | `--validate [--fake-script FILE]` | 0 | `status: validated`, `validated.fake_script` (the path or null) and, in the fake build, `validated.fake_script_steps` with the per-call counts; in the SDK build `validated.sdk_protocol_version` and `client_constructed: false` |
-| `--validate` with an unreadable or malformed script | 1 | `error: fake_script_unreadable` or `fake_script_line_<N>:<reason>` |
-| any other mode, a repeated or dangling argument, `--fake-script` in the SDK build | 64 | `error` names the problem |
+| `--validate` with an unreadable or malformed script, or `--fake-script` in the SDK build | 1 | `error: fake_script_unreadable`, `fake_script_line_<N>:<reason>` or `fake_script_requires_the_fake_backend` |
+| any other mode, a repeated or dangling argument | 64 | `error` names the problem |
 
 Every final report carries the claims `validation_only`, `camera_connected`,
 `reader_enabled`, `recording_requested`, `controls_set`, `led_touched`,
