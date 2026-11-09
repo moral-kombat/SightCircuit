@@ -127,9 +127,14 @@ def parse_packets(data):
 
 
 def software_vulkan_present():
-    """A software ICD (lavapipe) that always yields a device, or an explicit driver override."""
-    if os.environ.get("VK_ICD_FILENAMES") or os.environ.get("VK_DRIVER_FILES"):
-        return True
+    """A software ICD (lavapipe) that always yields a device, or an explicit driver override that exists.
+
+    Pointing ``VK_ICD_FILENAMES`` and ``VK_DRIVER_FILES`` at a missing file runs this module as a machine
+    without any Vulkan driver would: the GPU tests skip and the driverless cases are exercised.
+    """
+    overrides = [os.environ.get(name) for name in ("VK_ICD_FILENAMES", "VK_DRIVER_FILES") if os.environ.get(name)]
+    if overrides:
+        return any(Path(path).is_file() for value in overrides for path in value.split(os.pathsep))
     for pattern in ("/usr/share/vulkan/icd.d/*.json", "/etc/vulkan/icd.d/*.json", "/usr/local/share/vulkan/icd.d/*.json"):
         for path in glob.glob(pattern):
             try:
@@ -312,12 +317,14 @@ class CameraExportTests(unittest.TestCase):
         build = ready["build"]
         self.assertEqual(set(build), BUILD_KEYS | ({"build_commit_reason"} if build["build_commit"] is None else set()))
         self.assertIsNone(build["sdk_release"])
-        self.assertEqual(build["pixel_path_facts"]["path"], "cpu_linear" if undecided else pixel_path)
-        self.assertEqual(build["hello_camera_count"], 2)
+        if build["pixel_path_facts"]:  # empty when the named path did not open
+            self.assertEqual(build["pixel_path_facts"]["path"], "cpu_linear" if undecided else pixel_path)
         if controls_read:
+            self.assertEqual(build["hello_camera_count"], 2)
             self.assertRegex(build["controls_digest_start"], r"^[0-9a-f]{64}$")
             self.assertEqual(end["digests"]["controls_start"], build["controls_digest_start"])
         else:
+            self.assertIn(build["hello_camera_count"], (None, 2))  # null when the run ended before the connect
             self.assertIsNone(build["controls_digest_start"])
         self.assertRegex(build["contract_digest"], r"^[0-9a-f]{64}$")
         for value in build.values():  # scalars, or objects of scalars: no arrays anywhere
@@ -624,9 +631,22 @@ class CameraExportTests(unittest.TestCase):
         _, end = self.check_stream(parse_packets(out), undecided=True)
         self.assertEqual(end["reason"], "pixel_path_error")
         self.assertTrue(self.final(records)["detail"].startswith("gpu_convert_open_failed:"), self.final(records)["detail"])
-        # The first frame set was released before the GPU path was opened.
-        calls = final["fake_calls"]
-        self.assertEqual(calls[calls.index("acquire") + 1], "release")
+        self.assertEqual(self.final(records)["fake_calls"][3:5], ["acquire", "release"])
+        # Named, the path is known whether or not it opens: the ready says gpu_convert, no frame, the end at once,
+        # before any connect (the connect's facts are null).
+        process = self.start(["--export-frames", "--max-seconds", 8, "--max-frames", 4, "--fps", 10, "--pixel-path",
+                              "gpu_convert"], "export_nv12",
+                             env=dict(self.env, VK_ICD_FILENAMES="/nonexistent/icd.json", VK_DRIVER_FILES="/nonexistent/icd.json"))
+        os.write(process.pty_master, b"yes\n")
+        code, out, records = self.finish(process)
+        self.assertEqual(code, 1)
+        packets = parse_packets(out)
+        _, end = self.check_stream(packets, pixel_path="gpu_convert", controls_read=False)
+        self.assertEqual(end["reason"], "pixel_path_error")
+        self.assertEqual(packets[0][0]["build"]["pixel_path_facts"], {})
+        final = self.final(records)
+        self.assertTrue(final["detail"].startswith("pixel_path_open_failed:"), final["detail"])
+        self.assertEqual(final["fake_calls"], [])
         # A plane table that claims fewer bytes than its rows need is refused before any read, on both paths.
         paths = ["cpu_linear"] + (["gpu_convert"] if software_vulkan_present() else [])
         for pixel_path in paths:
