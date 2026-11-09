@@ -614,6 +614,16 @@ class CameraExportTests(unittest.TestCase):
         opened = not final["detail"].startswith("gpu_convert_open_failed:")
         _, end = self.check_stream(packets, pixel_path="gpu_convert", undecided=not opened)
         self.assertEqual(end["reason"], "pixel_path_error")
+        # Without any Vulkan driver (the loader is pointed at a driver file that does not exist) the GPU path
+        # does not open: the path was never chosen, so the ready says "undecided" and the end follows at once.
+        process = self.start(["--export-frames", "--max-seconds", 8, "--max-frames", 4, "--fps", 10], "export_ubwc",
+                             env=dict(self.env, VK_ICD_FILENAMES="/nonexistent/icd.json", VK_DRIVER_FILES="/nonexistent/icd.json"))
+        os.write(process.pty_master, b"yes\n")
+        code, out, records = self.finish(process)
+        self.assertEqual(code, 1)
+        _, end = self.check_stream(parse_packets(out), undecided=True)
+        self.assertEqual(end["reason"], "pixel_path_error")
+        self.assertTrue(self.final(records)["detail"].startswith("gpu_convert_open_failed:"), self.final(records)["detail"])
         # The first frame set was released before the GPU path was opened.
         calls = final["fake_calls"]
         self.assertEqual(calls[calls.index("acquire") + 1], "release")

@@ -1043,6 +1043,7 @@ private:
         const bool opened = pixel_path_->open(error, pixel_path_facts_);
         lifecycle::disarm_watchdog();
         if (!opened) {
+            pixel_path_settled_ = false;  // never chosen: the ready that precedes the end says "undecided"
             end_export(export_protocol::kEndReasonPixelPathError, "gpu_convert_open_failed:" + error);
             return false;
         }
