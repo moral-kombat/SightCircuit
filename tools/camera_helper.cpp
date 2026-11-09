@@ -450,8 +450,8 @@ std::string packet_bytes(const std::string& header_json, const uint8_t* payload,
 }
 
 // Writes to the protocol descriptor without lifecycle::write_protocol, whose
-// torn-line newline has no place in a packet stream. SIGPIPE is ignored in the
-// export mode, so a vanished parent shows up here as a failed write.
+// torn-line newline has no place in a packet stream. SIGPIPE is ignored (main),
+// so a vanished parent shows up here as a failed write.
 bool write_packet_bytes(const std::string& bytes) {
     const char* data = bytes.data();
     std::size_t size = bytes.size();
@@ -847,7 +847,6 @@ private:
     }
 
     void export_loop() {
-        ::signal(SIGPIPE, SIG_IGN);
         export_started_ns_ = clock_ns(CLOCK_MONOTONIC);
         // A named pixel path is settled already, so the ready packet goes out
         // before the first acquire; "auto" writes it once the first frame set
@@ -1372,6 +1371,9 @@ int main(int argc, char** argv) {
         return 1;
     }
     ::prctl(PR_SET_PDEATHSIG, SIGTERM);
+    // A parent that closed the protocol pipe must not end the helper by SIGPIPE before its
+    // final record: the write then fails with EPIPE, which emit() records and the exit code shows.
+    std::signal(SIGPIPE, SIG_IGN);
     rlimit no_core{};
     no_core.rlim_cur = 0;
     no_core.rlim_max = 0;

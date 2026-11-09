@@ -67,7 +67,7 @@ The [shared workflow](../../.github/workflows/check-jobs.yml) has three jobs:
 
 | Job | Work and limits |
 | --- | --- |
-| `native` | Lint on x86_64, check generated HUD headers, build native helpers and all capture-reference fixtures, then run the system-Python suite once with native modules pinned against skips. Probe checks use explicit missing-runtime paths; no headset is involved. |
+| `native` | Lint on x86_64, check generated HUD headers, build native helpers (including the camera helper's fake backend; its SDK unit is compiled to an object by the tests and never linked) and all capture-reference fixtures, then run the system-Python suite once with native modules pinned against skips. Probe checks use explicit missing-runtime paths; no headset is involved. |
 | `replay` | Test the minimal decoder environment, then install window dependencies, build the bridge, fetch seed images, and run the full suite with the relevant modules pinned against skips. Check generated documentation and links; run the smoke environment on x86_64. |
 | `replay-pacing` | On-demand ARM64 replay of the synthetic stand-in; publishes runner-CPU latency reports, never Frame measurements. |
 

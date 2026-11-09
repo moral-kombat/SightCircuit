@@ -110,6 +110,10 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends libvulkan1 libvulkan-dev mesa-vulkan-drivers
+      - name: Build the camera helper's fake backend (the tests compile its SDK unit to an object; nothing links the SDK)
+        # The Arcturus Client Library is never fetched, cached, built or linked here (docs/reference/camera-helper.md).
+        # After the Vulkan step: the gpu_convert pixel path compiles against the Vulkan headers.
+        run: bash scripts/build_camera_helper.sh --fake
       - name: Build the pinned capture reference without activation
         run: bash scripts/build_capture_reference.sh
       - name: Build the transport-only adaptation and self-test synthetic sockets

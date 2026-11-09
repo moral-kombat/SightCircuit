@@ -34,6 +34,7 @@ still display a cloud terminal: confirm where commands run before proceeding.
 | Prepare the separately approved mapping observation | [HUD checkpoint](guides/hud-checkpoint.md) |
 | Measure the fallback's device terms with the calibration marker (`fallback_measure`, approval needed) | [Fallback measurement](guides/fallback-measurement.md) |
 | Test the agent guard's enforcement on the Frame (Phase 2, approval needed) | [Agent guard enforcement test](guides/agent-enforcement-test.md) |
+| Probe the Arcturus camera SDK's handshake and frame metadata without reading a pixel (lane S Phase A and Phase B, each separately approved) | [Camera SDK probe](guides/camera-probe.md) |
 
 The checkpoint is experimental. It does not enable the production live HUD.
 Each device guide describes prerequisites, operating limits, and shutdown.
@@ -49,6 +50,9 @@ Each device guide describes prerequisites, operating limits, and shutdown.
   budget is exhausted.
 - [Camera interfaces and research](steam-frame-camera.md) — mirror input,
   dedicated capture constraints, and pinned upstream sources.
+- [Camera helper](reference/camera-helper.md) — the containment for the
+  Arcturus camera SDK: one SDK translation unit, a fake backend for CI, an
+  operator-only build against the Client Library, metadata-only modes.
 - [Agent-on-Frame design](agent-on-frame.md) and
   [third-party attribution](../THIRD_PARTY.md).
 

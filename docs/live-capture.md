@@ -100,7 +100,9 @@ A5, 4 to B4, 5 to B1 and B3.
 
 The [architecture decisions](poc-scope.md#architecture-decisions-2026-11-07)
 produce five lanes (A, B, C, P and E; the letter D is kept for the decisions);
-lane F, the fallback build, opened on 2026-11-08 at the D2 exit.
+lane F, the fallback build, opened on 2026-11-08 at the D2 exit; lane S, the
+SDK camera-input lane, opened cloud-only the same night (the letter G is the
+gates').
 Sizes are S, M or L. "Device" marks a step that runs on the
 Frame and needs the owner's approval for that specific run; a historical
 approval does not carry over. Items without a dependency can start now, in
@@ -146,7 +148,7 @@ parallel coder sessions. The acceptance order of the gates is unchanged.
 | C3 | Box entry in the session manifest helper, with documentation | S | none |
 | C4 | Per-label box recall and a basename-only input path in the report | S | C3 |
 | C3b | A Qt box-annotation tool that writes the manifest's objects entries, so the owner can draw the boxes on the Frame desktop | S to M | C3 |
-| C5 | The representative evaluation session: at least twenty boxed chair stills, scored file-only, plus one `mirror_recognize` run per detector for inference p95 | M, device | C1 to C4, approval |
+| C5 | The representative evaluation session: at least twenty boxed chair stills, scored file-only, plus one `mirror_recognize` run per detector for inference p95. Part one on 2026-11-08: six lamps-on stills, presence-only, paused by the owner ([E93](evidence/e093.md)); resumes under the same approval with the lamps-off stills, the boxing and the timing runs | M, device, in progress | C1 to C4, approval |
 | C6 | WP1: a native-resolution colour still of the E61 scene evaluated beside the grey preview | S, device | approval; shares C5's session |
 | C7 | Stale script names in E8, E67 and E69 | S | none |
 | C8 | The E80 re-run manifest records its input by the pre-move absolute path, so a repeat with `--require-input-digests` fails; make the recorded path relative and document the repeat ([E86](evidence/e086.md)) | S | none |
@@ -181,11 +183,11 @@ that run.
 | F3a | The marker bridge mode accepts the visibility opcode while the marker is displayed and writes the seven lines, so the measurements use the one tile the device is approved to show and the one pattern the mirror can be read for (the coordinator's call, 2026-11-08). Done (#50): a run that receives nothing is the observer's run, measured identical; only the visibility request is accepted on stdin; the bridge must be rebuilt on the Frame before any run that uses it | S, done | F1 |
 | F3b | `fallback_measure`, the thirteenth command: the marker bridge in that mode driven for N bounded cycles through the F2 API while the mirror is read at full rate and `locate_copies` tells presence from absence; one report with a section per measurement, counts and nanoseconds only; validate mode, opt-in flags and the checkpoint manifest as the observer has them. Done (#51): margins taken from the bridge's own display deadline, a cycle starts only with room for both requests, a capture failure ends the cycling; [guide](guides/fallback-measurement.md) | M, done | F3a, F2 |
 | F3 | The device measurements themselves: hide-to-absence latency, hidden-event delivery, loopback repeats, show-to-visible; one `fallback_measure` run of 20 s and five cycles can give the four evidence entries (E94 to E97 reserved). Staged by the Frame manager; needs the owner's approval, which covers the bridge rebuild from the F3a sources and a new checkpoint manifest | S, device | F3b, approval |
-| F4 | Capture window and admission rule in the pipeline, with rejection counters and boundary tests | M | F3 |
-| F5 | The fallback stage: hide, window, infer, show on `_run_latest`; tile rendering without a mask; run reports | M | F2, F4 |
-| F6 | Acceptance rows and gate references for the fallback, a reviewed edit to scope, this work order and `sightcircuit/gates.py` | S | planner and owner |
-| F7 | Command and operator guide; the 60-second run under the diagnostic tier's scope record | M, then device | F5, F6 |
-| F8 | Retire or quarantine the dead mask stack and its documentation | M | an accepted fallback run |
+| F4 | Capture window and admission rule in the pipeline, with rejection counters and boundary tests | M, held | F3; held until S5 answers the passthrough question (owner, 2026-11-08) |
+| F5 | The fallback stage: hide, window, infer, show on `_run_latest`; tile rendering without a mask; run reports | M, held | F2, F4 |
+| F6 | Acceptance rows and gate references for the fallback, a reviewed edit to scope, this work order and `sightcircuit/gates.py` | S, held | planner and owner |
+| F7 | Command and operator guide; the 60-second run under the diagnostic tier's scope record | M, then device; held | F5, F6 |
+| F8 | Retire or quarantine the dead mask stack and its documentation | M, held | an accepted fallback run |
 
 Lane A's device steps consume the D2 attempt budget: A4 is the first counted
 attempt, A5 the second and last. An attempt counts when the observer judged the
@@ -193,6 +195,52 @@ scene (a precondition rejection, or anything after the marker tile appears); a
 stop caused by connectivity or preparation never counts, whatever its position
 in the run. The [counting rule](poc-scope.md#architecture-decisions-2026-11-07)
 and the [operator table](guides/hud-checkpoint.md) carry the full list.
+
+**Lane S, SDK camera input (cloud-only).**
+
+Opened on 2026-11-08 at night after the owner obtained the Arcturus Vision
+Camera Preview SDK ([scope row](poc-scope.md#architecture-decisions-2026-11-07));
+the [dated input review](history/2026-11-09-arcturus-sdk-input-review.md#migration-plan)
+owns the step definitions, the device phases and the owner decisions. The
+public headers and the agreement are vendored (#54); the client library is
+never committed, fetched or linked in CI, and only the fake backend is built
+there. The owner's own session wrote the lane's implementation on branch
+`sdk-helper/metadata-probe` (107c893, from `de2523b`), adopted by the owner
+over the coder's parallel draft; the coder reviews it, re-authors it onto main
+as one PR and fixes what the review finds. Its fake build and 38 tests passed
+on the Frame on 2026-11-08 (21:26 to 21:28 EST, a throwaway worktree, no SDK
+library, no camera action; the Frame manager's report at the SDK session's
+request, with the owner's approval in the Frame manager's session). That run
+is a note, not a work-order step and not evidence: nothing on the device
+changed and nothing was observed. No gate, pinned file or constant changes in
+this lane before the owner's gate classification.
+
+| Item | Work | Size | Depends on |
+| --- | --- | --- | --- |
+| S1 | Containment and build: `scripts/build_camera_helper.sh` (`--fake`, `--sdk DIR` outside the work tree, release and header verification, a symbol allow-list per object), the SightCircuit-owned backend interface with no SDK type, the fake backend driving every outcome, the source-text and symbol tests in the dependency-free job | M | the review's finding 5 |
+| S2 | `sightcircuit-camera-helper`, the one binary that links the client library: `--describe` (no connect), `--hello` (connect, handshake and control state, reader off) and `--probe-frames N --max-seconds S` (format metadata, planes, timestamps against host clocks, sequence gaps, standby and control drift; no pixel read, no control change, no exclusive request); typed confirmation, runtime-directory lock, signals held around SDK calls, a watchdog with a prepared final record | M | S1 |
+| S3 | The operator procedure for the two probe phases in the device guides: preparation, the passthrough observation as an operator field, the headset-removal sub-step, the G2 recovery procedure ready, the report fields. Done (#57, 2026-11-09): [camera probe guide](guides/camera-probe.md), written against the helper as it is on the owner's branch; its flag names, bounds and record fields follow the S1/S2 review | S, done | S2 merged |
+| S4 | Phase A on the Frame: connect, handshake and control state with the reader never activated; the wearer watches passthrough during the run and for 30 s after | S, device | S3, approval |
+| S5 | Phase B on the Frame: the reader active for at most 10 s, metadata for a few frame sets, the passthrough observation repeated with headset removal; answers linear or UBWC, standby behaviour and the passthrough question that holds F4 to F8 | S, device | S4, approval |
+
+On 2026-11-09 (02:40Z) the owner set the goal of a working proof of concept
+using the helper: camera frames from the SDK reaching the detectors in a
+bounded run without display, the [E48](evidence/e048.md) pattern on the camera
+route. The items below were added for it; S6 and S7 proceed in parallel with
+S1 to S3 and depend on no device result (the pixel path's UBWC branch is
+unverified until S5 answers linear or UBWC). The later steps of the review's
+migration plan (the acquisition module and the replay, identity and frame-set
+findings) follow lane F and are not scheduled.
+
+| Item | Work | Size | Depends on |
+| --- | --- | --- | --- |
+| S6 | The helper's `--export-frames` mode: BGR3 frames to the parent over stdout under the camera export protocol (version 1: `SCCF` packets, a `ready`, `frame` and `end` header vocabulary, bounded sizes), paced at 1 to 10 frames a second for at most 60 s or 600 frames; two pixel paths behind one interface, `cpu_linear` (mmap of linear DMA-BUF planes and a tested YCbCr conversion) and `gpu_convert` (Vulkan import by DRM modifier and conversion, allowed to adapt the frozen capture track's import code); ends on headset removal or standby; never writes a pixel anywhere; the fake backend serves memfd-backed linear frames for the tests | L | S1, S2 |
+| S7 | The Python side: the camera contract as data with a generated C++ header pinned by a test, a strict export-stream reader producing `Frame`s, a `camera_helper` source launching the helper through the runtime primitive, and `camera_recognize`, the fourteenth command: bounded recognition without display, structured as `mirror_recognize`, at most 30 s and 300 frames, a validate mode against a fake producer, labels, boxes and timings in the report and never pixels; a guide | M | none (tests use a fake producer) |
+| S8 | Pixel path on the Frame without saving: `--export-frames` into the reader's validate path, counts and timings only, the passthrough observation as in S5 | S, device | S5, S6, S7, approval |
+| S9 | Bounded camera recognition on the Frame: one `camera_recognize` run of at most 30 s on the chair scene, no display, counts, labels, boxes and timings in the report; the proof of concept the owner asked for | S, device | S8, approval |
+
+Evidence identifiers for S4 to S9 are allocated when each is approved (E94
+to E97 stay reserved for F3).
 
 #### Progress (2026-11-07, evening)
 
@@ -239,8 +287,12 @@ E1 (#38), F1 (#41), F2 (#48), F3a (#50), F3b (#51), B9 (#40), B10 (#42) and
 P3 (#45) merged on 2026-11-08; lanes B and P are complete and lane F's cloud
 work up to the device measurements is done. Open, all waiting on the owner: F3
 (device, approval, with the first bridge rebuild since E1), C5 with C6
-(approved, staged, waiting for the owner's start), the Phase 2 enforcement run
-(staged, approval). After F3: F4 to F8. A9 deferred; A7, A8 and A10 superseded. The Frame's built bridge predates E1 and F1 and is rebuilt only
+(begun, six stills, [E93](evidence/e093.md); resumes on the owner's word). The
+Phase 2 enforcement run is done ([E92](evidence/e092.md)). After F3: F4 to F8, held until the SDK
+lane's Phase B probe (S5) answers the passthrough question (owner decision,
+2026-11-08). Lane S opened cloud-only that night; the owner's implementation
+(branch `sdk-helper/metadata-probe`, 107c893) was adopted over the coder's
+draft and awaits its review and PR. A9 deferred; A7, A8 and A10 superseded. The Frame's built bridge predates E1 and F1 and is rebuilt only
 when a device step needs it (F3), under that step's approval. The council's
 hypothesis for the cancellation race was wrong; the recorded cause is the
 readiness probe firing on the worker before it had exec'd
@@ -256,15 +308,38 @@ handler on the main thread ([checks reference](reference/development-checks.md#h
   layout, or shows names only; decided when F5 is specified (the capture-layout
   and 300-second mapping-lifetime questions of the mask path lapsed with the
   fallback decision).
-- The Phase 2 guard-enforcement test is scoped (B10, #42) and staged by the
-  Frame manager; it runs only on the owner's approval of that run, after the
-  owner accepts the workspace trust dialog once on the Frame
-  ([E86](evidence/e086.md), [guide](guides/agent-enforcement-test.md)).
+- The Phase 2 guard-enforcement run happened on 2026-11-08 and passed with
+  reduced coverage ([E92](evidence/e092.md)): the guide is revised for what
+  the device showed (no Glob tool in print mode; a deny-rule Read refused
+  before the hook). A second run with the revised set is a new approval,
+  not scheduled.
 - Decided 2026-11-08: the fallback (D2 as written; [scope](poc-scope.md#architecture-decisions-2026-11-07)),
-  C5 with C6 approved (staged by the Frame manager, E92 reserved), the Phase 2
-  test scheduled. Next device approvals, each separate: the F3 measurement
-  run (staged, with the bridge rebuild), the Phase 2 enforcement run (staged),
-  and the owner's start of the C5/C6 sitting.
+  C5 with C6 approved (begun, E93), the Phase 2
+  test scheduled and run ([E92](evidence/e092.md)). Next device approvals,
+  each separate: the owner's resumption of the C5/C6 sitting (approved and
+  confirmed; part one is E93), the F3 measurement run (staged, not approved,
+  with the bridge rebuild; E94 to E97).
+- Decided 2026-11-08, night: the SDK camera-input lane is open, cloud-only
+  (the review's decision 1); F4 to F8 are held until S5 answers the
+  passthrough question; the owner's helper branch is the lane's code.
+- Decided 2026-11-09 (02:45Z), from the [review's list](history/2026-11-09-arcturus-sdk-input-review.md#owner-decisions-in-priority-order)
+  and recorded in [scope](poc-scope.md#architecture-decisions-2026-11-07):
+  the passthrough rule (each phase approved separately; any wearer-visible
+  passthrough change during a probe or in the 30 s after it is a disturbance,
+  and one disturbance stops the SDK track until the owner reopens it); the
+  gate classification (the no-pixel probe modes and bounded camera recognition
+  without display are confirmed uses outside the live-input gate, the E48
+  pattern; every gate stays closed); the frozen capture track's import code
+  may be adapted into the SDK helper where it helps, the track itself staying
+  paused; consent (counts, labels, boxes, timings and format metadata may be
+  saved locally and published; no pixels, stills, previews or calibration data
+  anywhere; the red LED untouched). Still open, none blocking S1 to S9: the
+  presence source for the agreement's section 3.2 (operator-attended bounded
+  runs are the interim), whether Arcturus-app rehearsal recordings count as
+  Camera Data, the long-term status of the private camera routes and mirror
+  input, and the toolchain beyond the host compiler the build script uses.
+  Next device approvals on this lane, each separate, after the S1 to S3 PRs
+  merge: S4, then S5, then S8, then S9.
 - The Frame rebooted into SteamOS 0.5.8 ([E85](evidence/e085.md)); a Frame
   manager session exists and the "Frame update check" scheduled task was
   rebound to it on 2026-11-07, with the old task left disabled as a record.
