@@ -59,8 +59,8 @@
     },
     {
       "capability": "Candidate detector and evaluation harness",
-      "state": "E61 miss reproduced; Frame model choice open",
-      "evidence": "The original still and digest were verified on Frame; the miss remains unexplained ([E80](#e80-file-only-detector-re-run-on-the-e61-still-with-audit-variants)). Five unboxed stills support the chair demo, not a model default. [Evaluation details](evidence/capability-notes.md#candidate-detector-and-evaluation-harness)."
+      "state": "E61 miss reproduced; the representative set begun on Frame (six presence-only stills); Frame model choice open",
+      "evidence": "The original still and digest were verified on Frame; the miss remains unexplained ([E80](#e80-file-only-detector-re-run-on-the-e61-still-with-audit-variants)). Five unboxed stills support the chair demo, not a model default. The C5 sitting's first part took six lamps-on chair stills at 1 to 2 m, pinned and scored file-only for presence (MobileNet-SSD 4 of 6, YOLOX-Nano 3 of 6, no absent violations, no boxes yet); it resumes on the owner's word ([E93](#e93-c5-evaluation-sitting-on-frame-part-one-six-presence-only-chair-stills-paused-by-the-owner)). [Evaluation details](evidence/capability-notes.md#candidate-detector-and-evaluation-harness)."
     },
     {
       "capability": "Existing-mirror diagnostic",

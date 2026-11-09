@@ -25,7 +25,7 @@ kinds of evidence. Unknown dates, revisions and runtime versions stay unknown.
 | Bounded mirror recognition | Rewritten path re-run on Frame; broader accuracy open | The November 3 rerun had labels matching the owner’s view ([E81](#e81-catch-up-session-on-frame-regressions-400-frame-panel-run-mirror-and-wp2-stills)). [Earlier measurements, still export and limits](evidence/capability-notes.md#bounded-mirror-recognition). |
 | Existing-mirror diagnostic | Frame capture confirmed; VR panel included in input | Physical-room preview and bounded inference work, but this composited view includes our overlay; physical camera identity/timing remain unknown; [E14](#e14-physical-room-visible-in-the-mirror-preview), [E18](#e18-vr-panel-included-in-mirror-input) |
 | Recognition on the saved room still | Frame execution confirmed; false positive | One image processed and annotated; user identifies the `sofa`-labeled item as a rug; [E15](#e15-saved-room-recognition-and-rug-false-positive) |
-| Candidate detector and evaluation harness | E61 miss reproduced; Frame model choice open | The original still and digest were verified on Frame; the miss remains unexplained ([E80](#e80-file-only-detector-re-run-on-the-e61-still-with-audit-variants)). Five unboxed stills support the chair demo, not a model default. [Evaluation details](evidence/capability-notes.md#candidate-detector-and-evaluation-harness). |
+| Candidate detector and evaluation harness | E61 miss reproduced; the representative set begun on Frame (six presence-only stills); Frame model choice open | The original still and digest were verified on Frame; the miss remains unexplained ([E80](#e80-file-only-detector-re-run-on-the-e61-still-with-audit-variants)). Five unboxed stills support the chair demo, not a model default. The C5 sitting's first part took six lamps-on chair stills at 1 to 2 m, pinned and scored file-only for presence (MobileNet-SSD 4 of 6, YOLOX-Nano 3 of 6, no absent violations, no boxes yet); it resumes on the owner's word ([E93](#e93-c5-evaluation-sitting-on-frame-part-one-six-presence-only-chair-stills-paused-by-the-owner)). [Evaluation details](evidence/capability-notes.md#candidate-detector-and-evaluation-harness). |
 
 ### Replay and development
 
@@ -444,6 +444,10 @@ provenance and original uncertainty.
 ### E92: Phase 2 guard-enforcement run on Frame, no negative call allowed and the positive control passed, with reduced coverage
 
 [Full evidence](evidence/e092.md). Device report.
+
+### E93: C5 evaluation sitting on Frame, part one: six presence-only chair stills, paused by the owner
+
+[Full evidence](evidence/e093.md). Device report.
 
 ## Maintaining the evidence
 
