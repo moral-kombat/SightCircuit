@@ -904,6 +904,9 @@ int main(int argc, char** argv) {
         return 1;
     }
     ::prctl(PR_SET_PDEATHSIG, SIGTERM);
+    // A parent that closed the protocol pipe must not end the helper by SIGPIPE before its
+    // final record: the write then fails with EPIPE, which emit() records and the exit code shows.
+    std::signal(SIGPIPE, SIG_IGN);
     rlimit no_core{};
     no_core.rlim_cur = 0;
     no_core.rlim_max = 0;

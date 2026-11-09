@@ -201,6 +201,18 @@ class CameraHelperTests(unittest.TestCase):
         self.assertEqual(list(Path(self.runtime.name).iterdir()), [])
         self.assertFalse(result.stderr)
 
+    def test_a_closed_protocol_pipe_ends_describe_by_exit_code_not_by_sigpipe(self):
+        # A parent that stopped reading: every protocol write fails with EPIPE, which --describe
+        # reports as exit 1; the default SIGPIPE action would end the helper without a record.
+        read_end, write_end = os.pipe()
+        os.close(read_end)
+        try:
+            result = subprocess.run([str(self.binary), "--describe"], stdin=subprocess.DEVNULL, stdout=write_end,
+                                    stderr=subprocess.PIPE, env=self.env, timeout=10)
+        finally:
+            os.close(write_end)
+        self.assertEqual(result.returncode, 1, result.stderr)
+
     def test_ok_scenarios_report_format_metadata_and_clean_up(self):
         for scenario, pixel_format, modifier, sensor_bits in (("ok_linear_nv12", "nv12", "0x0000000000000000", 8),
                                                               ("ok_ubwc_nv12", "nv12_ubwc", "0x0500000000000001", 8),
