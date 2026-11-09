@@ -42,6 +42,7 @@ sightcircuit-frame-session-manifest = "sightcircuit.commands.frame_session_manif
 sightcircuit-annotate-boxes = "sightcircuit.commands.annotate_boxes:main"
 sightcircuit-agent-enforcement-check = "sightcircuit.commands.agent_enforcement_check:main"
 sightcircuit-fallback-measure = "sightcircuit.commands.fallback_measure:main"
+sightcircuit-camera-recognize = "sightcircuit.commands.camera_recognize:main"
 
 [tool.setuptools.packages.find]
 include = ["sightcircuit*"]

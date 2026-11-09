@@ -78,7 +78,7 @@ them.
 
 ### Commands and entry points (2026-11-07)
 
-The bodies of the thirteen active commands live in `sightcircuit/commands/`
+The bodies of the fourteen active commands live in `sightcircuit/commands/`
 (`replay_window`, `mirror_recognize`, `live_pipeline`, `hud_marker_check`,
 `hud_marker_observer`, `hud_validation_report`, `evaluate_detectors`,
 `generate_status`, `mirror_check`, `frame_session_manifest`; decision D5 and the
@@ -86,8 +86,11 @@ The bodies of the thirteen active commands live in `sightcircuit/commands/`
 [box-annotation window](guides/mirror-recognition.md#compare-detectors-on-frame-stills),
 joined on 2026-11-08 for work-order item C3b, `agent_enforcement_check`, the
 [guard enforcement matrix](guides/agent-enforcement-test.md), for B10 the same
-day, and `fallback_measure`, the
-[fallback measurement](guides/fallback-measurement.md), for F3b the same day). Each `scripts/<name>.py` is a thin wrapper: run as
+day, `fallback_measure`, the
+[fallback measurement](guides/fallback-measurement.md), for F3b the same day,
+and `camera_recognize`, the
+[bounded recognition on camera-helper frames](guides/camera-recognize.md), for
+lane S's S7 on 2026-11-09, cloud-checked against a fake producer only). Each `scripts/<name>.py` is a thin wrapper: run as
 a file it adds the checkout root to `sys.path` and calls the body's `main`, so
 every documented `python3 scripts/<name>.py` command keeps working on the Frame
 without installation; imported as `scripts.<name>` it is the body module
@@ -248,6 +251,7 @@ uvx ruff@0.14.2 check .
 python3 scripts/generate_status.py --check
 python3 scripts/check_docs.py
 python3 scripts/hud_contract_header.py --check
+python3 scripts/camera_contract_header.py --check
 git diff --check
 ```
 
@@ -452,6 +456,15 @@ See [Native VR panel build and validation](reference/hud-development.md#native-v
 ### Generated HUD contract header
 
 See [Generated HUD contract header](reference/hud-development.md#generated-hud-contract-header).
+
+### Generated camera export header
+
+`tools/camera_export_protocol.hpp` is generated from
+`sightcircuit/camera/contract.py` by `python3 scripts/camera_contract_header.py --write`
+(`--check` fails when it is stale; CI runs the check) through the renderer
+both contract headers share, `sightcircuit/native_header.py`. The
+[camera recognition guide](guides/camera-recognize.md#the-wire-protocol-camera-export-v1)
+describes the protocol; `tests/test_camera_contract.py` pins the header.
 
 ## Generated evidence summaries
 

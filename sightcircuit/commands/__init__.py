@@ -23,4 +23,5 @@ COMMANDS = (
     "annotate_boxes",
     "agent_enforcement_check",
     "fallback_measure",
+    "camera_recognize",
 )

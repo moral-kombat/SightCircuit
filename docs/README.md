@@ -34,6 +34,7 @@ still display a cloud terminal: confirm where commands run before proceeding.
 | Prepare the separately approved mapping observation | [HUD checkpoint](guides/hud-checkpoint.md) |
 | Measure the fallback's device terms with the calibration marker (`fallback_measure`, approval needed) | [Fallback measurement](guides/fallback-measurement.md) |
 | Test the agent guard's enforcement on the Frame (Phase 2, approval needed) | [Agent guard enforcement test](guides/agent-enforcement-test.md) |
+| Run bounded recognition on frames the camera helper exports (`camera_recognize`; cloud-checked against a fake producer, a device run needs approval) | [Camera recognition](guides/camera-recognize.md) |
 
 The checkpoint is experimental. It does not enable the production live HUD.
 Each device guide describes prerequisites, operating limits, and shutdown.
