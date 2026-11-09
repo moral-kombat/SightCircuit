@@ -40,10 +40,12 @@ and never asks for exclusive control (the reader's `recording` flag is always
 false), never touches the red recording LED, saves no image and copies no
 calibration JSON or auxiliary JSON, only their sizes and, for the calibration,
 a SHA-256. It makes no OpenVR call and does not start, stop or restart any
-service. The three software gates in `sightcircuit/gates.py` are untouched,
-and no gate classification of the probe modes exists yet (owner decision 3 of
-the review); the probes establish facts about the camera service, nothing
-about live input.
+service. The three software gates in `sightcircuit/gates.py` are untouched.
+The owner classified the helper's no-pixel probe modes on 2026-11-09 as uses
+outside the live-input gate, in the pattern of the E48 mirror diagnostics
+([E48](../evidence/e048.md)), with the gates unchanged (decision 3 of the
+[review's list](../history/2026-11-09-arcturus-sdk-input-review.md#owner-decisions-in-priority-order));
+the probes establish facts about the camera service, nothing about live input.
 
 ## What this guide does not authorise
 
@@ -62,9 +64,30 @@ about live input.
 - Copying the SDK release directory, the Client Library or the linked helper
   binary into the checkout or off the Frame (agreement section 2: the Client
   Library is never redistributed).
-- A repeat after a passthrough disturbance. Any disturbance in either phase
-  stops the SDK track; what happens next is the owner's decision, recorded in
-  scope, not a rerun.
+- A repeat after a passthrough disturbance. One disturbance in either phase
+  stops the SDK track until the owner reopens it (the owner's passthrough
+  rule, below); what happens next is the owner's decision, recorded in scope,
+  not a rerun.
+
+## The owner's rules for the probes (2026-11-09)
+
+The owner answered the review's open decisions for these phases on
+2026-11-09, in the planner's session; the guide states them as rules, and the
+scope page records them when the planner updates it:
+
+1. **Passthrough rule.** The owner approves Phase A and Phase B separately.
+   Any change the wearer sees in passthrough during a probe or in the
+   30 seconds after it counts as a disturbance: grey, a freeze, black, a
+   stutter or a colour shift. One disturbance stops the SDK track until the
+   owner reopens it.
+2. **Gate classification.** The helper's no-pixel probe modes are uses outside
+   the live-input gate, in the E48 pattern; the gates are unchanged.
+3. **Consent under the agreement.** Counts, labels, boxes, timings and format
+   metadata may be saved locally on the Frame and published in evidence pages.
+   No pixels, stills, previews or calibration data are saved or published
+   anywhere. The red camera LED is left untouched.
+4. **Toolchain.** The helper is built with the SteamOS host compiler, as the
+   bridge is; this is what the build script does.
 
 ## The agreement's terms that bind the operator
 
@@ -76,9 +99,9 @@ Using the SDK makes SightCircuit an Application under the
   before each run what the helper will do, in the words of the helper's own
   notice, and gives the typed confirmation themselves or hears the operator
   read it. The red recording LED stays as the service has it: the helper never
-  writes it (`led_written` is false in every final record), and the operator
-  reports the LED's state before, during and after as an observation. Whether a
-  later mode may restore or set the LED is owner decision 6, not this guide's.
+  writes it (`led_written` is false in every final record), the owner's rule
+  is that it stays untouched, and the operator reports the LED's state before,
+  during and after as an observation.
 - **Processing stops when the headset is removed (section 3.2).** No image
   processing happens in either phase. During Phase B's headset-removal
   sub-step the helper keeps reading metadata until its time bound, and the
@@ -92,7 +115,9 @@ Using the SDK makes SightCircuit an Application under the
   empty; the report section below says what may leave the device all the same.
   Redirecting the helper's output to a file is a save of its records, not of
   Camera Data; the notice reminds the operator that anything redirected or
-  published falls under the owner's consent decision (owner decision 5).
+  published falls under the owner's consent rule, which allows counts,
+  timings and format metadata to be saved on the Frame and published, and
+  nothing of pixels, stills, previews or calibration data.
 - **No private camera APIs (section 3).** The helper reaches the cameras only
   through the SDK client: its build checks that the one SDK translation unit
   references nothing but ten allow-listed Client Library symbols, and the
@@ -201,10 +226,10 @@ the phase; nothing in them needs the owner's Camera Switch change.
    shared. `artifacts/camera-helper/build-report.json` records the SDK release,
    the four input hashes (the library's included), the compiler, the C library,
    the build commit, whether the tree was dirty and `client_library_copied`
-   false. The script uses the host compiler (`CXX`, default `g++`), as the
-   bridge is built; building inside the vendor's Steam Runtime image instead
-   is owner decision 8, and a build made there passes `--image-id` so the
-   report names the image. The build's duration on the Frame is unmeasured.
+   false. The script uses the SteamOS host compiler (`CXX`, default `g++`),
+   as the bridge is built, which is the owner's toolchain rule; `--image-id`
+   exists for a build made inside a container image and is not used here. The
+   build's duration on the Frame is unmeasured.
 
 3. **Describe, without connecting.** `--describe` needs no lock, no runtime
    directory and no confirmation, and makes no SDK call:
@@ -240,8 +265,9 @@ the phase; nothing in them needs the owner's Camera Switch change.
 6. **The wearer's briefing.** Read them the helper's notice for the mode about
    to run (it appears on the terminal before the `yes` prompt and is quoted
    under each phase), and the observation list: colour passthrough unchanged,
-   or grey (the tracking-camera view), frozen, black, or stuttering, with the
-   time it started and ended against the run's start; tracking normal or not;
+   or grey (the tracking-camera view), frozen, black, stuttering or shifted in
+   colour, with the time it started and ended against the run's start;
+   tracking normal or not;
    the red LED on or off before, during and after; any green input
    ([E59](../status.md#e59-arcturus-green-input-recurrence-and-operator-recovery)).
    They watch during the run and for 30 seconds after the helper exits.
@@ -295,11 +321,12 @@ passthrough and says at once if anything changes. Ctrl-C (or SIGTERM over SSH)
 is collected between SDK calls, never during one, and ends the run with the
 disconnect done and exit 130.
 
-**Stop rule.** Any passthrough disturbance the wearer reports, in the run or in
-the 30 seconds after, stops the SDK track. Keep the run directory, follow the
-G2 recovery procedure if passthrough does not return on its own, and report;
-do not run Phase B. What counts as a disturbance is owner decision 2; until
-the owner defines it, anything but "unchanged" counts.
+**Stop rule.** Any change the wearer sees in passthrough, in the run or in the
+30 seconds after (grey, a freeze, black, a stutter or a colour shift), is a
+disturbance under the owner's passthrough rule, and one disturbance stops the
+SDK track until the owner reopens it. Keep the run directory, follow the G2
+recovery procedure if passthrough does not return on its own, and report; do
+not run Phase B.
 
 ## Phase B: the reader active for at most 10 seconds, metadata only
 
@@ -387,9 +414,10 @@ and watches passthrough for the 30 seconds as before; the operator records
 what passthrough did on re-donning. The helper does not and cannot read a
 proximity or standby signal; it only reports what the acquire calls returned.
 
-**Stop rule.** As in Phase A: any passthrough disturbance in either run or in
-the 30 seconds after stops the SDK track; do not run the second run after a
-disturbance in the first.
+**Stop rule.** As in Phase A: any change the wearer sees in passthrough in
+either run or in the 30 seconds after is a disturbance, and one disturbance
+stops the SDK track until the owner reopens it; do not run the second run
+after a disturbance in the first.
 
 ## Reading the result
 
@@ -453,10 +481,12 @@ Does not leave the Frame: the linked binary, the Client Library and anything
 else from the SDK directory (agreement section 2); any path outside the
 checkout; the SDK's `sdk_message` strings if one carries a path (redact the
 path and say so). Nothing in a probe produces an image, a recording or a
-detection, so no Camera Data exists to be sent; the owner's consent decision
-(decision 5) still governs what the coordinator may place on the public
-evidence pages beyond counts and digests, and the records wait on the Frame
-until the coordinator asks for them.
+detection, so no Camera Data exists to be sent. The owner's consent rule
+(2026-11-09) allows counts, labels, boxes, timings and format metadata to be
+saved on the Frame and published in evidence pages, and no pixels, stills,
+previews or calibration data anywhere; the helper's records fall inside the
+first class, and the coordinator applies the rule when writing the evidence
+entry.
 
 ### Wearer and operator fields
 
@@ -465,7 +495,7 @@ claim, in `owner-notes.txt` in the run directory and in the hand-off:
 
 | Field | Values |
 | --- | --- |
-| `passthrough_during_run` | `unchanged`, `grey`, `frozen`, `black`, `stutter`, `other: <words>`, with start and end times relative to `started.txt` |
+| `passthrough_during_run` | `unchanged`, `grey`, `frozen`, `black`, `stutter`, `colour_shift`, `other: <words>`, with start and end times relative to `started.txt`; anything but `unchanged` is a disturbance under the owner's rule |
 | `passthrough_after_30s` | the same vocabulary for the 30 seconds after the helper exited |
 | `tracking` | `normal` or `<words>`, with times |
 | `red_led_before`, `red_led_during`, `red_led_after` | `on`, `off`, `not_checked`; the `controls` records' `red_recording_led_enabled` is the software reading beside it, not a substitute |
@@ -480,8 +510,9 @@ After each run and the 30-second watch, take the baseline record and the G2
 log-watch counts again and record the differences against the "before" set.
 A camera-ownership request, a colour-camera disconnect and reconnect, or an
 IPE failure in the run window is a device fact to record, whatever passthrough
-looked like; whether a logged ownership request without a visible change
-counts as a disturbance is part of owner decision 2. E89 and E90 recorded such
+looked like; the owner's passthrough rule is written in terms of what the
+wearer sees, so a logged line without a visible change is recorded as a log
+fact for the owner, not counted as a disturbance by the operator. E89 and E90 recorded such
 lines before their runs with nothing of ours running, so the times matter:
 compare against `started.txt` and `ended.txt`.
 
@@ -499,7 +530,7 @@ coordinator allocates the record identifier; this guide reserves none, and
 nothing on this page is evidence. A clean Phase A supports the owner's
 approval of Phase B. A clean Phase B answers the questions the work order
 holds F4 to F8 for (linear or UBWC, standby behaviour and the passthrough
-question) and feeds the owner's gate, presence and consent decisions; it
+question) and feeds the owner's presence decision and the later phases; it
 enables no live input, no pixel path and no gate change.
 
 ## Helper identity and what this page follows
