@@ -38,7 +38,7 @@ kinds of evidence. Unknown dates, revisions and runtime versions stay unknown.
 | Linux development setup and smoke check | Cloud-tested | Linux x86_64, Python 3.12; generated repeated-image video, CPU detection and offscreen rendering; [E7](#e7-cloud-validation); integration through [E78](#e78-mirror-session-tokens-and-neutral-hud-mask-fill-cloud-checks) |
 | Read-only device and recording inspection | Device-confirmed | Inventory and MP4 header reports supplied by the user; device presence does not prove capture; [E1](#e1-frame-inventory), [E4](#e4-recordings-and-container-metadata) |
 | Vendor Arcturus app live preview and recording | Device-confirmed | User reports the vendor app works; it does not supply frames to SightCircuit; [E2](#e2-vendor-app) |
-| Guarded on-device agent runner | Phase 0 installed and re-verified on SteamOS 0.5.8; guard version 4 active; runner and guard enforcement untested on Frame | Phase 0 passed and guard settings were installed ([E82](#e82-guarded-claude-code-setup-installed-on-frame-phase-0)). Installation does not validate automated checks or blocking. The review's cycle-3 follow-ups (glob guard, update signal handling and outcome, lock-file and checkout-state reporting, installer cleanup) are fixed, cloud-checked and merged ([E84](#e84-ship-pass-of-2026-11-06-cloud-checks-for-prs-22-24-25-26-and-27)); none has run as a task on Frame. The installer re-run at 6e648c7 on SteamOS 0.5.8 passed all five stages with the first recorded signature pass of Claude Code 2.1.319, and the pull to 45771fe made guard version 4 the active guard with the settings file unchanged ([E86](#e86-installer-run-at-6e648c7-on-frame-first-signature-pass-of-claude-code-21319-and-the-guard-version-4-disclosure)). [Coverage and follow-ups](evidence/capability-notes.md#guarded-on-device-agent-runner). |
+| Guarded on-device agent runner | Phase 0 installed and re-verified on SteamOS 0.5.8; guard version 4 active; the Phase 2 enforcement run passed on Frame with reduced coverage | Phase 0 passed and guard settings were installed ([E82](#e82-guarded-claude-code-setup-installed-on-frame-phase-0)). Installation does not validate automated checks or blocking. The review's cycle-3 follow-ups (glob guard, update signal handling and outcome, lock-file and checkout-state reporting, installer cleanup) are fixed, cloud-checked and merged ([E84](#e84-ship-pass-of-2026-11-06-cloud-checks-for-prs-22-24-25-26-and-27)); none has run as a task on Frame. The installer re-run at 6e648c7 on SteamOS 0.5.8 passed all five stages with the first recorded signature pass of Claude Code 2.1.319, and the pull to 45771fe made guard version 4 the active guard with the settings file unchanged ([E86](#e86-installer-run-at-6e648c7-on-frame-first-signature-pass-of-claude-code-21319-and-the-guard-version-4-disclosure)). On November 8 the Phase 2 enforcement run on Frame refused every negative call it saw (four hook blocks, two runner refusals, one settings denial) and passed the positive control, with the two Glob cases unattempted because the build has no Glob tool in print mode and the hook's verdict on an image Read unobserved behind the settings' deny rule ([E92](#e92-phase-2-guard-enforcement-run-on-frame-no-negative-call-allowed-and-the-positive-control-passed-with-reduced-coverage)). [Coverage and follow-ups](evidence/capability-notes.md#guarded-on-device-agent-runner). |
 
 ### Paused provider research
 
@@ -440,6 +440,10 @@ provenance and original uncertainty.
 ### E91: Journal watchers left running after the A4 and A5 runs; a correction to E90 and an independent corroboration of its quiet run window
 
 [Full evidence](evidence/e091.md). Device report.
+
+### E92: Phase 2 guard-enforcement run on Frame, no negative call allowed and the positive control passed, with reduced coverage
+
+[Full evidence](evidence/e092.md). Device report.
 
 ## Maintaining the evidence
 

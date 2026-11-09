@@ -239,8 +239,10 @@ E1 (#38), F1 (#41), F2 (#48), F3a (#50), F3b (#51), B9 (#40), B10 (#42) and
 P3 (#45) merged on 2026-11-08; lanes B and P are complete and lane F's cloud
 work up to the device measurements is done. Open, all waiting on the owner: F3
 (device, approval, with the first bridge rebuild since E1), C5 with C6
-(approved, staged, waiting for the owner's start), the Phase 2 enforcement run
-(staged, approval). After F3: F4 to F8. A9 deferred; A7, A8 and A10 superseded. The Frame's built bridge predates E1 and F1 and is rebuilt only
+(approved, staged, waiting for the owner's start). The Phase 2 enforcement
+run is done ([E92](evidence/e092.md)). After F3: F4 to F8, held until the SDK
+lane's Phase B probe answers the passthrough question (owner decision,
+2026-11-08). A9 deferred; A7, A8 and A10 superseded. The Frame's built bridge predates E1 and F1 and is rebuilt only
 when a device step needs it (F3), under that step's approval. The council's
 hypothesis for the cancellation race was wrong; the recorded cause is the
 readiness probe firing on the worker before it had exec'd
@@ -256,15 +258,17 @@ handler on the main thread ([checks reference](reference/development-checks.md#h
   layout, or shows names only; decided when F5 is specified (the capture-layout
   and 300-second mapping-lifetime questions of the mask path lapsed with the
   fallback decision).
-- The Phase 2 guard-enforcement test is scoped (B10, #42) and staged by the
-  Frame manager; it runs only on the owner's approval of that run, after the
-  owner accepts the workspace trust dialog once on the Frame
-  ([E86](evidence/e086.md), [guide](guides/agent-enforcement-test.md)).
+- The Phase 2 guard-enforcement run happened on 2026-11-08 and passed with
+  reduced coverage ([E92](evidence/e092.md)): the guide is revised for what
+  the device showed (no Glob tool in print mode; a deny-rule Read refused
+  before the hook). A second run with the revised set is a new approval,
+  not scheduled.
 - Decided 2026-11-08: the fallback (D2 as written; [scope](poc-scope.md#architecture-decisions-2026-11-07)),
-  C5 with C6 approved (staged by the Frame manager, E92 reserved), the Phase 2
-  test scheduled. Next device approvals, each separate: the F3 measurement
-  run (staged, with the bridge rebuild), the Phase 2 enforcement run (staged),
-  and the owner's start of the C5/C6 sitting.
+  C5 with C6 approved (staged by the Frame manager, E93 reserved), the Phase 2
+  test scheduled and run ([E92](evidence/e092.md)). Next device approvals,
+  each separate: the owner's start of the C5/C6 sitting (approved and
+  confirmed; E93), the F3 measurement run (staged, not approved, with the
+  bridge rebuild; E94 to E97).
 - The Frame rebooted into SteamOS 0.5.8 ([E85](evidence/e085.md)); a Frame
   manager session exists and the "Frame update check" scheduled task was
   rebound to it on 2026-11-07, with the old task left disabled as a record.

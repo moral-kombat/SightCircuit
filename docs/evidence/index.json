@@ -637,6 +637,13 @@
       "file": "e091.md",
       "kind": "device_report",
       "reconstructed": false
+    },
+    {
+      "id": "E92",
+      "title": "Phase 2 guard-enforcement run on Frame, no negative call allowed and the positive control passed, with reduced coverage",
+      "file": "e092.md",
+      "kind": "device_report",
+      "reconstructed": false
     }
   ]
 }
