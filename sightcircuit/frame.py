@@ -60,21 +60,46 @@ class Frame:
             size = image.strides[0] * image.shape[0]
             native_format = dict(width=image.shape[1], height=image.shape[0], fourcc="BGR3",
                                  stride_bytes=image.strides[0], buffer_bytes=size, minimum_buffer_bytes=size)
-        descriptor = dict(native_format)
-        if (len(descriptor) > 22 or
-                any(not isinstance(key, str) or len(key) > 64 or type(value) not in (int, str) or
-                    len(str(value)) > 96 for key, value in descriptor.items()) or
-                descriptor.get("width") != image.shape[1] or descriptor.get("height") != image.shape[0] or
-                descriptor.get("fourcc") not in ("RGB3", "BGR3") or
-                type(descriptor.get("stride_bytes")) is not int or descriptor["stride_bytes"] < image.shape[1] * 3 or
-                descriptor.get("minimum_buffer_bytes") != descriptor["stride_bytes"] * image.shape[0] or
-                type(descriptor.get("buffer_bytes")) is not int or
-                not descriptor["minimum_buffer_bytes"] <= descriptor["buffer_bytes"] <= MAX_NATIVE_BYTES):
-            raise ValueError("invalid_native_frame_layout")
+        descriptor = native_layout(native_format, image.shape[1], image.shape[0])
         owned = np.array(image, dtype=np.uint8, order="C", copy=True)
         owned.flags.writeable = False
         return cls(owned, "BGR24", image.shape[1], image.shape[0], owned.strides[0], source, sequence,
-                   observed_ns, media_time, {"native_format": dict(sorted(descriptor.items()))})
+                   observed_ns, media_time, {"native_format": descriptor})
+
+    @classmethod
+    def from_native(cls, pixels, native_format, source, sequence, observed_ns, *, metadata=None):
+        """A validated raw ``RGB3``/``BGR3`` frame from a native buffer and its layout descriptor.
+
+        ``pixels`` is a bytes-like buffer of exactly ``native_format["buffer_bytes"]``
+        bytes (it becomes immutable ``bytes``); the descriptor follows the same
+        rules as ``owned_bgr``'s, with ``width`` and ``height`` taken from it,
+        and is kept as ``metadata["native_format"]`` beside the caller's other
+        ``metadata`` entries (which may not name ``native_format`` themselves).
+        Identity is validated as ``owned_bgr`` validates it. No pixel is
+        inspected or converted here.
+        """
+        if type(sequence) is not int or sequence < 1 or type(observed_ns) is not int or observed_ns < 0:
+            raise ValueError("invalid_frame_identity_or_observation_time")
+        if not isinstance(source, str) or not 1 <= len(source) <= 96:
+            raise ValueError("invalid_source_identity")
+        if not isinstance(native_format, dict):
+            raise ValueError("invalid_native_frame_layout")
+        width, height = native_format.get("width"), native_format.get("height")
+        if (type(width) is not int or type(height) is not int or not 1 <= width <= MAX_NATIVE_SIDE or
+                not 1 <= height <= MAX_NATIVE_SIDE):
+            raise ValueError("invalid_native_frame_layout")
+        descriptor = native_layout(native_format, width, height)
+        try:
+            data = bytes(memoryview(pixels))
+        except TypeError:
+            raise ValueError("native_pixels_not_a_buffer") from None
+        if len(data) != descriptor["buffer_bytes"]:
+            raise ValueError("native_pixels_size_mismatch")
+        extra = dict(metadata or {})
+        if "native_format" in extra:
+            raise ValueError("native_format_declared_twice")
+        return cls(data, descriptor["fourcc"], width, height, descriptor["stride_bytes"], source, sequence,
+                   observed_ns, None, {"native_format": descriptor, **extra})
 
     def owned(self):
         """This frame with pixels and metadata no other code holds.
@@ -99,6 +124,28 @@ class Frame:
             except TypeError:  # Not a buffer: nothing a source could rewrite in place.
                 pass
         return replace(self, pixels=pixels, stride=stride, metadata=deepcopy(self.metadata))
+
+
+def native_layout(native_format, width, height):
+    """The validated, key-sorted copy of a native layout descriptor for a ``width`` x ``height`` image.
+
+    The one descriptor rule (``owned_bgr``, ``Frame.from_native``): at most 22
+    integer or string entries, ``fourcc`` ``RGB3`` or ``BGR3``, ``stride_bytes``
+    at least three bytes per pixel, ``minimum_buffer_bytes`` exactly the stride
+    times the height and ``buffer_bytes`` between that and ``MAX_NATIVE_BYTES``.
+    """
+    descriptor = dict(native_format)
+    if (len(descriptor) > 22 or
+            any(not isinstance(key, str) or len(key) > 64 or type(value) not in (int, str) or
+                len(str(value)) > 96 for key, value in descriptor.items()) or
+            descriptor.get("width") != width or descriptor.get("height") != height or
+            descriptor.get("fourcc") not in ("RGB3", "BGR3") or
+            type(descriptor.get("stride_bytes")) is not int or descriptor["stride_bytes"] < width * 3 or
+            descriptor.get("minimum_buffer_bytes") != descriptor["stride_bytes"] * height or
+            type(descriptor.get("buffer_bytes")) is not int or
+            not descriptor["minimum_buffer_bytes"] <= descriptor["buffer_bytes"] <= MAX_NATIVE_BYTES):
+        raise ValueError("invalid_native_frame_layout")
+    return dict(sorted(descriptor.items()))
 
 
 def native_format(frame):

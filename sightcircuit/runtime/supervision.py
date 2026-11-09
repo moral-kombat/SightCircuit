@@ -51,6 +51,10 @@ supervisor follow (architecture decision D4). It offers:
   at all while the main thread blocked, uninterrupted, in the wait's lock
   acquire (the lane B flake; see the checks reference). Neither can happen to
   a relay thread.
+- **A caller's stop.** ``supervise_owned(stop=event)`` ends the worker the
+  way a cancellation does once another thread of the caller sets the event
+  (the camera helper source stops its helper that way when its reader refuses the
+  stream); the report's status is then ``stopped``.
 - **One report block.** ``status``, ``exit_code``, ``cleanup_ok``,
   ``reason``, ``worker_pid``, ``worker_armed``, ``worker_reaped``,
   ``worker_exit_code``, ``worker_tree_reaped``, ``report_reader_stopped``,
@@ -684,7 +688,7 @@ class ReportStream:
 
 def supervise_owned(command, base_report, timeout, validate, *, descendants=False, parent_fd=None, pass_fds=(),
                     grace=GRACE, group_fd=None, nested_group_fd=None, progress=None, signals=RECORD_AND_POLL,
-                    env=None):
+                    env=None, stop=None):
     """Run ``command`` in an owned session for at most ``timeout`` seconds and accept its report only if ``validate`` does.
 
     Returns the report (``record`` mode); in ``raise`` mode a cancellation
@@ -692,10 +696,15 @@ def supervise_owned(command, base_report, timeout, validate, *, descendants=Fals
     it. ``parent_fd`` is a lifeline whose readability means the supervisor's
     parent is gone; ``group_fd`` receives the worker's group and then
     "reaped", for a supervisor that contains an unconfirmed group read from
-    ``nested_group_fd`` if this process is killed. Every escalation and
-    surviving process is reflected in ``cleanup_ok``, independently of the
-    worker's own claims. Descendants must stay in the owned group; worker
-    code cannot detach helpers.
+    ``nested_group_fd`` if this process is killed. ``stop``, when given, is a
+    ``threading.Event`` another thread of the caller may set: the worker is
+    then ended as a cancellation ends it (SIGTERM after the arm wait, the
+    cooperative grace, then the group escalation) and the report's status is
+    ``stopped`` with exit code 1; a cooperative stop confirms ``cleanup_ok``
+    as a cooperative cancellation does. Every escalation and surviving
+    process is reflected in ``cleanup_ok``, independently of the worker's own
+    claims. Descendants must stay in the owned group; worker code cannot
+    detach helpers.
     """
     if descendants and not sys.platform.startswith("linux"):
         raise ValueError("native_helper_supervision_requires_linux")
@@ -812,6 +821,9 @@ def supervise_owned(command, base_report, timeout, validate, *, descendants=Fals
                 if handlers.received:
                     failure = "cancelled"
                     break
+                if stop is not None and stop.is_set():
+                    failure = "stopped"
+                    break
                 if time.monotonic() >= deadline:
                     failure = "timed_out"
                     break
@@ -831,7 +843,7 @@ def supervise_owned(command, base_report, timeout, validate, *, descendants=Fals
             if arm_write is not None:
                 os.close(arm_write)
             if process is not None:
-                end_worker(failure in ("cancelled", "supervisor_lost") or handlers.received)
+                end_worker(failure in ("cancelled", "supervisor_lost", "stopped") or handlers.received)
                 if group_fd is not None and tree_gone:
                     with contextlib.suppress(BrokenPipeError):
                         os.write(group_fd, b"reaped\n")
@@ -872,7 +884,8 @@ def supervise_owned(command, base_report, timeout, validate, *, descendants=Fals
         # reports, nonzero contradictions or forced kills never establish it.
         report["cleanup_ok"] = (report.get("cleanup_ok") is True and tree_gone and stream is not None and
                                 stream.done.is_set() and owned.get("report_reader_stopped") is True and
-                                owned.get("worker_reaped") is True and not forced and failure in (None, "cancelled"))
+                                owned.get("worker_reaped") is True and not forced and
+                                failure in (None, "cancelled", "stopped"))
         if not report["cleanup_ok"] and report["exit_code"] == 0:
             report.update(status="cleanup_failed", exit_code=1)
         if handlers.received and signals.mode == RAISE:

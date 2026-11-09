@@ -537,6 +537,36 @@ class SupervisedOwnedTests(unittest.TestCase):
         self.assertTrue(all(thread is threading.main_thread() for _, thread in seen))
         self.assertEqual((report["status"], report["n"], report["cleanup_ok"]), ("done", 3, True))
 
+    def test_a_callers_stop_ends_a_cooperative_worker_with_cleanup_confirmed(self):
+        stop = threading.Event()
+        timer = threading.Timer(0.4, stop.set)
+        timer.start()
+        self.addCleanup(timer.cancel)
+        started = time.monotonic()
+        report = supervision.supervise_owned(worker_command(COOPERATIVE), {"report_kind": "test"}, 10, accept,
+                                             stop=stop)
+        self.assertEqual((report["status"], report["exit_code"]), ("stopped", 1))
+        self.assertTrue(report["cleanup_ok"])
+        self.assertTrue(report["worker_termination_requested"])
+        self.assertFalse(report["worker_forced_termination"])
+        self.assertTrue(report["worker_reaped"] and report["worker_tree_reaped"])
+        self.assertEqual(report["worker_exit_code"], 130)
+        self.assertLess(time.monotonic() - started, 4)
+        for number in RECORD_AND_POLL.numbers:  # The stop is not a signal: none was recorded.
+            self.assertEqual(signal.getsignal(number), self.previous[number])
+
+    def test_a_callers_stop_escalates_on_a_deaf_worker_and_does_not_confirm_cleanup(self):
+        stop = threading.Event()
+        stop.set()  # Already set: the worker is ended as soon as the loop sees it.
+        grace = Grace(arm=0.2, cooperative=0.3, terminate=0.3, kill=0.3, report=0.3)
+        report = supervision.supervise_owned(
+            worker_command("import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)"),
+            {"report_kind": "test"}, 10, accept, grace=grace, stop=stop)
+        self.assertEqual(report["status"], "stopped")
+        self.assertTrue(report["worker_forced_termination"])
+        self.assertFalse(report["cleanup_ok"])
+        self.assertTrue(report["worker_tree_reaped"])
+
     def test_the_worker_sees_its_cooperative_grace(self):
         report = supervision.supervise_owned(
             worker_command("import json, os; print(json.dumps({'status': 'done', 'exit_code': 0, 'cleanup_ok': True, "
