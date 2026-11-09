@@ -272,8 +272,8 @@ agreement, with the agreement's Camera Data obligations.
   not arise on this route, while the mask and fallback work keeps its purpose
   for the mirror.
 - The lane is cloud-only until the owner approves a probe: containment and
-  build with a fake backend, the metadata-only helper modes and the operator
-  procedure. The helper's fake build passed its tests on the Frame on
+  build with a fake backend, the metadata-only helper modes and the
+  [operator procedure](guides/camera-probe.md) for the two probe phases. The helper's fake build passed its tests on the Frame on
   2026-11-08 without the SDK library and without a camera action (the Frame
   manager's report; not evidence).
 
