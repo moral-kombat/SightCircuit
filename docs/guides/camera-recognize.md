@@ -14,27 +14,36 @@ here is a device result, and no device run is approved by this page.
 
 ## Gate statement
 
-Every gate stays closed. The report of every run carries `gates.claims()`:
-`production_live_input_enabled`, `mapping_qualified` and
-`production_hud_enabled` are `false`. The command follows the bounded SteamVR
-mirror recognizer ([E48](../evidence/e048.md)), the confirmed use outside the
-gates: it never builds the live `Pipeline`, never touches the HUD path, opens
-no window and writes no image. Running it against the helper's SDK build on
-the Frame is a device step with its own approval, after the owner's gate
-classification of bounded recognition without display (the review's owner
-decision 3); until then it runs only against the fake producer.
+Every gate stays closed and none is lifted by this command. The report of
+every run carries `gates.claims()`: `production_live_input_enabled`,
+`mapping_qualified` and `production_hud_enabled` are `false`, and a
+`gate_statement` field says the following. On 2026-11-09 the owner classified
+bounded camera recognition without display (counts, labels, boxes and timings
+only, no saved image, at most 30 seconds) as a confirmed use outside the
+live-input gate, exactly as the bounded SteamVR mirror recognizer of
+[E48](../evidence/e048.md) is; `sightcircuit/gates.py` is unchanged and nothing
+feeds the live `Pipeline` or the HUD path. The command never builds the live
+pipeline, opens no window and writes no image. A run against the helper's SDK
+build on the Frame is still a device step with its own approval, under the
+accepted passthrough rule (any wearer-visible passthrough change during a run
+or in the 30 seconds after stops the SDK track); nothing in this guide
+approves one, and until one is approved the command runs only against the
+fake producer.
 
 ## Camera Data
 
 Under the Arcturus camera SDK agreement (sections 1 and 3.2) the detections,
 labels, scores and boxes derived from camera frames are Camera Data, and so is
 every per-frame record in the report. The command says so in its docstring and
-in the report's `camera_data` block. It saves nothing on its own: the report
-goes to stdout, and to a file only when the operator names a new `.json` path
-with `--report`, which is the operator's explicit action to save Camera Data.
-The report never contains pixels (`pixels_in_report: false`), and no preview,
-still or other file is written. Sending a report on needs the same explicit,
-informed authorization.
+in the report's `camera_data` block. The owner's consent decision of
+2026-11-09 allows counts, labels, boxes, inference timings and format metadata
+to be saved locally on the Frame and published in evidence; pixels, stills,
+previews and calibration data are never saved or published anywhere, and the
+camera's red LED is untouched. The command saves nothing on its own: the
+report goes to stdout, and to a file only when the operator names a new
+`.json` path with `--report`, which is the operator's explicit action to save
+Camera Data. The report never contains pixels (`pixels_in_report: false`),
+and no preview, still or other file is written.
 
 ## What the command does
 
@@ -125,7 +134,7 @@ standard library only. Expect `status: validated` and exit 0.
 | `inference_p95_budget_ms`, `inference_p95_within_budget` | `LIVE_INFERENCE_P95_BUDGET_MS` (200) and whether this run's p95 met it; which machine ran it is the report's business, so a cloud figure is never a Frame figure |
 | `capture` | The source report: `helper` (resolved path, SHA-256, arguments), `supervision` (the primitive's block: pid, exit code, forced termination, tree reaped), `stream` (packets and frames read, frames per camera, dropped frames, the `ready` and `end` headers, the refusal if any), `diagnostics` (the collected stderr lines and the counts of dropped, non-JSON and oversize lines), `helper_exit_code` |
 | `camera_data` | The Camera Data statement, `report_saved_by_operator` and `report_path` |
-| `production_live_input_enabled`, `mapping_qualified`, `production_hud_enabled` | `gates.claims()`, all `false` |
+| `gate_statement`, `production_live_input_enabled`, `mapping_qualified`, `production_hud_enabled` | The owner's 2026-11-09 classification in one sentence, and `gates.claims()`, all `false` |
 | `cleanup_ok`, `images_saved`, `pixels_in_report`, `display_started`, `overlay_requested` | The primitive's cleanup verdict and the processing thread's exit; the last four are always `false` |
 
 ## The wire protocol, camera export v1

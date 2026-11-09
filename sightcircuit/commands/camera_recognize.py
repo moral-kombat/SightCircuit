@@ -20,13 +20,19 @@ Nothing is saved unless the operator names ``--report``, which is the
 operator's explicit action to save Camera Data; the report never contains
 pixels, and no preview, still or other file is written.
 
-Gates. Every gate stays closed (``gates.claims()`` is in every report). The
-command follows the bounded mirror recognizer (E48): it never touches the live
-``Pipeline``, the HUD path or a display. Running it against the helper's SDK
-build on the Frame is a device step that needs the owner's approval and the
-owner's gate classification; the cloud checks run it against the fake producer
-only. ``--validate`` runs the reader against the fake producer's valid and
-invalid streams without any helper or detector.
+Gates. Every gate stays closed and none is lifted here (``gates.claims()`` is
+in every report). The owner classified this command on 2026-11-09 as a
+confirmed use outside the live-input gate, exactly as E48 mirror recognition
+is: counts, labels, boxes and timings only, no display, no saved image, at most
+30 seconds. It never touches the live ``Pipeline``, the HUD path or a display.
+The owner's consent decision of the same day allows counts, labels, boxes,
+inference timings and format metadata to be saved locally on the Frame and
+published in evidence; pixels, stills, previews and calibration data are never
+saved or published, and the camera LED is untouched. Running it against the
+helper's SDK build on the Frame is a device step that needs its own approval;
+the cloud checks run it against the fake producer only. ``--validate`` runs
+the reader against the fake producer's valid and invalid streams without any
+helper or detector.
 """
 import argparse
 import json
@@ -63,9 +69,13 @@ MAX_LISTED_DETECTIONS = 20
 PROCESSOR_JOIN_SECONDS = 15.0
 CAMERA_DATA_STATEMENT = (
     "Detections, labels, scores and boxes derived from camera frames are Camera Data under the Arcturus camera SDK "
-    "agreement (sections 1 and 3.2); every per-frame record in this report is Camera Data. The report holds no "
-    "pixels and is written only to the path the operator names with --report, which is the operator's explicit "
-    "action to save it; sending it on needs the same explicit, informed authorization.")
+    "agreement (sections 1 and 3.2); every per-frame record in this report is Camera Data. The owner's consent "
+    "decision of 2026-11-09 allows counts, labels, boxes, inference timings and format metadata to be saved locally "
+    "and published in evidence; pixels, stills, previews and calibration data are never saved or published. The "
+    "report holds no pixels and is written only to the path the operator names with --report, which is the "
+    "operator's explicit action to save it.")
+GATE_STATEMENT = ("Confirmed use outside the live-input gate (owner decision 2026-11-09, the E48 pattern): bounded, "
+                  "no display, no saved image; every gate stays closed and none is lifted")
 SCOPE = ("Bounded recognition on frames the camera helper exported; camera identity, clocks and the pixel path are "
          "what the helper declares; no display, no preview, no still; a device run needs the owner's approval")
 TIMINGS = ("input_age_ms", "processing_ms", "inference_ms")
@@ -77,7 +87,7 @@ def new_report(mode):
             "overlay_requested": False, "source_kind": "arcturus_camera_export", "live_input_verified": False,
             "camera_data": {"detections_are_camera_data": True, "statement": CAMERA_DATA_STATEMENT,
                             "report_saved_by_operator": False, "report_path": None},
-            **gates.claims(),
+            "gate_statement": GATE_STATEMENT, **gates.claims(),
             "frames_received": 0, "frames_processed": 0, "stale_inputs_skipped": 0, "pending_frames_replaced": 0,
             "labels_seen": [], "maximum_pending_frames": 1, "maximum_input_observation_age_ms": MAX_DISPLAY_AGE_MS,
             "inference_p95_budget_ms": LIVE_INFERENCE_P95_BUDGET_MS, "inference_p95_within_budget": None,
