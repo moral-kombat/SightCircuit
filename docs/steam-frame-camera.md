@@ -14,8 +14,11 @@ below do not imply validation on a newer runtime.
 
 ## What the available sources establish
 
-The reviewed sources do not establish a supported public Steam Frame/Arcturus
-live-camera API for SightCircuit. Valve's general OpenVR camera interface is
+The reviewed public sources do not establish a supported public Steam
+Frame/Arcturus live-camera API for SightCircuit. The
+[Camera Preview SDK](#arcturus-camera-preview-sdk-2026-11-09) the owner obtained
+on 2026-11-09 is a vendor contract under a developer agreement, not a public
+API; it is the first route to camera frames and is handled in its own lane. Valve's general OpenVR camera interface is
 an application contract, not proof of support on this headset. Arcturus's
 [official apps][arcturus-apps] document recording, viewing and reconstruction;
 those features do not establish an application frame-access contract.
@@ -26,7 +29,7 @@ those features do not establish an application frame-access contract.
 | [spyjacob investigation][hand-findings] and [capture implementation][hand-capture] | Experimental Arcturus buffer access through a Vulkan layer | Third-party result; missing producer synchronization |
 | [Frame Passthrough Shortcuts][source-switch] | RGB/monochrome source switching through private interfaces | Source selection does not supply frames or a stable public ABI |
 | [Arcturus apps][arcturus-apps], [Splat Workshop][splat-workshop] and [Spirula][spirula] | Recording, transfer, conversion and reconstruction | File workflows, separate from live detection |
-| [Arcturus developer page][arcturus-developers] (read 2026-11-07) | Passthrough *behind* an app through the OpenXR environment blend mode, with Unity and native samples | States that no direct camera access API is available; output-side only, not frame access |
+| [Arcturus developer page][arcturus-developers] (read 2026-11-07) | Passthrough *behind* an app through the OpenXR environment blend mode, with Unity and native samples | States that no direct camera access API is available; output-side only, not frame access. Written before the [preview SDK](#arcturus-camera-preview-sdk-2026-11-09) the owner obtained on 2026-11-09 |
 
 ## Project device results
 
@@ -183,7 +186,9 @@ not order reads against the camera producer.
 Read by the coordinator on 2026-11-07 at the owner's request. The page is the
 vendor's statement, not a project result, and nothing from it has been run.
 The owner sent the vendor an inquiry about camera access for a passthrough
-overlay on 2026-11-08 (owner's report); no reply is recorded yet.
+overlay on 2026-11-08 (owner's report) and obtained the vendor's Camera Preview
+SDK the next day ([below](#arcturus-camera-preview-sdk-2026-11-09)); the
+page's statement describes the public position before that SDK.
 
 **Camera data access.** The page states: "A direct camera access API is not
 yet available. We're taking developer inquiries about your use case." That
@@ -226,6 +231,51 @@ Steam Frame, not for PC apps using streamed VR.
   Adopting either sample would mean pinning its archive and checksums and
   recording its license in [third-party attribution](../THIRD_PARTY.md).
 - The "local VR only" constraint matches the project's on-device approach.
+
+## Arcturus Camera Preview SDK (2026-11-09)
+
+The owner accepted the Arcturus Vision Camera Preview SDK developer agreement
+(version 2026-11-08) and obtained the SDK directly from the vendor, confirmed
+2026-11-09. Its two public headers and the agreement are vendored under
+[`third_party/arcturus-camera-sdk/`](../third_party/arcturus-camera-sdk/README.md)
+with pinned checksums; the client library is never committed, fetched or linked
+in CI. The [dated input review](history/2026-11-09-arcturus-sdk-input-review.md)
+records what the SDK provides, how it would enter the input phases, the device
+phases and the owner decisions; this section is the summary, and nothing here
+has run against a camera.
+
+**What the SDK provides.** One client at a time connects to the camera service
+and receives frames as raw DMA-BUF buffers (NV12 or P010, possibly UBWC-tiled)
+with format metadata, exposure timestamps, plane layout, intrinsics and
+transforms, pose, and the shared camera controls (a change affects every
+application using the cameras). Frame and control calls are refused until the
+owner enables developer camera access in the headset's Camera Switch setting.
+There is no decode step and no public frame-access API for applications that
+do not hold the agreement. Any use makes SightCircuit an Application under the
+agreement, with the agreement's Camera Data obligations.
+
+**What this means for SightCircuit.**
+
+- It does not change the [accepted input strategy](poc-scope.md#architecture-decisions-2026-11-07)
+  (decision D2) yet: the mirror stays the input, and lane F's remaining steps
+  are held until the lane's Phase B probe answers the passthrough question
+  ([work order](live-capture.md#architecture-plan-work-order-2026-11-07),
+  lane S).
+- Passthrough disturbance is the first risk. The public camera probe
+  interrupted passthrough ([E3](evidence/e003.md)), and third-party notes
+  report that the camera service closes its own passthrough while an external
+  client owns the colour cameras; both probe phases are owner-run, separately
+  approved, with the wearer watching passthrough and the G2 recovery
+  procedure ready, and any disturbance stops the SDK track.
+- The passthrough cameras image the room before the compositor, so frames from
+  the SDK would not contain the HUD; the feedback problem of mirror input does
+  not arise on this route, while the mask and fallback work keeps its purpose
+  for the mirror.
+- The lane is cloud-only until the owner approves a probe: containment and
+  build with a fake backend, the metadata-only helper modes and the
+  [operator procedure](guides/camera-probe.md) for the two probe phases. The helper's fake build passed its tests on the Frame on
+  2026-11-08 without the SDK library and without a camera action (the Frame
+  manager's report; not evidence).
 
 ## Community references selected for follow-up (2026-10-16)
 
