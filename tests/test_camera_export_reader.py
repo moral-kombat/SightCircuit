@@ -140,6 +140,22 @@ class InvalidStreamTests(unittest.TestCase):
             list(reader.frames())
         self.assertLess(reader.bytes_read, 1024)
 
+    def test_a_header_of_sixteen_thousand_brackets_is_refused_not_raised(self):
+        import sys
+        data = fake_export.encode(None, header_text=b"[" * 16000)
+        reader = ExportReader(io.BytesIO(data), limits=LIMITS)
+        with self.assertRaises(ExportRefused) as caught:  # Never a RecursionError out of frames().
+            list(reader.frames())
+        self.assertEqual(caught.exception.reason, "header_not_json")
+        self.assertLess(16000, sys.getrecursionlimit() * 20)  # The case is deep enough to matter on any limit.
+        from sightcircuit.camera.export_reader import MAX_HEADER_DEPTH, depth_of
+        self.assertEqual(MAX_HEADER_DEPTH, 5)
+        self.assertEqual(depth_of(1), 1)
+        self.assertEqual(depth_of({"a": [{"b": 1}]}), 4)
+        self.assertEqual(depth_of(fake_export.frame_header(1)), 5)  # acquisition_format.planes[0].offset, a scalar
+        self.assertEqual(depth_of(fake_export.ready_header()), 4)  # build.sdk_release.source_revision
+        self.assertEqual(depth_of(fake_export.end_header(0)), 3)  # counts.exported
+
     def test_read_failure_is_a_refusal(self):
         class Broken:
             def read(self, size):

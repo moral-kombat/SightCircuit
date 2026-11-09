@@ -163,6 +163,7 @@ class Diagnostics(threading.Thread):
 
     def run(self):
         pending = bytearray()
+        discarding = False  # Inside an unterminated line already counted oversize: its tail is the same line.
         try:
             while True:
                 try:
@@ -176,13 +177,18 @@ class Diagnostics(threading.Thread):
                 while True:
                     line, newline, rest = pending.partition(b"\n")
                     if not newline:
-                        if len(pending) > MAX_DIAGNOSTIC_LINE_BYTES:  # Discard an unterminated oversize line as it grows.
+                        if len(pending) > MAX_DIAGNOSTIC_LINE_BYTES and not discarding:  # Counted once; the rest is dropped.
                             self.oversize_lines += 1
+                            discarding = True
+                        if discarding:
                             pending = bytearray()
                         break
-                    self.line(bytes(line))
+                    if discarding:
+                        discarding = False  # The oversize line ends here; it was counted when it overflowed.
+                    else:
+                        self.line(bytes(line))
                     pending = bytearray(rest)
-            if pending:
+            if pending and not discarding:
                 self.line(bytes(pending))
         except OSError as error:
             self.error = str(error)[:256]

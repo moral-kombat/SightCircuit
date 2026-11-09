@@ -3,8 +3,8 @@
 ``ExportReader`` reads packets from a binary stream or a file descriptor and
 validates every byte of framing and every header field against the contract:
 the prefix (magic, version, size bounds), the header (UTF-8, one JSON object
-without duplicate keys, exactly the fields of its kind with their types and
-bounds), the payload size, and the stream rules (``ready`` first and once,
+without duplicate keys, nested at most ``MAX_HEADER_DEPTH`` deep, exactly the
+fields of its kind with their types and bounds), the payload size, and the stream rules (``ready`` first and once,
 ``end`` last and once, consecutive sequences from 1 within ``max_frames``,
 frame sets numbered from 1 without gaps with each camera at most once per set,
 a camera the ``ready`` selected, the derivation of the declared pixel path
@@ -28,11 +28,12 @@ from ..frame import Frame
 from . import contract
 
 READ_CHUNK = 1 << 20
+MAX_HEADER_DEPTH = 5  # The header object, acquisition_format, its planes list, a plane object, a scalar (``depth_of``).
 # Every reason a refusal can name; field reasons carry the field path after the colon.
 REASONS = (
     "truncated_prefix", "bad_magic", "unsupported_version", "header_empty", "header_too_large", "payload_too_large",
     "truncated_header", "truncated_payload", "header_not_utf8", "header_not_json", "duplicate_header_key",
-    "header_not_object", "missing_kind", "unknown_kind", "ready_not_first", "ready_twice", "packet_after_end",
+    "header_not_object", "header_too_deep", "missing_kind", "unknown_kind", "ready_not_first", "ready_twice", "packet_after_end",
     "stream_ended_without_ready", "stream_ended_without_end", "missing_field:<path>", "unexpected_field:<path>",
     "invalid_field:<path>", "ready_payload_not_empty", "end_payload_not_empty", "limits_differ_from_requested",
     "stride_too_small", "buffer_bytes_mismatch", "payload_bytes_mismatch", "sequence_not_consecutive",
@@ -73,6 +74,19 @@ def _pairs(pairs):
     if len(set(keys)) != len(keys):
         raise KeyError("duplicate_header_key")
     return dict(pairs)
+
+
+def depth_of(value):
+    """Nesting depth of a decoded JSON value: 1 for a scalar, 1 + the deepest child for a container (iterative)."""
+    deepest, pending = 1, [(value, 1)]
+    while pending:
+        item, depth = pending.pop()
+        deepest = max(deepest, depth)
+        if type(item) is dict:
+            pending.extend((child, depth + 1) for child in item.values())
+        elif type(item) is list:
+            pending.extend((child, depth + 1) for child in item)
+    return deepest
 
 
 def check_field(field, value, path):
@@ -230,10 +244,12 @@ class ExportReader:
             header = json.loads(text, object_pairs_hook=_pairs, parse_constant=_nonfinite)
         except KeyError:
             raise self._refuse("duplicate_header_key", f"packet {packet.index} header repeats a key") from None
-        except ValueError:
+        except (ValueError, RecursionError):  # A header nested past the interpreter's limit is not a header.
             raise self._refuse("header_not_json", f"packet {packet.index} header is not JSON") from None
         if type(header) is not dict:
             raise self._refuse("header_not_object", f"packet {packet.index} header is not a JSON object")
+        if depth_of(header) > MAX_HEADER_DEPTH:
+            raise self._refuse("header_too_deep", f"packet {packet.index} header nests deeper than {MAX_HEADER_DEPTH}")
         kind = header.get("kind")
         if "kind" not in header:
             raise self._refuse("missing_kind", f"packet {packet.index} header has no kind")

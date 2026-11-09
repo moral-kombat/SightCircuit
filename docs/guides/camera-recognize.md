@@ -100,6 +100,13 @@ flags; without it nothing is launched.
   --report artifacts/camera/run-01.json
 ```
 
+The terminal confirmation is the command line's only path to the helper. The
+library functions beneath it, `camera_recognize.recognize(confirmed=...)` and
+`camera_helper.run_export(confirmed=...)`, trust their caller's word that the
+operator confirmed: they exist for the tests (which pass `confirmed=True`
+against the stand-in) and for a future caller that performs its own informed
+start; no shipped command calls them without the typed answer.
+
 `--cameras` takes `0`, `1` or `0,1` (camera index 0 is reported as the left
 camera and 1 as the right; the assignment is the helper's, made from the
 camera transforms as the SDK example does it, and nothing in Python verifies

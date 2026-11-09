@@ -147,6 +147,8 @@ INVALID = {
     "duplicate_header_key": (lambda: encode(None, header_text=b'{"kind": "ready", "kind": "ready"}'),
                              "duplicate_header_key"),
     "header_not_object": (lambda: encode(None, header_text=b'["ready"]'), "header_not_object"),
+    "header_deep_brackets": (lambda: encode(None, header_text=b"[" * 16000), "header_not_json"),
+    "header_too_deep": (lambda: encode(dict(ready_header(), build={"a": {"b": {"c": {"d": 1}}}})), "header_too_deep"),
     "missing_kind": (lambda: encode({"protocol": 1}), "missing_kind"),
     "unknown_kind": (lambda: encode({"kind": "frames"}), "unknown_kind"),
     "kind_not_string": (lambda: encode({"kind": 1}), "unknown_kind"),

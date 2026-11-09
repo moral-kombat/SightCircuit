@@ -238,6 +238,31 @@ class RunExportTests(unittest.TestCase):
                 self.assertEqual((report["status"], report["reason"]), ("error", "camera_selection_invalid"))
 
 
+class DiagnosticsTests(unittest.TestCase):
+    def collect(self, *writes):
+        read_fd, write_fd = os.pipe()
+        thread = camera_helper.Diagnostics(read_fd)
+        thread.start()
+        for data in writes:
+            os.write(write_fd, data)
+        os.close(write_fd)
+        thread.join(10)
+        self.assertFalse(thread.is_alive())
+        return thread.report()
+
+    def test_an_oversize_unterminated_line_counts_once_including_its_tail(self):
+        report = self.collect(b"x" * 70000, b"y" * 70000 + b"\n", b'{"event": "after"}\n')
+        self.assertEqual((report["oversize_lines"], report["line_count"], report["non_json_lines"]), (1, 1, 0))
+        self.assertEqual(report["lines"], [{"event": "after"}])
+
+    def test_a_terminated_oversize_line_and_a_trailing_fragment(self):
+        report = self.collect(b"z" * 9000 + b"\n", b'{"event": "one"}\n', b'{"event": "tail"}')
+        self.assertEqual((report["oversize_lines"], report["line_count"]), (1, 2))
+        self.assertEqual([line["event"] for line in report["lines"]], ["one", "tail"])
+        report = self.collect(b"q" * 70000)  # Unterminated at end of stream: one oversize line, nothing else.
+        self.assertEqual((report["oversize_lines"], report["line_count"], report["non_json_lines"]), (1, 0, 0))
+
+
 class HelperPathTests(unittest.TestCase):
     def test_the_path_must_be_an_existing_executable_file(self):
         with tempfile.TemporaryDirectory() as temporary:
