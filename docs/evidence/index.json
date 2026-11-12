@@ -658,6 +658,13 @@
       "file": "e094.md",
       "kind": "offline",
       "reconstructed": false
+    },
+    {
+      "id": "E95",
+      "title": "Phase A camera probe on Frame, the linked helper built and ran, and the camera service was not reachable",
+      "file": "e095.md",
+      "kind": "device_report",
+      "reconstructed": false
     }
   ]
 }

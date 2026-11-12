@@ -453,6 +453,10 @@ provenance and original uncertainty.
 
 [Full evidence](evidence/e094.md). Offline record.
 
+### E95: Phase A camera probe on Frame, the linked helper built and ran, and the camera service was not reachable
+
+[Full evidence](evidence/e095.md). Device report.
+
 ## Maintaining the evidence
 
 The coordinator checks pending allocations before assigning an evidence ID and adds its record
