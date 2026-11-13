@@ -665,6 +665,13 @@
       "file": "e095.md",
       "kind": "device_report",
       "reconstructed": false
+    },
+    {
+      "id": "E96",
+      "title": "Second Phase A camera probe on Frame, the helper connected to the camera service and read its control state",
+      "file": "e096.md",
+      "kind": "device_report",
+      "reconstructed": false
     }
   ]
 }
