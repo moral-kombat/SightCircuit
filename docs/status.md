@@ -461,6 +461,10 @@ provenance and original uncertainty.
 
 [Full evidence](evidence/e096.md). Device report.
 
+### E97: Phase B camera probe on Frame, the reader delivered NV12 UBWC frame metadata with passthrough unchanged
+
+[Full evidence](evidence/e097.md). Device report.
+
 ## Maintaining the evidence
 
 The coordinator checks pending allocations before assigning an evidence ID and adds its record

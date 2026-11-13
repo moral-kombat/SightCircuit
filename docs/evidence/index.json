@@ -672,6 +672,13 @@
       "file": "e096.md",
       "kind": "device_report",
       "reconstructed": false
+    },
+    {
+      "id": "E97",
+      "title": "Phase B camera probe on Frame, the reader delivered NV12 UBWC frame metadata with passthrough unchanged",
+      "file": "e097.md",
+      "kind": "device_report",
+      "reconstructed": false
     }
   ]
 }
