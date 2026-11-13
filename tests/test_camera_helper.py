@@ -651,7 +651,9 @@ class CameraHelperTests(unittest.TestCase):
         os.chmod(shared, 0o755)
         regular = Path(self.runtime.name) / "file"
         regular.write_text("")
-        for value in (relative, str(shared), str(regular), str(Path(self.runtime.name) / "absent")):
+        link = Path(self.runtime.name) / "link"  # a symlink to a valid directory: the directory is opened O_NOFOLLOW
+        link.symlink_to(self.runtime.name, target_is_directory=True)
+        for value in (relative, str(shared), str(regular), str(link), str(Path(self.runtime.name) / "absent")):
             with self.subTest(value=value):
                 code, records, err = self.run_helper(["--hello"], "ok_linear_nv12",
                                                      env=dict(self.env, XDG_RUNTIME_DIR=value))
@@ -660,7 +662,103 @@ class CameraHelperTests(unittest.TestCase):
                 self.assertEqual(records[-1]["fake_calls"], [])
         self.assertFalse((ROOT / relative).exists())
         self.assertFalse(Path(relative).exists())
-        self.assertEqual(sorted(path.name for path in Path(self.runtime.name).iterdir()), ["file", "shared"])
+        self.assertEqual(sorted(path.name for path in Path(self.runtime.name).iterdir()), ["file", "link", "shared"])
+
+    def test_a_foreign_users_runtime_dir_is_refused(self):
+        # A 0700 directory owned by another user is no runtime directory of ours. As root the test makes
+        # one (owned by uid 1); otherwise it uses /root when that is 0700 and root's; else it skips.
+        foreign = None
+        if os.getuid() == 0:
+            foreign = Path(self.runtime.name) / "foreign"
+            foreign.mkdir(mode=0o700)
+            os.chmod(foreign, 0o700)
+            os.chown(foreign, 1, 1)
+        else:
+            try:
+                status = os.stat("/root")
+                if status.st_uid != os.getuid() and (status.st_mode & 0o7777) == 0o700:
+                    foreign = Path("/root")
+            except OSError:
+                pass
+        if foreign is None:
+            self.skipTest("no directory owned by another user with mode 0700 is available here")
+        code, records, err = self.run_helper(["--hello"], "ok_linear_nv12", env=dict(self.env, XDG_RUNTIME_DIR=str(foreign)))
+        self.assertEqual(code, 5, err)
+        self.assertEqual(records[-1]["reason"], "runtime_dir_invalid")
+        self.assertEqual(records[-1]["fake_calls"], [])
+        try:
+            created = (foreign / "sightcircuit-camera-helper.lock").exists()
+        except PermissionError:
+            # The directory is not searchable by this user, so the helper, which ran as the same
+            # user, could not have created a file in it either.
+            created = False
+        self.assertFalse(created)
+
+    def unread_pipe_run(self, args, scenario, pipe_bytes, drain_after):
+        """Run the helper with stdout a pipe of pipe_bytes that nobody reads for drain_after seconds."""
+        master, slave = pty.openpty()
+        read_end, write_end = os.pipe()
+        fcntl.fcntl(write_end, 1031, pipe_bytes)  # F_SETPIPE_SZ
+        process = subprocess.Popen([str(self.binary), *map(str, args), "--fake-scenario", scenario], stdin=slave,
+                                   stdout=write_end, stderr=subprocess.PIPE, env=self.env, start_new_session=True)
+        os.close(slave)
+        os.close(write_end)
+        process.pty_master = master
+        self.addCleanup(self.reap, process)
+        self.answer(process)
+        time.sleep(drain_after)
+        data = b""
+        while True:
+            chunk = os.read(read_end, 65536)
+            if not chunk:
+                break
+            data += chunk
+        os.close(read_end)
+        process.wait(timeout=20)
+        process.stderr.close()
+        records = []
+        for line in data.decode(errors="replace").splitlines():
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+        return process.returncode, records
+
+    def test_a_stall_keeps_a_specific_outcome_and_records_the_stall_beside_it(self):
+        # Planner's note 2: a one-page pipe takes the hello record and nothing more, so the denied
+        # control read's outcome record stalls. The run keeps permission_denied and exit 2; the
+        # final record says protocol_stalled beside it rather than turning it into helper_error.
+        code, records = self.unread_pipe_run(["--hello"], "permission_denied", 4096, 2.5)
+        self.assertEqual(code, 2)
+        final = records[-1]
+        self.assertEqual(final["event"], "final")
+        self.assertEqual((final["outcome"], final["reason"], final["exit_code"]), ("permission_denied", "permission_denied", 2))
+        self.assertIs(final["protocol_stalled"], True)
+        self.assertEqual(final["fake_calls"], ["connect", "control_state", "disconnect"])
+        self.assertEqual(self.events(records), ["hello", "final"])  # the outcome record is the one the stall dropped
+        # A stall in a healthy run is still helper_error with the stall as its reason, and the flag set.
+        code, records = self.unread_pipe_run(["--probe-frames", 50, "--max-seconds", 4, "--interval-ms", 100],
+                                             "ok_linear_nv12", 8192, 5.0)
+        self.assertEqual(code, 1)
+        self.assertEqual((records[-1]["outcome"], records[-1]["reason"]), ("helper_error", "protocol_stalled"))
+        self.assertIs(records[-1]["protocol_stalled"], True)
+        _, records, _ = self.run_helper(["--hello"], "ok_linear_nv12")
+        self.assertIs(records[-1]["protocol_stalled"], False)
+
+    def test_cleanup_records_after_the_bound_keep_their_write_budget(self):
+        # Planner's note 3: two passes fill a two-page pipe before the one-second bound ends the loop;
+        # the end control-state record is then pending against a full pipe. It gets the normal
+        # one-second budget (not zero grace because the bound has passed), so a reader that drains
+        # at 1.5 s receives it and the run ends ok, exit 0, no stall.
+        code, records = self.unread_pipe_run(["--probe-frames", 50, "--max-seconds", 1, "--interval-ms", 500],
+                                             "ok_linear_nv12", 8192, 1.5)
+        self.assertEqual(code, 0, records)
+        final = records[-1]
+        self.assertEqual((final["outcome"], final["reason"]), ("ok", "ok"))
+        self.assertIs(final["protocol_stalled"], False)
+        self.assertEqual(final["frame_sets"], 2)
+        self.assertEqual([record["phase"] for record in records if record["event"] == "controls"], ["start", "end"])
+        self.assertEqual(final["controls_digest_end"], [r for r in records if r["event"] == "controls"][-1]["controls"]["digest"])
 
     def test_utf8_passes_through_the_records_and_bad_bytes_are_replaced(self):
         # Finding 6: the bytes of a UTF-8 sequence are no longer escaped one by one as Latin-1 code

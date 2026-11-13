@@ -850,7 +850,11 @@ private:
     // the reader must not stay active for it.
     bool stalled() {
         if (!g_protocol_stalled) return false;
-        if (reason_.empty()) {
+        protocol_stalled_ = true;
+        // A run that had reached no specific outcome ends as helper_error with the stall as its
+        // reason. A run that had (permission denied, a cancellation, a lost transport) keeps its
+        // outcome, reason and exit code; the final record's protocol_stalled flag records the stall.
+        if (outcome_ == Outcome::ok && reason_.empty()) {
             outcome_ = Outcome::helper_error;
             reason_ = "protocol_stalled";
         }
@@ -1367,6 +1371,10 @@ private:
 
     // Deactivate the reader, read the end control state, disconnect, report.
     int finish() {
+        // The loop is over: the records of the cleanup (a failed reader deactivation, the end
+        // control state) get the normal write budget even when the run bound has passed, since
+        // the reader is being turned off, not kept active.
+        g_run_deadline_ns = 0;
         if (session_lost_) {
             reader_deactivated_ = reader_active_ ? "session_closed" : "true";
             if (reader_active_) cleanup_ok_ = false;
@@ -1391,7 +1399,6 @@ private:
             lifecycle::disarm_watchdog();
         }
         connected_ = false;
-        g_run_deadline_ns = 0;  // the final record has its own, longer budget
         stalled();
         if (reason_.empty()) reason_ = outcome_name(outcome_);
         int exit_code = exit_code_for(outcome_);
@@ -1432,7 +1439,8 @@ private:
         object.str("mode", options_.mode == Options::none ? "none" : mode_name());
         if (connect_attempted_) object.str("outcome", outcome_name(outcome_));
         else object.null("outcome");
-        object.str("reason", reason_).integer("exit_code", exit_code).boolean("cleanup_ok", cleanup_ok_);
+        object.str("reason", reason_).integer("exit_code", exit_code).boolean("cleanup_ok", cleanup_ok_)
+            .boolean("protocol_stalled", protocol_stalled_);
         if (detail_.empty()) object.null("detail");
         else object.str("detail", detail_);
         if (stop_signal_.empty()) object.null("stop_signal");
@@ -1505,6 +1513,7 @@ private:
     bool connect_attempted_ = false, connected_ = false, hello_known_ = false, reader_active_ = false, reader_activated_ = false;
     bool session_lost_ = false;
     bool cleanup_ok_ = true;
+    bool protocol_stalled_ = false;  // a protocol write did not complete within its budget
     std::string reader_deactivated_ = "true";
     unsigned passes_ = 0, frame_sets_ = 0;
     ControlSummary start_controls_, end_controls_;
@@ -1618,14 +1627,27 @@ int take_lock(std::string& reason) {
         reason = "runtime_dir_missing";
         return -1;
     }
-    struct stat status {};
-    if (directory[0] != '/' || ::stat(directory, &status) != 0 || !S_ISDIR(status.st_mode) ||
-        status.st_uid != ::getuid() || (status.st_mode & 07777) != 0700) {
+    // The directory itself is opened (never through a symlink) and judged by its descriptor, and
+    // the lock is created relative to that descriptor, so nothing can be swapped between the
+    // check and the open.
+    if (directory[0] != '/') {
         reason = "runtime_dir_invalid";
         return -1;
     }
-    const std::string path = std::string(directory) + "/sightcircuit-camera-helper.lock";
-    const int fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
+    const int directory_fd = ::open(directory, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (directory_fd < 0) {
+        reason = "runtime_dir_invalid";
+        return -1;
+    }
+    struct stat status {};
+    if (::fstat(directory_fd, &status) != 0 || !S_ISDIR(status.st_mode) || status.st_uid != ::getuid() ||
+        (status.st_mode & 07777) != 0700) {
+        ::close(directory_fd);
+        reason = "runtime_dir_invalid";
+        return -1;
+    }
+    const int fd = ::openat(directory_fd, "sightcircuit-camera-helper.lock", O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
+    ::close(directory_fd);
     if (fd < 0) {
         reason = "lock_open_failed";
         return -1;

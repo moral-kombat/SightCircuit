@@ -74,8 +74,10 @@ None of these is pinned by the checkpoint manifest; no gate, pinned file or
 `--hello`, `--probe-frames` and `--export-frames` first take a lock, `sightcircuit-camera-helper.lock`
 in `$XDG_RUNTIME_DIR` (never `/tmp`; without the variable the run is refused
 with `runtime_dir_missing`, and a value that is not an absolute path to an
-existing directory owned by the user with mode 0700 is refused with
-`runtime_dir_invalid`), then print a notice on the terminal and read a typed `yes` from standard
+existing directory owned by the user with mode 0700, or that is a symbolic
+link, is refused with `runtime_dir_invalid`; the directory is opened without
+following links, judged by its descriptor, and the lock is created relative
+to that descriptor), then print a notice on the terminal and read a typed `yes` from standard
 input, which must be a terminal; nothing skips the confirmation. Stop signals
 (`SIGINT`, `SIGTERM`, `SIGHUP`) are blocked around SDK calls and collected
 between them, so a cancellation always ends with the reader disabled, the end
@@ -92,13 +94,19 @@ hold the helper past the run bound with the reader active. Each record is
 written in chunks of at most 4 KiB, each chunk only after `poll()` reports
 room, and a record waits at most one second for the pipe to drain, in probe
 mode never past `--max-seconds`. A write that does not complete marks the
-protocol stalled: the run ends (`reason: protocol_stalled`, `outcome:
-helper_error`, exit 1), the reader is deactivated, the end control state is
-read, the session is closed, nothing else is written, and the final record
-alone waits up to five seconds for a reader that resumes (a line the stall
-tore is terminated first, so the final record parses on its own). A consumer
-that never resumes gets no final record and the helper exits 1 within that
-budget.
+protocol stalled: the run ends, the reader is deactivated, the end control
+state is read when at least one pass ran, the session is closed, nothing else
+is written, and the final record alone waits up to five seconds for a reader
+that resumes (a line the stall tore is terminated first, so the final record
+parses on its own). A run that had reached no specific outcome ends
+`outcome: helper_error`, `reason: protocol_stalled`, exit 1; a run that had
+(permission denied, a cancellation, a lost transport, an invalid argument)
+keeps its outcome, reason and exit code, and the final record's
+`protocol_stalled` flag, `true` in both cases and `false` otherwise, records
+the stall. Once the loop is over the cleanup's records (a failed reader
+deactivation, the end control state) get the normal one-second budget even
+when the run bound has passed. A consumer that never resumes gets no final
+record and the helper exits within the final record's budget.
 
 Every record is one JSON line on the real standard output (fd 1 points at
 standard error before anything else runs); strings carry well-formed UTF-8
@@ -116,7 +124,7 @@ has `report_kind`
 | `controls` | `phase` (`hello`, `start` or `end`) and the control summary: the supported and current control bitmasks and capability masks as hex, the named mode values (white balance, transfer function, primaries, YCbCr encoding, resolution mode), LED, bit depth, HDR, tone mapping, brightness, auto exposure, the exposure and gain ranges, `current_fps` and its rounded value, `digest` and `digest_input`. The latest exposure and gain sensor values are not configuration and are not reported. |
 | `frame_set` | `pass`, `sequence`, `camera_count`, the pose and velocity validity flags, `cameras` (per camera: `frame_id`, `exposure_timestamp_ns`, `timestamp_seconds`, `width`, `height`, `drm_format`, `pixel_format`, `drm_modifier`, `plane_count`, `planes` with offset, stride and size, the texture-bounds, intrinsics and KB4 validity flags, `camera_model`, `first_camera_from_camera_valid`, `aux_json_size`, `transfer`, `primaries`, `ycbcr_encoding`), and the host clocks (`monotonic_ns`, `boottime_ns`, `realtime_ns`) sampled before and after the acquire. No exposure seconds, gain, sensor temperature, intrinsics values, transforms, pose matrices or auxiliary JSON: those are Camera Data this phase does not report. |
 | `outcome` | A call that did not succeed: `call`, `outcome`, `retryable`, `pass` when inside the loop, the SDK's `status_error`, `result`, `system_error` and `sdk_message`, `monotonic_ns`, and an operator `message` for permission denied and camera busy. |
-| `final` | `mode`, `outcome`, `reason`, `exit_code`, `cleanup_ok`, `stop_signal`, `outcome_counts` over the whole vocabulary, `passes`, `frame_sets`, `bounds`, `sequence_gaps`, `format_changed` and `first_format_change`, `last_frame_set_monotonic_ns`, `first_retryable_after_last_frame_set_monotonic_ns`, `clock_offsets` (min and max of each host clock minus the exposure timestamp and minus `timestamp_seconds`, and `invalid_timestamps`, the number of cameras whose `timestamp_seconds` was not finite or out of range or whose difference from a host clock would overflow; those take no part in the ranges), `controls_changed_during_run` and `controls_changed_fields`, `controls_digest_start` and `controls_digest_end`, the false claims, `reader_activated`, `reader_deactivated` (`true`, `session_closed`, `deactivation_failed` or `unknown` from the watchdog) and, in the fake build, `fake_calls`. |
+| `final` | `mode`, `outcome`, `reason`, `exit_code`, `cleanup_ok`, `protocol_stalled`, `stop_signal`, `outcome_counts` over the whole vocabulary, `passes`, `frame_sets`, `bounds`, `sequence_gaps`, `format_changed` and `first_format_change`, `last_frame_set_monotonic_ns`, `first_retryable_after_last_frame_set_monotonic_ns`, `clock_offsets` (min and max of each host clock minus the exposure timestamp and minus `timestamp_seconds`, and `invalid_timestamps`, the number of cameras whose `timestamp_seconds` was not finite or out of range or whose difference from a host clock would overflow; those take no part in the ranges), `controls_changed_during_run` and `controls_changed_fields`, `controls_digest_start` and `controls_digest_end`, the false claims, `reader_activated`, `reader_deactivated` (`true`, `session_closed`, `deactivation_failed` or `unknown` from the watchdog) and, in the fake build, `fake_calls`. |
 
 The false claims on every `describe` and `final` record are `pixels_read`,
 `images_saved`, `controls_written`, `exclusive_control_requested` and
@@ -386,9 +394,11 @@ SDK unit to an object against the vendored headers and never link it.
 `tests/test_camera_helper.py` builds the fake through the script into a
 temporary directory and runs every scenario, the argument bounds, the
 confirmation and runtime-directory refusals (missing, relative, shared,
-foreign, absent or not a directory), the lock, SIGTERM and SIGINT
+foreign-owned, a symbolic link, absent or not a directory), the lock, SIGTERM and SIGINT
 cancellation, the watchdog, the closed-pipe exit, the stalled consumer (a
-two-page unread pipe, drained late and never), the connect-time
+two-page unread pipe, drained late and never; a stall that keeps a denied
+run's outcome; the cleanup records written after the bound against a full
+pipe), the connect-time
 invalid-metadata and permission-denied paths, every status class that ends
 as `helper_error`, invalid timestamps, UTF-8 in records and the 8 KiB line
 limit.
