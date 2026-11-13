@@ -60,14 +60,14 @@ inline uint32_t bgr_stride_bytes(uint32_t width) { return ((width + 3u) / 4u) * 
 
 inline bool modifier_is_linear(uint64_t modifier) { return modifier == kDrmModifierLinear; }
 
-// Builds the pixel paths' view of a camera from the backend's metadata.
+// Builds the pixel paths' view of a camera's layout from the backend's
+// metadata, without a descriptor (fd stays -1): what PixelPath::plan takes.
 // Refuses an unknown pixel format or encoding, a FourCC that disagrees with
 // the pixel format, an odd or oversized dimension or a plane count other than
 // two for a linear buffer (tiled buffers may carry more planes; the GPU path
 // checks them against the driver).
-inline bool source_frame_from_meta(const CameraMeta& meta, int fd, SourceFrame& frame, std::string& error) {
+inline bool source_layout_from_meta(const CameraMeta& meta, SourceFrame& frame, std::string& error) {
     frame = SourceFrame();
-    frame.fd = fd;
     frame.width = meta.width;
     frame.height = meta.height;
     frame.drm_fourcc = meta.drm_format_value;
@@ -86,7 +86,14 @@ inline bool source_frame_from_meta(const CameraMeta& meta, int fd, SourceFrame& 
     if (frame.width % 2 || frame.height % 2) { error = "dimensions_not_even"; return false; }
     if (frame.plane_count == 0 || frame.plane_count > kMaxPlanes) { error = "plane_count_out_of_range"; return false; }
     if (modifier_is_linear(frame.drm_modifier) && frame.plane_count != 2) { error = "linear_plane_count_not_two"; return false; }
+    return true;
+}
+
+// The same, with the camera's borrowed descriptor: what PixelPath::convert takes.
+inline bool source_frame_from_meta(const CameraMeta& meta, int fd, SourceFrame& frame, std::string& error) {
+    if (!source_layout_from_meta(meta, frame, error)) return false;
     if (fd < 0) { error = "buffer_descriptor_missing"; return false; }
+    frame.fd = fd;
     return true;
 }
 
@@ -99,6 +106,12 @@ public:
     // loader, picks a device and builds its pipeline here). On success,
     // diagnostics is a JSON object with the facts the ready packet reports.
     virtual bool open(std::string& error, std::string& diagnostics_json) = 0;
+    // Told the layout of the frames to come (no descriptor; nothing is read),
+    // a path may settle how it will import them and say so in its facts: the
+    // GPU path chooses its import strategy here. A path with nothing to
+    // settle leaves diagnostics_json alone. A layout the path cannot take is
+    // not an error here; convert() reports it.
+    virtual void plan(const SourceFrame& layout, std::string& diagnostics_json) { (void)layout; (void)diagnostics_json; }
     // Converts one camera's buffer into out. The descriptor stays open and
     // the frame set stays held by the caller throughout.
     virtual bool convert(const SourceFrame& frame, BgrImage& out, std::string& error) = 0;
@@ -108,7 +121,16 @@ public:
 };
 
 // Defined in camera_pixels_cpu.cpp and camera_pixels_gpu.cpp respectively.
+// only_strategy restricts the GPU path to one import strategy by name
+// (plane_views_uint, plane_views_unorm, ycbcr_sampler) so a test can run each
+// on a driver that would accept the first; the helper never passes it.
 std::unique_ptr<PixelPath> make_cpu_linear_path();
-std::unique_ptr<PixelPath> make_gpu_convert_path();
+std::unique_ptr<PixelPath> make_gpu_convert_path(const char* only_strategy = nullptr);
+
+// --query-gpu: opens the Vulkan device as the GPU path does and writes, as one
+// JSON object, what the driver answers for NV12 and P010 with its modifiers and
+// each import strategy. No buffer is imported, mapped or read; no camera is
+// involved. False with a reason when no device opens. camera_pixels_gpu.cpp.
+bool query_gpu_convert(std::string& json, std::string& error);
 
 } // namespace sightcircuit_camera

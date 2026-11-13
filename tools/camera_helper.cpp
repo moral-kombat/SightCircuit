@@ -4,7 +4,8 @@
 // camera_backend_sdk.cpp); the fake build drives the same code from
 // camera_backend_fake.cpp on any architecture.
 //
-// Modes: --describe (no connect), --hello (connect, handshake and control
+// Modes: --describe (no connect), --query-gpu (no connect and no camera: what
+// the Vulkan driver answers for the GPU pixel path), --hello (connect, handshake and control
 // state; the reader stays off), --probe-frames N --max-seconds S (metadata
 // of a few frame sets with the reader active, paced well below camera rate)
 // and --export-frames (BGR3 frames to the parent over stdout under the camera
@@ -307,7 +308,7 @@ void note(const std::string& text) {
 // ---- arguments -------------------------------------------------------------
 
 struct Options {
-    enum Mode { none, describe, hello, probe, export_frames };
+    enum Mode { none, describe, query_gpu, hello, probe, export_frames };
     Mode mode = none;
     unsigned frame_sets = 0;
     unsigned max_seconds = 0;
@@ -387,6 +388,8 @@ Options parse_arguments(int argc, char** argv) {
             options.help = true;
         } else if (argument == "--describe") {
             set_mode(Options::describe);
+        } else if (argument == "--query-gpu") {
+            set_mode(Options::query_gpu);
         } else if (argument == "--hello") {
             set_mode(Options::hello);
         } else if (argument == "--probe-frames") {
@@ -432,7 +435,7 @@ Options parse_arguments(int argc, char** argv) {
     if (options.help || !options.error.empty()) return options;
     const bool export_only = have_max_frames || have_fps || have_camera || have_pixel_path || options.parent_confirmed;
     if (options.mode == Options::none) {
-        options.error = "one of --describe, --hello, --probe-frames or --export-frames is required";
+        options.error = "one of --describe, --query-gpu, --hello, --probe-frames or --export-frames is required";
     } else if (options.mode == Options::export_frames) {
         if (!have_max_seconds || !have_max_frames) options.error = "--export-frames needs --max-seconds and --max-frames";
         else if (have_interval) options.error = "--interval-ms applies to --probe-frames";
@@ -454,6 +457,8 @@ Options parse_arguments(int argc, char** argv) {
 const char* usage_text() {
     return "sightcircuit-camera-helper: Arcturus camera SDK metadata probe and frame export; writes no file.\n"
            "  --describe                                  build, backend and SDK release facts; no connect\n"
+           "  --query-gpu                                 what the Vulkan driver answers for the gpu_convert pixel path's\n"
+           "                                              formats, modifiers and import strategies; no connect, no camera\n"
            "  --hello [--timeout-ms N]                    connect, handshake and control state; reader stays off\n"
            "  --probe-frames N --max-seconds S [--interval-ms M] [--timeout-ms T]\n"
            "                                              metadata of up to N frame sets (1-50) within S seconds (1-10),\n"
@@ -1047,6 +1052,18 @@ private:
             end_export(export_protocol::kEndReasonPixelPathError, "gpu_convert_open_failed:" + error);
             return false;
         }
+        // The ready that follows names the import strategy the driver accepts for this layout
+        // (pixel_path_facts.import_strategy); a layout it accepts none for ends at the first convert.
+        for (uint32_t camera = 0; camera < meta.camera_count && camera < kMaxCameras; ++camera) {
+            if (!options_.exports_camera(camera)) continue;
+            SourceFrame layout;
+            if (source_layout_from_meta(meta.cameras[camera], layout, error)) {
+                lifecycle::rearm_watchdog(kConvertWatchdogSeconds);
+                pixel_path_->plan(layout, pixel_path_facts_);
+                lifecycle::disarm_watchdog();
+            }
+            break;
+        }
         return true;
     }
 
@@ -1549,6 +1566,21 @@ int run_describe() {
     return g_protocol_write_failed ? 1 : 0;
 }
 
+// --query-gpu: what the Vulkan driver answers for the gpu_convert pixel path. Like
+// --describe it makes no backend, connects nothing, takes no lock and asks for no
+// confirmation: it touches no camera and reads no buffer.
+int run_query_gpu() {
+    std::string gpu, error;
+    const bool opened = query_gpu_convert(gpu, error);
+    JsonObject object = record("gpu_query");
+    object.boolean("opened", opened);
+    if (opened) object.null("error").raw("gpu", gpu);
+    else object.str("error", error).null("gpu");
+    add_false_claims(object);
+    emit(object);
+    return g_protocol_write_failed || !opened ? 1 : 0;
+}
+
 std::string notice_for(const Options& options) {
     if (options.mode == Options::export_frames) {
         const std::string cameras = options.exports_camera(0) && options.exports_camera(1) ? "both passthrough cameras" :
@@ -1661,6 +1693,7 @@ int main(int argc, char** argv) {
     }
     if (!options.error.empty()) return emit_invalid_arguments(options.error);
     if (options.mode == Options::describe) return run_describe();
+    if (options.mode == Options::query_gpu) return run_query_gpu();
 
     std::unique_ptr<CameraBackend> backend = make_camera_backend(options.fake_scenario);
     if (!backend) return emit_invalid_arguments("unknown fake scenario: " + options.fake_scenario);

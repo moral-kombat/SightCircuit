@@ -5,7 +5,8 @@ contain (and which of them alone may read a buffer: the two pixel paths, and
 the fake's memfd), the status mapping run against the vendored headers, API
 drift of the SDK translation unit (compiled, never linked) with its symbol
 allow-list, coverage of every vendored enumerator, the helper's own SHA-256,
-the embedded compute shader against its source, and the build script's
+the embedded compute shader's three variants against their source, that the
+read-only ``--query-gpu`` mode reaches no backend, and the build script's
 refusals against fake SDK directories made outside the checkout. None of this
 needs the Client Library; no file named like it is ever created inside the
 checkout.
@@ -145,7 +146,7 @@ class IncludeAndTextBoundaries(unittest.TestCase):
 
     # Every "--flag" literal the helper parses. The only flag that stands in for the typed
     # confirmation is --parent-confirmed (the owner's decision of 2026-11-09, export mode only).
-    HELPER_FLAGS = {"--help", "--describe", "--hello", "--probe-frames", "--export-frames", "--max-seconds", "--max-frames",
+    HELPER_FLAGS = {"--help", "--describe", "--query-gpu", "--hello", "--probe-frames", "--export-frames", "--max-seconds", "--max-frames",
                     "--fps", "--cameras", "--pixel-path", "--interval-ms", "--timeout-ms", "--fake-scenario",
                     "--parent-confirmed"}
 
@@ -160,6 +161,43 @@ class IncludeAndTextBoundaries(unittest.TestCase):
         self.assertIn('options.error = "--parent-confirmed applies to --export-frames"', text)
         self.assertEqual(text.count("confirm(notice_for(options), reason)"), 1)
         self.assertEqual(text.count("options.parent_confirmed)"), 2)  # the parse check and the one branch in main
+
+    def test_the_gpu_query_mode_makes_no_sdk_call_and_reads_no_buffer(self):
+        text = (ROOT / "tools/camera_helper.cpp").read_text()
+        # main leaves for the query before a backend exists, before the lock and before the confirmation.
+        main = text[text.index("int main(int argc, char** argv)"):]
+        leave = main.index("if (options.mode == Options::query_gpu) return run_query_gpu();")
+        for later in ("make_camera_backend(", "Session session(", "take_lock(", "confirm(", "session.run()"):
+            with self.subTest(after=later):
+                self.assertEqual(main.count(later), 1)
+                self.assertLess(leave, main.index(later))
+        # The mode's body: one call into the GPU unit, one record, and no name of the backend, the session,
+        # a descriptor or a pixel path that converts.
+        body = re.search(r"\nint run_query_gpu\(\) \{\n(.*?)\n\}\n", text, re.S).group(1)
+        self.assertEqual(body.count("query_gpu_convert(gpu, error)"), 1)
+        self.assertEqual(body.count("emit(object)"), 1)
+        for banned in ("backend", "Backend", "Session", "session", "connect", "acquire", "reader", "fd", "convert(",
+                       "make_gpu_convert_path", "make_cpu_linear_path", "write_packet", "STDERR_FILENO", "note("):
+            with self.subTest(text=banned):
+                self.assertNotIn(banned, body.replace("query_gpu_convert(gpu, error)", ""))
+        self.assertEqual(text.count("run_query_gpu()"), 2)  # its definition and the one call in main
+        self.assertEqual(text.count("query_gpu_convert("), 1)
+        # In the GPU unit the query asks the driver and builds pipelines; it imports nothing, maps nothing but the
+        # path's own output buffer (never touched here) and binds no memory to its trial image.
+        gpu = (ROOT / "tools/camera_pixels_gpu.cpp").read_text()
+        query = gpu[gpu.index("// ---- the query (--query-gpu)"):gpu.index("// ---- teardown")]
+        for banned in ("import_memory(", "import_frame(", "import_modifier(", "import_linear_copy(", "vkAllocateMemory",
+                       "vkBindImageMemory", "vkMapMemory", "frame.fd", "dup(", "dispatch_and_read(", "vkQueueSubmit",
+                       "ensure_output("):
+            with self.subTest(text=banned):
+                self.assertNotIn(banned, query)
+        entry = gpu[gpu.index("bool query_gpu_convert("):]
+        for banned in ("convert(frame", ".convert(", "plan("):
+            self.assertNotIn(banned, entry)
+        # The strategy is the driver's answer, never an option of the helper: only the test fixture restricts it.
+        self.assertEqual(re.findall(r"make_gpu_convert_path\(([^)]*)\)", text), ["", ""])
+        for banned in ("only_strategy", "plane_views_", "ycbcr_sampler"):
+            self.assertNotIn(banned, text)
 
     def test_reader_state_is_never_recording(self):
         calls = []
@@ -178,26 +216,58 @@ class IncludeAndTextBoundaries(unittest.TestCase):
                 self.assertNotIn("overlay_lifecycle.hpp", (ROOT / relative).read_text())
         self.assertIn('#include "overlay_lifecycle.hpp"', (ROOT / "tools/camera_helper.cpp").read_text())
 
+    # The shader's variants, one per import strategy of the GPU path: the array's name and the define it is built with.
+    SHADER_VARIANTS = (("kCameraConvert", None), ("kCameraConvertUnorm", "CAMERA_CONVERT_UNORM"),
+                       ("kCameraConvertYcbcr", "CAMERA_CONVERT_YCBCR"))
+
     def test_the_embedded_shader_matches_its_source(self):
         header = (ROOT / "tools/camera_convert_spirv.hpp").read_text()
         source = (ROOT / "tools/camera_convert.comp").read_bytes()
         digest = re.search(r'kCameraConvertSourceSha256 = "([0-9a-f]{64})"', header).group(1)
         self.assertEqual(digest, hashlib.sha256(source).hexdigest(),
                          "camera_convert.comp changed; run scripts/build_camera_helper.sh --shader")
-        count = int(re.search(r"kCameraConvertSpirvWords = (\d+);", header).group(1))
-        words = [int(word, 16) for word in re.findall(r"0x([0-9a-f]{8})", header.split("= {", 1)[1])]
-        self.assertEqual(len(words), count)
-        self.assertEqual(words[0], 0x07230203)  # the SPIR-V magic
-        self.assertIn(f"kCameraConvertSpirv[{count}]", header)
         for banned in ("imwrite", "fopen", "#include <vulkan"):
             self.assertNotIn(banned, header)
-        if shutil.which("spirv-val"):
-            with tempfile.NamedTemporaryFile(suffix=".spv") as module:
-                module.write(struct.pack(f"<{count}I", *words))
-                module.flush()
-                result = subprocess.run(["spirv-val", "--target-env", "vulkan1.1", module.name], capture_output=True,
-                                        text=True, timeout=60)
-                self.assertEqual(result.returncode, 0, result.stderr)
+        # Exactly the three modules, each with its word count, its own digest and the SPIR-V magic.
+        self.assertEqual(re.findall(r"const uint32_t (\w+)Spirv\[", header), [name for name, _ in self.SHADER_VARIANTS])
+        self.assertEqual(len(re.findall(r"SpirvSha256 = ", header)), len(self.SHADER_VARIANTS))
+        modules = {}
+        for name, define in self.SHADER_VARIANTS:
+            with self.subTest(module=name):
+                count = int(re.search(rf"\b{name}SpirvWords = (\d+);", header).group(1))
+                body = re.search(rf"const uint32_t {name}Spirv\[{count}\] = \{{(.*?)\}};", header, re.S).group(1)
+                words = [int(word, 16) for word in re.findall(r"0x([0-9a-f]{8})", body)]
+                self.assertEqual(len(words), count)
+                self.assertEqual(words[0], 0x07230203)  # the SPIR-V magic
+                binary = struct.pack(f"<{count}I", *words)
+                recorded = re.search(rf'\b{name}SpirvSha256 = "([0-9a-f]{{64}})"', header).group(1)
+                self.assertEqual(recorded, hashlib.sha256(binary).hexdigest())
+                modules[name] = binary
+                if define:
+                    self.assertIn(f"defined({define})".encode(), source)
+                with tempfile.TemporaryDirectory() as work:
+                    module = Path(work) / "module.spv"
+                    module.write_bytes(binary)
+                    if shutil.which("spirv-val"):
+                        result = subprocess.run(["spirv-val", "--target-env", "vulkan1.1", str(module)], capture_output=True,
+                                                text=True, timeout=60)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                    compiler = shutil.which("glslangValidator")
+                    recorded_compiler = re.search(r"// compiler: (.*)", header).group(1)
+                    if compiler and subprocess.run([compiler, "--version"], capture_output=True, text=True,
+                                                   timeout=60).stdout.splitlines()[0] == recorded_compiler:
+                        # With the compiler the header names, the source gives these very words.
+                        rebuilt = Path(work) / "rebuilt.spv"
+                        subprocess.run([compiler, "--target-env", "vulkan1.1", *([f"-D{define}"] if define else []), "-V",
+                                        str(ROOT / "tools/camera_convert.comp"), "-o", str(rebuilt)], check=True,
+                                       capture_output=True, text=True, timeout=120)
+                        self.assertEqual(rebuilt.read_bytes(), binary)
+        self.assertEqual(len(set(modules.values())), len(self.SHADER_VARIANTS))  # three different modules
+        # The GPU path uses each module for its strategy and nothing else carries SPIR-V.
+        gpu = (ROOT / "tools/camera_pixels_gpu.cpp").read_text()
+        for name, _ in self.SHADER_VARIANTS:
+            self.assertEqual(gpu.count(f"shader_info.pCode = {name}Spirv;"), 1)
+            self.assertEqual(gpu.count(f"{name}SpirvWords * sizeof(uint32_t)"), 1)
 
     def test_every_vendored_enumerator_is_mapped_or_listed_raw(self):
         headers = "".join((VENDORED / name).read_text() for name in SDK_HEADERS)
