@@ -679,6 +679,13 @@
       "file": "e097.md",
       "kind": "device_report",
       "reconstructed": false
+    },
+    {
+      "id": "E98",
+      "title": "Pixel-path check on Frame, the GPU import of the UBWC camera buffer was refused by the driver",
+      "file": "e098.md",
+      "kind": "device_report",
+      "reconstructed": false
     }
   ]
 }

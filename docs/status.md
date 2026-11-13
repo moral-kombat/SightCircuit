@@ -465,6 +465,10 @@ provenance and original uncertainty.
 
 [Full evidence](evidence/e097.md). Device report.
 
+### E98: Pixel-path check on Frame, the GPU import of the UBWC camera buffer was refused by the driver
+
+[Full evidence](evidence/e098.md). Device report.
+
 ## Maintaining the evidence
 
 The coordinator checks pending allocations before assigning an evidence ID and adds its record
