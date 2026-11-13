@@ -7,7 +7,10 @@ same content independently in Python, with the fixed-point conversion that
 pins the protocol constants, the packet framing byte for byte, pacing and the
 dropped counts, every end reason the fake can provoke, the refusals, and that
 the mode writes no file. The GPU path runs when a software Vulkan driver
-(lavapipe) is installed and is skipped otherwise; on the runner CI installs it.
+(lavapipe) is installed and is skipped otherwise; on the runner CI installs it:
+the export through it, each of its import strategies against the CPU path byte
+for byte (``tests/fixtures/camera_gpu_strategy_fixture.cpp``), and the read-only
+``--query-gpu`` mode, whose record's schema is pinned here.
 No test touches a camera, the SDK headers or the Client Library.
 """
 import glob
@@ -48,6 +51,30 @@ BUILD_KEYS = {"build_commit", "build_dirty", "sdk_release", "compiler", "contrac
 SHAPES = {"export_nv12": ("nv12", "bt709", 62, 32), "export_nv12_tiny": ("nv12", "bt709", 8, 4),
           "export_nv12_bt601": ("nv12", "bt601", 62, 32), "export_p010": ("p010", "bt2020", 62, 32)}
 KR_KB = {"bt601": (0.299, 0.114), "bt709": (0.2126, 0.0722), "bt2020": (0.2627, 0.0593)}
+# The gpu_convert path's import strategies, in the order the driver is asked.
+IMPORT_STRATEGIES = ("plane_views_uint", "plane_views_unorm", "ycbcr_sampler")
+# What the GPU path reports about itself (ready.build.pixel_path_facts): scalars only.
+GPU_FACT_KEYS = {"path", "device_name", "device_type", "api_version", "driver_version", "queue_family", "import",
+                 "image_format_list", "sampler_ycbcr_conversion_feature", "device_extensions", "shader_source_sha256",
+                 "chroma_siting", "fixed_point_bits", "import_strategy", "import_strategy_results", "chroma_location"}
+# The --query-gpu record: its envelope, the "gpu" object, one format, one tiling, and the image-format rows.
+QUERY_RECORD_KEYS = {"report_kind", "schema_version", "backend", "contract", "event", "opened", "error", "gpu",
+                     "pixels_read", "images_saved", "controls_written", "exclusive_control_requested", "led_written",
+                     "camera_data_fields", "persistence"}
+QUERY_GPU_KEYS = {"device", "modifier_extension", "programs", "columns", "formats", "trial_image"}
+QUERY_PROGRAM_KEYS = {"plane_views_uint", "plane_views_unorm", "ycbcr_sampler_nv12", "ycbcr_sampler_p010"}
+QUERY_COLUMNS = ["mutable_format", "view_formats", "transfer_src", "vk_result", "max_width", "max_height",
+                 "external_memory_features", "compatible_handle_types"]
+QUERY_FORMAT_KEYS = {"format", "vk_format", "modifiers_listed", "tilings", "modifiers_omitted"}
+QUERY_TILING_KEYS = {"tiling", "modifier", "listed", "plane_count", "features", "sampled_image", "midpoint_chroma_samples",
+                     "cosited_chroma_samples", "ycbcr_linear_filter", "ycbcr_separate_reconstruction_filter",
+                     "ycbcr_explicit_reconstruction", "ycbcr_explicit_forceable", "disjoint", "image_format"}
+QUERY_TRIAL_KEYS = {"basis", "format", "modifier", "width", "height", "planes", "buffer_bytes", *IMPORT_STRATEGIES}
+# MUTABLE_FORMAT off and on, by format list, by usage: the first three columns of the twelve rows, in order.
+QUERY_ROW_HEADS = [[mutable, views, transfer] for mutable in (0, 1) for views in ("none", "uint", "unorm")
+                   for transfer in (0, 1)]
+UBWC_MODIFIER = "0x0500000000000001"
+VK_FORMATS = {"nv12": 1000156003, "p010": 1000156013}  # G8_B8R8_2PLANE_420_UNORM, G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16
 
 
 # ---- the reference rendering: the fake's content and the shared conversion --------------
@@ -619,8 +646,14 @@ class CameraExportTests(unittest.TestCase):
                                                     "camera_0:modifier_unknown_to_driver:")), final["detail"])
         self.assertEqual(final["exported"], 0)
         opened = not final["detail"].startswith("gpu_convert_open_failed:")
-        _, end = self.check_stream(packets, pixel_path="gpu_convert", undecided=not opened)
+        ready, end = self.check_stream(packets, pixel_path="gpu_convert", undecided=not opened)
         self.assertEqual(end["reason"], "pixel_path_error")
+        if opened:
+            # The path was told the layout before the ready: it names no strategy, because the driver has none for it.
+            facts = ready["build"]["pixel_path_facts"]
+            self.assertEqual(set(facts), GPU_FACT_KEYS)
+            self.assertEqual((facts["import_strategy"], facts["chroma_location"]), ("none", "not_applicable"))
+            self.assertEqual(final["pixel_path_notes"]["import_strategy"], "none")
         # Without any Vulkan driver (the loader is pointed at a driver file that does not exist) the GPU path
         # does not open: the path was never chosen, so the ready says "undecided" and the end follows at once.
         process = self.start(["--export-frames", "--max-seconds", 8, "--max-frames", 4, "--fps", 10], "export_ubwc",
@@ -914,16 +947,185 @@ class CameraExportTests(unittest.TestCase):
                 self.assertIn("VK_EXT_external_memory_dma_buf", facts["device_extensions"].split(","))
                 self.assertEqual(facts["shader_source_sha256"],
                                  hashlib.sha256((ROOT / "tools/camera_convert.comp").read_bytes()).hexdigest())
+                # A named path writes its ready before any frame set: the strategy is not chosen yet there,
+                # and the final record's notes say which one imported the frames.
+                self.assertEqual(set(facts), GPU_FACT_KEYS)
+                self.assertTrue(all(not isinstance(value, (dict, list)) for value in facts.values()), facts)
+                self.assertEqual((facts["import_strategy"], facts["import_strategy_results"], facts["chroma_location"]),
+                                 ("undecided", "", "not_applicable"))
                 for header, payload in packets[1:-1]:
                     self.assertEqual(header["derivation"], "gpu_converted")
                     self.check_pixels(scenario, header, payload)
                 notes = self.final(records)["pixel_path_notes"]
                 self.assertEqual((notes["frames_imported"], notes["import"]), (2, facts["import"]))
+                self.assertIn(notes["import_strategy"], IMPORT_STRATEGIES)
+                if "lvp" in facts["device_name"] or "llvmpipe" in facts["device_name"]:
+                    self.assertEqual(notes["import_strategy"], "plane_views_uint")  # lavapipe accepts the first
         # The first frame set of a run has the same content on either path: the bytes agree exactly.
         _, gpu, _ = self.export("export_nv12", "--pixel-path", "gpu_convert", max_frames=1)
         _, cpu, _ = self.export("export_nv12", "--pixel-path", "cpu_linear", max_frames=1)
         self.assertEqual(gpu[1][1], cpu[1][1])
         self.assertEqual(gpu[1][0]["frame_id"], cpu[1][0]["frame_id"])
+
+    @unittest.skipUnless(software_vulkan_present(), "a software Vulkan driver (lavapipe) is required")
+    def test_every_import_strategy_matches_the_cpu_path_byte_for_byte(self):
+        # The helper has no flag that picks a strategy: the fixture links the two pixel paths and restricts the GPU
+        # path to one strategy at a time, over NV12 and P010 in the three encodings, on a memfd it fills itself.
+        fixture = Path(self.build.name) / "camera-gpu-strategy-fixture"
+        probe = subprocess.run(["g++", "-std=c++17", "-x", "c++", "-fsyntax-only", "-"], input="#include <vulkan/vulkan.h>\n",
+                               capture_output=True, text=True, timeout=60)
+        includes = [] if probe.returncode == 0 else [f"-I{ROOT / '.cache/vulkan-headers/include'}"]
+        subprocess.run(["g++", "-std=c++17", "-O2", "-Wall", "-Wextra", "-Wpedantic", "-Werror", f"-I{ROOT / 'tools'}", *includes,
+                        str(ROOT / "tests/fixtures/camera_gpu_strategy_fixture.cpp"), str(ROOT / "tools/camera_pixels_gpu.cpp"),
+                        str(ROOT / "tools/camera_pixels_cpu.cpp"), "-ldl", "-o", str(fixture)],
+                       check=True, capture_output=True, text=True, timeout=600)
+        result = subprocess.run([str(fixture)], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=300,
+                                env=self.env, cwd=self.cwd.name)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        lines = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual([line["strategy"] for line in lines], ["driver", *IMPORT_STRATEGIES])
+        software = False
+        for line in lines:
+            with self.subTest(strategy=line["strategy"]):
+                facts, notes = line["planned_facts"], line["notes"]
+                self.assertEqual(set(facts), GPU_FACT_KEYS)
+                software = "llvmpipe" in facts["device_name"]
+                if line["status"] == "unsupported":
+                    # A driver may refuse a strategy; it then says which answer each one got, and no frame came out.
+                    self.assertFalse(software, line)  # lavapipe runs all three
+                    self.assertNotEqual(line["strategy"], "driver", line)
+                    self.assertEqual(line["detail"], "no_import_strategy:" + facts["import_strategy_results"])
+                    self.assertEqual((facts["import_strategy"], line["cases"]), ("none", 0))
+                    continue
+                # Two formats by three encodings, every byte of every padded row equal to the CPU path's.
+                self.assertEqual((line["status"], line["detail"], line["cases"]), ("identical", "", 6), line)
+                self.assertEqual(line["bytes_per_case"], 72 * 3 * 38)
+                # plan() chose from the layout alone, before any buffer was read, and convert() used that choice.
+                chosen = facts["import_strategy"]
+                self.assertEqual(notes["import_strategy"], chosen)
+                self.assertEqual(notes["frames_imported"], 6)
+                answers = dict(item.split("=", 1) for item in facts["import_strategy_results"].split(","))
+                if line["strategy"] == "driver":
+                    self.assertEqual(tuple(answers), IMPORT_STRATEGIES)  # every strategy is asked, in order
+                    self.assertEqual(chosen, next(name for name in IMPORT_STRATEGIES if answers[name] == "ok"))
+                else:
+                    self.assertEqual((chosen, answers), (line["strategy"], {line["strategy"]: "ok"}))
+                self.assertEqual(facts["chroma_location"] in ("midpoint", "cosited_even"), chosen == "ycbcr_sampler")
+        if software:
+            self.assertEqual(lines[0]["planned_facts"]["import_strategy"], "plane_views_uint")
+
+    # -- the read-only GPU query -------------------------------------------------------------
+
+    def query_gpu(self, env=None):
+        """Runs --query-gpu with no terminal and no runtime directory; returns (exit code, the one record)."""
+        environment = {key: value for key, value in (env or self.env).items() if key != "XDG_RUNTIME_DIR"}
+        result = subprocess.run([str(self.binary), "--query-gpu"], stdin=subprocess.DEVNULL, capture_output=True,
+                                env=environment, cwd=self.cwd.name, timeout=120)
+        self.assertEqual(result.stderr, b"")  # one record on stdout, nothing anywhere else
+        lines = result.stdout.decode().splitlines()
+        self.assertEqual(len(lines), 1, lines)
+        self.assertLessEqual(len(lines[0]), 8192)
+        record = json.loads(lines[0])
+        self.assertEqual(set(record), QUERY_RECORD_KEYS)
+        self.assertEqual((record["report_kind"], record["schema_version"], record["backend"], record["contract"],
+                          record["event"]), ("sightcircuit_camera_helper", 1, "fake", "camera-helper/1", "gpu_query"))
+        for claim in ("pixels_read", "images_saved", "controls_written", "exclusive_control_requested", "led_written"):
+            self.assertIs(record[claim], False)
+        self.assertEqual((record["camera_data_fields"], record["persistence"]), ([], "stdout_only"))
+        # No lock was taken and nothing was written: the mode has no runtime directory and needs none.
+        self.assertEqual(os.listdir(self.runtime.name), [])
+        self.assertEqual(os.listdir(self.cwd.name), [])
+        self.assertEqual(os.listdir(self.tmp.name), [])
+        return result.returncode, record
+
+    @unittest.skipUnless(software_vulkan_present(), "a software Vulkan driver (lavapipe) is required")
+    def test_query_gpu_reports_what_the_driver_answers_in_one_record(self):
+        code, record = self.query_gpu()
+        self.assertEqual((code, record["opened"], record["error"]), (0, True, None))
+        gpu = record["gpu"]
+        self.assertEqual(set(gpu), QUERY_GPU_KEYS)
+        device = gpu["device"]
+        self.assertEqual(set(device), GPU_FACT_KEYS)
+        self.assertEqual((device["path"], device["import_strategy"]), ("gpu_convert", "undecided"))
+        self.assertEqual(gpu["modifier_extension"], device["import"] == "drm_format_modifier")
+        software = "llvmpipe" in device["device_name"]
+        # Each strategy's pipeline was built: "ok", with the chroma location for the sampler conversion, or why not.
+        self.assertEqual(set(gpu["programs"]), QUERY_PROGRAM_KEYS)
+        for name, answer in gpu["programs"].items():
+            with self.subTest(program=name):
+                self.assertIsInstance(answer, str)
+                if software:
+                    self.assertIn(answer, ("ok:midpoint", "ok:cosited_even") if name.startswith("ycbcr_sampler") else ("ok",))
+        self.assertEqual(gpu["columns"], QUERY_COLUMNS)
+        self.assertEqual([entry["format"] for entry in gpu["formats"]], ["nv12", "p010"])
+        for entry in gpu["formats"]:
+            with self.subTest(format=entry["format"]):
+                self.assertEqual(set(entry), QUERY_FORMAT_KEYS)
+                self.assertEqual(entry["vk_format"], VK_FORMATS[entry["format"]])
+                tilings = entry["tilings"]
+                kinds = [(tiling["tiling"], tiling["modifier"]) for tiling in tilings]
+                self.assertEqual(kinds[-1], ("optimal", None))  # always last; the modifiers come before it
+                self.assertEqual(len(set(kinds)), len(kinds))
+                if gpu["modifier_extension"]:
+                    # The UBWC modifier is asked about whether or not the driver lists it, then two others at most.
+                    self.assertEqual(kinds[0], ("drm_format_modifier", UBWC_MODIFIER))
+                    self.assertLessEqual(len(kinds), 4)
+                    listed = sum(1 for tiling in tilings[:-1] if tiling["listed"])
+                    self.assertEqual(listed + entry["modifiers_omitted"], entry["modifiers_listed"])
+                else:
+                    self.assertEqual((len(kinds), entry["modifiers_listed"], entry["modifiers_omitted"]), (1, 0, 0))
+                for tiling in tilings:
+                    self.assertEqual(set(tiling), QUERY_TILING_KEYS)
+                    features = int(tiling["features"], 16)
+                    self.assertRegex(tiling["features"], r"^0x[0-9a-f]{8}$")
+                    for key, bit in (("sampled_image", 0x1), ("midpoint_chroma_samples", 0x20000),
+                                     ("ycbcr_linear_filter", 0x40000), ("ycbcr_separate_reconstruction_filter", 0x80000),
+                                     ("ycbcr_explicit_reconstruction", 0x100000), ("ycbcr_explicit_forceable", 0x200000),
+                                     ("disjoint", 0x400000), ("cosited_chroma_samples", 0x800000)):
+                        self.assertIs(tiling[key], bool(features & bit), key)
+                    rows = tiling["image_format"]
+                    self.assertEqual([row[:3] for row in rows], QUERY_ROW_HEADS)
+                    for row in rows:
+                        self.assertEqual(len(row), len(QUERY_COLUMNS))
+                        self.assertTrue(all(isinstance(value, int) for value in row[4:]), row)
+                        self.assertTrue(row[3] is None or isinstance(row[3], int), row)
+                        if row[3] != 0:
+                            self.assertEqual(row[4:], [0, 0, 0, 0])  # a refused combination reports nothing else
+                        if tiling["tiling"] == "optimal":
+                            self.assertEqual(row[6:], [0, 0])  # no external memory is asked about without a modifier
+                if software:
+                    # lavapipe takes every combination with optimal tiling: the three strategies all run in the cloud.
+                    self.assertTrue(all(row[3] == 0 and row[4] >= 2464 and row[5] >= 2464 for row in tilings[-1]["image_format"]))
+                    self.assertTrue(tilings[-1]["sampled_image"])
+                    self.assertTrue(tilings[-1]["midpoint_chroma_samples"] or tilings[-1]["cosited_chroma_samples"])
+        if gpu["modifier_extension"]:
+            trial = gpu["trial_image"]
+            self.assertEqual(set(trial), QUERY_TRIAL_KEYS)
+            self.assertEqual((trial["basis"], trial["format"], trial["modifier"], trial["width"], trial["height"], trial["planes"],
+                              trial["buffer_bytes"]),
+                             ("e097", "nv12", UBWC_MODIFIER, 2464, 2464, "0/2560/6348800,6348800/2560/3215360", 9564160))
+            for name in IMPORT_STRATEGIES:
+                self.assertRegex(trial[name], r"^(not_created:query:VkResult=-?\d+|vkCreateImage:VkResult=-?\d+|"
+                                              r"created:size=\d+:alignment=\d+:memory_type_bits=0x[0-9a-f]{8})$")
+        else:
+            self.assertIsNone(gpu["trial_image"])  # the delivered layout needs the modifier extension
+
+    def test_query_gpu_without_a_driver_says_so_and_exits_one(self):
+        code, record = self.query_gpu(env=dict(self.env, VK_ICD_FILENAMES="/nonexistent/icd.json",
+                                               VK_DRIVER_FILES="/nonexistent/icd.json"))
+        self.assertEqual((code, record["opened"], record["gpu"]), (1, False, None))
+        self.assertTrue(record["error"])
+
+    def test_query_gpu_takes_no_other_mode_or_bound(self):
+        for arguments in (["--query-gpu", "--hello"], ["--query-gpu", "--describe"], ["--query-gpu", "--max-seconds", 1],
+                          ["--query-gpu", "--pixel-path", "gpu_convert"], ["--query-gpu", "--parent-confirmed"],
+                          ["--query-gpu", "--cameras", "0"], ["--query-gpu", "--import-strategy", "ycbcr_sampler"]):
+            with self.subTest(arguments=arguments):
+                result = subprocess.run([str(self.binary), *map(str, arguments)], stdin=subprocess.DEVNULL, capture_output=True,
+                                        text=True, env=self.env, cwd=self.cwd.name, timeout=60)
+                self.assertEqual(result.returncode, 64)
+                self.assertNotIn("gpu_query", result.stdout)
+                self.assertEqual(os.listdir(self.runtime.name), [])
 
 
 if __name__ == "__main__":
