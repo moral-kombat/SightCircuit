@@ -457,6 +457,10 @@ provenance and original uncertainty.
 
 [Full evidence](evidence/e095.md). Device report.
 
+### E96: Second Phase A camera probe on Frame, the helper connected to the camera service and read its control state
+
+[Full evidence](evidence/e096.md). Device report.
+
 ## Maintaining the evidence
 
 The coordinator checks pending allocations before assigning an evidence ID and adds its record
