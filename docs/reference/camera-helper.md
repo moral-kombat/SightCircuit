@@ -155,6 +155,44 @@ order, and nothing else (`tools/camera_export_protocol.hpp`, the generated
 header of the S7 camera contract, pinned by `tests/test_camera_export.py`);
 every other fact of a run is in the stderr `final` record.
 
+Standard error carries the helper's own records as JSON lines, and the
+helper keeps it that way while text from the libraries it loads arrives
+there too. The Vulkan loader, the driver and implicit layers write plain text
+straight to fd 2 (and some to stdout, whose fd the helper points at the same
+file): on the Frame (a user-reported run on 2026-11-14 at `4a07296`, not
+cloud-verified) Mesa's driconf wrote `ATTENTION: default value of option
+vk_wsi_force_swapchain_to_current_extent overridden by environment.` and
+Gamescope's WSI layer wrote `[Gamescope WSI] Failed to connect to gamescope
+socket: gamescope-0. Bypass layer will be unavailable.`, from session
+variables the desktop session sets. While the GPU path opens (dlopen of the
+loader, instance and device creation, the first pipeline: the window named
+`gpu_convert_open`, at start with `--pixel-path gpu_convert` or at the first
+frame set under `auto`) and for the whole of `--query-gpu` (`query_gpu`),
+fds 1 and 2 point at a non-blocking pipe; when the window closes they are
+restored and every captured line becomes a note record on stderr:
+`{"event": "note", "source": "library_output", "window": ..., "message": ...,
+"truncated": ...}`, with the line's trailing whitespace removed, at most 1024
+bytes of it (a cut line says `truncated: true`; a byte that is not UTF-8
+becomes U+FFFD and control bytes are escaped, as in every record), at most 32
+lines per window. When lines were left out, or the pipe had less room left
+than one atomic write (`PIPE_BUF`) so a library's write may have been refused,
+one more note says so with `omitted_lines`, `omitted_bytes` and `pipe_full`.
+Nothing waits on the pipe: a library that writes more than it holds loses the
+rest, and a run does not stall on it. The helper changes no environment
+variable to quiet anything, and its own records are as before. Under `auto`
+the window opens after the connect, so text the SDK writes during it is
+captured the same way; `library_output` names where the text was written, not
+which library wrote it. Text written outside a window (a driver thread later,
+a message at teardown, a watchdog exit during the window, which loses the
+captured text) is not captured and reaches stderr as written; the Python
+supervisor's diagnostics reader counts such lines as `non_json_lines` and
+keeps none of them, so the promise the tests hold the helper to is: every
+line the helper writes is JSON, and library text written while the GPU path
+opens becomes JSON. The alternative, documenting third-party lines and letting
+the tests skip lines with known driver prefixes, was not taken: it would lose
+the text as evidence and need a list of prefixes that drivers and layers do
+not keep stable.
+
 | Kind | Header |
 | --- | --- |
 | `ready` (first, once) | `protocol` 1, `backend`, `pixel_path` (`cpu_linear` or `gpu_convert`; under `auto` the first frame set chooses the path and is released unexported, and the ready follows it; `undecided` only in the ready of a run that ends before the path was chosen, which no frame follows), `build` (scalars: the `--describe` facts, the contract digest, `pixel_path_facts` with the GPU path's device, extensions, `import` (`drm_format_modifier` or `linear_copy_fallback`), `import_strategy`, each strategy's answer in `import_strategy_results` and `chroma_location`, `camera_index_mapping` (`avCam0` is taken as left until the transforms say otherwise), `frame_timeout_ms`, `presence_gap_ns`, `hello_camera_count`, `controls_digest_start`, host clocks), `delivered_format` `{"fourcc":"BGR3"}`, `cameras` (the selected indices), `limits` (`fps`, `max_seconds`, `max_frames`, as requested), `confirmation` (`terminal` or `parent`). It is written once the path is known and the connect has given its facts; a run that ends before then (a pixel path that does not open, a refused connect, no frame set before standby or the watchdog) writes it right before its `end`, with the connect's facts null when they were never read. Every run that passed the confirmation writes exactly one `ready` first and one `end` last, and frames only after a ready that names the path. |
@@ -289,8 +327,15 @@ names the strategy that imported the frames. When the driver accepts none,
 `pixel_path_error` and the detail
 `camera_N:no_import_strategy:<each strategy's answer>`. A modifier the driver
 does not list, lists with another plane count or lists as not sampleable is
-refused before any strategy is asked, as before. The helper has no flag and
-no environment variable that chooses a strategy.
+refused before any strategy is asked, as before. A strategy the query
+accepted can still be refused at the import itself: on the Frame (the same
+user-reported run of 2026-11-14) Turnip's query accepted a strategy for the
+fake's UBWC frame set and `vkCreateImage` then refused its synthetic plane
+table with `camera_0:vkCreateImage(modifier):VkResult=-1000158000`
+(`VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT`); the facts then
+name the accepted strategy and the run ends with `pixel_path_error` the same
+way. The helper has no flag and no environment variable that chooses a
+strategy.
 
 `--query-gpu` asks the same driver the same questions without a camera. It
 opens the device as `gpu_convert` does and prints one `gpu_query` record
@@ -407,7 +452,27 @@ and restricts the GPU path to one strategy at a time, which the helper never
 does; lavapipe accepts all three, with optimal tiling and the copy fallback,
 so none of them has run over a modifier import or a compressed buffer), and
 the `--query-gpu` record's schema, where a software driver (lavapipe)
-is installed as CI does; without any driver the query says so and exits 1. `tests/test_camera_helper_boundaries.py` pins the
+is installed as CI does; without any driver the query says so and exits 1.
+The fake's `export_ubwc` scenario under `auto` holds linear samples under the
+UBWC modifier with a synthetic plane table, so no driver can import it
+correctly; the test accepts each place a driver can stop it (the path does not
+open, the layout is refused before a strategy is chosen, or a chosen
+strategy's import refuses the plane table, as Turnip does) and asserts in
+every case that the run ends `pixel_path_error` with no frame, the frame set
+released, the reader deactivated and the end packet last. Serving Turnip's
+real UBWC layout instead was not done: the buffer would still hold linear
+bytes, so an import that passed would convert wrong pixels rather than test
+anything. The library-output capture is exercised with
+`tests/fixtures/camera_chatty_vulkan_icd.cpp`, a fixture driver that the
+loader loads from a manifest named by `VK_ICD_FILENAMES` and `VK_DRIVER_FILES`
+in the test's environment; it writes the two Frame lines above (one through
+stdout), a stray byte, an over-long line and more lines than the bound to
+fds 1 and 2, and optionally more bytes than a pipe holds, then refuses the
+interface version. Alone it makes the GPU path fail to open, and the test
+checks the export mode's stderr is JSON lines only under `auto`, with
+`--pixel-path gpu_convert` and with the over-full pipe, and that `--query-gpu`
+keeps its one stdout record; listed beside lavapipe, the GPU path converts the
+fake's frames exactly while the same notes are recorded. `tests/test_camera_helper_boundaries.py` pins the
 rest. All three run in the dependency-free `native` job of `check-jobs.yml`,
 which the ARM64 workflow reuses, and may not skip there.
 

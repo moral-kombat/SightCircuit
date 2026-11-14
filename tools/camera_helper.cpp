@@ -28,10 +28,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include <fcntl.h>
+#include <limits.h>
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
@@ -597,6 +599,110 @@ void emit(const JsonObject& object, bool final = false) {
     }
 }
 
+// ---- library text written to stderr while the GPU path opens -------------------------
+// The Vulkan loader, the driver (Mesa's driconf: "ATTENTION: default value of option ...
+// overridden by environment.") and implicit layers (Gamescope's WSI layer) write plain text
+// straight to fd 2, and some to stdout, which isolate_stdout has pointed at the same file,
+// mostly while the instance and the device are created. Around that window, the GPU path's
+// open() and --query-gpu, fds 1 and 2 point at a non-blocking pipe instead; afterwards they
+// are restored and every captured line becomes a note record on stderr, so the export
+// mode's stderr stays JSON lines and the text is kept as evidence instead of being counted
+// and dropped. Nothing waits on the pipe: a library that writes more than the pipe holds
+// loses the rest (its write fails with EAGAIN), and the summary note says the pipe was
+// full. Text written outside the window (a driver thread later, a teardown message) is
+// not captured and still reaches stderr as written; the helper changes no environment
+// variable to silence anything.
+constexpr std::size_t kCapturedLines = 32;           // note records per window, before the summary
+constexpr std::size_t kCapturedMessageBytes = 1024;  // of one line; json_quote keeps any cut valid JSON
+
+class LibraryOutputCapture {
+public:
+    explicit LibraryOutputCapture(const char* window) : window_(window) {
+        int fds[2];
+        if (::pipe2(fds, O_CLOEXEC | O_NONBLOCK) != 0) return;
+        saved_err_ = ::fcntl(STDERR_FILENO, F_DUPFD_CLOEXEC, 3);
+        saved_out_ = ::fcntl(STDOUT_FILENO, F_DUPFD_CLOEXEC, 3);
+        if (saved_err_ < 0 || saved_out_ < 0) {  // no usable stderr: the window runs uncaptured
+            close_saved();
+            ::close(fds[0]);
+            ::close(fds[1]);
+            return;
+        }
+        std::fflush(stdout);
+        std::fflush(stderr);
+        const int capacity = ::fcntl(fds[0], F_GETPIPE_SZ);
+        capacity_ = capacity > 0 ? static_cast<std::size_t>(capacity) : 0;
+        ::dup2(fds[1], STDERR_FILENO);
+        ::dup2(fds[1], STDOUT_FILENO);
+        ::close(fds[1]);
+        read_fd_ = fds[0];
+    }
+    LibraryOutputCapture(const LibraryOutputCapture&) = delete;
+    LibraryOutputCapture& operator=(const LibraryOutputCapture&) = delete;
+    ~LibraryOutputCapture() { finish(); }
+
+    // Restores fds 1 and 2, then writes the captured lines as note records. Idempotent.
+    void finish() {
+        if (read_fd_ < 0) return;
+        std::fflush(stdout);  // text a library left in stdio's buffer belongs to the window
+        std::fflush(stderr);
+        ::dup2(saved_err_, STDERR_FILENO);
+        ::dup2(saved_out_, STDOUT_FILENO);
+        close_saved();
+        std::string text;
+        char buffer[16384];
+        while (true) {
+            const ssize_t count = ::read(read_fd_, buffer, sizeof buffer);
+            if (count < 0 && errno == EINTR) continue;
+            if (count <= 0) break;
+            text.append(buffer, static_cast<std::size_t>(count));
+        }
+        ::close(read_fd_);
+        read_fd_ = -1;
+        std::size_t written = 0, omitted_lines = 0, omitted_bytes = 0;
+        for (std::size_t start = 0; start < text.size();) {
+            std::size_t end = text.find('\n', start);
+            if (end == std::string::npos) end = text.size();
+            std::string line = text.substr(start, end - start);
+            start = end + 1;
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) line.pop_back();
+            if (line.empty()) continue;
+            if (written == kCapturedLines) {
+                ++omitted_lines;
+                omitted_bytes += line.size();
+                continue;
+            }
+            const bool cut = line.size() > kCapturedMessageBytes;
+            if (cut) line.resize(kCapturedMessageBytes);
+            write_fd(STDERR_FILENO, record("note").str("source", "library_output").str("window", window_)
+                                        .str("message", line).boolean("truncated", cut).done() + "\n");
+            ++written;
+        }
+        // Full: less room was left than one atomic write (PIPE_BUF), so a library's write may have been refused.
+        const bool full = capacity_ && text.size() + PIPE_BUF > capacity_;
+        if (omitted_lines || full) {
+            write_fd(STDERR_FILENO, record("note").str("source", "library_output").str("window", window_)
+                                        .str("message", "sightcircuit-camera-helper: library output beyond the note bound was not recorded")
+                                        .integer("omitted_lines", static_cast<int64_t>(omitted_lines))
+                                        .integer("omitted_bytes", static_cast<int64_t>(omitted_bytes))
+                                        .boolean("pipe_full", full).done() + "\n");
+        }
+    }
+
+private:
+    void close_saved() {
+        if (saved_err_ >= 0) ::close(saved_err_);
+        if (saved_out_ >= 0) ::close(saved_out_);
+        saved_err_ = saved_out_ = -1;
+    }
+
+    const char* window_;
+    int read_fd_ = -1;
+    int saved_err_ = -1;
+    int saved_out_ = -1;
+    std::size_t capacity_ = 0;
+};
+
 // ---- the export packet stream ------------------------------------------------------
 
 void put_u32(std::string& out, uint32_t value) {
@@ -806,7 +912,10 @@ public:
         else pixel_path_ = make_cpu_linear_path();
         if (options_.pixel_path != "auto") pixel_path_settled_ = true;
         lifecycle::rearm_watchdog(kConvertWatchdogSeconds);
+        std::optional<LibraryOutputCapture> capture;  // the CPU path loads no library
+        if (options_.pixel_path == export_protocol::kPixelPathGpuConvert) capture.emplace("gpu_convert_open");
         const bool opened = pixel_path_->open(error, pixel_path_facts_);
+        if (capture) capture->finish();
         lifecycle::disarm_watchdog();
         return opened;
     }
@@ -1045,7 +1154,11 @@ private:
         std::string error;
         pixel_path_ = make_gpu_convert_path();
         lifecycle::rearm_watchdog(kConvertWatchdogSeconds);
-        const bool opened = pixel_path_->open(error, pixel_path_facts_);
+        bool opened;
+        {
+            LibraryOutputCapture capture("gpu_convert_open");
+            opened = pixel_path_->open(error, pixel_path_facts_);
+        }
         lifecycle::disarm_watchdog();
         if (!opened) {
             pixel_path_settled_ = false;  // never chosen: the ready that precedes the end says "undecided"
@@ -1571,7 +1684,11 @@ int run_describe() {
 // confirmation: it touches no camera and reads no buffer.
 int run_query_gpu() {
     std::string gpu, error;
-    const bool opened = query_gpu_convert(gpu, error);
+    bool opened;
+    {
+        LibraryOutputCapture capture("query_gpu");  // its notes go to stderr; stdout keeps the one record
+        opened = query_gpu_convert(gpu, error);
+    }
     JsonObject object = record("gpu_query");
     object.boolean("opened", opened);
     if (opened) object.null("error").raw("gpu", gpu);
