@@ -42,6 +42,165 @@ The [qualification design](hud-qualification.md) states what an observation
 cannot prove and what qualification still requires. Existing commands and
 historical one-run approvals are not new device authorization.
 
+### Camera display work order (proposed 2026-11-15, not adopted)
+
+**Status: a proposal for the owner.** Nothing in this section is adopted, and
+nothing here authorises a device step. It is adopted when the owner answers
+the decisions [below](#camera-display-decisions-for-the-owner) and L1 records
+them in [scope](poc-scope.md#architecture-decisions-2026-11-07). Until then the
+work order above and the lanes below stay current. The owner asked for it on
+2026-11-15, after the proof of concept ([E99](evidence/e099.md)): the SDK
+camera is to become the live display's input.
+
+**Why the plan changes.** E99 proved the input half on the Frame: SDK camera
+frames reached the detector through the helper's GPU import, with inference
+p95 39.3 ms and processing p95 51.6 ms against the 200 ms budget, and
+passthrough unchanged. The output half (tile rendering, `fixed-edge-hud-v1`,
+the overlay sink, the bridge's visibility opcode, the one-second display age)
+exists but is checked mostly in the cloud. The mask, mapping and marker work
+(G3, G4, WP9, lane A) and the time-multiplexed fallback (F3 to F8) exist
+because the mirror contains our own panel ([E18](evidence/e018.md)). SDK
+frames image the room before compositing, so on the camera route that
+machinery has no job. That is the 2026-11-09 review's statement, not device
+evidence, so it becomes a measured row (G8) rather than an assumption.
+
+**What is missing.** The joint between the halves (a frame source around the
+helper, a mask-free row selector, real-output expiry and a runner); device
+proof of five things never run (the helper and the bridge together, expiry
+in real output, which the bridge reports only under `--validate-stdin`, an
+overlay update soak at HUD size, the stop on headset removal, and the absence
+of feedback); and a governance path, since showing camera-derived labels is
+gated live input and HUD output. The E48-pattern classification covers only
+bounded recognition without display.
+
+**Not established by E99.** Chair recall: the owner had no chair and used a
+bottle, the scene was not controlled, and the eight chair frames are
+incidental. Chair coverage is first measured in L-D1.
+
+#### Lane L, live label display from the SDK camera
+
+Cloud items run in parallel with the two out-of-gate device steps L-D1 and
+L-D2. G-numbers G1 to G6 keep their meaning as mirror rows; G7 to G10 are new.
+
+| Item | Work | Kind | Depends on |
+| --- | --- | --- | --- |
+| L1 | Record the owner's answers as dated scope rows, quoting the owner: the SDK camera (left, index 0) supersedes the mirror as the display's input; displayed labels are gated use; the diagnostic tier as decided; the passthrough definition; the presence interim; the consent answer for display; the calibration answer; the contract bound; F3's disposition. Superseded sentences are marked, not deleted (including the 2026-11-08 ordering clause that SDK probes follow F3 and C5/C6). No row opens a gate or authorises a device run | S, docs | the owner's answers |
+| L2 | Truth fixes, independent of the decisions: the S2 row's "no probe has run" and the helper reference's "unverified on the device" paragraph now cite E95 to E99 (the foreign-queue acquire and DMA-BUF sync observed working, not verified in general); the recognition guide's "nothing here is a device result"; the lane S heading's "cloud-only"; a `gates.py` docstring naming bounded camera recognition as an out-of-gate use (docstring only) | S, docs | none |
+| L3 | Reviewed acceptance-row edit (F6's role): mark G1 to G6 mirror route, G2 carrying over closed; add G7 to G10 with numeric criteria and the evidence type (headset report, distinct from cloud and CI); restate the scope's acceptance for camera input; a camera-HUD device-report template; rewrite the work-order intro, critical path and risks; a docs test pins every G-number `gates.py` names to the table | M, docs and decision | L1 |
+| L4 | Camera export contract v2: `max_seconds` 1 to 90 and `max_frames` 1 to 900 (fps 1 to 10 unchanged), protocol `camera-export/2` so an old helper is refused, a regenerated header, a revised wearer-facing notice that says labels are shown; `camera_recognize` keeps its 30 s and 300 frames | S to M, cloud | owner decision 4 |
+| L5 | `CameraHelperSource`: a pipeline frame source around the export reader; left camera only; `headset_removed` and `standby` end the run as `presence_ended`, never retried; acquire-time `observed_ns`; the exposure-minus-acquire offset reported as a timing, never as calibration; a test that no pixel array or intrinsics field reaches a report or log; `run_pipeline` still refuses the source | M, cloud | none (L4 beyond 600 frames) |
+| L6 | Mask-free `camera_rows`: the sanitising, dedupe and row cap extracted from `HudMask.select` into a shared helper; direction per owner decision 3, a 3x3 cell from the box centre over the full frame (thresholds 0.4 and 0.6) or names only; no calibration; digest-pinned tile output | S, cloud | none (decision 3 picks the default) |
+| L7 | Bridge `--fixed-hud` real-output mode: geometry pinned to the HUD contract, no settings packets, the expiring-frame opcode accepted only here and under `--validate-stdin`, the deadline cleared within one poll with a `frame_expired` record, a retransmission never renewing a deadline; every other mode keeps refusing the opcode | M, native | none |
+| L8 | `CameraHudStage`: frame, detector, rows, tile, then submit with `expires_ns = observed_ns + 1 s`; submit on change, refresh when expiry is within 500 ms; clear on end. Report p50, p95 and max of input age, inference, processing, output age and capture-to-display age with declared timebases; per-label display seconds and longest gap; the helper's ready and end records; no pixels or calibration values | M, cloud | L5, L6, L7 |
+| L9 | `camera_hud`, the fifteenth command, with `--validate` (fake producer, validation bridge, in CI), `--synthetic-rows` (G9's driver, camera never opened) and `--camera` (at most 90 s); a typed informed start that never creates a scope record; the supervision primitive and G2's green-input abort; never routed through `ReplayWorker`. The terminal confirmation moves from `camera_recognize` into a shared module. Guide `guides/camera-hud.md`; the command count in CLAUDE.md flagged for an owner-reviewed edit | M to L, cloud and docs | L4, L8 (L10 for device use) |
+| L10 | Reviewed `gates.py` edit 1, no gate opens: a new `LIVE_CAMERA_INPUT` lifted by G7, G8 and G10; `LIVE_HUD_OUTPUT` lifted by G8, G9 and G10; `LIVE_IMAGE_INPUT` (the mirror) and `HARDWARE_MAPPING` unchanged. A one-run scope record consulted only by `camera_hud`, written by the Frame manager when staging an approved step, bound to the revision, the manifest digests, a run id, an absolute deadline, the source and the geometry. This is a procedural control against mistakes, not a cryptographic one: anyone who can run the writer on the Frame can write a record, so the owner's approval in the Frame manager's session stays the authority. Tests refuse a missing, expired, mismatched or reused record, the mirror, both cameras, other geometry and other runners | M, cloud and decision | L3, L7, L8, decisions 1, 2 and 15 |
+| L11 | Close the replay window's ungated live-source hook (input review finding 1): `ReplayWorker` accepts recorded sources only | S, cloud | none |
+| L12 | Pre-sitting rehearsal before each displayed device step (L-D3 included): the full pre-push list on the pinned commit plus ARM64 on demand, an independent review against this order and the consent rules, the Frame manager's manifest and step cards; afterwards evidence entries and a verdict per row stating what stays unproven | S, cloud and docs | L9, L10, L11 |
+| L13 | Reviewed `gates.py` edit 2, the lift, only after G7 to G10 are accepted and the owner decides: the camera input and HUD output gates open for `camera_hud`, the left camera and `fixed-edge-hud-v1` only. The gate model has no notion of a gate open for a named runner today, so this edit specifies that mechanism and its tests. Mirror input and hardware mapping stay closed; bounded attended runs and the typed start stay | M, cloud and decision | L-D1 to L-D5 accepted |
+| L14 | Held remedies if a device step shows processing p95 over 200 ms, a stalled consumer or coverage short of its threshold: downscale or crop inside the helper (frames are 18,213,888 bytes), or preprocessing changes | M, held | a failing device result |
+| L15 | Make L-D1 measurable: `camera_recognize` records a wall-clock time beside each frame's monotonic time and accepts operator marks (removal, cue positions), counts only; the arrow side checked on both axes, with the camera image's orientation confirmed by a cue | S, cloud | none |
+
+#### Lane L device steps
+
+Each step needs the owner's explicit approval, staged by the Frame manager,
+which confirms in its own session; nothing runs from the cloud. The owner may
+name adjacent steps for one sitting, each with its stop point. If SteamOS,
+SteamVR or Mesa changed since the last step, the Frame manager re-runs
+`--describe`, the offline tests and `--query-gpu` before continuing, as it did
+for E99. No screen showing the Frame's desktop, the replay window or the
+SteamVR mirror may be in the cameras' view during a run.
+
+| Step | What runs | Acceptance (proposed numbers in decision 9) | Depends on |
+| --- | --- | --- | --- |
+| L-D1 | G7 and coverage, no display, out of gate as in E99: two `camera_recognize` runs of at most 30 s, left camera, 5 fps. Run 1: the chair at about 1.5 m and 3 m; the headset removed at about 20 s. Run 2: the chair at cued positions (left, centre, right, up, down) | the run ends `headset_removed` or `standby` at most 3.0 s after the removal mark, no frame processed with an acquire time over 2.0 s after it; the chair in at least 80% of in-view 1-s windows; p95s within 200 ms; the offline side matches at least 2 of 3 cues per position, or decision 3 falls to names only | L1, L15, approval |
+| L-D2 | G8, coexistence and the canary: the bridge shows the public seed fixture with horses (a class absent from the room) at the HUD position at HUD size, updated at 5 Hz for at least 120 s, during one `camera_recognize` run; a printed copy held in view for the last 10 s as the positive control. No camera-derived output is shown. The panel driver needed for a still at 5 Hz is part of L7 | no horse while only the panel shows it; the print detected at least once; at least 600 acknowledged updates, no freeze; camera p95 within 200 ms with the bridge running; both cleanups clean. Measured for this scene and panel only | L1, decisions 6 and 7, approval |
+| L-D3 | G9, real-output expiry and soak, no camera: `camera_hud --synthetic-rows` on the rebuilt bridge under one scope record; a counter row at 5 Hz for at least 75 s with three stops | at least 375 acknowledged updates at 320x128; each stop gives `frame_expired` within 1,000 ms plus one poll and the wearer sees the tile blank; nothing displayed past its deadline | L7, L9, L10, L12, approval |
+| L-D4 | First displayed camera labels: `camera_hud --camera`, at most 30 s, on the chair; the wearer turns away at least three times; the headset removed once at the end, so the presence stop is seen on the displayed path. A separate entry; it does not count as G10 | the chair named; arrows within tolerance if decision 3 is arrows; the name gone within about 2 s of each turn-away by the wearer and `frame_expired`; the tile cleared on removal; p95s within 200 ms | L-D1 to L-D3, L4, L9, L10, L12, approval |
+| L-D5 | G10, the 60-second camera-HUD acceptance (formerly F7 and WP12): `camera_hud --camera`, 90 s bound, the chair, head turns, the chair out of view for 5 s and back. The arrow tolerance agreed in writing first | the chair named for at least 90% of a contiguous 60 s window, no gap over 2 s, and the wearer agrees; expiry on leaving view; capture-to-display p95 within decision 9's bound; input age at most 1,000 ms; passthrough and tracking normal during and for 30 s after; clean shutdown; green input aborts (G2) | L-D4, approval |
+
+The red LED is a code property (no software path touches it), not a wearer
+observation; the step cards say so.
+
+#### Lane R, retiring the mirror route
+
+| Item | Work | Depends on |
+| --- | --- | --- |
+| R0 | Cancel F3 without running it and withdraw its staging in the Frame manager's session; update the "Frame update check" scheduled task's prompt if it names F3; freeze F3a, F3b and their guide; hold F4 to F8 as superseded by lane L; record the E100 to E103 disposition | decision 5 |
+| R1 | Mark A6 and A9 retired; a "mirror route, not current" banner on the HUD checkpoint, qualification and fallback-measurement pages; WP9, G3 and G4 have no further device work | L1 |
+| R2 | Quarantine the mirror HUD commands in place (`hud_marker_check`, `hud_marker_observer`, `fallback_measure`) and refuse the live runtime's HUD mirror mode | G10 accepted, L13 merged |
+| R3 | Delete the dead mask stack, with the list recounted from today's tree (the F-lane instruments included), and `HARDWARE_MAPPING` with its last call sites; mirror recognition stays as decided | R2, the owner's go |
+| R4 | Documentation retirement under the [documentation plan](documentation-plan.md): the HUD runtime page, the overlay page's planned HUD, the architecture's camera boundary, the camera page's D2 sentence; the plan's procedure and containment rows name the camera-HUD guide | R3 |
+
+#### Unchanged or held
+
+Kept: G2 (closed, carries over), F1 and F2, lanes B, C1 to C4, C7, C8, P and
+E, WP1 with C6 off the critical path, `mirror_recognize` and `mirror_check` as
+E48 diagnostics, never a HUD input. Held for decision 12: WP2 and C5's boxed
+half; C5's timing half becomes a camera p95. Deferred: calibrated projection
+and world-locked labels (WP3 to WP8). After the lift, each its own decision:
+N1, presence and resume (a pause state instead of ending, or a proximity
+source for the agreement's section 3.2 beyond attended runs); N2, longer runs,
+the right camera and a soak past 600 updates. The capture-provider track stays
+paused. Also open: the offline helper test that failed on the Frame at E99 is
+fixed in the cloud (#76) and unverified on Turnip; offline review follow-up 2
+(the bridge's six-second connection budget) needs its device check, now on the
+helper-plus-bridge path.
+
+#### Camera display decisions for the owner
+
+Each has a recommendation. Decisions 1, 9 (the chair) and 14 are the owner's
+alone; the others can be taken as recommended.
+
+1. **Input and gates.** The left SDK camera supersedes the mirror as the
+   display's input, and displayed labels are gated use: new rows G7 to G10,
+   one-run scope records for the device steps, a lift only after acceptance.
+   Recommended: yes.
+2. **Gate structure.** A new `LIVE_CAMERA_INPUT` gate, so the mirror stays
+   closed after the lift. Recommended: yes.
+3. **Tile content.** Coarse arrows from the box position, or names only.
+   Recommended: arrows if L-D1's offline check passes, else names only.
+4. **Contract bound.** Raise the export contract to 90 s and 900 frames, so
+   G10's 60 s window has margin; the operator rebuilds the helper.
+   Recommended: yes.
+5. **Lane F.** Cancel F3 and release E100 to E103; park F4 to F8 and the mask
+   stack until G10, then retire them. Recommended: yes.
+6. **L-D2's class.** The replay-panel pattern (E47) with a bounded
+   recognition run and no camera-derived output shown, a named one-run use
+   outside the gate. Recommended: yes.
+7. **Passthrough rule.** It applies to every lane L device step, not only SDK
+   probes; only a change in the passthrough image itself counts (freeze,
+   black, grey, green, colour change, judder, lost "Colour, stable"), not our
+   tile appearing, updating or expiring; during a planned headset removal the
+   watch resumes when the headset is back on, and the 30 s after count from
+   then. Recommended: yes.
+8. **Presence.** Operator-attended bounded runs with the helper ending on
+   removal, as the agreement's interim; one typed start per launch.
+   Recommended: yes.
+9. **Object and numbers.** Is a chair available where the Frame is used? The
+   proposed thresholds: removal stop within 3.0 s; coverage at least 80%; G10
+   at least 90% of 60 s with no gap over 2 s; capture-to-display p95 at most
+   400 ms; expiry within 1,000 ms plus one poll.
+10. **Age clock.** Ages and expiry from the host acquire time, at 1 s, with
+    the exposure offset (about 241 to 245 ms, E97) reported beside them.
+    Recommended: yes.
+11. **Calibration.** No calibration used in this phase; the helper keeps
+    discarding it. Calibrated projection needs a new consent answer.
+    Recommended: yes.
+12. **Evaluation.** Recall measured as counts-only coverage with
+    wearer-confirmed presence (L-D1); C5's boxed mirror stills continue only
+    if mirror stills are not treated as camera data. Recommended: yes.
+13. **Mirror's future.** Bounded mirror recognition stays as a diagnostic;
+    the mirror is retired only as a HUD input. Recommended: yes.
+14. **Consent for display.** The 2026-11-09 consent covers what may be saved
+    or published. Showing camera-derived labels and arrows in the headset to
+    the wearer, with nothing saved beyond counts, labels, boxes, timings and
+    format metadata, needs its own answer. Recommended: yes, for attended
+    bounded runs.
+15. **Diagnostic tier.** D3 allowed one diagnostic scope for the 60-second
+    acceptance run. This order uses one per displayed step (L-D3, L-D4, L-D5)
+    and needs a rule for a re-run after a failure: each re-run is a new
+    approval with a new record. Recommended: yes.
+
 ### Implementation and evidence reconciliation
 
 The checkout already contains packages A–H, the mirror session tokens and
