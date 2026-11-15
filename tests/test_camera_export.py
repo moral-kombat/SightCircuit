@@ -74,6 +74,16 @@ QUERY_TRIAL_KEYS = {"basis", "format", "modifier", "width", "height", "planes", 
 QUERY_ROW_HEADS = [[mutable, views, transfer] for mutable in (0, 1) for views in ("none", "uint", "unorm")
                    for transfer in (0, 1)]
 UBWC_MODIFIER = "0x0500000000000001"
+# How a GPU-path run of the fake's UBWC frame set may end (export_ubwc under auto), by where the driver stops it:
+# the layout refused before any strategy is chosen (UBWC_LAYOUT_REFUSAL, gpu_convert's decide()), or a strategy
+# chosen and the import of the fake's synthetic plane table refused (import_modifier()), as Turnip does with
+# vkCreateImage(modifier):VkResult=-1000158000 (VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT).
+UBWC_LAYOUT_REFUSAL = (r"camera_0:(modifier_import_unsupported_by_device|modifier_unknown_to_driver|"
+                       r"modifier_plane_count_disagrees_with_driver|modifier_not_sampleable|no_import_strategy):")
+UBWC_IMPORT_REFUSAL = (r"camera_0:((vkCreateImage\(modifier\)|vkGetMemoryFdPropertiesKHR|vkAllocateMemory\(import\)|"
+                       r"vkBindImageMemory):VkResult=-\d+|buffer_smaller_than_driver_layout:\d+<\d+|"
+                       r"no_memory_type_for_dma_buf_import)$")
+UBWC_GPU_FAILURE = rf"^(gpu_convert_open_failed:|{UBWC_LAYOUT_REFUSAL}|{UBWC_IMPORT_REFUSAL})"
 VK_FORMATS = {"nv12": 1000156003, "p010": 1000156013}  # G8_B8R8_2PLANE_420_UNORM, G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16
 
 
@@ -162,14 +172,20 @@ def software_vulkan_present():
     overrides = [os.environ.get(name) for name in ("VK_ICD_FILENAMES", "VK_DRIVER_FILES") if os.environ.get(name)]
     if overrides:
         return any(Path(path).is_file() for value in overrides for path in value.split(os.pathsep))
+    return bool(lavapipe_manifests())
+
+
+def lavapipe_manifests():
+    """The installed lavapipe driver manifests, which the stderr-capture tests list beside the chatty fixture driver."""
+    found = []
     for pattern in ("/usr/share/vulkan/icd.d/*.json", "/etc/vulkan/icd.d/*.json", "/usr/local/share/vulkan/icd.d/*.json"):
-        for path in glob.glob(pattern):
+        for path in sorted(glob.glob(pattern)):
             try:
                 if "lvp" in json.loads(Path(path).read_text()).get("ICD", {}).get("library_path", ""):
-                    return True
+                    found.append(path)
             except (OSError, ValueError):
                 continue
-    return False
+    return found
 
 
 class ProtocolConstantsTests(unittest.TestCase):
@@ -292,9 +308,9 @@ class CameraExportTests(unittest.TestCase):
             records.append(record)
         return process.returncode, out, records
 
-    def export(self, scenario, *extra, max_seconds=8, max_frames=4, fps=10, answer="yes\n", timeout=30):
+    def export(self, scenario, *extra, max_seconds=8, max_frames=4, fps=10, answer="yes\n", timeout=30, env=None):
         args = ["--export-frames", "--max-seconds", max_seconds, "--max-frames", max_frames, "--fps", fps, *extra]
-        process = self.start(args, scenario)
+        process = self.start(args, scenario, env=env)
         if answer is not None:
             os.write(process.pty_master, answer.encode())
         code, out, records = self.finish(process, timeout)
@@ -635,25 +651,38 @@ class CameraExportTests(unittest.TestCase):
                 calls = final["fake_calls"]
                 self.assertEqual(calls[calls.index("acquire") + 1], "release")
                 self.assertEqual(calls[-3:], ["set_reader:false", "control_state", "disconnect"])
-        # A tiled buffer under auto needs the GPU path, and this runner's driver (if any) cannot import
-        # the Adreno modifier: either the path does not open (the ready is then "undecided") or the import
-        # is refused (the ready names gpu_convert), never a wrong frame. The stream is complete either way.
+        # A tiled buffer under auto needs the GPU path. The fake's buffer holds linear samples under the UBWC
+        # modifier with a synthetic plane table, so no driver can import it correctly: the path does not open
+        # (the ready is then "undecided"), the driver refuses the layout before any strategy is chosen, or, where
+        # the driver accepts the modifier (Turnip on the Frame), a strategy is chosen and the import step refuses
+        # the plane table. Never a frame; the stream is complete, the frame set released and the end last.
         code, packets, records = self.export("export_ubwc")
         self.assertEqual(code, 1)
         final = self.final(records)
         self.assertEqual(final["reason"], "pixel_path_error")
-        self.assertTrue(final["detail"].startswith(("gpu_convert_open_failed:", "camera_0:modifier_import_unsupported_by_device:",
-                                                    "camera_0:modifier_unknown_to_driver:")), final["detail"])
+        detail = final["detail"]
+        self.assertRegex(detail, UBWC_GPU_FAILURE)
         self.assertEqual(final["exported"], 0)
-        opened = not final["detail"].startswith("gpu_convert_open_failed:")
+        self.assertIs(final["cleanup_ok"], True)
+        calls = final["fake_calls"]
+        self.assertEqual(calls[calls.index("acquire") + 1], "release")
+        self.assertEqual(calls[-3:], ["set_reader:false", "control_state", "disconnect"])
+        opened = not detail.startswith("gpu_convert_open_failed:")
         ready, end = self.check_stream(packets, pixel_path="gpu_convert", undecided=not opened)
         self.assertEqual(end["reason"], "pixel_path_error")
+        self.assertEqual(end["counts"]["exported"], 0)
         if opened:
-            # The path was told the layout before the ready: it names no strategy, because the driver has none for it.
+            # The path was told the layout before the ready: the facts name the strategy the driver's query accepted,
+            # or "none" when it refused the layout first, and the final notes agree.
             facts = ready["build"]["pixel_path_facts"]
             self.assertEqual(set(facts), GPU_FACT_KEYS)
-            self.assertEqual((facts["import_strategy"], facts["chroma_location"]), ("none", "not_applicable"))
-            self.assertEqual(final["pixel_path_notes"]["import_strategy"], "none")
+            refused_before_import = re.match(UBWC_LAYOUT_REFUSAL, detail) is not None
+            expected = "none" if refused_before_import else facts["import_strategy"]
+            self.assertIn(expected, ("none", *IMPORT_STRATEGIES))
+            self.assertEqual(facts["import_strategy"], expected)
+            self.assertEqual(facts["chroma_location"] in ("midpoint", "cosited_even"), expected == "ycbcr_sampler")
+            self.assertEqual(final["pixel_path_notes"]["import_strategy"], expected)
+            self.assertEqual(final["pixel_path_notes"]["frames_imported"], 0)
         # Without any Vulkan driver (the loader is pointed at a driver file that does not exist) the GPU path
         # does not open: the path was never chosen, so the ready says "undecided" and the end follows at once.
         process = self.start(["--export-frames", "--max-seconds", 8, "--max-frames", 4, "--fps", 10], "export_ubwc",
@@ -1013,6 +1042,103 @@ class CameraExportTests(unittest.TestCase):
                 self.assertEqual(facts["chroma_location"] in ("midpoint", "cosited_even"), chosen == "ycbcr_sampler")
         if software:
             self.assertEqual(lines[0]["planned_facts"]["import_strategy"], "plane_views_uint")
+
+    # -- library text on stderr while the GPU path opens -----------------------------------------
+
+    def chatty_driver_env(self, *also, **extra):
+        """An environment whose Vulkan loader loads the fixture driver that only writes text (and refuses), then ``also``."""
+        manifest = Path(self.build.name) / "camera-chatty-icd.json"
+        if not manifest.exists():
+            library = Path(self.build.name) / "libcamera-chatty-icd.so"
+            subprocess.run(["g++", "-std=c++17", "-O2", "-Wall", "-Wextra", "-Wpedantic", "-Werror", "-shared", "-fPIC",
+                            str(ROOT / "tests/fixtures/camera_chatty_vulkan_icd.cpp"), "-o", str(library)],
+                           check=True, capture_output=True, text=True, timeout=300)
+            manifest.write_text(json.dumps({"file_format_version": "1.0.0",
+                                            "ICD": {"library_path": str(library), "api_version": "1.1.0"}}))
+        drivers = os.pathsep.join([str(manifest), *also])
+        return dict(self.env, VK_ICD_FILENAMES=drivers, VK_DRIVER_FILES=drivers, **extra)
+
+    def check_library_notes(self, records, window, pipe_full=False):
+        """The fixture driver's text came back as note records of ``window``, bounded, and nothing else changed form."""
+        notes = [record for record in records if record["event"] == "note" and record.get("source") == "library_output"]
+        self.assertEqual({note["window"] for note in notes}, {window})
+        lines = [note for note in notes if "omitted_lines" not in note]
+        summaries = [note for note in notes if "omitted_lines" in note]
+        messages = [note["message"] for note in lines]
+        self.assertIn("ATTENTION: default value of option vk_wsi_force_swapchain_to_current_extent overridden by environment.",
+                      messages)
+        # Written to stdout, which the helper points at stderr's file: captured the same way.
+        self.assertIn("[Gamescope WSI] Failed to connect to gamescope socket: gamescope-0. Bypass layer will be unavailable.",
+                      messages)
+        self.assertIn("chatty-icd: bytes \ufffd\x01 end", messages)  # a stray byte becomes U+FFFD, a control byte escaped
+        long_lines = [note for note in lines if note["message"].startswith("chatty-icd: long ")]
+        self.assertTrue(long_lines)
+        for note in lines:
+            self.assertEqual(note["truncated"], note in long_lines)
+            self.assertLessEqual(len(note["message"].encode()), 1024)
+        self.assertTrue(all(len(note["message"]) == 1024 for note in long_lines))
+        self.assertEqual(len(lines), 32)  # the bound; the fixture writes more lines than that
+        self.assertEqual(len(summaries), 1)
+        self.assertGreater(summaries[0]["omitted_lines"], 0)
+        self.assertGreater(summaries[0]["omitted_bytes"], 0)
+        self.assertIs(summaries[0]["pipe_full"], pipe_full)
+        return notes
+
+    def test_library_text_written_while_the_gpu_path_opens_becomes_note_records(self):
+        """Driver, layer and loader text written to fds 1 and 2 during the open keeps the export mode's stderr JSON-only."""
+        # Under auto, the GPU path opens at the first frame set and finds no usable driver: finish() checks that every
+        # stderr line is one of the helper's JSON records, and the helper's own records are as without the text.
+        process = self.start(["--export-frames", "--max-seconds", 8, "--max-frames", 4, "--fps", 10], "export_ubwc",
+                             env=self.chatty_driver_env())
+        os.write(process.pty_master, b"yes\n")
+        code, out, records = self.finish(process)
+        self.assertEqual(code, 1)
+        _, end = self.check_stream(parse_packets(out), undecided=True)
+        self.assertEqual(end["reason"], "pixel_path_error")
+        final = self.final(records)
+        self.assertTrue(final["detail"].startswith("gpu_convert_open_failed:"), final["detail"])
+        self.assertEqual(final["fake_calls"][3:5], ["acquire", "release"])
+        self.check_library_notes(records, "gpu_convert_open")
+        self.assertEqual(records[-1]["event"], "final")  # the notes were written when the window closed, not later
+        # Named, the path opens before any connect: the same capture, and the run ends there.
+        code, packets, records = self.export("export_nv12", "--pixel-path", "gpu_convert", env=self.chatty_driver_env())
+        self.assertEqual(code, 1)
+        self.check_stream(packets, pixel_path="gpu_convert", controls_read=False)
+        self.assertTrue(self.final(records)["detail"].startswith("pixel_path_open_failed:"))
+        self.check_library_notes(records, "gpu_convert_open")
+        # More text than the pipe holds: nothing waits on it, the rest is lost, and the summary says the pipe was full.
+        code, packets, records = self.export("export_nv12", "--pixel-path", "gpu_convert", timeout=20,
+                                             env=self.chatty_driver_env(CAMERA_CHATTY_ICD_BURST_BYTES="2000000"))
+        self.assertEqual(code, 1)
+        self.check_stream(packets, pixel_path="gpu_convert", controls_read=False)
+        self.check_library_notes(records, "gpu_convert_open", pipe_full=True)
+        # --query-gpu: stdout keeps its one record; the notes go to stderr, as JSON lines.
+        result = subprocess.run([str(self.binary), "--query-gpu"], stdin=subprocess.DEVNULL, capture_output=True,
+                                env=self.chatty_driver_env(), cwd=self.cwd.name, timeout=120)
+        self.assertEqual(result.returncode, 1)
+        lines = result.stdout.decode().splitlines()
+        self.assertEqual(len(lines), 1, lines)
+        self.assertEqual((json.loads(lines[0])["event"], json.loads(lines[0])["opened"]), ("gpu_query", False))
+        notes = [json.loads(line) for line in result.stderr.decode().splitlines()]
+        self.assertTrue(all(note["event"] == "note" for note in notes), notes)
+        self.check_library_notes(notes, "query_gpu")
+
+    @unittest.skipUnless(lavapipe_manifests() and not os.environ.get("VK_ICD_FILENAMES") and not os.environ.get("VK_DRIVER_FILES"),
+                         "lavapipe is required beside the fixture driver")
+    def test_a_driver_that_writes_text_does_not_change_the_frames(self):
+        env = self.chatty_driver_env(*lavapipe_manifests())
+        code, packets, records = self.export("export_nv12", "--cameras", "0,1", "--pixel-path", "gpu_convert", max_frames=2,
+                                             env=env)
+        self.assertEqual(code, 0, self.final(records))
+        self.check_stream(packets, "export_nv12", camera_indices=(0, 1), pixel_path="gpu_convert")
+        for header, payload in packets[1:-1]:
+            self.check_pixels("export_nv12", header, payload)
+        self.check_library_notes(records, "gpu_convert_open")
+        result = subprocess.run([str(self.binary), "--query-gpu"], stdin=subprocess.DEVNULL, capture_output=True, env=env,
+                                cwd=self.cwd.name, timeout=120)
+        self.assertEqual(result.returncode, 0)
+        self.assertTrue(json.loads(result.stdout.decode().splitlines()[0])["opened"])
+        self.check_library_notes([json.loads(line) for line in result.stderr.decode().splitlines()], "query_gpu")
 
     # -- the read-only GPU query -------------------------------------------------------------
 
