@@ -449,6 +449,26 @@ provenance and original uncertainty.
 
 [Full evidence](evidence/e093.md). Device report.
 
+### E94: Camera export end to end in the cloud, the fake-backend helper through camera_recognize
+
+[Full evidence](evidence/e094.md). Offline record.
+
+### E95: Phase A camera probe on Frame, the linked helper built and ran, and the camera service was not reachable
+
+[Full evidence](evidence/e095.md). Device report.
+
+### E96: Second Phase A camera probe on Frame, the helper connected to the camera service and read its control state
+
+[Full evidence](evidence/e096.md). Device report.
+
+### E97: Phase B camera probe on Frame, the reader delivered NV12 UBWC frame metadata with passthrough unchanged
+
+[Full evidence](evidence/e097.md). Device report.
+
+### E98: Pixel-path check on Frame, the GPU import of the UBWC camera buffer was refused by the driver
+
+[Full evidence](evidence/e098.md). Device report.
+
 ## Maintaining the evidence
 
 The coordinator checks pending allocations before assigning an evidence ID and adds its record

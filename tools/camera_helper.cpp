@@ -4,7 +4,8 @@
 // camera_backend_sdk.cpp); the fake build drives the same code from
 // camera_backend_fake.cpp on any architecture.
 //
-// Modes: --describe (no connect), --hello (connect, handshake and control
+// Modes: --describe (no connect), --query-gpu (no connect and no camera: what
+// the Vulkan driver answers for the GPU pixel path), --hello (connect, handshake and control
 // state; the reader stays off), --probe-frames N --max-seconds S (metadata
 // of a few frame sets with the reader active, paced well below camera rate)
 // and --export-frames (BGR3 frames to the parent over stdout under the camera
@@ -27,10 +28,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include <fcntl.h>
+#include <limits.h>
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
@@ -307,7 +310,7 @@ void note(const std::string& text) {
 // ---- arguments -------------------------------------------------------------
 
 struct Options {
-    enum Mode { none, describe, hello, probe, export_frames };
+    enum Mode { none, describe, query_gpu, hello, probe, export_frames };
     Mode mode = none;
     unsigned frame_sets = 0;
     unsigned max_seconds = 0;
@@ -387,6 +390,8 @@ Options parse_arguments(int argc, char** argv) {
             options.help = true;
         } else if (argument == "--describe") {
             set_mode(Options::describe);
+        } else if (argument == "--query-gpu") {
+            set_mode(Options::query_gpu);
         } else if (argument == "--hello") {
             set_mode(Options::hello);
         } else if (argument == "--probe-frames") {
@@ -432,7 +437,7 @@ Options parse_arguments(int argc, char** argv) {
     if (options.help || !options.error.empty()) return options;
     const bool export_only = have_max_frames || have_fps || have_camera || have_pixel_path || options.parent_confirmed;
     if (options.mode == Options::none) {
-        options.error = "one of --describe, --hello, --probe-frames or --export-frames is required";
+        options.error = "one of --describe, --query-gpu, --hello, --probe-frames or --export-frames is required";
     } else if (options.mode == Options::export_frames) {
         if (!have_max_seconds || !have_max_frames) options.error = "--export-frames needs --max-seconds and --max-frames";
         else if (have_interval) options.error = "--interval-ms applies to --probe-frames";
@@ -454,6 +459,8 @@ Options parse_arguments(int argc, char** argv) {
 const char* usage_text() {
     return "sightcircuit-camera-helper: Arcturus camera SDK metadata probe and frame export; writes no file.\n"
            "  --describe                                  build, backend and SDK release facts; no connect\n"
+           "  --query-gpu                                 what the Vulkan driver answers for the gpu_convert pixel path's\n"
+           "                                              formats, modifiers and import strategies; no connect, no camera\n"
            "  --hello [--timeout-ms N]                    connect, handshake and control state; reader stays off\n"
            "  --probe-frames N --max-seconds S [--interval-ms M] [--timeout-ms T]\n"
            "                                              metadata of up to N frame sets (1-50) within S seconds (1-10),\n"
@@ -591,6 +598,110 @@ void emit(const JsonObject& object, bool final = false) {
         g_protocol_stalled = true;
     }
 }
+
+// ---- library text written to stderr while the GPU path opens -------------------------
+// The Vulkan loader, the driver (Mesa's driconf: "ATTENTION: default value of option ...
+// overridden by environment.") and implicit layers (Gamescope's WSI layer) write plain text
+// straight to fd 2, and some to stdout, which isolate_stdout has pointed at the same file,
+// mostly while the instance and the device are created. Around that window, the GPU path's
+// open() and --query-gpu, fds 1 and 2 point at a non-blocking pipe instead; afterwards they
+// are restored and every captured line becomes a note record on stderr, so the export
+// mode's stderr stays JSON lines and the text is kept as evidence instead of being counted
+// and dropped. Nothing waits on the pipe: a library that writes more than the pipe holds
+// loses the rest (its write fails with EAGAIN), and the summary note says the pipe was
+// full. Text written outside the window (a driver thread later, a teardown message) is
+// not captured and still reaches stderr as written; the helper changes no environment
+// variable to silence anything.
+constexpr std::size_t kCapturedLines = 32;           // note records per window, before the summary
+constexpr std::size_t kCapturedMessageBytes = 1024;  // of one line; json_quote keeps any cut valid JSON
+
+class LibraryOutputCapture {
+public:
+    explicit LibraryOutputCapture(const char* window) : window_(window) {
+        int fds[2];
+        if (::pipe2(fds, O_CLOEXEC | O_NONBLOCK) != 0) return;
+        saved_err_ = ::fcntl(STDERR_FILENO, F_DUPFD_CLOEXEC, 3);
+        saved_out_ = ::fcntl(STDOUT_FILENO, F_DUPFD_CLOEXEC, 3);
+        if (saved_err_ < 0 || saved_out_ < 0) {  // no usable stderr: the window runs uncaptured
+            close_saved();
+            ::close(fds[0]);
+            ::close(fds[1]);
+            return;
+        }
+        std::fflush(stdout);
+        std::fflush(stderr);
+        const int capacity = ::fcntl(fds[0], F_GETPIPE_SZ);
+        capacity_ = capacity > 0 ? static_cast<std::size_t>(capacity) : 0;
+        ::dup2(fds[1], STDERR_FILENO);
+        ::dup2(fds[1], STDOUT_FILENO);
+        ::close(fds[1]);
+        read_fd_ = fds[0];
+    }
+    LibraryOutputCapture(const LibraryOutputCapture&) = delete;
+    LibraryOutputCapture& operator=(const LibraryOutputCapture&) = delete;
+    ~LibraryOutputCapture() { finish(); }
+
+    // Restores fds 1 and 2, then writes the captured lines as note records. Idempotent.
+    void finish() {
+        if (read_fd_ < 0) return;
+        std::fflush(stdout);  // text a library left in stdio's buffer belongs to the window
+        std::fflush(stderr);
+        ::dup2(saved_err_, STDERR_FILENO);
+        ::dup2(saved_out_, STDOUT_FILENO);
+        close_saved();
+        std::string text;
+        char buffer[16384];
+        while (true) {
+            const ssize_t count = ::read(read_fd_, buffer, sizeof buffer);
+            if (count < 0 && errno == EINTR) continue;
+            if (count <= 0) break;
+            text.append(buffer, static_cast<std::size_t>(count));
+        }
+        ::close(read_fd_);
+        read_fd_ = -1;
+        std::size_t written = 0, omitted_lines = 0, omitted_bytes = 0;
+        for (std::size_t start = 0; start < text.size();) {
+            std::size_t end = text.find('\n', start);
+            if (end == std::string::npos) end = text.size();
+            std::string line = text.substr(start, end - start);
+            start = end + 1;
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) line.pop_back();
+            if (line.empty()) continue;
+            if (written == kCapturedLines) {
+                ++omitted_lines;
+                omitted_bytes += line.size();
+                continue;
+            }
+            const bool cut = line.size() > kCapturedMessageBytes;
+            if (cut) line.resize(kCapturedMessageBytes);
+            write_fd(STDERR_FILENO, record("note").str("source", "library_output").str("window", window_)
+                                        .str("message", line).boolean("truncated", cut).done() + "\n");
+            ++written;
+        }
+        // Full: less room was left than one atomic write (PIPE_BUF), so a library's write may have been refused.
+        const bool full = capacity_ && text.size() + PIPE_BUF > capacity_;
+        if (omitted_lines || full) {
+            write_fd(STDERR_FILENO, record("note").str("source", "library_output").str("window", window_)
+                                        .str("message", "sightcircuit-camera-helper: library output beyond the note bound was not recorded")
+                                        .integer("omitted_lines", static_cast<int64_t>(omitted_lines))
+                                        .integer("omitted_bytes", static_cast<int64_t>(omitted_bytes))
+                                        .boolean("pipe_full", full).done() + "\n");
+        }
+    }
+
+private:
+    void close_saved() {
+        if (saved_err_ >= 0) ::close(saved_err_);
+        if (saved_out_ >= 0) ::close(saved_out_);
+        saved_err_ = saved_out_ = -1;
+    }
+
+    const char* window_;
+    int read_fd_ = -1;
+    int saved_err_ = -1;
+    int saved_out_ = -1;
+    std::size_t capacity_ = 0;
+};
 
 // ---- the export packet stream ------------------------------------------------------
 
@@ -801,7 +912,10 @@ public:
         else pixel_path_ = make_cpu_linear_path();
         if (options_.pixel_path != "auto") pixel_path_settled_ = true;
         lifecycle::rearm_watchdog(kConvertWatchdogSeconds);
+        std::optional<LibraryOutputCapture> capture;  // the CPU path loads no library
+        if (options_.pixel_path == export_protocol::kPixelPathGpuConvert) capture.emplace("gpu_convert_open");
         const bool opened = pixel_path_->open(error, pixel_path_facts_);
+        if (capture) capture->finish();
         lifecycle::disarm_watchdog();
         return opened;
     }
@@ -1044,12 +1158,28 @@ private:
         std::string error;
         pixel_path_ = make_gpu_convert_path();
         lifecycle::rearm_watchdog(kConvertWatchdogSeconds);
-        const bool opened = pixel_path_->open(error, pixel_path_facts_);
+        bool opened;
+        {
+            LibraryOutputCapture capture("gpu_convert_open");
+            opened = pixel_path_->open(error, pixel_path_facts_);
+        }
         lifecycle::disarm_watchdog();
         if (!opened) {
             pixel_path_settled_ = false;  // never chosen: the ready that precedes the end says "undecided"
             end_export(export_protocol::kEndReasonPixelPathError, "gpu_convert_open_failed:" + error);
             return false;
+        }
+        // The ready that follows names the import strategy the driver accepts for this layout
+        // (pixel_path_facts.import_strategy); a layout it accepts none for ends at the first convert.
+        for (uint32_t camera = 0; camera < meta.camera_count && camera < kMaxCameras; ++camera) {
+            if (!options_.exports_camera(camera)) continue;
+            SourceFrame layout;
+            if (source_layout_from_meta(meta.cameras[camera], layout, error)) {
+                lifecycle::rearm_watchdog(kConvertWatchdogSeconds);
+                pixel_path_->plan(layout, pixel_path_facts_);
+                lifecycle::disarm_watchdog();
+            }
+            break;
         }
         return true;
     }
@@ -1558,6 +1688,25 @@ int run_describe() {
     return g_protocol_write_failed ? 1 : 0;
 }
 
+// --query-gpu: what the Vulkan driver answers for the gpu_convert pixel path. Like
+// --describe it makes no backend, connects nothing, takes no lock and asks for no
+// confirmation: it touches no camera and reads no buffer.
+int run_query_gpu() {
+    std::string gpu, error;
+    bool opened;
+    {
+        LibraryOutputCapture capture("query_gpu");  // its notes go to stderr; stdout keeps the one record
+        opened = query_gpu_convert(gpu, error);
+    }
+    JsonObject object = record("gpu_query");
+    object.boolean("opened", opened);
+    if (opened) object.null("error").raw("gpu", gpu);
+    else object.str("error", error).null("gpu");
+    add_false_claims(object);
+    emit(object);
+    return g_protocol_write_failed || !opened ? 1 : 0;
+}
+
 std::string notice_for(const Options& options) {
     if (options.mode == Options::export_frames) {
         const std::string cameras = options.exports_camera(0) && options.exports_camera(1) ? "both passthrough cameras" :
@@ -1683,6 +1832,7 @@ int main(int argc, char** argv) {
     }
     if (!options.error.empty()) return emit_invalid_arguments(options.error);
     if (options.mode == Options::describe) return run_describe();
+    if (options.mode == Options::query_gpu) return run_query_gpu();
 
     std::unique_ptr<CameraBackend> backend = make_camera_backend(options.fake_scenario);
     if (!backend) return emit_invalid_arguments("unknown fake scenario: " + options.fake_scenario);

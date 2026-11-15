@@ -1,15 +1,37 @@
-// The gpu_convert pixel path's compute shader: full-range YCbCr (NV12 or P010,
-// read through per-plane unsigned-integer views) to BGR3 rows in a storage
-// buffer, with the fixed-point formula of camera_ycbcr.hpp, so the GPU and CPU
-// paths deliver identical bytes. One work item converts four horizontal
-// pixels (twelve bytes, three words); rows are padded to whole groups.
+// The gpu_convert pixel path's compute shader: full-range YCbCr (NV12 or P010)
+// to BGR3 rows in a storage buffer, with the fixed-point formula of
+// camera_ycbcr.hpp, so the GPU and CPU paths deliver identical bytes. One work
+// item converts four horizontal pixels (twelve bytes, three words); rows are
+// padded to whole groups.
+//
+// One source, three variants, one per import strategy of camera_pixels_gpu.cpp
+// (chosen there by what the driver's image-format query accepts):
+//   (no define)            plane_views_uint: per-plane unsigned-integer views,
+//                          read with texelFetch;
+//   CAMERA_CONVERT_UNORM   plane_views_unorm: per-plane UNORM views, read with
+//                          texelFetch and rounded back to the stored integers;
+//   CAMERA_CONVERT_YCBCR   ycbcr_sampler: the whole multi-planar image through
+//                          an immutable sampler with a VkSamplerYcbcrConversion
+//                          (model RGB_IDENTITY, nearest chroma filter, identity
+//                          components: G is Y, B is Cb, R is Cr, unconverted),
+//                          sampled at texel centres and rounded back.
+// A UNORM value v of an n-bit texel is v/(2^n-1) exactly, so
+// uint(v * (2^n-1) + 0.5) is the stored integer and the three variants feed the
+// same samples to the same integer formula.
 // Compiled into camera_convert_spirv.hpp by scripts/build_camera_helper.sh --shader.
 #version 450
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
+#if defined(CAMERA_CONVERT_YCBCR)
+layout(set = 0, binding = 0) uniform sampler2D image;
+#elif defined(CAMERA_CONVERT_UNORM)
+layout(set = 0, binding = 0) uniform sampler2D luma;
+layout(set = 0, binding = 1) uniform sampler2D chroma;
+#else
 layout(set = 0, binding = 0) uniform usampler2D luma;
 layout(set = 0, binding = 1) uniform usampler2D chroma;
+#endif
 layout(set = 0, binding = 2, std430) writeonly buffer Output { uint words[]; } bgr;
 
 layout(push_constant) uniform Params {
@@ -33,6 +55,37 @@ uint channel(int accumulator) {
     return (value * 255u + 511u) / 1023u;
 }
 
+#if defined(CAMERA_CONVERT_YCBCR) || defined(CAMERA_CONVERT_UNORM)
+// The largest stored texel value: 8-bit texels for NV12, 16-bit for P010.
+float texel_max() { return params.sample_shift == 0u ? 255.0 : 65535.0; }
+#endif
+
+// Y, Cb and Cr of pixel (x, y) as samples in [0, sample_max]; chroma from (x / 2, y / 2).
+uvec3 read_samples(uint x, uint y) {
+#if defined(CAMERA_CONVERT_YCBCR)
+    vec2 size = vec2(float(params.width), float(params.height));
+    // Luma at this pixel's centre. Chroma from a second sample, 0.75 luma texels
+    // past the even luma coordinate: the chroma position reconstructed from
+    // there is (x / 2) + 0.375 for midpoint chroma samples and (x / 2) + 0.625
+    // for cosited-even ones, inside chroma texel (x / 2, y / 2) either way, so
+    // neither the sampler's chroma location nor rounding at a texel edge
+    // decides which chroma texel is read.
+    float luma_value = textureLod(image, (vec2(float(x), float(y)) + 0.5) / size, 0.0).g;
+    vec2 chroma_at = vec2(float(x & ~1u), float(y & ~1u)) + 0.75;
+    vec3 chroma_value = textureLod(image, chroma_at / size, 0.0).rgb;
+    vec3 raw = vec3(luma_value, chroma_value.b, chroma_value.r);
+    return uvec3(raw * texel_max() + 0.5) >> params.sample_shift;
+#elif defined(CAMERA_CONVERT_UNORM)
+    float luma_value = texelFetch(luma, ivec2(int(x), int(y)), 0).r;
+    vec2 pair = texelFetch(chroma, ivec2(int(x >> 1), int(y >> 1)), 0).rg;
+    return uvec3(vec3(luma_value, pair.r, pair.g) * texel_max() + 0.5) >> params.sample_shift;
+#else
+    uint luma_value = texelFetch(luma, ivec2(int(x), int(y)), 0).r;
+    uvec2 pair = texelFetch(chroma, ivec2(int(x >> 1), int(y >> 1)), 0).rg;
+    return uvec3(luma_value, pair.r, pair.g) >> params.sample_shift;
+#endif
+}
+
 void main() {
     uint group = gl_GlobalInvocationID.x;
     uint y = gl_GlobalInvocationID.y;
@@ -42,10 +95,10 @@ void main() {
     for (uint k = 0u; k < 4u; ++k) {
         uint x = group * 4u + k;
         if (x < params.width) {
-            int luma_sample = int(texelFetch(luma, ivec2(int(x), int(y)), 0).r >> params.sample_shift) << 16;
-            uvec2 pair = texelFetch(chroma, ivec2(int(x >> 1), int(y >> 1)), 0).rg >> params.sample_shift;
-            int d_cb = int(pair.r) - half_value;
-            int d_cr = int(pair.g) - half_value;
+            uvec3 samples = read_samples(x, y);
+            int luma_sample = int(samples.x) << 16;
+            int d_cb = int(samples.y) - half_value;
+            int d_cr = int(samples.z) - half_value;
             bytes[k * 3u + 0u] = channel(luma_sample + params.cb_b * d_cb);
             bytes[k * 3u + 1u] = channel(luma_sample + params.cb_g * d_cb + params.cr_g * d_cr);
             bytes[k * 3u + 2u] = channel(luma_sample + params.cr_r * d_cr);

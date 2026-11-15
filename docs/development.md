@@ -275,16 +275,22 @@ confirmation writes one `ready` packet first and one `end` packet last, and
 frames only after a `ready` that names the pixel path. Two pixel paths sit behind one interface
 (`tools/camera_pixels.hpp`): `cpu_linear` maps a linear DMA-BUF and converts
 on the CPU with the fixed-point formula in `tools/camera_ycbcr.hpp`;
-`gpu_convert` imports the buffer into Vulkan by its DRM format modifier and
-converts with the compute shader `tools/camera_convert.comp`, whose SPIR-V is
+`gpu_convert` imports the buffer into Vulkan by its DRM format modifier, with
+the first of three [import strategies](reference/camera-helper.md#import-strategies-and-the-gpu-query)
+the driver accepts, and
+converts with the compute shader `tools/camera_convert.comp`, whose SPIR-V
+(one module a strategy) is
 embedded in the generated `tools/camera_convert_spirv.hpp` (regenerate with
 `bash scripts/build_camera_helper.sh --shader`, which needs `glslang-tools`).
+`--query-gpu` prints what the driver answers for those strategies and touches
+no camera.
 The fake build therefore needs the Vulkan headers (`libvulkan-dev`, or the
 pinned checkout `scripts/build_capture_gpu_check.sh` leaves in
 `.cache/vulkan-headers`); the loader itself is opened at run time, never
 linked. The fake backend's `export_*` scenarios serve memfd-backed linear NV12
 and P010 frames with known content, so the export tests prove both paths pixel
-for pixel; the GPU path's test runs only where a software Vulkan driver
+for pixel; the GPU path's tests (the export, each import strategy against the
+CPU path, the query's schema) run only where a software Vulkan driver
 (`mesa-vulkan-drivers`, lavapipe) is installed, as it is in CI, and is skipped
 elsewhere. The mode writes no file: stdout must be a pipe or socket, and a
 pixel leaves the process only through it. Some capture-fixture tests skip unless their corresponding
