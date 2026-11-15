@@ -686,6 +686,13 @@
       "file": "e098.md",
       "kind": "device_report",
       "reconstructed": false
+    },
+    {
+      "id": "E99",
+      "title": "Bounded camera recognition on Frame, Arcturus camera frames reached the detector through the GPU import",
+      "file": "e099.md",
+      "kind": "device_report",
+      "reconstructed": false
     }
   ]
 }

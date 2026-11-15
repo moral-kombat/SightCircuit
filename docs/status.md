@@ -469,6 +469,10 @@ provenance and original uncertainty.
 
 [Full evidence](evidence/e098.md). Device report.
 
+### E99: Bounded camera recognition on Frame, Arcturus camera frames reached the detector through the GPU import
+
+[Full evidence](evidence/e099.md). Device report.
+
 ## Maintaining the evidence
 
 The coordinator checks pending allocations before assigning an evidence ID and adds its record
