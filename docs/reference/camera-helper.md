@@ -74,10 +74,12 @@ None of these is pinned by the checkpoint manifest; no gate, pinned file or
 `--hello`, `--probe-frames` and `--export-frames` first take a lock, `sightcircuit-camera-helper.lock`
 in `$XDG_RUNTIME_DIR` (never `/tmp`; without the variable the run is refused
 with `runtime_dir_missing`, and a value that is not an absolute path to an
-existing directory owned by the user with mode 0700, or that is a symbolic
-link, is refused with `runtime_dir_invalid`; the directory is opened without
-following links, judged by its descriptor, and the lock is created relative
-to that descriptor), then print a notice on the terminal and read a typed `yes` from standard
+existing directory owned by the user with mode 0700, whose last component is
+a symbolic link, or that ends in `/`, `/.` or `/..`, is refused with
+`runtime_dir_invalid`; the directory is opened without following a link in
+its last component (links in earlier components are followed, and the opened
+directory's owner and mode decide), judged by its descriptor, and the lock is
+created relative to that descriptor), then print a notice on the terminal and read a typed `yes` from standard
 input, which must be a terminal; nothing skips the confirmation. Stop signals
 (`SIGINT`, `SIGTERM`, `SIGHUP`) are blocked around SDK calls and collected
 between them, so a cancellation always ends with the reader disabled, the end
@@ -98,10 +100,11 @@ protocol stalled: the run ends, the reader is deactivated, the end control
 state is read when at least one pass ran, the session is closed, nothing else
 is written, and the final record alone waits up to five seconds for a reader
 that resumes (a line the stall tore is terminated first, so the final record
-parses on its own). A run that had reached no specific outcome ends
+parses on its own). A run that had reached no failing outcome (`ok`, or a
+retryable `no_frame`, `not_ready` or `unavailable`, whose exit code is 0) ends
 `outcome: helper_error`, `reason: protocol_stalled`, exit 1; a run that had
-(permission denied, a cancellation, a lost transport, an invalid argument)
-keeps its outcome, reason and exit code, and the final record's
+a failing one (permission denied, a cancellation, a lost transport, an invalid
+argument) keeps its outcome, reason and exit code, and the final record's
 `protocol_stalled` flag, `true` in both cases and `false` otherwise, records
 the stall. Once the loop is over the cleanup's records (a failed reader
 deactivation, the end control state) get the normal one-second budget even

@@ -653,7 +653,12 @@ class CameraHelperTests(unittest.TestCase):
         regular.write_text("")
         link = Path(self.runtime.name) / "link"  # a symlink to a valid directory: the directory is opened O_NOFOLLOW
         link.symlink_to(self.runtime.name, target_is_directory=True)
-        for value in (relative, str(shared), str(regular), str(link), str(Path(self.runtime.name) / "absent")):
+        # O_NOFOLLOW covers only the last component, and Linux follows a link spelled with a trailing
+        # "/" or a final "." or "..", so those spellings are refused too, for the link and for the
+        # valid directory itself.
+        spellings = (str(link) + "/", str(link) + "/.", str(link) + "/..", self.runtime.name + "/",
+                     self.runtime.name + "/.")
+        for value in (relative, str(shared), str(regular), str(link), str(Path(self.runtime.name) / "absent"), *spellings):
             with self.subTest(value=value):
                 code, records, err = self.run_helper(["--hello"], "ok_linear_nv12",
                                                      env=dict(self.env, XDG_RUNTIME_DIR=value))

@@ -960,10 +960,12 @@ private:
     bool stalled() {
         if (!g_protocol_stalled) return false;
         protocol_stalled_ = true;
-        // A run that had reached no specific outcome ends as helper_error with the stall as its
-        // reason. A run that had (permission denied, a cancellation, a lost transport) keeps its
+        // A run that had reached no failing outcome ends as helper_error with the stall as its
+        // reason: ok, and the retryable outcomes whose exit code is 0 (no_frame, not_ready,
+        // unavailable), since a stalled run must not keep an outcome that maps to exit 0. A run
+        // that had a failing one (permission denied, a cancellation, a lost transport) keeps its
         // outcome, reason and exit code; the final record's protocol_stalled flag records the stall.
-        if (outcome_ == Outcome::ok && reason_.empty()) {
+        if (exit_code_for(outcome_) == 0 && reason_.empty()) {
             outcome_ = Outcome::helper_error;
             reason_ = "protocol_stalled";
         }
@@ -1744,10 +1746,18 @@ int take_lock(std::string& reason) {
         reason = "runtime_dir_missing";
         return -1;
     }
-    // The directory itself is opened (never through a symlink) and judged by its descriptor, and
-    // the lock is created relative to that descriptor, so nothing can be swapped between the
-    // check and the open.
-    if (directory[0] != '/') {
+    // The directory itself is opened without following a link in its last component and judged
+    // by its descriptor, and the lock is created relative to that descriptor, so nothing can be
+    // swapped between the check and the open. O_NOFOLLOW covers only the last component, and
+    // Linux follows a link named with a trailing "/" or a final "." or "..", so those spellings
+    // are refused; links in earlier components are followed, and the descriptor's owner and mode
+    // decide.
+    const std::string value(directory);
+    const auto ends_with = [&value](const char* tail) {
+        const std::size_t length = std::strlen(tail);
+        return value.size() >= length && value.compare(value.size() - length, length, tail) == 0;
+    };
+    if (value[0] != '/' || ends_with("/") || ends_with("/.") || ends_with("/..")) {
         reason = "runtime_dir_invalid";
         return -1;
     }
