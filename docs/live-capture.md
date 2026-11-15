@@ -182,7 +182,7 @@ that run.
 | F2 | `OverlayClient` event queue and a cycle API on the sink. Done (#48, 2026-11-08): every visibility line kept by cycle, a pure outcome reading confirmed only by the runtime's event, a derived 320 ms deadline (cloud default, unmeasured on the Frame), `OverlaySink.hide` and `show` failing closed; no runtime event has ever been produced | S, done | F1 |
 | F3a | The marker bridge mode accepts the visibility opcode while the marker is displayed and writes the seven lines, so the measurements use the one tile the device is approved to show and the one pattern the mirror can be read for (the coordinator's call, 2026-11-08). Done (#50): a run that receives nothing is the observer's run, measured identical; only the visibility request is accepted on stdin; the bridge must be rebuilt on the Frame before any run that uses it | S, done | F1 |
 | F3b | `fallback_measure`, the thirteenth command: the marker bridge in that mode driven for N bounded cycles through the F2 API while the mirror is read at full rate and `locate_copies` tells presence from absence; one report with a section per measurement, counts and nanoseconds only; validate mode, opt-in flags and the checkpoint manifest as the observer has them. Done (#51): margins taken from the bridge's own display deadline, a cycle starts only with room for both requests, a capture failure ends the cycling; [guide](guides/fallback-measurement.md) | M, done | F3a, F2 |
-| F3 | The device measurements themselves: hide-to-absence latency, hidden-event delivery, loopback repeats, show-to-visible; one `fallback_measure` run of 20 s and five cycles can give the four evidence entries (E99 to E102 reserved). Staged by the Frame manager; needs the owner's approval, which covers the bridge rebuild from the F3a sources and a new checkpoint manifest | S, device | F3b, approval |
+| F3 | The device measurements themselves: hide-to-absence latency, hidden-event delivery, loopback repeats, show-to-visible; one `fallback_measure` run of 20 s and five cycles can give the four evidence entries (E100 to E103 reserved). Staged by the Frame manager; needs the owner's approval, which covers the bridge rebuild from the F3a sources and a new checkpoint manifest | S, device | F3b, approval |
 | F4 | Capture window and admission rule in the pipeline, with rejection counters and boundary tests | M, held | F3; held until S5 answers the passthrough question (owner, 2026-11-08) |
 | F5 | The fallback stage: hide, window, infer, show on `_run_latest`; tile rendering without a mask; run reports | M, held | F2, F4 |
 | F6 | Acceptance rows and gate references for the fallback, a reviewed edit to scope, this work order and `sightcircuit/gates.py` | S, held | planner and owner |
@@ -236,10 +236,10 @@ findings) follow lane F and are not scheduled.
 | --- | --- | --- | --- |
 | S6 | The helper's `--export-frames` mode: BGR3 frames to the parent over stdout under the camera export protocol (version 1: `SCCF` packets, a `ready`, `frame` and `end` header vocabulary, bounded sizes), paced at 1 to 10 frames a second for at most 60 s or 600 frames; two pixel paths behind one interface, `cpu_linear` (mmap of linear DMA-BUF planes and a tested YCbCr conversion) and `gpu_convert` (Vulkan import by DRM modifier and conversion, allowed to adapt the frozen capture track's import code); ends on headset removal or standby; never writes a pixel anywhere; the fake backend serves memfd-backed linear frames for the tests. Done (#63, 2026-11-09): independently reviewed; one protocol writer for records and packets; the UBWC import and the device's modifier support are unverified until a device run | L, done | S1, S2 |
 | S7 | The Python side: the camera contract as data with a generated C++ header pinned by a test, a strict export-stream reader producing `Frame`s, a `camera_helper` source launching the helper through the runtime primitive, and `camera_recognize`, the fourteenth command: bounded recognition without display, structured as `mirror_recognize`, at most 30 s and 300 frames, a validate mode against a fake producer, labels, boxes and timings in the report and never pixels; a guide. Done (#62, 2026-11-09): independently reviewed; cloud-checked against the fake producer only, never against the helper, the SDK or a camera | M, done | none (tests use a fake producer) |
-| S8 | Pixel path on the Frame without saving: `--export-frames` into the reader's validate path, counts and timings only, the passthrough observation as in S5 | S, device | S5, S6, S7, approval |
-| S9 | Bounded camera recognition on the Frame: one `camera_recognize` run of at most 30 s on the chair scene, no display, counts, labels, boxes and timings in the report; the proof of concept the owner asked for | S, device | S8, approval |
+| S8 | Pixel path on the Frame without saving: `--export-frames` into the reader's validate path, counts and timings only, the passthrough observation as in S5. Done (E98, then E99, 2026-11-13 to 15): the first check failed at the GPU import; after #75 the check passed with 10 frames processed | S, device, done | S5, S6, S7, approval |
+| S9 | Bounded camera recognition on the Frame: one `camera_recognize` run of at most 30 s on the chair scene, no display, counts, labels, boxes and timings in the report; the proof of concept the owner asked for. Done ([E99](evidence/e099.md), 2026-11-15): 100 frames from the left camera through the GPU YCbCr-sampler import to MobileNet-SSD, labels and boxes reported, inference p95 39.3 ms, passthrough unchanged; the proof of concept | S, device, done | S8, approval |
 
-Evidence identifiers for S4 to S9 are allocated when each runs (E99 to E102
+Evidence identifiers for S4 to S9 are allocated when each runs (E100 to E103
 stay reserved for F3). Phase A ran on 2026-11-11 ([E95](evidence/e095.md)):
 the pinned SDK verified, the linked helper built and passed its tests on the
 Frame, and its single connect ended `provider_unreachable` because the camera
@@ -257,7 +257,9 @@ export stream and the clean stop all worked against the real service, and the
 first GPU import of the UBWC buffer was refused by the Turnip driver
 (`VK_ERROR_FORMAT_NOT_SUPPORTED` at the image-format query), so no frame
 reached the detector and S9 was not run; the import fix is cloud work and a
-new run is a new approval. The
+new run is a new approval. After the import fix (#75), the proof of concept
+ran on 2026-11-15 ([E99](evidence/e099.md)): SDK camera frames reached the
+detector in a bounded run without display, with passthrough unchanged. The
 merged chain ran end to end in the cloud against the fake backend on
 2026-11-09 ([E94](evidence/e094.md)): twenty synthetic frames exported by the
 helper, confirmed on a terminal, read, recognised and reported without a
@@ -339,7 +341,7 @@ handler on the main thread ([checks reference](reference/development-checks.md#h
   test scheduled and run ([E92](evidence/e092.md)). Next device approvals,
   each separate: the owner's resumption of the C5/C6 sitting (approved and
   confirmed; part one is E93), the F3 measurement run (staged, not approved,
-  with the bridge rebuild; E99 to E102).
+  with the bridge rebuild; E100 to E103).
 - Decided 2026-11-08, night: the SDK camera-input lane is open, cloud-only
   (the review's decision 1); F4 to F8 are held until S5 answers the
   passthrough question; the owner's helper branch is the lane's code.
