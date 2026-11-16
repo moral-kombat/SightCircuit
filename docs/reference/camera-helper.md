@@ -410,16 +410,20 @@ driver accepts for the delivered format, whether their pipelines build and
 whether the delivered plane table makes an image, whatever this change got
 wrong; it does not say that imported pixels are right.
 
-Unverified on the device: that Turnip accepts `ycbcr_sampler` for the UBWC
-modifier (expected from its source, not run), that an imported UBWC image
-samples the camera's content through the conversion with nearest chroma
-(lavapipe offers cosited-even chroma samples only, so the midpoint location
-Turnip offers has not run anywhere; the shader's chroma coordinate is chosen
-to suit both), P010 with UBWC (the Turnip releases read have no P010 format,
-so every strategy is expected to be refused for it), the foreign-queue
-acquire preserving contents, whether the SDK's descriptors answer the
-DMA-BUF sync ioctl, timings at camera size, and how removal and standby
-manifest through `acquireFrameSet`.
+Observed on the device ([E98](../evidence/e098.md), [E99](../evidence/e099.md);
+headset reports, not cloud checks): Turnip refuses the two plane-view
+strategies for the UBWC modifier and accepts `ycbcr_sampler`; its program
+builds with the midpoint chroma location; 110 frames at camera size were
+imported, converted and recognised with plausible labels (inference p95
+39.3 ms, processing p95 51.6 ms in the 20-second run), so the foreign-queue
+acquire and the buffer hand-over worked in those runs. That is not
+verification in general, and no image was saved or compared: that the
+converted pixels are exact (lavapipe offers cosited-even chroma samples only,
+so the midpoint location has byte-identity tests nowhere) stays unverified.
+Still unverified on the device: P010 with UBWC (the Turnip releases read have
+no P010 format, so every strategy is expected to be refused for it), whether
+the SDK's descriptors answer the DMA-BUF sync ioctl, and how removal and
+standby manifest through `acquireFrameSet`.
 
 ## The pipeline source (L5)
 
