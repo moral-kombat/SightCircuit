@@ -204,12 +204,11 @@ from the last frame's deadline: the runtime's hide is called within one 20 ms
 bridge poll (`hide_called_after_deadline_ms`, verdict
 `hide_called_within_poll`), and it has returned within an allowance of 250 ms
 (`hide_returned_after_deadline_ms`, verdict
-`hide_returned_within_allowance`). The allowance is the value proposed to
-the owner, not yet an accepted number; G9 as written, 1,000 ms plus one poll
-from the observation, leaves the runtime's call no time, so each stop also
-carries `within_bound_as_written` and the times from the observation. The
-report holds every measured value, so the evidence stands whichever bound is
-accepted. A stop also needs `hide_ok` true and `api_visible_after_hide`
+`hide_returned_within_allowance`). The owner accepted these two numbers on
+2026-11-16 and row G9 states them; G9's first wording, 1,000 ms plus one poll
+from the observation, left the runtime's call no time, and each stop still
+carries `within_bound_as_written` for it and the times from the observation.
+The report holds every measured value. A stop also needs `hide_ok` true and `api_visible_after_hide`
 false. Those are the times the runtime's calls returned; whether the tile was
 seen to go blank is the wearer's observation.
 
