@@ -7,8 +7,8 @@ the joint between the left-camera frame source
 ([L6](hud-runtime.md#row-selection)) and the bridge's observed-frame path
 ([L7](overlay.md#fixed-hud-mode-work-order-item-l7-2026-11-16)).
 
-**Status: library code, cloud-checked only.** No command constructs the stage
-(that is L9), it opens no gate, and real output is refused unless a
+**Status: cloud-checked only.** The [`camera_hud` command](#the-command-l9)
+(L9) constructs the stage; it opens no gate, and real output is refused unless a
 [one-run scope record](#the-one-run-scope-record) verifies (L10). Everything below
 is checked against the camera stand-in, the validation bridge and, for the
 real-output path, a fake OpenVR runtime that logs the bridge's calls. None of
@@ -383,7 +383,79 @@ exception's message is therefore never in the report; `status`, `reason` and
 `error_type` are. The placement numbers in the bridge's `fixed_hud` block are
 the HUD contract's constants.
 
+## The command (L9)
+
+`sightcircuit/commands/camera_hud.py` is the fifteenth command; the
+[camera HUD guide](../guides/camera-hud.md) owns the operator procedure. It
+is the only code that builds a `RunScope`, and it has three modes.
+
+**`--validate`** runs `run_camera` on the helper's fake backend with a
+scripted detector and the validation bridge, then the synthetic rows on the
+validation bridge with one stop. Before asking the helper to export anything
+it reads the helper's `--describe` record (no connect, no camera) and refuses
+unless it says `backend: fake` with no SDK release. It needs no record and no
+terminal.
+
+**`--synthetic-rows`** runs `SyntheticRows`
+(`sightcircuit/hud/synthetic_rows.py`), the driver of step L-D3. It sends one
+observed frame five times a second, a tile whose single names-only row is
+`count NNNN`, with `observed_ns` the time the tile was drawn and a deadline
+one second later. `schedule(seconds, stops, stop_seconds)` splits the run
+into `stops + 1` segments of updates with a stop between each (2 to 10 s
+each, at most 8 stops, at most 120 s in all, at least one second of updates
+per segment). In a stop nothing is sent, not even a hide request, so the
+bridge takes the tile down at the last frame's deadline by itself. The report
+(`camera_hud_synthetic_rows`) pairs each stop with the bridge's
+`frame_expired` line for the frame that was up: when it was noticed, when the
+runtime's hide was called and returned, `hide_ok`, `api_visible_after_hide`,
+and `within_bound` against 1,000 ms plus one 20 ms poll measured from that
+frame's observation. On the validation bridge there are no hide times and
+the noticed time is the basis. The camera is never opened and
+`camera_derived` is false by construction: the row's text is built from the
+counter alone.
+
+**`--camera`** runs `run_camera`: `CameraHelperSource` on the left camera,
+the chosen detector, `CameraHudStage` and an `ObservedFrameClient` in real
+output carrying the run's `RunScope`. `--directions` or `--names-only` and
+`--orientation` are required and passed to the stage. The run is on the main
+thread, the helper under the supervision primitive, and never routed through
+`ReplayWorker` or the live runner. The synthetic rows record SIGINT, SIGTERM
+and SIGHUP for the length of the run (`guard.cancellation`) and stop at the
+next 50 ms poll, reporting `cancelled`; the previous handlers are restored
+afterwards and no thread or descriptor is left behind.
+
+In both device modes the order is: the parser's checks; the informed start on
+the terminal (`sightcircuit/camera/confirmation.py`, shared with
+`camera_recognize`); then the cheap preconditions (the pinned helper and
+bridge exist, the detector loads, the target label is one of its classes),
+checked before the record so a typo does not spend it; then the stage or the
+driver, whose first act is the permission check. A gate's refusal ends
+`refused` with nothing launched. The typed answer never creates a record and
+never stands in for one.
+
+The `--camera` report is the stage's report plus `command`, `scope_record`,
+`marks`, `timebase` and `target`, checked by `check_report` with the
+command's field table and a size limit of 61,440 bytes (the stage's 40,960
+plus 20,480 for those blocks; still well under one tile). `target` is
+`named_in_window` for `--target-label` with row G10's numbers (60 s, 90%,
+2 s). A report that does not fit its schema is replaced by a short error
+report that says so, never printed as it is.
+
 ## Cloud checks
+
+`tests/test_camera_hud_command.py` covers the command: validate mode on the
+helper's fake build, and its refusal of every helper that does not describe
+itself as the fake; the parser's refusals; no terminal, a declined answer and
+a typed `yes` without a record, each with nothing launched and no record
+written; a record for the wrong source, the mirror, both cameras, another
+runner, a longer run and an expired record; the cheap preconditions leaving
+the record unspent; the synthetic-rows schedule; and, on `--fixed-hud`
+against the fake runtime under a test fixture record (a temporary checkout
+whose pinned bridge is a copy of the bridge built here and whose pinned
+helper is the camera stand-in), the synthetic rows expiring at each stop and
+returning after it, the camera mode end to end, a headset removal, and the
+command line from the typed `yes` to the saved report, with the second
+launch on the same record refused.
 
 `tests/test_observed_frame_client.py` (standard library, validation bridge):
 the packets and their order, the take-down and the show, the end latch and a

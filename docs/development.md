@@ -78,7 +78,7 @@ them.
 
 ### Commands and entry points (2026-11-07)
 
-The bodies of the fourteen active commands live in `sightcircuit/commands/`
+The bodies of the fifteen active commands live in `sightcircuit/commands/`
 (`replay_window`, `mirror_recognize`, `live_pipeline`, `hud_marker_check`,
 `hud_marker_observer`, `hud_validation_report`, `evaluate_detectors`,
 `generate_status`, `mirror_check`, `frame_session_manifest`; decision D5 and the
@@ -90,7 +90,9 @@ day, `fallback_measure`, the
 [fallback measurement](guides/fallback-measurement.md), for F3b the same day,
 and `camera_recognize`, the
 [bounded recognition on camera-helper frames](guides/camera-recognize.md), for
-lane S's S7 on 2026-11-09, cloud-checked against a fake producer only). Each `scripts/<name>.py` is a thin wrapper: run as
+lane S's S7 on 2026-11-09, cloud-checked against a fake producer only, and
+`camera_hud`, the gated [camera HUD](guides/camera-hud.md), for work-order item
+L9 on 2026-11-16, cloud-checked only). Each `scripts/<name>.py` is a thin wrapper: run as
 a file it adds the checkout root to `sys.path` and calls the body's `main`, so
 every documented `python3 scripts/<name>.py` command keeps working on the Frame
 without installation; imported as `scripts.<name>` it is the body module

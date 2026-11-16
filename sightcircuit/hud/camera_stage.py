@@ -176,8 +176,15 @@ def _check(value, path, key, depth):
         refuse()
 
 
-def check_report(report):
+def check_report(report, blocks=None, max_bytes=None):
     """Raise ``ValueError('camera_hud_report_field_invalid:<path>')`` unless ``report`` fits the report schema.
+
+    ``blocks`` is the schema's field table, ``REPORT_BLOCKS`` (the stage's
+    report) unless a caller with a report of its own passes another: the
+    ``camera_hud`` command does, for the stage's report plus its own blocks
+    and for the synthetic-rows report. Every rule below applies to any table.
+    ``max_bytes`` is the size limit, ``MAX_REPORT_BYTES`` unless that caller
+    passes its own for a report with more blocks.
 
     What is enforced:
 
@@ -202,9 +209,10 @@ def check_report(report):
     would pass. ``report_value`` and the fixed set of fields the stage
     writes are what keep that out, not this function.
     """
-    if type(report) is not dict or set(report) != set(REPORT_BLOCKS):
+    blocks = REPORT_BLOCKS if blocks is None else blocks
+    if type(report) is not dict or set(report) != set(blocks):
         raise ValueError("camera_hud_report_field_invalid:report")
-    for name, keys in REPORT_BLOCKS.items():
+    for name, keys in blocks.items():
         value = report[name]
         if keys is None:
             if type(value) in (dict, list):
@@ -212,7 +220,7 @@ def check_report(report):
         elif value is not None and (type(value) is not dict or not set(value) <= set(keys)):
             raise ValueError(f"camera_hud_report_field_invalid:report.{name}")
         _check(value, f"report.{name}", name, 1)
-    if len(json.dumps(report).encode()) > MAX_REPORT_BYTES:
+    if len(json.dumps(report).encode()) > (MAX_REPORT_BYTES if max_bytes is None else max_bytes):
         raise ValueError("camera_hud_report_field_invalid:report_size")
     return report
 

@@ -119,7 +119,11 @@ The runner is the suite's entry point and does two more things there:
   container (one launch of the stand-in helper through the supervision
   primitive per invalid stream of the fake catalogue, the deadline and
   escalation cases, and the end-to-end runs with a slow stand-in detector), with about
-  three times and about two and a half times the margin.
+  three times and about two and a half times the margin. Added 2026-11-16 (L9):
+  `test_camera_hud_command` 150 s, from 37 s measured on the x86 cloud
+  container (one build of the helper's fake backend and one of the fake
+  OpenVR runtime, the validate mode, and the bounded runs on the fake
+  runtime), with about four times the margin.
 - Before the tests run it normalises SIGINT for the suite's children. A test
   process started with SIGINT ignored (a background job of a shell without job
   control) passes that ignore to every subprocess the tests signal, so the

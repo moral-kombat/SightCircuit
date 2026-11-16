@@ -24,4 +24,5 @@ COMMANDS = (
     "agent_enforcement_check",
     "fallback_measure",
     "camera_recognize",
+    "camera_hud",
 )

@@ -119,7 +119,10 @@ before any run with this checkout.
   --report artifacts/camera/run-01.json
 ```
 
-The terminal confirmation is the command line's only path to the helper. The
+The terminal confirmation is the command line's only path to the helper. Its
+code is `sightcircuit/camera/confirmation.py`, shared with
+[`camera_hud`](camera-hud.md) since work-order item L9 so that neither
+command imports the other; this command's behaviour is unchanged. The
 library functions beneath it, `camera_recognize.recognize(confirmed=...)` and
 `camera_helper.run_export(confirmed=...)`, trust their caller's word that the
 operator confirmed: they exist for the tests (which pass `confirmed=True`

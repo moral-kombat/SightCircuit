@@ -36,6 +36,7 @@ still display a cloud terminal: confirm where commands run before proceeding.
 | Test the agent guard's enforcement on the Frame (Phase 2, approval needed) | [Agent guard enforcement test](guides/agent-enforcement-test.md) |
 | Probe the Arcturus camera SDK's handshake and frame metadata without reading a pixel (lane S Phase A and Phase B, each separately approved) | [Camera SDK probe](guides/camera-probe.md) |
 | Run bounded recognition on frames the camera helper exports (`camera_recognize`; cloud-checked against a fake producer, a device run needs approval) | [Camera recognition](guides/camera-recognize.md) |
+| Show camera-derived names on the fixed HUD under a one-run scope record (`camera_hud`; cloud-checked only, each device step needs its own approval) | [Camera HUD](guides/camera-hud.md) |
 
 The checkpoint is experimental. It does not enable the production live HUD.
 Each device guide describes prerequisites, operating limits, and shutdown.

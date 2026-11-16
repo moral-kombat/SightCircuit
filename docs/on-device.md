@@ -16,6 +16,7 @@ capabilities; the [current plan](live-capture.md) owns the next proposed work.
 | Measure the fallback's device terms with the marker (F3, approval needed) | [Fallback measurement](guides/fallback-measurement.md) |
 | Test the agent guard's enforcement (Phase 2) | [Agent guard enforcement test](guides/agent-enforcement-test.md) |
 | Probe the camera SDK's handshake and frame metadata, no pixels (lane S Phase A and B, approval each) | [Camera SDK probe](guides/camera-probe.md) |
+| Show camera-derived names on the fixed HUD (`camera_hud`; a procedure, each device step needs its own approval and a one-run scope record) | [Camera HUD](guides/camera-hud.md) |
 | Inspect paused-provider build procedures | [Retained device checks](reference/capture-device-checks.md) |
 
 Read prerequisites and expected results before running a device command.
