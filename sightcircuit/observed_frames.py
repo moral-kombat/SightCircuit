@@ -36,6 +36,13 @@ EXPIRY_EVENT_FIELDS = ("deadline_ns", "observed_ns", "validation_only", "content
                        "frame_observed_ns", "outcome", "hide_called_ns", "hide_returned_ns", "hide_ok", "hide_error",
                        "api_visible_after_hide", "texture_cleared")
 FIRST_FRAME_LINES = ("frame_validated", "frame_submitted")
+# The bridge's answer to each observed frame: presented (its calls returned) or refused, with the reason.
+PRESENTED_LINE, REFUSED_LINE = "frame_presented", "frame_refused"
+REFUSAL_REASONS = ("stale", "expired_on_arrival", "retransmission", "expired_before_show")
+MAX_ACKNOWLEDGEMENTS = 4096  # Presented and refused lines kept, each; a run is at most 900 frames.
+# The bridge's lines handed to the listener as they are read (``bridge_line``): what was presented, refused,
+# expired, hidden or shown, in the bridge's own order and on its clock.
+LISTENER_LINES = (PRESENTED_LINE, REFUSED_LINE, "frame_expired", "hide_returned", "show_returned")
 # Counters of the bridge's final report that the client's own report repeats (None when the bridge wrote none).
 BRIDGE_COUNTS = ("observed_frames_received", "frames_received", "frames_submitted", "frames_retransmitted",
                  "stale_frames_dropped", "expired_frames", "frames_expired_in_upload", "settings_received",
@@ -83,9 +90,19 @@ class ObservedFrameClient(OverlayClient):
       presented is answered ``no_image``, and while the tile is taken down the
       keepalive is a hide, so it cannot bring back a tile that has not yet
       reached its deadline.
-    * on ``close``, a hide request unless the tile is already taken down, then
-      the stop packet; the bridge's own cleanup hides, clears and destroys
-      the overlay whether or not either arrives.
+    * on ``end`` and on ``close``, a hide request unless the tile is already
+      taken down; ``close`` then sends the stop packet. ``end`` is final:
+      under the same lock as the queue, it drops a waiting frame and latches
+      the client, so no frame is accepted and no show request is written
+      afterwards, whichever thread asks. The bridge's own cleanup hides,
+      clears and destroys the overlay whether or not either packet arrives.
+
+    The hide is a packet on the same pipe as the frames. A frame the writer
+    is already writing when the end comes is finished first, and the bridge,
+    which is one thread, uploads and may show it before it reads the hide:
+    the end-of-run hide can therefore trail the end by one frame's write and
+    upload. ``final_hide`` records when the hide was written so a run can
+    measure it against the bridge's ``hide_returned`` line.
 
     It never sends a settings packet, a frame without a deadline or an
     expiring frame of the validation layout: the inherited calls that would
@@ -96,7 +113,13 @@ class ObservedFrameClient(OverlayClient):
     per-frame acknowledgement, kept with the time it was read), every
     ``frame_expired`` line (``expiry_events``, the first ``MAX_EXPIRY_EVENTS``
     with the fields of ``EXPIRY_EVENT_FIELDS``), the visibility lines and the
-    final report. ``listener(event, **fields)``, when set, is called on the
+    final report, and the bridge's answer to each frame: ``frame_presented``
+    (kept in ``presented``, by identity, with the time the bridge's calls
+    returned and whether the tile was asked to be up) or ``frame_refused``
+    with its reason (``refused``). A frame with neither line was never
+    acknowledged. ``listener(event, **fields)``, when set, is called on the
+    reader thread with ``bridge_line`` (``line``: one of ``LISTENER_LINES``,
+    as read, in the bridge's order) and on the
     writer thread as each packet has been written: ``frame_sent`` (``frame_id``,
     ``observed_ns``, ``expires_ns``, ``sent_ns``, ``hidden``: whether the tile
     was taken down when the frame went, so that only the show brings it up,
@@ -117,6 +140,11 @@ class ObservedFrameClient(OverlayClient):
         self.keepalive_seconds, self.listener = float(keepalive_seconds), listener
         self.hidden = False  # The last visibility request written was a hide: the tile is taken down.
         self._want_hidden = False  # What the caller asked for last, under ``condition``; the writer follows it.
+        self.final = False  # ``end`` was called: nothing is accepted and nothing is shown any more.
+        self.final_hide = None  # {"cycle", "sent_ns"} of the hide written at or after ``end``; None if none was.
+        self.presented, self.refused = {}, {}  # frame_id -> the bridge's line, the first MAX_ACKNOWLEDGEMENTS each.
+        self.presented_count = self.refused_count = 0
+        self.refused_reasons = dict.fromkeys(REFUSAL_REASONS, 0)
         self._pending_observed = None  # (packet, frame_id, observed_ns, expires_ns, token)
         self._last_frame_id = None
         self._cycle = 0
@@ -176,6 +204,28 @@ class ObservedFrameClient(OverlayClient):
             self.expiry_event_count += 1
             if len(self.expiry_events) < MAX_EXPIRY_EVENTS:
                 self.expiry_events.append({name: message[name] for name in EXPIRY_EVENT_FIELDS if name in message})
+        elif event in (PRESENTED_LINE, REFUSED_LINE):
+            frame_id = message.get("frame_id")
+            if type(frame_id) is not int or frame_id < 0:
+                raise RuntimeError("overlay_frame_line_invalid")
+            if event == PRESENTED_LINE:
+                at = message.get("presented_ns")
+                if type(at) is not int or at < 0 or type(message.get("visible")) is not bool:
+                    raise RuntimeError("overlay_frame_line_invalid")
+                self.presented_count += 1
+                if len(self.presented) < MAX_ACKNOWLEDGEMENTS:
+                    self.presented[frame_id] = {"presented_ns": at, "visible": message["visible"],
+                                                "read_ns": time.monotonic_ns()}
+            else:
+                reason = message.get("reason")
+                if reason not in REFUSAL_REASONS:
+                    raise RuntimeError("overlay_frame_line_invalid")
+                self.refused_count += 1
+                self.refused_reasons[reason] += 1
+                if len(self.refused) < MAX_ACKNOWLEDGEMENTS:
+                    self.refused[frame_id] = reason
+        if event in LISTENER_LINES:
+            self._notify("bridge_line", line=message)
 
     @property
     def expiry_events_dropped(self):
@@ -187,7 +237,7 @@ class ObservedFrameClient(OverlayClient):
         return self.writer is not None and self.writer.is_alive() and not self.stopping.is_set()
 
     def submit_observed(self, frame_id, observed_ns, expires_ns, width, height, rgba, *, token=None):
-        """Queue one observed frame for the writer; True when queued, False when the client is no longer running.
+        """Queue one observed frame for the writer; True when queued, False once ended or no longer running.
 
         ``observed_ns`` is the source frame's observation time and
         ``expires_ns`` its deadline, at most ``MAX_DISPLAY_AGE_NS`` later
@@ -198,7 +248,7 @@ class ObservedFrameClient(OverlayClient):
         """
         data = observed_frame_packet(frame_id, observed_ns, expires_ns, width, height, rgba)
         with self.condition:
-            if not self._running():
+            if self.final or not self._running():
                 return False
             if self._last_frame_id is not None and frame_id <= self._last_frame_id:
                 raise ValueError("observed_frame_identity_not_rising")
@@ -233,6 +283,17 @@ class ObservedFrameClient(OverlayClient):
             self.condition.notify()
         return True
 
+    def end(self):
+        """The final take-down: as ``take_down``, and from now on no frame is accepted and no show is written.
+
+        The latch is set under the queue's lock, so a ``submit_observed``
+        racing it is either dropped here or refused there; it can never undo
+        the take-down. Safe from any thread, any number of times.
+        """
+        with self.condition:
+            self.final = True
+        return self.take_down()
+
     def _notify(self, event, **fields):
         if self.listener is not None:
             self.listener(event, **fields)
@@ -261,6 +322,8 @@ class ObservedFrameClient(OverlayClient):
                     sent_ns = self._visibility(False)
                     self.take_downs += 1
                     last_packet = time.monotonic()
+                    if self.final and self.final_hide is None:
+                        self.final_hide = {"cycle": self._cycle, "sent_ns": sent_ns}
                     self._notify("taken_down", sent_ns=sent_ns)
                 if self.stopping.is_set():
                     if frame is not None:
@@ -289,9 +352,9 @@ class ObservedFrameClient(OverlayClient):
                     self._visibility(not self.hidden)  # The request already in force, repeated: nothing changes.
                     self.keepalives += 1
                     last_packet = time.monotonic()
-        except (OSError, RuntimeError, ValueError) as error:
+        except Exception as error:  # Anything, a listener's failure included: the client fails and says so.
             if not self.stopping.is_set():
-                self._fail(error)
+                self._fail(error if str(error) else type(error).__name__)
         finally:
             self.process.stdin.close()
 
@@ -327,7 +390,7 @@ class ObservedFrameClient(OverlayClient):
         with self._close_lock:
             if self._closed_report is None:
                 started = self.process is not None
-                self.take_down()  # The writer sends the hide, if the tile is not down already, then the stop.
+                self.end()  # The writer sends the hide, if the tile is not down already, then the stop.
                 report = super().close()
                 native = report.get("native_report") or {}
                 if self.validation_only:
@@ -341,6 +404,8 @@ class ObservedFrameClient(OverlayClient):
                     frames_expired_before_send=self.frames_expired_before_send, frames_retransmitted=0,
                     take_downs=self.take_downs, shows=self.shows, keepalives=self.keepalives,
                     visibility_requests=self.visibility_requests, settings_sent=0,
+                    frames_presented=self.presented_count, frames_refused=self.refused_count,
+                    refused_reasons=dict(self.refused_reasons),
                     expiry_events=self.expiry_event_count, expiry_events_dropped=self.expiry_events_dropped,
                     bridge_counts={name: native.get(name) for name in BRIDGE_COUNTS},
                     cleanup_confirmed=(not started and self.error is None) or (bridge_closed_cleanly(report) and mode_ok))

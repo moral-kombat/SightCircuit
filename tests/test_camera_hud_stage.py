@@ -107,7 +107,7 @@ class StageCase(unittest.TestCase):
         extra = (("--fake-scenario", scenario) if scenario else ()) + tuple(str(item) for item in fake)
         self.source = CameraHelperSource(self.binary, limits or self.LIMITS, confirmed=True, extra_args=extra)
         self.detector = detector or ScriptedDetector()
-        self.frames, self.queued, self.packets, self.end_packet_ns = [], [], [], None
+        self.frames, self.queued, self.packets, self.bridge_lines, self.end_packet_ns = [], [], [], [], None
 
         def convert(frame):
             self.frames.append(frame)
@@ -122,8 +122,8 @@ class StageCase(unittest.TestCase):
                                 "size": (width, height), "rgba": rgba, "token": token, "at_ns": time.monotonic_ns()})
             return queue(frame_id, observed_ns, expires_ns, width, height, rgba, token=token)
 
-        def listener(event, **fields):
-            self.packets.append((event, fields))
+        def listener(event, **fields):  # The writer's events; the bridge's lines are kept apart, as read.
+            (self.bridge_lines.append(fields["line"]) if event == "bridge_line" else self.packets.append((event, fields)))
             record(event, **fields)
 
         def end(header):
@@ -134,6 +134,28 @@ class StageCase(unittest.TestCase):
 
     def named(self, name):
         return [fields for event, fields in self.packets if event == name]
+
+    def run_with_the_end_during_the_third_conversion(self):
+        """Run until the third tile's colour conversion, set ``stop`` inside it and let it return only once the
+        watcher has ended the client: ``submit`` has passed its own check and now meets the client's latch."""
+        from sightcircuit.hud import camera_stage
+        stop = threading.Event()
+        stage = self.stage(limits={"fps": 5, "max_seconds": 20, "max_frames": 100})
+        convert, calls = camera_stage.rgba_from_bgr, []
+
+        def racing(image):
+            calls.append(time.monotonic_ns())
+            if len(calls) == 3:
+                self.assertFalse(stage._ended.is_set())  # ``submit`` passed its own check with the run still live.
+                stop.set()
+                deadline = time.monotonic() + 3
+                while not stage.client.final and time.monotonic() < deadline:
+                    time.sleep(0.001)
+                self.assertTrue(stage.client.final)
+            return convert(image)
+        with mock.patch.object(camera_stage, "rgba_from_bgr", racing):
+            report = stage.run(stop)
+        return report, calls
 
     def assert_deadlines_within_the_cap(self, run_deadline_ns=None):
         """Every frame handed to the client carries its camera frame's observation and a deadline within the cap.
@@ -196,8 +218,14 @@ class CameraHudStageTests(StageCase):
         sent = len(self.named("frame_sent"))
         self.assertEqual((frames["submitted"], frames["sent"] + frames["not_sent"], frames["sent"],
                           frames["written_past_deadline"]), (8, 8, sent, 0))
-        self.assertEqual((frames["bridge_received"], frames["bridge_presented"], frames["retransmitted"],
+        self.assertEqual((frames["bridge_received"], frames["bridge_accepted"], frames["retransmitted"],
                           frames["refused"], frames["expired"], frames["expired_in_upload"]), (sent, sent, 0, 0, 0, 0))
+        # The bridge answered for every frame written: one frame_presented line each, none refused, none unanswered.
+        self.assertEqual((frames["acknowledged_presented"], frames["acknowledged_refused"], frames["unacknowledged"],
+                          frames["refused_reasons"]),
+                         (sent, 0, 0, {"stale": 0, "expired_on_arrival": 0, "retransmission": 0, "expired_before_show": 0}))
+        self.assertEqual([line["frame_id"] for line in self.bridge_lines if line["event"] == "frame_presented"],
+                         [fields["frame_id"] for fields in self.named("frame_sent")])
         self.assertEqual(report["identities"], {"frame_identity": "camera_frame_sequence", "first_frame_id": 1,
                                                 "last_frame_id": 8, "last_result_index": 8,
                                                 "source_id": "arcturus_camera_left"})
@@ -226,23 +254,28 @@ class CameraHudStageTests(StageCase):
         self.assertEqual([timings[name]["count"] for name in ("input_age_ms", "inference_ms", "processing_ms",
                                                               "result_age_ms")], [8, 8, 8, 8])
         output = timings["output_age_ms"]
-        self.assertEqual((output["count"], output["timebase"], output["from"], output["to"], output["bridge_acknowledged"],
-                          output["why"]),
+        self.assertEqual((output["count"], output["timebase"], output["from"], output["to"]),
                          (report["frames"]["sent"], "host_clock_monotonic", "camera_frame_observed",
-                          "packet_written_to_bridge_pipe", False, "bridge_reports_no_per_frame_acknowledgement"))
+                          "packet_written_to_bridge_pipe"))
         self.assertGreaterEqual(output["p50"], timings["input_age_ms"]["p50"])
         self.assertLess(output["max"], 1000)
-        # The bridge acknowledges its first frame only: one sample, and the rest declared unacknowledged.
+        # Capture to display covers every frame the bridge acknowledged, to the time its calls returned, and
+        # says that this is not the headset's display.
         display = timings["capture_to_display_age_ms"]
-        self.assertEqual((display["count"], display["measured"], display["to"], display["frames_without_acknowledgement"],
-                          display["lower_bound_for_other_frames"], display["physical_display_observed"]),
-                         (1, "first_frame_only", "bridge_first_frame_line_read", report["frames"]["sent"] - 1,
-                          "output_age_ms", False))
+        presented = {line["frame_id"]: line for line in self.bridge_lines if line["event"] == "frame_presented"}
+        sent = {fields["frame_id"]: fields for fields in self.named("frame_sent")}
+        self.assertEqual(set(presented), set(sent))
+        self.assertEqual((display["count"], display["to"], display["acknowledged_by"], display["frames_without_acknowledgement"],
+                          display["ends_at_headset_display"], display["physical_display_observed"]),
+                         (len(sent), "bridge_present_calls_returned", "bridge_frame_presented_line", 0, False, False))
+        ages = sorted((presented[frame_id]["presented_ns"] - sent[frame_id]["observed_ns"]) / 1e6 for frame_id in sent)
+        self.assertAlmostEqual(display["max"], ages[-1], places=2)
+        self.assertAlmostEqual(display["p50"], ages[(len(ages) + 1) // 2 - 1], places=2)
+        for frame_id, line in presented.items():
+            self.assertEqual((line["frame_observed_ns"], line["deadline_ns"], line["visible"], line["validation_only"]),
+                             (sent[frame_id]["observed_ns"], sent[frame_id]["expires_ns"], True, True))
+            self.assertGreater(line["presented_ns"], sent[frame_id]["observed_ns"])
         self.assertEqual(report["bridge"]["first_frame"]["event"], "frame_validated")
-        first_sent = self.named("frame_sent")[0]
-        self.assertAlmostEqual(display["max"], (report["bridge"]["first_frame"]["read_ns"] - first_sent["observed_ns"]) / 1e6,
-                               places=2)
-        self.assertGreaterEqual(report["bridge"]["first_frame"]["read_ns"], first_sent["sent_ns"] - MARGIN_NS)
         # The source's report as it carries it: ready and end records, the exposure offset as a timing.
         source = report["source"]
         self.assertEqual((source["report_kind"], source["status"], source["end_reason"], source["presence_ended"],
@@ -277,14 +310,21 @@ class CameraHudStageTests(StageCase):
         self.assertEqual([name for name in lines if name in ("hide_requested", "show_requested")],
                          ["hide_requested", "show_requested", "hide_requested"])  # The last one is the end of the run.
         self.assertEqual((report["bridge"]["take_downs"], report["bridge"]["shows"]), (2, 1))
-        # The label's two spells and the gap between them, from this side's write times.
+        # The label's two spells and the gap between them, from the bridge's own hide and show lines.
         row, = report["labels"]["rows"]
-        self.assertEqual((row["label"], row["spells"]), ("bottle", 2))
-        self.assertAlmostEqual(row["longest_gap_seconds"], (shown["sent_ns"] - down["sent_ns"]) / 1e9, places=3)
-        self.assertGreater(row["longest_gap_seconds"], 0.3)
-        self.assertLess(row["longest_gap_seconds"], 0.3 + 2 * PERIOD_S)
+        self.assertEqual((row["label"], row["spells"], len(row["intervals"])), ("bottle", 2, 2))
+        hidden = next(line for line in self.bridge_lines if line["event"] == "hide_returned")
+        back = next(line for line in self.bridge_lines if line["event"] == "show_returned" and line["ok"])
+        start = report["labels"]["run_start_ns"]
+        self.assertAlmostEqual(row["intervals"][0]["end_ms"], (hidden["returned_ns"] - start) / 1e6, places=2)
+        self.assertAlmostEqual(row["intervals"][1]["start_ms"], (back["returned_ns"] - start) / 1e6, places=2)
+        gap = (back["returned_ns"] - hidden["returned_ns"]) / 1e9
+        self.assertGreater(gap, 0.3)
+        self.assertLess(gap, 0.3 + 2 * PERIOD_S)
+        self.assertGreaterEqual(row["longest_gap_seconds"], round(gap, 3))  # Or the lead-in, if that was longer.
         self.assertGreater(row["display_seconds"], 0.6)
-        self.assertEqual(report["labels"]["physical_display_observed"], False)
+        self.assertEqual((report["labels"]["physical_display_observed"], report["labels"]["spells_dropped"],
+                          report["labels"]["basis"]), (False, 0, "bridge_frame_presented_hide_show_and_expiry_lines"))
         # The hidden tile still reached its own deadline in the bridge, which is an expiry like any other.
         self.assertLessEqual(report["frame_expired"]["count"], 1)
         self.assert_deadlines_within_the_cap()
@@ -351,13 +391,20 @@ class CameraHudStageTests(StageCase):
                 down, = self.named("taken_down")
                 self.assertGreaterEqual(down["sent_ns"], self.end_packet_ns - MS)
                 self.assertLess(down["sent_ns"] - self.end_packet_ns, MARGIN_NS)
-                self.assertLess(abs(report["deadlines"]["ended_ns"] - self.end_packet_ns), MARGIN_NS)
+                self.assertLess(abs(report["end"]["ended_ns"] - self.end_packet_ns), MARGIN_NS)
+                end = report["end"]
+                self.assertEqual((end["hide_written_ns"], end["tile_already_down"], end["bridge_ended_first"]),
+                                 (down["sent_ns"], False, False))
+                self.assertLess(end["hide_written_after_end_ms"], MARGIN_NS / 1e6)
+                self.assertGreaterEqual(end["bridge_hide_returned_ns"], end["hide_written_ns"] - MS)
+                self.assertLess(end["bridge_hide_after_end_ms"], MARGIN_NS / 1e6)
                 if len(detector.returned_ns) > 1:  # The call was in flight: the hide did not wait for it.
                     self.assertLess(down["sent_ns"], detector.returned_ns[1] - 400 * MS)
                 self.assertLess(down["sent_ns"], self.queued[0]["expires_ns"] - 500 * MS)  # Not left to expire.
                 self.assertEqual(report["results"]["results"], 1)  # The second frame's result reached no sink.
                 row, = report["labels"]["rows"]
-                self.assertEqual(row["last_end_ns"], down["sent_ns"])
+                self.assertAlmostEqual(row["intervals"][-1]["end_ms"],
+                                       (end["bridge_hide_returned_ns"] - report["labels"]["run_start_ns"]) / 1e6, places=2)
                 self.assert_both_children_closed(report)
                 self.assert_no_gate_opened(report)
                 self.assertLess(time.monotonic() - started, 6)
@@ -438,6 +485,7 @@ class CameraHudStageTests(StageCase):
         report = stage.run()
         self.assertLess(time.monotonic() - started, 8)
         self.assertEqual((report["status"], report["reason"]), ("error", "overlay_bridge_failed"))
+        self.assertEqual(report["end"]["bridge_ended_first"], True)
         self.assertEqual((report["cleanup"]["bridge_ok"], report["cleanup"]["ok"], report["cleanup"]["source_ok"]),
                          (False, False, True))
         self.assertEqual(report["bridge"]["error"], "overlay_bridge_failed")
@@ -481,7 +529,7 @@ class CameraHudStageTests(StageCase):
                 self.assertEqual({item["rgba"] for item in self.queued}, {expected})
                 self.assertEqual({item["token"] for item in self.queued}, {("bottle", "cup")})
                 self.assertEqual([row["label"] for row in report["labels"]["rows"]], ["bottle", "cup"])
-                self.assertEqual(report["frames"]["bridge_presented"], report["frames"]["sent"])
+                self.assertEqual(report["frames"]["acknowledged_presented"], report["frames"]["sent"])
 
     def test_the_real_output_start_is_refused_by_the_gate_before_anything_is_launched(self):
         import subprocess
@@ -527,23 +575,30 @@ class CameraHudStageTests(StageCase):
             stage.run()
 
     def test_no_field_of_the_report_can_hold_image_bytes_or_free_text(self):
+        import base64
+        import copy
         import numpy as np
         from sightcircuit.hud import camera_stage
         report = self.stage(scenario="hello_noise").run()
         self.assertIs(camera_stage.check_report(report), report)
         text = json.dumps(report)
-        self.assertLess(len(text), 16384)
+        self.assertLess(len(text), 16384)  # A plain run; the check's own cap leaves room for intervals and expiries.
+        self.assertEqual(camera_stage.MAX_REPORT_BYTES, 40960)
+        self.assertEqual(set(report), set(camera_stage.REPORT_BLOCKS))
         strings = 0
         for path, key, value in walk(report):
             with self.subTest(path=path, key=key):
                 self.assertIn(type(value), (dict, list, str, int, float, bool, type(None)))
-                self.assertRegex(str(key), r"\A[A-Za-z0-9_.:/+@-]{1,128}\Z")
+                self.assertRegex(str(key), r"\A[A-Za-z0-9_.:-]{1,72}\Z")
                 if type(value) is list and value and type(value[0]) is not dict:
                     self.assertLessEqual(len(value), camera_stage.MAX_SCALAR_LIST)
+                    self.assertFalse(any(type(item) is float for item in value))
+                if type(value) is int and type(value) is not bool:
+                    self.assertLess(abs(value), 2 ** 64)
                 if type(value) is str:
                     strings += 1
                     self.assertNotRegex(value, r"\s") if key != "label" else self.assertEqual(value, "bottle")
-                    self.assertLessEqual(len(value), 128)
+                    self.assertLessEqual(len(value), 72)
         self.assertGreater(strings, 20)
         for word in ("calib", "intrinsic", "offline_cal", "distortion", "extrinsic", "c" * 64, "f" * 64, str(self.binary)):
             self.assertNotIn(word, text.lower())
@@ -554,50 +609,273 @@ class CameraHudStageTests(StageCase):
         self.assertEqual(report["fields_withheld"], 0)
         self.assertNotIn("error", report["source"])
         self.assertEqual(set(report["source"]["export"]["helper"]), {"sha256", "parent_confirmed"})
-        # The schema itself: what it refuses, wherever it sits.
-        tile = bytes(HUD_CONFIG.width_px * HUD_CONFIG.height_px * 4)
+
+        # The schema itself. Each value below is refused wherever a block would hold it, and as a new top-level field.
+        tile = bytes(range(1, 251)) * (HUD_CONFIG.width_px * HUD_CONFIG.height_px * 4 // 250 + 1)
+        tile = tile[:HUD_CONFIG.width_px * HUD_CONFIG.height_px * 4]
+        chunks = base64.b64encode(tile).decode().replace("+", "A").replace("/", "B").replace("=", "")
         refused = {"bytes": tile, "bytearray": bytearray(tile), "memoryview": memoryview(tile),
-                   "array": np.zeros((2, 2), np.uint8), "tuple": (1, 2), "set": {1}, "long_list": list(range(17)),
-                   "tile_as_list": list(tile), "long_string": "a" * 129, "prose": "two words", "newline": "a\nb",
-                   "hex_tile": tile.hex(), "nan": float("nan"), "mixed": [{"a": 1}, 2], "object": object(),
+                   "array": np.zeros((2, 2), np.uint8), "numpy_int": np.int64(5), "numpy_float": np.float32(0.5),
+                   "tuple": (1, 2), "set": {1}, "long_list": list(range(camera_stage.MAX_SCALAR_LIST + 1)),
+                   "tile_as_list": list(tile), "float_list": [0.5, 1.5, 2.5], "long_string": "a" * 73,
+                   "prose": "two words", "newline": "a\nb", "hex_tile": tile.hex(), "nan": float("nan"),
+                   "mixed": [{"a": 1}, 2], "object": object(), "path": "/tmp/helper", "relative_path": "tmp/helper",
                    "records": [{"n": index} for index in range(camera_stage.MAX_RECORD_LIST + 1)],
-                   "deep": {"a": {"b": {"c": {"d": {"e": {"f": {"g": {"h": {"i": 1}}}}}}}}}, "label": "bad/label",
-                   "nested_bytes": {"inner": [{"pixels": tile}]}, "bad key": 1}
+                   "deep": {"a": {"b": {"c": {"d": {"e": {"f": {"g": {"h": 1}}}}}}}},
+                   "nested_bytes": {"inner": [{"pixels": tile}]},
+                   # The fan-out forms: many small accepted values that together would carry a picture.
+                   "one_integer": int.from_bytes(tile, "big"), "wide_integer": 2 ** 64,
+                   "bytes_as_keys": {f"b{index}": value for index, value in enumerate(tile[:4096])},
+                   "wide_object": {f"k{index}": 0 for index in range(camera_stage.MAX_KEYS + 1)},
+                   "base64_chunks": {f"r{row}": {f"c{column}": chunks[(row * 40 + column) * 72:][:72]
+                                                 for column in range(40)} for row in range(40)},
+                   "base64_records": [{f"c{column}": chunks[(row * 40 + column) * 72:][:72] for column in range(40)}
+                                      for row in range(75)],
+                   "integer_records": [{f"v{column}": int.from_bytes(tile[:8], "big") for column in range(40)}
+                                       for _ in range(200)]}
         for name, value in refused.items():
             with self.subTest(refused=name):
-                candidate = {name: value} if name != "bad key" else {"bad key": 1}
-                with self.assertRaisesRegex(ValueError, "camera_hud_report_field_invalid:report"):
-                    camera_stage.check_report(candidate)
+                inside = copy.deepcopy(report)
+                inside["source"]["export"]["extra"] = value
                 with self.assertRaisesRegex(ValueError, "camera_hud_report_field_invalid"):
-                    camera_stage.check_report({**report, "extra": candidate})
-        accepted = {"label": "cell phone", "box_xyxy": [1.0, 2.0, 3.5, 4.0], "code": "camera-export/2", "none": None,
-                    "records": [{"label": "cup", "n": 1}], "flag": True}
+                    camera_stage.check_report(inside)
+                with self.assertRaisesRegex(ValueError, "camera_hud_report_field_invalid:report"):
+                    camera_stage.check_report({**report, name: value})
+        # The whitelist: no new top-level field, no new key in a block, no missing field, no block turned scalar.
+        for candidate in ({**report, "extra": 1}, {**report, "config": {**report["config"], "note": 1}},
+                          {name: value for name, value in report.items() if name != "cleanup"},
+                          {**report, "labels": {**report["labels"], "pixels": 1}}, {**report, "status": {"a": 1}},
+                          {**report, "frames": [1, 2]}, "report", None, [report]):
+            with self.assertRaisesRegex(ValueError, "camera_hud_report_field_invalid"):
+                camera_stage.check_report(candidate)
+        # The total size: accepted values only, yet too many of them.
+        bulky = copy.deepcopy(report)
+        bulky["source"]["export"]["fill"] = [{f"k{column}": "a" * 72 for column in range(40)} for _ in range(20)]
+        self.assertGreater(len(json.dumps(bulky)), camera_stage.MAX_REPORT_BYTES)
+        with self.assertRaisesRegex(ValueError, "camera_hud_report_field_invalid:report_size"):
+            camera_stage.check_report(bulky)
+        # A label is a sanitised row label, under ``label`` only.
+        for value in ("bad/label", "x" * 21, " padded", ""):
+            labelled = copy.deepcopy(report)
+            labelled["labels"]["rows"][0]["label"] = value
+            with self.assertRaisesRegex(ValueError, "camera_hud_report_field_invalid"):
+                camera_stage.check_report(labelled)
+        accepted = copy.deepcopy(report)
+        accepted["labels"]["rows"][0]["label"] = "cell phone"
+        accepted["source"]["export"]["extra"] = {"code": "camera-export/2", "none": None, "flag": True, "ids": [1, 2, 3],
+                                                 "records": [{"label": "cup", "n": 1.5}], "wide": 2 ** 64 - 1}
         self.assertIs(camera_stage.check_report(accepted), accepted)
         # ``report_value`` reduces an embedded report to the schema and counts what it had to withhold.
         withheld = [0]
         kept = camera_stage.report_value({"reason": "sdk_error", "error": "free text here", "note": "more free text",
                                           "pixels": tile, "path": "/tmp/helper", "list": list(range(40)), "ok": True,
+                                          "floats": [0.1, 0.2], "big": 2 ** 70, "where": "/dev/video0",
                                           "nested": {"detail": "prose", "count": 3}}, withheld)
         self.assertEqual((kept, withheld[0]), ({"reason": "sdk_error", "note": None, "pixels": None, "list": None,
-                                                "ok": True, "nested": {"count": 3}}, 3))
-        camera_stage.check_report(kept)
+                                                "ok": True, "floats": None, "big": None, "where": None,
+                                                "nested": {"count": 3}}, 6))
 
-    def test_the_display_ledger_counts_spells_and_gaps_from_write_times_and_deadlines(self):
-        from sightcircuit.hud.camera_stage import DisplayLedger
+    def test_numbers_are_checked_and_made_plain_at_construction_so_the_report_cannot_fail_at_the_end(self):
+        import numpy as np
+        stage = self.stage(max_fps=np.int64(10), threshold=np.float32(0.5), max_frames=np.int32(3), seconds=np.float64(5))
+        self.assertEqual([type(value) for value in (stage.max_fps, stage.threshold, stage.max_frames, stage.seconds)],
+                         [float, float, int, float])
+        report = stage.run()
+        self.assertEqual((report["status"], report["reason"]), ("completed", "max_frames"))
+        self.assertEqual((report["config"]["max_fps"], report["config"]["threshold"], report["config"]["max_frames"],
+                          report["config"]["seconds"]), (10.0, 0.5, 3, 5.0))
+        for options, reason in (({"max_fps": 0}, "camera_hud_limits_invalid"), ({"max_fps": "5"}, "camera_hud_limits_invalid"),
+                                ({"max_fps": float("inf")}, "camera_hud_limits_invalid"),
+                                ({"max_fps": True}, "camera_hud_limits_invalid"),
+                                ({"max_frames": -1}, "camera_hud_limits_invalid"),
+                                ({"max_frames": 2.5}, "camera_hud_limits_invalid"),
+                                ({"max_frames": True}, "camera_hud_limits_invalid"),
+                                ({"seconds": 0}, "camera_hud_limits_invalid"),
+                                ({"seconds": float("nan")}, "camera_hud_limits_invalid"),
+                                ({"threshold": 1.5}, "hud_threshold_invalid"), ({"threshold": None}, "hud_threshold_invalid"),
+                                ({"threshold": float("nan")}, "hud_threshold_invalid")):
+            with self.subTest(options=options), self.assertRaisesRegex(ValueError, reason):
+                self.stage(**options)
+
+    def test_an_end_racing_a_submit_cannot_send_a_frame_after_the_final_take_down(self):
+        """The stop is set while the third result's tile is being converted, after ``submit`` saw the run as live.
+
+        The conversion waits until the watcher has ended the client, then
+        returns: the frame is refused by the client's latch, counted after
+        the end, and nothing follows the final hide on the pipe.
+        """
+        report, calls = self.run_with_the_end_during_the_third_conversion()
+        stage = self.the_stage
+        self.assertEqual((report["status"], report["reason"]), ("stopped", "stop_requested"))
+        self.assertEqual(len(calls), 3)
+        self.assertEqual([item["frame_id"] for item in self.queued], [1, 2, 3])  # The third was offered,
+        self.assertEqual([fields["frame_id"] for fields in self.named("frame_sent")], [1, 2])  # and never written.
+        self.assertEqual([event for event, _ in self.packets], ["frame_sent", "frame_sent", "taken_down"])
+        self.assertEqual((report["results"]["results_after_end"], report["frames"]["submitted"], report["frames"]["sent"],
+                          report["bridge"]["shows"], report["bridge"]["take_downs"]), (1, 2, 2, 0, 1))
+        self.assertEqual([line["frame_id"] for line in self.bridge_lines if line["event"] == "frame_presented"], [1, 2])
+        after = self.bridge_lines[[line["event"] for line in self.bridge_lines].index("hide_returned"):]
+        self.assertEqual([line["event"] for line in after], ["hide_returned"])  # Nothing presented or shown after it.
+        row, = report["labels"]["rows"]
+        self.assertEqual(row["spells"], 1)  # One spell, ended by the hide: no second one is booked.
+        # The latch itself, directly: after ``end`` the client accepts nothing and a take-down cannot be undone.
+        client = stage.client
+        now = time.monotonic_ns()
+        self.assertFalse(client.submit_observed(99, now, now + MS, 1, 1, bytes(4)))
+        self.assert_both_children_closed(report)
+
+    def test_a_bridge_that_dies_stops_the_helper_at_once_even_while_the_detector_is_busy(self):
+        detector = ScriptedDetector(delays={3: 3.0})  # In its third call from about 0.4 s to 3.4 s.
+        stage = self.stage(detector, limits={"fps": 5, "max_seconds": 20, "max_frames": 100})
+        killed = []
+
+        def kill():
+            killed.append(time.monotonic_ns())
+            stage.client.process.kill()
+        killer = threading.Timer(0.7, kill)
+        killer.start()
+        self.addCleanup(killer.cancel)
+        report = stage.run()
+        self.assertEqual((report["status"], report["reason"], report["end"]["bridge_ended_first"]),
+                         ("error", "overlay_bridge_failed", True))
+        # The stop came with the bridge's end, not with the detector's return two and a half seconds later.
+        self.assertLess(report["end"]["ended_ns"] - killed[0], MARGIN_NS)
+        self.assertLess(report["end"]["ended_ns"], detector.returned_ns[2] - 2_000 * MS)
+        source = report["source"]
+        self.assertEqual(source["status"], "stopped")
+        self.assertLess(source["export"]["supervision"]["supervisor_elapsed_seconds"], 2.0)
+        self.assertLessEqual(source["frames_emitted"], 6)  # About 0.7 s at 5 a second, not the 17 of 3.4 s.
+        self.assertFalse(alive(source["export"]["supervision"]["worker_pid"]))
+        self.assertEqual((report["cleanup"]["source_ok"], report["cleanup"]["bridge_ok"]), (True, False))
+
+    def test_a_failure_on_the_clients_writer_thread_is_the_runs_error(self):
+        stage = self.stage(limits={"fps": 5, "max_seconds": 20, "max_frames": 12})
+        record = stage.client.listener
+
+        def failing(event, **fields):
+            if event == "frame_sent" and fields["frame_id"] == 3:
+                raise KeyError("injected")
+            record(event, **fields)
+        stage.client.listener = failing
+        started = time.monotonic()
+        report = stage.run()
+        self.assertLess(time.monotonic() - started, 2.0)  # Stopped at the failure, not at the helper's bound.
+        self.assertEqual((report["status"], report["reason"], report["bridge"]["error"]),
+                         ("error", "overlay_client_failed", "overlay_client_failed"))
+        self.assertIn("injected", stage.client.error)
+        self.assertEqual((report["cleanup"]["bridge_ok"], report["cleanup"]["ok"]), (False, False))
+        self.assertLessEqual(report["results"]["results"], 4)
+        self.assertLessEqual(report["results"]["results_after_end"], 1)
+        self.assertLess(report["source"]["frames_emitted"], 8)
+        # And a client that is not running while the run has not ended is an error from ``submit``, not a count.
+        import numpy as np
+        idle = self.stage()
+        result = ScriptedDetector().detect(None, 0.5)
+        tile = idle._tile(np.zeros((48, 64, 3), np.uint8), result)
+        now = time.monotonic_ns()
+        with self.assertRaisesRegex(RuntimeError, "observed_frame_client_not_running"):
+            idle.submit(Processed(Frame(b"\0" * 12, "BGR3", 2, 2, 6, "arcturus_camera_left", 1, now), result, tile, 1, 1.0, 1.0))
+        self.assertEqual((idle.counts["results_after_end"], idle._queued), (0, {}))
+
+    def test_the_display_ledger_books_only_what_the_bridge_said_was_up(self):
+        from sightcircuit.hud.camera_stage import MAX_SPELLS, DisplayLedger
         second = 1_000_000_000
         ledger = DisplayLedger()
-        ledger.shown(("bottle",), 0, second)                 # bottle 0 to 0.2 s (replaced)
-        ledger.shown(("bottle", "cup"), second // 5, second * 6 // 5)   # both to their deadline at 1.2 s
-        ledger.shown(("cup",), 3 * second, 4 * second)       # cup again from 3 s, taken down at 3.5 s
-        ledger.down(second * 7 // 2)
-        ledger.shown(("bottle",), 5 * second, 5 * second)    # already at its deadline: never up
-        ledger.down(9 * second)
-        rows = {row["label"]: row for row in ledger.report()}
-        self.assertEqual((rows["bottle"]["display_seconds"], rows["bottle"]["spells"], rows["bottle"]["longest_gap_seconds"]),
-                         (1.2, 1, 0.0))
-        self.assertEqual((rows["cup"]["display_seconds"], rows["cup"]["spells"], rows["cup"]["longest_gap_seconds"]),
-                         (1.5, 2, 1.8))
-        self.assertEqual((rows["cup"]["first_shown_ns"], rows["cup"]["last_end_ns"]), (second // 5, second * 7 // 2))
+        ledger.presented(("bottle",), 1 * second, 2 * second, True)            # bottle up at 1.0
+        ledger.presented(("bottle", "cup"), second * 6 // 5, second * 11 // 5, True)   # replaced at 1.2: both up
+        ledger.expired(second * 11 // 5 + 30_000_000)                          # the bridge's hide returned at 2.23
+        ledger.shown(3 * second)                                               # a show with nothing waiting: nothing
+        ledger.presented(("cup",), 4 * second, 5 * second, True)               # cup up at 4.0
+        ledger.hidden(second * 9 // 2)                                         # taken down at 4.5, pixels kept
+        ledger.presented(("bottle",), 6 * second, 7 * second, False)           # presented while down: not up
+        ledger.shown(second * 13 // 2)                                         # shown at 6.5
+        ledger.finish(20 * second)                                             # never hidden: ends at its deadline, 7.0
+        ledger.presented(("ghost",), 8 * second, 8 * second, True)             # at its deadline already: never up
+        ledger.presented(("late",), 9 * second, 10 * second, False)            # waiting, then expired unseen
+        ledger.expired(10 * second)
+        ledger.shown(11 * second)
+        rows = {row["label"]: row for row in ledger.rows(0, 12 * second)}
+        self.assertEqual(sorted(rows), ["bottle", "cup"])
+        self.assertEqual(rows["bottle"]["intervals"], [{"start_ms": 1000.0, "end_ms": 2230.0}, {"start_ms": 6500.0, "end_ms": 7000.0}])
+        self.assertEqual(rows["cup"]["intervals"], [{"start_ms": 1200.0, "end_ms": 2230.0}, {"start_ms": 4000.0, "end_ms": 4500.0}])
+        self.assertEqual((rows["bottle"]["display_seconds"], rows["bottle"]["spells"]), (1.73, 2))
+        self.assertEqual((rows["cup"]["display_seconds"], rows["cup"]["spells"]), (1.53, 2))
+        # The longest gap counts the lead-in and the tail: bottle's is the 5 s after 7.0, cup's the 7.5 s after 4.5.
+        self.assertEqual((rows["bottle"]["longest_gap_seconds"], rows["cup"]["longest_gap_seconds"]), (5.0, 7.5))
+        self.assertEqual(ledger.rows(0, 7 * second)[0]["longest_gap_seconds"], 4.27)  # 2.23 to 6.5 once the tail is gone.
+        self.assertEqual({row["label"]: row["longest_gap_seconds"] for row in ledger.rows(-9 * second, 7 * second)},
+                         {"bottle": 10.0, "cup": 10.2})  # The lead-in.
+        # A hidden tile that a show brings back before its deadline is booked again: that is what the bridge did.
+        again = DisplayLedger()
+        again.presented(("cup",), 0, second, True)
+        again.hidden(second // 5)
+        again.shown(second * 2 // 5)
+        again.finish(second * 3)
+        self.assertEqual(again.rows(0, second)[0]["intervals"], [{"start_ms": 0.0, "end_ms": 200.0},
+                                                                 {"start_ms": 400.0, "end_ms": 1000.0}])
+        # Bounded: intervals beyond the cap are counted, not kept.
+        many = DisplayLedger()
+        for index in range(MAX_SPELLS + 5):
+            many.presented(("cup",), index * 10, index * 10 + 100, True)
+            many.expired(index * 10 + 5)
+        self.assertEqual((many.count, many.dropped, len(many.rows(0, 10 ** 6)[0]["intervals"])), (MAX_SPELLS, 5, MAX_SPELLS))
+
+    def test_the_window_verdict_finds_a_contiguous_window_and_counts_leading_trailing_and_inner_gaps(self):
+        from sightcircuit.hud import camera_stage
+        verdict = camera_stage.window_verdict
+        rule = {"window_seconds": 60, "fraction": 0.9, "max_gap_seconds": 2}
+        steady = [(5.0, 70.0)]  # Named from 5 s to 70 s of a 75 s run.
+        self.assertEqual(verdict(steady, 75, **rule), {"found": True, "window_start_seconds": 5.0, "named_fraction": 1.0,
+                                                       "longest_gap_seconds": 0.0})
+        # A deliberate out-of-view pause of 5 s in the middle: no 60 s window avoids it, so the gap rule fails,
+        # though the label is up more than 90% of the best window.
+        paused = [(2.0, 30.0), (35.0, 75.0)]
+        result = verdict(paused, 75, **rule)
+        self.assertEqual((result["found"], result["named_fraction"] > 0.9), (False, True))
+        self.assertEqual(verdict(paused, 75, window_seconds=60, fraction=0.9, max_gap_seconds=5)["found"], True)
+        # The same pause in a 90 s run: the window after it qualifies, and only that one.
+        long_run = [(2.0, 20.0), (25.0, 90.0)]
+        self.assertEqual(verdict(long_run, 90, **rule), {"found": True, "window_start_seconds": 25.0,
+                                                         "named_fraction": 1.0, "longest_gap_seconds": 0.0})
+        # Leading gap: the label first appears 3 s into the only window there is.
+        self.assertEqual(verdict([(3.0, 60.0)], 60, **rule)["found"], False)
+        self.assertEqual(verdict([(3.0, 60.0)], 60, **rule)["longest_gap_seconds"], 3.0)
+        self.assertEqual(verdict([(2.0, 60.0)], 60, **rule)["found"], True)
+        # Trailing gap: the label goes 3 s before the run ends.
+        self.assertEqual(verdict([(0.0, 57.0)], 60, **rule)["found"], False)
+        self.assertEqual(verdict([(0.0, 58.0)], 60, **rule)["found"], True)
+        # Many short gaps: each within the limit, together too much.
+        flicker = [(index * 2.0, index * 2.0 + 1.5) for index in range(40)]
+        result = verdict(flicker, 80, **rule)
+        self.assertEqual((result["found"], result["named_fraction"]), (False, 0.75))
+        self.assertEqual(verdict(flicker, 80, window_seconds=60, fraction=0.75, max_gap_seconds=2)["found"], True)
+        # A run shorter than the window, and a label never shown.
+        self.assertEqual(verdict([(0.0, 30.0)], 30, **rule)["found"], False)
+        self.assertEqual(verdict([], 75, **rule), {"found": False, "window_start_seconds": None, "named_fraction": 0.0,
+                                                   "longest_gap_seconds": None})
+        # The window may start anywhere: here only one starting 1.5 s before an interval satisfies both rules.
+        offset = [(0.0, 10.0), (20.0, 81.5)]
+        self.assertEqual(verdict(offset, 90, **rule)["found"], True)
+        for arguments in (([(2, 1)], 10), ([(0, 5), (4, 6)], 10)):
+            with self.assertRaisesRegex(ValueError, "camera_hud_window_intervals_invalid"):
+                verdict(*arguments, **rule)
+        for bad in ({"window_seconds": 0}, {"fraction": 0}, {"fraction": 1.1}, {"max_gap_seconds": -1}, {"window_seconds": True}):
+            with self.assertRaisesRegex(ValueError, "camera_hud_window_arguments_invalid"):
+                verdict(steady, 75, **{**rule, **bad})
+        # From a report: the run's own start and end bound the windows, and a report that dropped intervals is void.
+        report = self.stage(ScriptedDetector([BOTTLE, BOTTLE, (), (), BOTTLE])).run()
+        run_seconds = (report["labels"]["run_end_ns"] - report["labels"]["run_start_ns"]) / 1e9
+        named = camera_stage.named_in_window(report, "bottle", window_seconds=0.3, fraction=0.9, max_gap_seconds=0.1)
+        self.assertEqual((named["found"], named["named_fraction"] >= 0.9), (True, True))
+        whole = camera_stage.named_in_window(report, "bottle", window_seconds=round(run_seconds - 0.05, 3), fraction=0.5,
+                                             max_gap_seconds=0.1)
+        self.assertEqual(whole["found"], False)  # The take-down for the two empty results is a gap of about 0.4 s.
+        self.assertGreater(whole["longest_gap_seconds"], 0.3)
+        self.assertEqual(camera_stage.named_in_window(report, "cup", window_seconds=0.3, fraction=0.5,
+                                                      max_gap_seconds=1)["found"], False)
+        report["labels"]["spells_dropped"] = 1
+        with self.assertRaisesRegex(ValueError, "camera_hud_window_intervals_incomplete"):
+            camera_stage.named_in_window(report, "bottle", window_seconds=0.3, fraction=0.9, max_gap_seconds=0.1)
 
 
 @unittest.skipUnless(RUNNABLE and fake_vrclient.available(),
@@ -622,11 +900,23 @@ class FixedHudStageTests(StageCase):
         self.permitted = permit.start()
         self.addCleanup(permit.stop)
 
-    def client(self, **fake):
+    def client(self, keepalive_seconds=observed_frames.KEEPALIVE_SECONDS, **fake):
         FixedHudStageTests.runs += 1
         self.log = Path(self.directory.name) / f"calls-{FixedHudStageTests.runs}.jsonl"
-        return ObservedFrameClient(validation_only=False,
+        return ObservedFrameClient(validation_only=False, keepalive_seconds=keepalive_seconds,
                                    env={**os.environ, **self.runtime_env, "FAKE_VR_LOG": str(self.log), **fake})
+
+    def visible_spans(self):
+        """From the fake's log: the ``[start_ns, end_ns]`` spans in which the overlay was visible."""
+        spans, since = [], None
+        for call in self.calls():
+            if call.get("visible") and since is None:
+                since = call["end_ns"]
+            elif not call.get("visible") and since is not None:
+                spans.append([since, call["end_ns"]])
+                since = None
+        self.assertIsNone(since)
+        return spans
 
     def calls(self, *names):
         return [call for call in fake_vrclient.calls(self.log) if not names or call["call"] in names]
@@ -688,7 +978,7 @@ class FixedHudStageTests(StageCase):
         self.assertEqual([item["frame_id"] for item in self.queued], [1, 2, 5, 6, 7, 8])
         sent = self.named("frame_sent")
         self.assertEqual(len(self.calls("SetOverlayRaw")), len(sent))
-        self.assertEqual((report["frames"]["bridge_presented"], report["frames"]["sent"]), (len(sent), len(sent)))
+        self.assertEqual((report["frames"]["acknowledged_presented"], report["frames"]["sent"]), (len(sent), len(sent)))
         self.assertEqual(report["bridge"]["first_frame"]["event"], "frame_submitted")
         down, shown = self.named("taken_down")[0], self.named("shown")[0]
         self.assertLess(down["sent_ns"] - detector.returned_ns[2], PERIOD_S * 1e9)
@@ -766,6 +1056,130 @@ class FixedHudStageTests(StageCase):
         down, = self.named("taken_down")
         hide = next(call for call in self.calls("HideOverlay") if call["start_ns"] >= down["sent_ns"] - MS)
         self.assertLess(hide["start_ns"] - self.detector.called_ns[2], MARGIN_NS)
+        self.assert_nothing_shown_past_its_deadline(report)
+        self.assert_retired(report)
+        self.assert_both_children_closed(report)
+
+
+    def test_the_ledger_agrees_with_the_fake_runtimes_visible_time_when_uploads_are_slow(self):
+        """A steady label at 5 a second for 5 s, with every upload stalled in the runtime.
+
+        At 1,100 ms every frame outlives its deadline in the upload: the
+        bridge shows none, says so per frame, and the ledger books nothing.
+        At 600 ms about every third frame is shown for the rest of its
+        second: the ledger's time is the fake's visible time, not the time
+        from each pipe write.
+        """
+        limits = {"fps": 5, "max_seconds": 5, "max_frames": 25}
+        for delay_ms in (1100, 600):
+            with self.subTest(upload_delay_ms=delay_ms):
+                client = self.client(FAKE_VR_SetOverlayRaw_DELAY_MS=",".join([str(delay_ms)] * 60))
+                report = self.stage(limits=limits, client=client).run()
+                self.assertEqual(report["status"], "completed")
+                visible = sum(end - start for start, end in self.visible_spans()) / 1e9
+                booked = sum(row["display_seconds"] for row in report["labels"]["rows"])
+                frames, sent = report["frames"], len(self.named("frame_sent"))
+                self.assertEqual(frames["acknowledged_presented"] + frames["acknowledged_refused"] + frames["unacknowledged"],
+                                 sent)
+                self.assertLessEqual(frames["unacknowledged"], 1)  # At most the frame the stop packet overtook.
+                self.assertEqual(frames["acknowledged_presented"], len(self.calls("ShowOverlay")))
+                self.assertEqual(report["timings"]["capture_to_display_age_ms"]["count"], frames["acknowledged_presented"])
+                self.assertAlmostEqual(booked, visible, delta=0.1)
+                if delay_ms == 1100:
+                    self.assertEqual((visible, booked, report["labels"]["rows"], frames["acknowledged_presented"]),
+                                     (0.0, 0, [], 0))
+                    self.assertGreaterEqual(frames["refused_reasons"]["expired_before_show"], 3)
+                    self.assertEqual(frames["refused_reasons"]["expired_before_show"], frames["expired_in_upload"])
+                    # The bridge's own count of frames taken is not a count of frames presented, and is named so.
+                    self.assertEqual(frames["bridge_accepted"], frames["expired_in_upload"])
+                else:
+                    self.assertGreater(visible, 0.4)
+                    self.assertGreaterEqual(report["timings"]["capture_to_display_age_ms"]["p50"], delay_ms)
+                    row, = report["labels"]["rows"]
+                    spans = self.visible_spans()
+                    self.assertEqual(len(row["intervals"]), len(spans))
+                    start = report["labels"]["run_start_ns"]
+                    for interval, (shown, hidden) in zip(row["intervals"], spans):
+                        self.assertAlmostEqual(interval["start_ms"], (shown - start) / 1e6, delta=5)
+                        self.assertAlmostEqual(interval["end_ms"], (hidden - start) / 1e6, delta=5)
+                self.assert_retired(report)
+                self.assert_both_children_closed(report)
+
+    def test_the_end_of_run_hide_waits_behind_a_frame_already_being_written_and_the_report_measures_it(self):
+        # Uploads of 600 ms: a stop that lands while a frame is in the pipe finds the bridge inside SetOverlayRaw,
+        # and the hide, a packet behind that frame, is acted on only when the upload has returned.
+        client = self.client(FAKE_VR_SetOverlayRaw_DELAY_MS=",".join(["600"] * 60))
+        stop = threading.Event()
+        stage = self.stage(limits={"fps": 5, "max_seconds": 20, "max_frames": 100}, client=client)
+        timer = threading.Timer(2.05, stop.set)
+        timer.start()
+        self.addCleanup(timer.cancel)
+        report = stage.run(stop)
+        end = report["end"]
+        self.assertEqual((report["status"], end["tile_already_down"], end["bridge_ended_first"]), ("stopped", False, False))
+        down = self.named("taken_down")[-1]
+        self.assertEqual(end["hide_written_ns"], down["sent_ns"])
+        self.assertGreaterEqual(end["hide_written_after_end_ms"], 0)
+        self.assertGreaterEqual(end["bridge_hide_after_end_ms"], end["hide_written_after_end_ms"])
+        # Bounded by one frame's write and the uploads the bridge still had to finish, never open-ended.
+        self.assertLess(end["bridge_hide_after_end_ms"], 2 * 600 + MARGIN_NS / 1e6)
+        hide = [call for call in self.calls("HideOverlay") if call["end_ns"] <= end["bridge_hide_returned_ns"]][-1]
+        self.assertLess(end["bridge_hide_returned_ns"] - hide["end_ns"], 5 * MS)
+        # No frame was accepted after the end: at most the one already in flight was uploaded behind it.
+        late = [call for call in self.calls("SetOverlayRaw") if call["start_ns"] > end["ended_ns"]]
+        self.assertLessEqual(len(late), 1)
+        self.assertEqual(self.calls("SetOverlayRaw", "ShowOverlay")[-1]["end_ns"] < hide["start_ns"], True)
+        self.assert_retired(report)
+        self.assert_both_children_closed(report)
+
+    def test_an_end_racing_a_submit_uploads_and_shows_nothing_after_the_final_hide(self):
+        report, calls = self.run_with_the_end_during_the_third_conversion()
+        self.assertEqual((report["status"], len(calls), report["results"]["results_after_end"]), ("stopped", 3, 1))
+        self.assertEqual([fields["frame_id"] for fields in self.named("frame_sent")], [1, 2])
+        end = report["end"]
+        hide = next(call for call in self.calls("HideOverlay") if call["start_ns"] >= end["hide_written_ns"] - MS)
+        self.assertLess(hide["start_ns"] - end["ended_ns"], MARGIN_NS)
+        self.assertEqual([call["call"] for call in self.calls("SetOverlayRaw", "ShowOverlay")
+                          if call["start_ns"] > hide["start_ns"]], [])
+        self.assertEqual(len(self.calls("SetOverlayRaw")), 2)
+        row, = report["labels"]["rows"]
+        self.assertEqual(row["spells"], 1)
+        self.assert_nothing_shown_past_its_deadline(report)
+        self.assert_retired(report)
+        self.assert_both_children_closed(report)
+
+    def test_keepalives_on_a_live_tile_and_after_its_expiry_neither_extend_nor_revive_it(self):
+        # A detector stalled for 1.8 s with a keepalive every 0.3 s: several keepalives land while the first tile
+        # is up, and several after the bridge has hidden it at its deadline.
+        detector = ScriptedDetector(delays={2: 1.8})
+        report = self.stage(detector, client=self.client(keepalive_seconds=0.3)).run()
+        self.assertEqual(report["status"], "completed")
+        self.assertGreaterEqual(report["bridge"]["keepalives"], 5)
+        event = report["frame_expired"]["events"][0]
+        first = self.queued[0]
+        self.assertEqual((event["frame_id"], event["deadline_ns"], event["outcome"], event["hide_ok"]),
+                         (1, first["expires_ns"], "hidden", True))
+        # The deadline held: hidden within one poll of the observation's second, whatever the keepalives did.
+        self.assertLess(event["hide_returned_after_deadline_ms"], (BRIDGE_INPUT_POLL_NS + MARGIN_NS) / 1e6)
+        returned = [line for line in self.bridge_lines if line["event"] == "show_returned"
+                    and line["returned_ns"] < detector.returned_ns[1]]
+        live = [line for line in returned if line["returned_ns"] < event["hide_called_ns"]]
+        after = [line for line in returned if line["returned_ns"] > event["hide_returned_ns"]]
+        self.assertGreaterEqual(len(live), 2)
+        self.assertGreaterEqual(len(after), 2)
+        self.assertEqual({(line["ok"], line["call"]) for line in live}, {(True, "ShowOverlay")})
+        self.assertEqual({(line["ok"], line["call"], line["reason"]) for line in after}, {(False, "HideOverlay", "no_image")})
+        # Nothing was uploaded or shown between the expiry and the next frame, and the label's spell ends there.
+        following = min(fields["sent_ns"] for fields in self.named("frame_sent") if fields["frame_id"] > 1)
+        self.assertEqual([call["call"] for call in self.calls("SetOverlayRaw", "ShowOverlay")
+                          if event["hide_returned_ns"] < call["start_ns"] < following - MS], [])
+        row, = report["labels"]["rows"]
+        self.assertAlmostEqual(row["intervals"][0]["end_ms"],
+                               (event["hide_returned_ns"] - report["labels"]["run_start_ns"]) / 1e6, places=2)
+        spans = self.visible_spans()
+        self.assertAlmostEqual(spans[0][1], event["hide_returned_ns"], delta=5 * MS)
+        self.assertAlmostEqual(sum(row["display_seconds"] for row in report["labels"]["rows"]),
+                               sum(end - start for start, end in spans) / 1e9, delta=0.1)
         self.assert_nothing_shown_past_its_deadline(report)
         self.assert_retired(report)
         self.assert_both_children_closed(report)

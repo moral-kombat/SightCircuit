@@ -34,8 +34,11 @@ def wait_for(condition, timeout=5.0):
 @unittest.skipUnless(DEFAULT_BRIDGE.is_file(), "Run bash scripts/build_overlay_bridge.sh")
 class ObservedFrameClientTests(unittest.TestCase):
     def client(self, **options):
-        self.events = []
-        client = ObservedFrameClient(listener=lambda event, **fields: self.events.append((event, fields)), **options)
+        self.events, self.bridge_lines = [], []
+
+        def listener(event, **fields):  # The writer's events, and apart from them the bridge's lines as read.
+            (self.bridge_lines.append(fields["line"]) if event == "bridge_line" else self.events.append((event, fields)))
+        client = ObservedFrameClient(listener=listener, **options)
         self.addCleanup(client.close)
         return client.start()
 
@@ -79,6 +82,85 @@ class ObservedFrameClientTests(unittest.TestCase):
                          ("frame_validated", WIDTH, HEIGHT))
         self.assertGreaterEqual(client.first_frame["read_ns"], sent[0]["observed_ns"])
         self.assertEqual(client.line_counts["ready"], 1)
+
+    def test_the_bridge_answers_for_every_frame_and_the_client_keeps_the_answers(self):
+        client = self.client()
+        observed = self.send(client, 1, life_ns=300 * MS)
+        self.assertTrue(wait_for(lambda: 1 in client.presented))
+        # A newer identity with an older observation is stale: refused, and answered with that reason.
+        stale = time.monotonic_ns() - 990 * MS
+        with client.condition:
+            self.assertTrue(client.submit_observed(2, stale, stale + MAX_DISPLAY_AGE_NS - 1, WIDTH, HEIGHT, RGBA))
+        self.assertTrue(wait_for(lambda: len(self.named("frame_sent")) + len(self.named("frame_not_sent")) == 2))
+        self.send(client, 3)
+        self.assertTrue(wait_for(lambda: 3 in client.presented))
+        report = client.close()
+        presented = [line for line in self.bridge_lines if line["event"] == "frame_presented"]
+        self.assertEqual([line["frame_id"] for line in presented], [1, 3])
+        self.assertEqual((presented[0]["frame_observed_ns"], presented[0]["deadline_ns"], presented[0]["visible"],
+                          presented[0]["validation_only"]), (observed, observed + 300 * MS, True, True))
+        self.assertGreaterEqual(presented[0]["presented_ns"], observed)
+        self.assertEqual(client.presented[1]["presented_ns"], presented[0]["presented_ns"])
+        self.assertGreaterEqual(client.presented[1]["read_ns"], presented[0]["presented_ns"])
+        self.assertEqual((report["frames_presented"], report["native_report"]["frames_received"]), (2, 2))
+        if self.named("frame_sent")[1:2] and self.named("frame_sent")[1]["frame_id"] == 2:  # It was written in time,
+            refused, = [line for line in self.bridge_lines if line["event"] == "frame_refused"]  # so the bridge answered.
+            self.assertEqual((refused["frame_id"], refused["reason"], refused["frame_observed_ns"]),
+                             (2, "stale", stale))
+            self.assertEqual((client.refused, report["frames_refused"], report["refused_reasons"]["stale"]),
+                             ({2: "stale"}, 1, 1))
+        else:
+            self.assertEqual(report["frames_expired_before_send"], 1)
+        # A line the client cannot read as an answer fails it instead of being guessed at.
+        for line in ({"event": "frame_presented", "frame_id": 1, "presented_ns": 5},
+                     {"event": "frame_presented", "frame_id": "1", "presented_ns": 5, "visible": True},
+                     {"event": "frame_refused", "frame_id": 1, "reason": "because"}):
+            with self.assertRaisesRegex(RuntimeError, "overlay_frame_line_invalid"):
+                ObservedFrameClient()._line(line)
+
+    def test_after_the_end_nothing_is_accepted_and_no_show_is_written(self):
+        client = self.client(keepalive_seconds=0.15)
+        self.send(client, 1)
+        self.assertTrue(wait_for(lambda: self.named("frame_sent")))
+        self.assertTrue(client.end())
+        self.assertTrue(client.final)
+        now = time.monotonic_ns()
+        self.assertFalse(client.submit_observed(2, now, now + MAX_DISPLAY_AGE_NS, WIDTH, HEIGHT, RGBA))  # Latched.
+        self.assertTrue(wait_for(lambda: self.named("taken_down")))
+        self.assertEqual(client.final_hide["sent_ns"], self.named("taken_down")[0]["sent_ns"])
+        time.sleep(0.5)  # Keepalives go on, as hides.
+        self.assertTrue(client.end())
+        report = client.close()
+        self.assertEqual([event for event, _ in self.events], ["frame_sent", "taken_down"])
+        names = [line["event"] for line in self.lines(client)]
+        self.assertNotIn("show_requested", names)
+        self.assertGreaterEqual(names.count("hide_requested"), 3)
+        self.assertEqual((report["frames_submitted"], report["frames_sent"], report["shows"], report["take_downs"],
+                          report["native_report"]["observed_frames_received"]), (1, 1, 0, 1, 1))
+        hide = next(line for line in client.cycle_lines(client.final_hide["cycle"]) if line["event"] == "hide_returned")
+        self.assertGreaterEqual(hide["returned_ns"], client.final_hide["sent_ns"] - MS)
+        # The race itself: a frame queued under the lock is dropped by the end taken under the same lock.
+        racing = self.client()
+        with racing.condition:
+            self.send(racing, 1, token="queued")
+            racing.end()
+        self.assertTrue(wait_for(lambda: racing.hidden))
+        report = racing.close()
+        self.assertEqual((report["frames_sent"], report["frames_withdrawn"], report["shows"]), (0, 1, 0))
+
+    def test_any_failure_on_the_writer_thread_fails_the_client(self):
+        def listener(event, **fields):
+            if event == "frame_sent":
+                raise KeyError("injected")
+        client = ObservedFrameClient(listener=listener)
+        self.addCleanup(client.close)
+        client.start()
+        self.send(client, 1)
+        self.assertTrue(wait_for(lambda: client.error))
+        self.assertIn("injected", client.error)
+        now = time.monotonic_ns()
+        self.assertFalse(client.submit_observed(2, now, now + MS, WIDTH, HEIGHT, RGBA))  # The writer is gone.
+        self.assertFalse(client.close()["cleanup_confirmed"])
 
     def test_what_the_client_never_sends_is_refused_by_name(self):
         client = self.client()

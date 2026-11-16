@@ -187,6 +187,24 @@ arrives (`FrameDeadline::judge` in `tools/overlay_frame.hpp`):
 | its deadline already passed | expired on arrival: refused, counted in `stale_frames_dropped`, never uploaded; the tile presented keeps its own deadline |
 | otherwise | uploaded and presented |
 
+The bridge answers every observed frame with one line (work-order item L8):
+
+- `frame_presented` once its pixels are presented: `frame_id`,
+  `frame_observed_ns`, `deadline_ns`, `presented_ns` and `visible`. In real
+  output `presented_ns` is read after `SetOverlayRaw` and the show-or-hide
+  call have returned; it is the return of the runtime's calls, never a
+  display time. `visible` is false when the tile was taken down by a hide
+  request and waits for a show.
+- `frame_refused` otherwise: `frame_id`, `frame_observed_ns`, `refused_ns`
+  and `reason`, one of `stale`, `expired_on_arrival`, `retransmission` and
+  `expired_before_show` (its deadline passed during the upload; the
+  `frame_expired` line with that outcome precedes it).
+
+The validation bridge writes the same lines and, for an observed frame
+within its deadline, now answers a show request `ok` true (`call` `none`),
+as it would have an image to show; frames of opcodes `1` and `4` get neither
+line and are answered `no_image` as before.
+
 A deadline is therefore renewed only by a frame with a newer identity, and
 never beyond one second after what that frame says it observed. A producer
 whose send loop outlives its detector, re-sending one observation under new

@@ -155,6 +155,14 @@ void emit_ready(const std::string& mode, bool validate, bool marker, std::uint64
 void emit_test_panel_submitted(int seconds, bool api_visible);
 void emit_frame_expired(const ExpiryRecord& record);
 void emit_first_frame(bool validate, std::uint32_t width, std::uint32_t height);
+// One line per observed frame (work-order item L8): frame_presented once its pixels are presented (in real
+// output after the upload and the show-or-hide call returned; presented_ns is that return, never a display
+// time), or frame_refused with the reason it was not (stale, expired_on_arrival, retransmission,
+// expired_before_show). Frames without an identity (opcodes 1 and 4) get neither line.
+void emit_frame_presented(std::uint64_t frame_id, std::uint64_t frame_observed_ns, std::uint64_t deadline_ns,
+                          std::uint64_t presented_ns, bool visible, bool validate);
+void emit_frame_refused(std::uint64_t frame_id, std::uint64_t frame_observed_ns, const char* reason,
+                        std::uint64_t refused_ns, bool validate);
 // The visibility lines of one fallback cycle (hud-fallback.md "Bridge events"): hide_requested or
 // show_requested, hide_returned or show_returned, overlay_hidden or overlay_shown, visibility_event_missing.
 void emit_visibility_requested(bool hide, std::uint32_t cycle, std::uint64_t request_ns, bool validate);
