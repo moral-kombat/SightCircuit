@@ -80,7 +80,26 @@ checkpoint scripts, the bridge sources and the assets in
 two scripts and its settings template) is operations tooling outside the
 production gates (decision D7), pinned in its own `agent` group since schema
 version 2 (2026-11-07): recorded and verified like every group, but an agent
-change no longer alters the `modules` group. It also pins the installed package versions, all
+change no longer alters the `modules` group. Since schema version 3
+(2026-11-16, work-order item L10) the optional `camera_hud` group pins the
+camera helper built on the machine
+(`artifacts/camera-helper/sightcircuit-camera-helper`), the translation units
+and local headers of its SDK build, the shader source, `build_camera_helper.sh`
+and the scope-record staging tool, so the manifest's digest, which a
+[one-run scope record](camera-hud.md#the-one-run-scope-record) names, covers
+the helper as well as the bridge and the models. A manifest carries the group
+when `--write` is given `--camera-hud` (a missing helper is then a problem)
+or when the helper exists; `groups` records what it carries, and `--verify`
+checks exactly those groups. So a machine without an SDK build of the helper
+still writes a manifest with no problems and verifies it, for the marker
+checkpoint and the fallback measurement, which never use the helper; the
+scope record is the consumer that requires the group and refuses a manifest
+without it. `runtime_packages` records whether `onnxruntime`, which
+detection uses when it is installed, is present and at which version: absent
+is recorded as null and is not a problem, and installing, removing or
+upgrading it afterwards is a difference. The Python version was already
+pinned. A version 2 manifest no longer verifies and is rewritten after the
+builds. It also pins the installed package versions, all
 as deterministic JSON with checkout-relative paths. It creates a new file
 (never overwriting) and refuses a dirty tree unless `--allow-dirty` records
 `dirty: true`. `--verify PATH` is read-only: it writes nothing, builds nothing
@@ -89,8 +108,10 @@ JSON. Both run on Frame after the native build; built binaries are never
 transferred. The [device checkpoint](../guides/hud-checkpoint.md)
 gives the commands, when to run them and what a failure means.
 
-`CHECKPOINT_SCRIPTS`, `CHECKPOINT_PACKAGES` and `AGENT_FILES` in the library are
-the single lists. `tests/test_checkpoint_manifest.py` fails if a script named in a code
+`CHECKPOINT_SCRIPTS`, `CHECKPOINT_PACKAGES`, `AGENT_FILES` and
+`CAMERA_HUD_FILES` in the library are the single lists; a test fails when the
+camera group's units or headers drift from what `build_camera_helper.sh --sdk`
+compiles. `tests/test_checkpoint_manifest.py` fails if a script named in a code
 block of the canonical checkpoint procedure is missing from the list, if a documented
 `checkpoint_manifest.py` command does not parse with the real parser, if a
 procedure runs the marker bridge before its first `--verify`, or if the
@@ -340,11 +361,13 @@ version and build), the kernel release, the SteamVR package identity (since
 `artifacts/overlay-bridge/sightcircuit-overlay-bridge`, every
 `sightcircuit/**/*.py` outside `sightcircuit/agent/` (`modules`), the agent
 package with its scripts and settings template in their own `agent` group,
-the scripts this procedure runs, the bridge sources
+the camera helper with its sources, build script and the scope-record staging
+tool in the `camera_hud` group when the manifest carries it, the scripts this
+procedure runs, the bridge sources
 including `tools/hud_contract.hpp`, and the models and fixture listed in
 `scripts/smoke-assets.json`. It also records the installed `numpy` and
 `opencv-python-headless` versions. Paths are relative to the checkout. The JSON
-is deterministic (sorted keys), with `schema_version` 2, `report_kind`
+is deterministic (sorted keys), with `schema_version` 3, `report_kind`
 `checkpoint_artifact_manifest` and a `scope` stating that it pins software
 identity only. It is not device or qualification evidence.
 `checkpoint_manifest.py --help` confirms these flags:

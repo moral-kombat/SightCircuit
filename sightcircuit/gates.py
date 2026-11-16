@@ -11,7 +11,14 @@ condition at a single call site.
 Outside these gates: recorded-replay output on the VR panel (E47), bounded
 SteamVR mirror recognition without display (E48) and bounded SDK camera
 recognition without display (E99, the owner's classification of 2026-11-09)
-are confirmed device uses. Showing camera-derived labels is not among them.
+are confirmed device uses. Showing camera-derived labels is not among them:
+it is behind ``LIVE_CAMERA_INPUT`` and ``LIVE_HUD_OUTPUT``.
+
+The diagnostic tier (owner decision 15, 2026-11-16) is not an open gate. One
+displayed device step may run under a one-run scope record
+(``sightcircuit/runtime/scope.py``), consulted only at the two permission
+sites that hand their answer to ``require``; every claim below stays False
+while it does.
 """
 from dataclasses import dataclass
 
@@ -37,15 +44,20 @@ class Gate:
 
 LIVE_IMAGE_INPUT = Gate(
     "live_image_input", "production_live_input_enabled",
-    "Non-synthetic images feeding the live pipeline or the HUD path", ("G4", "G5", "G6"))
+    "Non-synthetic images from any source feeding the generic live pipeline (run_pipeline), and from any "
+    "source other than the SDK camera (the SteamVR mirror) feeding the HUD path", ("G4", "G5", "G6"))
+LIVE_CAMERA_INPUT = Gate(
+    "live_camera_input", "production_camera_input_enabled",
+    "Arcturus SDK camera frames feeding the HUD path", ("G7", "G8", "G10"))
 HARDWARE_MAPPING = Gate(
     "hardware_mapping", "mapping_qualified",
     "Any HUD mask, calibration or mapping that is not a synthetic fixture", ("G4",))
 LIVE_HUD_OUTPUT = Gate(
     "live_hud_output", "production_hud_enabled",
-    "Fixed HUD placement or expiring frames on the real VR runtime (not validation-only bridges)", ("G5", "G6"))
+    "Fixed HUD placement or expiring frames on the real VR runtime (not validation-only bridges)",
+    ("G8", "G9", "G10"))
 
-GATES = (LIVE_IMAGE_INPUT, HARDWARE_MAPPING, LIVE_HUD_OUTPUT)
+GATES = (LIVE_IMAGE_INPUT, LIVE_CAMERA_INPUT, HARDWARE_MAPPING, LIVE_HUD_OUTPUT)
 
 
 def claims(*gates):

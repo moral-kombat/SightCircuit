@@ -8,7 +8,8 @@ the joint between the left-camera frame source
 ([L7](overlay.md#fixed-hud-mode-work-order-item-l7-2026-11-16)).
 
 **Status: library code, cloud-checked only.** No command constructs the stage
-(that is L9), it opens no gate, and real output is refused. Everything below
+(that is L9), it opens no gate, and real output is refused unless a
+[one-run scope record](#the-one-run-scope-record) verifies (L10). Everything below
 is checked against the camera stand-in, the validation bridge and, for the
 real-output path, a fake OpenVR runtime that logs the bridge's calls. None of
 it is a device result, and no time here is a Frame measurement.
@@ -78,13 +79,20 @@ a clean exit in the mode it started: a validation bridge that never
 initialised a runtime, or a fixed-HUD bridge whose hide, texture clear and
 destroy all returned.
 
-**Real output is refused.** With `validation_only=False` the client would
-start `--fixed-hud`. `check_start()`, which `start()` calls before anything
-is launched, passes the answer of `fixed_hud_output_permitted(client)` to the
-`LIVE_HUD_OUTPUT` gate's `require`, and that function returns `False`
-unconditionally. It is the one place that decides: work-order item L10 adds
-its one-run scope record check there. No argument, environment variable or
-bridge line changes the answer, and `sightcircuit/gates.py` is unchanged.
+**Real output is refused** unless a one-run scope record verifies. With
+`validation_only=False` the client would start `--fixed-hud`. `check_start()`,
+which `start()` calls before anything is launched, passes the answer of
+`fixed_hud_output_permitted(client)` to the `LIVE_HUD_OUTPUT` gate's
+`require`. That function is the one place that decides. It answers `True`
+only for a client whose `scope` is a `RunScope` that permits real output
+([below](#the-one-run-scope-record)); a client without one, with any other
+object in its place, or with a scope whose record does not verify is refused
+as before. Nothing keeps the answer in the client: it asks every time, the
+scope knows which client it granted, and at `start()` it checks the deadline
+and the bridge's digest again. A real-output client starts once, its mode
+cannot be changed after construction, and it ends real output itself at its
+own bound (`max_output_seconds`). No argument, environment variable or bridge
+line changes the answer, and the gate stays closed.
 
 ## The stage
 
@@ -140,6 +148,186 @@ nothing; with the real helper that is bounded recognition without display,
 the class of use `camera_recognize` already is. Showing camera-derived labels
 needs the client's real-output start, which is refused. `run_pipeline` still
 refuses the camera source.
+
+## The one-run scope record
+
+Work-order item L10: the diagnostic tier of
+[decision D3](../poc-scope.md#architecture-decisions-2026-11-07), without the
+mask, as the owner extended it on 2026-11-16 (decision 15) to one record per
+displayed step. Library: `sightcircuit/runtime/scope.py`. It opens no gate:
+`gates.claims()` reports every claim false before, during and after a run
+under a record.
+
+**What it is, and is not.** A record is a small JSON file that ties one run
+to one approval. It is a procedural control against mistakes, not a
+cryptographic one. Nothing is signed. Anyone who can run the writer on the
+Frame can write a record, and anyone who can edit files there can forge one
+or delete the ledger. The owner's approval, given in the Frame manager's
+session, is the authority. The record makes the ordinary mistakes fail
+closed: the wrong commit, a rebuilt binary, a second run, a run after the
+sitting, the wrong source, a longer run, another program.
+
+| Field | Bound to |
+| --- | --- |
+| `step` | `L-D3`, `L-D4` or `L-D5` |
+| `source` | `synthetic` for L-D3 (the camera is never opened), `arcturus_camera_left` for L-D4 and L-D5; the step fixes it |
+| `runner` | `camera_hud`, the only runner a record may name. The caller declares its own name, so this field keeps a record written for another runner from being accepted by a caller that names itself truthfully; it cannot identify the calling program |
+| `hud_config_id`, `hud_config_sha256` | `fixed-edge-hud-v1` and the digest of the HUD contract in this checkout |
+| `revision` | the checkout's full commit |
+| `manifest_sha256` | the SHA-256 of the [checkpoint manifest](hud-development.md#checkpoint-manifest-identity-and-verification) file, which must carry the `camera_hud` group and so pins the camera helper, the bridge, the models, every module, the inference runtime's version and the camera HUD's scripts |
+| `run_id` | 32 random hexadecimal characters; single-use through the ledger |
+| `created_utc`, `deadline_utc` | absolute UTC times; the deadline is at most 240 minutes after creation, and the whole run must fit before it |
+| `max_seconds` | the run's duration bound, at most the step's: 120 s for L-D3, 30 s for L-D4, 90 s for L-D5 |
+| `approval` | a reference to the owner's approval: an identifier of at most 64 characters, never free text |
+| `statement` | the fixed sentence that the record is a procedural control, opens no gate and is not an approval |
+
+**The writer.** `scope.write_record` creates a record, and only
+`scripts/stage_scope_record.py` calls it (a test pins that). The tool is for
+the Frame manager, when staging a step the owner approved. It lives in
+`scripts/` as a standalone file and is deliberately not one of the active
+operator commands: it has no body in `sightcircuit/commands/`, no console
+entry point, and no command imports it, so nothing an operator starts a run
+with can create a record. The checkpoint manifest pins it in the `camera_hud`
+group. It reads the revision, the manifest digest and the configuration
+digest from the checkout, requires the manifest to carry the `camera_hud`
+group and to verify at that moment (so never a dirty tree or another build),
+takes the source and the default duration from the step, and refuses an
+unknown step, a free-text approval, a duration over the step's bound, a
+validity outside 1 to 240 minutes, an existing path and a path that would
+dirty the checkout.
+
+```bash
+.venv-replay/bin/python scripts/stage_scope_record.py --step L-D3 \
+  --approval OWNER-APPROVAL-IDENTIFIER --valid-minutes 60 \
+  --checkpoint-manifest artifacts/camera-hud/checkpoint-manifest.json \
+  --out artifacts/camera-hud/scope-L-D3.json
+```
+
+Running it is a device-side staging action that follows an approval; it is
+not run from a cloud session, and the block above is its shape, not an
+instruction.
+
+**The check.** A runner holds a `RunScope`: the record's path, the manifest's
+path, its own name, the step it is running, the source it will read, its
+duration and the tile configuration. Naming the paths permits nothing.
+`permit(use, holder)` answers the literal `True` or `False`. The first call
+verifies everything, in order, and stops at the first refusal, which
+`refusal` names:
+
+| Order | Check | Refusal |
+| --- | --- | --- |
+| 1 | The request: runner `camera_hud`, a known step and source that belong together, a positive finite duration | `scope_runner_not_permitted`, `scope_source_not_permitted`, `scope_step_unknown`, `scope_step_source_mismatch`, `scope_duration_invalid` |
+| 2 | The record: present, at most 4,096 bytes, no key written twice, exactly the fields above, a known step with that step's source, the fixed configuration, a duration within the step's bound | `scope_record_missing`, `scope_record_invalid`, `scope_step_unknown`, `scope_source_not_permitted` (the mirror, both cameras, anything else), `scope_step_source_mismatch`, `scope_geometry_mismatch`, `scope_duration_over_bound` |
+| 3 | The request against the record: the same step, source and configuration, a duration within the record's | `scope_step_mismatch`, `scope_source_mismatch`, `scope_geometry_mismatch`, `scope_duration_over_record` |
+| 4 | The clock: the record was not created more than 60 s in the future, the deadline has not passed, it is not more than 240 minutes ahead, and the run would end before it | `scope_record_from_the_future`, `scope_record_expired`, `scope_deadline_too_far`, `scope_run_would_pass_deadline` |
+| 5 | The revision: the checkout's commit is the record's | `scope_revision_mismatch` |
+| 6 | The manifest: the file's digest is the record's; it carries the `camera_hud` group with the helper's digest, for all three steps; and `verify_manifest` reports `verified` (clean tree, every pinned file, binary, model and package as recorded) | `scope_manifest_digest_mismatch`, `scope_manifest_lacks_camera_group`, `scope_manifest_not_verified` |
+| 7 | The run id: unused, and marked used now by creating `artifacts/scope-ledger/<run_id>.json` exclusively | `scope_run_id_used`, `scope_ledger_unavailable` |
+
+Only then is the scope granted, for its source's uses: real HUD output, and
+for the left camera also camera input to the display. The run id is consumed
+as the last step of the verification, inside the permission check, so before
+the bridge or the helper is launched. An exception anywhere in it is a
+refusal (`scope_verification_failed`).
+
+**What verification runs.** It hashes files and runs read-only queries: `git`
+for the commit and the tree's state, and, where no package database is
+readable (the Frame's case), the manifest's read-only `pacman -Q` for the
+SteamVR package. It starts nothing else, and nothing that it starts writes.
+
+**Holders, and asking again.** A use goes to the first holder that asks for
+it (the client for real output, the stage for camera input) and to no other
+object. Nothing keeps the answer outside the scope. When the holder asks
+again, which the client does at `start()` right before it launches the
+bridge, the scope answers `True` only if it has not been revoked, the run's
+remaining seconds still end before the deadline, and the binary that use
+launches still has the digest the manifest recorded. Nothing is consumed
+again. So a start after the deadline, or with the bridge rewritten after the
+check, is refused. What remains between that answer and the launch is the
+launch itself. For the helper, `run_export` hashes the binary once more
+right before its launch and ends the run `helper_digest_mismatch`, with
+nothing launched, if it is not the manifest's.
+
+**Revoking.** A run that is refused, or that fails before its bridge started,
+revokes its scope (`ObservedFrameClient.withdraw`), so a grant can never
+start anything later. The run id stays spent.
+
+**The duration is bound to what runs.** The scope's seconds are not only a
+declared number:
+
+- A real-output client carries its own bound, `max_output_seconds`, which the
+  output site requires to be present and no longer than the scope's seconds.
+  The client enforces it: that long after `start()` is called its writer
+  drops what waits, writes the hide and the stop packet and accepts nothing
+  more, whatever its caller does. A real-output client with no bound is
+  refused.
+- The camera site requires the stage's own `seconds` (a stage with none is
+  refused), the helper's `max_seconds`, and the helper's `max_frames` at its
+  frame rate, all to lie within the scope's seconds.
+
+**The ledger.** It lives in the checkout's ignored `artifacts/` directory,
+so it does not dirty the tree and no environment variable moves it. This is
+where the control is plainly procedural: a fresh clone has an empty ledger,
+and removing the ledger directory makes a spent record usable again until
+its deadline.
+
+**The two call sites.** `fixed_hud_output_permitted` (above) is the output
+site. Its preconditions, checked before anything is consumed
+(`output_preconditions`): an `ObservedFrameClient` in real output, whose mode
+is fixed at construction; a `RunScope` of that exact type; a bound of its
+own within the scope's seconds; and the checkout's own
+`artifacts/overlay-bridge/sightcircuit-overlay-bridge`, the file the manifest
+hashes (`scope.pinned_binary`; a copy elsewhere is refused, a link to it is
+it, and `~` expands as it does for the helper's path). It then asks every
+callable in the client's `prerequisites`, and only then the scope.
+
+`camera_display_input_permitted` in `sightcircuit/hud/camera_stage.py` is the
+one check for camera input feeding the display path: `CameraHudStage.run`
+hands its answer to the `LIVE_CAMERA_INPUT` gate's `require` whenever its
+client is in real output, after the output check and before the helper or the
+bridge is launched. Its preconditions
+(`camera_display_input_preconditions`): a `CameraHelperSource` on the left
+camera whose helper is the checkout's own
+`artifacts/camera-helper/sightcircuit-camera-helper`, a scope asked for
+`arcturus_camera_left`, and the bounds above. The stage registers those
+preconditions as the client's prerequisite, so the output site checks them
+before it consumes the record: a wrong helper path, an unbounded stage or the
+synthetic step's record on a camera stage is refused with the record unspent
+(by the output gate, since that is the site that would have consumed it). A
+stage on the validation bridge displays nothing and asks neither site; that
+run stays the bounded recognition without display. Both sites take only a
+`RunScope` of that exact type and only its literal `True`. `run_pipeline`,
+the mirror's HUD mode and `require_synthetic` are unchanged and never consult
+a record.
+
+`RunScope.report()` gives identifiers only (the requested and the recorded
+step and source, the run id, the revision, the manifest digest, the
+deadline, the bound, the approval reference, whether it was granted, revoked
+and consumed, and the refusal), for a command's report.
+
+**A stored report from before this change.** Reports that carry every gate
+claim (`gates.claims()`) gained `production_camera_input_enabled`. The
+mirror route's validators require each claim to be present and `False`, so
+an observer or marker report stored before work-order item L10 no longer
+validates (`hud/observation.py`, reached from `hud/candidate.py`). That is
+left failing closed: an absent claim is not read as false. The mirror route
+is parked, and a new observation would be a new report.
+
+`tests/test_scope_record.py` builds a temporary checkout with a manifest per
+case and refuses each of: no record, an expired one, a run that would pass
+the deadline, a record from the future, a deadline too far ahead, a wrong
+revision, a wrong manifest digest, a manifest without the camera group, a
+rebuilt helper or bridge, a changed model, a dirty tree, a reused run id
+(also in a race), an unwritable ledger, the mirror and every other source,
+both cameras, another geometry, another runner, another step, a duration
+over the bound, a stage or a helper bounded beyond the scope's seconds, a
+client with no bound, a record for another step's source, a malformed record
+and one with a repeated key, a start after the deadline or with a rewritten
+bridge, a revoked scope, a truthy answer that is not `True` at both sites, a
+valid record named only by environment variables, and the synthetic-path
+bypass. It also runs a real-output client against the fake OpenVR runtime
+with a caller that never stops, and sees the client end output at its bound.
+The records that verify there are test fixture records.
 
 ## The report
 
@@ -279,7 +467,7 @@ failure on the client's writer thread, NumPy arguments, names-only rows and
 each orientation, the gate refusal with nothing launched, the ledger, the
 window verdict, and the report schema with its fan-out forms. On
 `--fixed-hud` against the fake runtime (`tests/fixtures/fake_vrclient.cpp`),
-with the permission function patched for the test: the runtime's hide and
+with the two permission functions patched for the test: the runtime's hide and
 show calls at the take-down and the show, the bridge's own hide at a
 deadline, the hide at a presence end, the end racing a submit, the
 end-of-run hide behind a stalled upload, keepalives on a live tile and after
