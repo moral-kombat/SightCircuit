@@ -42,15 +42,15 @@ The [qualification design](hud-qualification.md) states what an observation
 cannot prove and what qualification still requires. Existing commands and
 historical one-run approvals are not new device authorization.
 
-### Camera display work order (proposed 2026-11-15, not adopted)
+### Camera display work order (adopted 2026-11-16)
 
-**Status: a proposal for the owner.** Nothing in this section is adopted, and
-nothing here authorises a device step. It is adopted when the owner answers
-the decisions [below](#camera-display-decisions-for-the-owner) and L1 records
-them in [scope](poc-scope.md#architecture-decisions-2026-11-07). Until then the
-work order above and the lanes below stay current. The owner asked for it on
-2026-11-15, after the proof of concept ([E99](evidence/e099.md)): the SDK
-camera is to become the live display's input.
+**Status: adopted by the owner on 2026-11-16** (requested 2026-11-15, after the
+proof of concept, [E99](evidence/e099.md)). The owner's answers are recorded in
+[scope](poc-scope.md#architecture-decisions-2026-11-07) and
+[below](#camera-display-decisions-answered-2026-11-16). This section supersedes
+lane F's remaining device work and the mirror-input parts of the lanes below,
+as lane R records; nothing here authorises a device step, and every gate stays
+closed until its row is accepted and a reviewed edit lands.
 
 **Why the plan changes.** E99 proved the input half on the Frame: SDK camera
 frames reached the detector through the helper's GPU import, with inference
@@ -73,9 +73,11 @@ of feedback); and a governance path, since showing camera-derived labels is
 gated live input and HUD output. The E48-pattern classification covers only
 bounded recognition without display.
 
-**Not established by E99.** Chair recall: the owner had no chair and used a
-bottle, the scene was not controlled, and the eight chair frames are
-incidental. Chair coverage is first measured in L-D1.
+**The object is a bottle.** No chair is available at the device, so the owner
+chose the bottle (2026-11-16). E99 did not detect it: it was small or far and
+the scene was not controlled. Bottle coverage, held close, is first measured
+in L-D1; if it misses its threshold, L14's remedies apply before any displayed
+step.
 
 #### Lane L, live label display from the SDK camera
 
@@ -84,7 +86,7 @@ L-D2. G-numbers G1 to G6 keep their meaning as mirror rows; G7 to G10 are new.
 
 | Item | Work | Kind | Depends on |
 | --- | --- | --- | --- |
-| L1 | Record the owner's answers as dated scope rows, quoting the owner: the SDK camera (left, index 0) supersedes the mirror as the display's input; displayed labels are gated use; the diagnostic tier as decided; the passthrough definition; the presence interim; the consent answer for display; the calibration answer; the contract bound; F3's disposition. Superseded sentences are marked, not deleted (including the 2026-11-08 ordering clause that SDK probes follow F3 and C5/C6). No row opens a gate or authorises a device run | S, docs | the owner's answers |
+| L1 | Done (2026-11-16, this change). Record the owner's answers as dated scope rows, quoting the owner: the SDK camera (left, index 0) supersedes the mirror as the display's input; displayed labels are gated use; the diagnostic tier as decided; the passthrough definition; the presence interim; the consent answer for display; the calibration answer; the contract bound; F3's disposition. Superseded sentences are marked, not deleted (including the 2026-11-08 ordering clause that SDK probes follow F3 and C5/C6). No row opens a gate or authorises a device run | S, docs | the owner's answers |
 | L2 | Truth fixes, independent of the decisions: the S2 row's "no probe has run" and the helper reference's "unverified on the device" paragraph now cite E95 to E99 (the foreign-queue acquire and DMA-BUF sync observed working, not verified in general); the recognition guide's "nothing here is a device result"; the lane S heading's "cloud-only"; a `gates.py` docstring naming bounded camera recognition as an out-of-gate use (docstring only) | S, docs | none |
 | L3 | Reviewed acceptance-row edit (F6's role): mark G1 to G6 mirror route, G2 carrying over closed; add G7 to G10 with numeric criteria and the evidence type (headset report, distinct from cloud and CI); restate the scope's acceptance for camera input; a camera-HUD device-report template; rewrite the work-order intro, critical path and risks; a docs test pins every G-number `gates.py` names to the table | M, docs and decision | L1 |
 | L4 | Camera export contract v2: `max_seconds` 1 to 90 and `max_frames` 1 to 900 (fps 1 to 10 unchanged), protocol `camera-export/2` so an old helper is refused, a regenerated header, a revised wearer-facing notice that says labels are shown; `camera_recognize` keeps its 30 s and 300 frames | S to M, cloud | owner decision 4 |
@@ -112,11 +114,11 @@ SteamVR mirror may be in the cameras' view during a run.
 
 | Step | What runs | Acceptance (proposed numbers in decision 9) | Depends on |
 | --- | --- | --- | --- |
-| L-D1 | G7 and coverage, no display, out of gate as in E99: two `camera_recognize` runs of at most 30 s, left camera, 5 fps. Run 1: the chair at about 1.5 m and 3 m; the headset removed at about 20 s. Run 2: the chair at cued positions (left, centre, right, up, down) | the run ends `headset_removed` or `standby` at most 3.0 s after the removal mark, no frame processed with an acquire time over 2.0 s after it; the chair in at least 80% of in-view 1-s windows; p95s within 200 ms; the offline side matches at least 2 of 3 cues per position, or decision 3 falls to names only | L1, L15, approval |
+| L-D1 | G7 and coverage, no display, out of gate as in E99: two `camera_recognize` runs of at most 30 s, left camera, 5 fps. Run 1: the bottle held at about 0.5 m and 1 m; the headset removed at about 20 s. Run 2: the bottle at cued positions (left, centre, right, up, down) at about 0.7 m | the run ends `headset_removed` or `standby` at most 3.0 s after the removal mark, no frame processed with an acquire time over 2.0 s after it; the bottle in at least 80% of in-view 1-s windows within 1 m; p95s within 200 ms; the offline side matches at least 2 of 3 cues per position, or decision 3 falls to names only | L1, L15, approval |
 | L-D2 | G8, coexistence and the canary: the bridge shows the public seed fixture with horses (a class absent from the room) at the HUD position at HUD size, updated at 5 Hz for at least 120 s, during one `camera_recognize` run; a printed copy held in view for the last 10 s as the positive control. No camera-derived output is shown. The panel driver needed for a still at 5 Hz is part of L7 | no horse while only the panel shows it; the print detected at least once; at least 600 acknowledged updates, no freeze; camera p95 within 200 ms with the bridge running; both cleanups clean. Measured for this scene and panel only | L1, decisions 6 and 7, approval |
 | L-D3 | G9, real-output expiry and soak, no camera: `camera_hud --synthetic-rows` on the rebuilt bridge under one scope record; a counter row at 5 Hz for at least 75 s with three stops | at least 375 acknowledged updates at 320x128; each stop gives `frame_expired` within 1,000 ms plus one poll and the wearer sees the tile blank; nothing displayed past its deadline | L7, L9, L10, L12, approval |
-| L-D4 | First displayed camera labels: `camera_hud --camera`, at most 30 s, on the chair; the wearer turns away at least three times; the headset removed once at the end, so the presence stop is seen on the displayed path. A separate entry; it does not count as G10 | the chair named; arrows within tolerance if decision 3 is arrows; the name gone within about 2 s of each turn-away by the wearer and `frame_expired`; the tile cleared on removal; p95s within 200 ms | L-D1 to L-D3, L4, L9, L10, L12, approval |
-| L-D5 | G10, the 60-second camera-HUD acceptance (formerly F7 and WP12): `camera_hud --camera`, 90 s bound, the chair, head turns, the chair out of view for 5 s and back. The arrow tolerance agreed in writing first | the chair named for at least 90% of a contiguous 60 s window, no gap over 2 s, and the wearer agrees; expiry on leaving view; capture-to-display p95 within decision 9's bound; input age at most 1,000 ms; passthrough and tracking normal during and for 30 s after; clean shutdown; green input aborts (G2) | L-D4, approval |
+| L-D4 | First displayed camera labels: `camera_hud --camera`, at most 30 s, on the bottle; the wearer turns away at least three times; the headset removed once at the end, so the presence stop is seen on the displayed path. A separate entry; it does not count as G10 | the bottle named; arrows within tolerance if decision 3 is arrows; the name gone within about 2 s of each turn-away by the wearer and `frame_expired`; the tile cleared on removal; p95s within 200 ms | L-D1 to L-D3, L4, L9, L10, L12, approval |
+| L-D5 | G10, the 60-second camera-HUD acceptance (formerly F7 and WP12): `camera_hud --camera`, 90 s bound, the bottle within 1 m, head turns, the bottle out of view for 5 s and back. The arrow tolerance agreed in writing first | the bottle named for at least 90% of a contiguous 60 s window, no gap over 2 s, and the wearer agrees; expiry on leaving view; capture-to-display p95 within decision 9's bound; input age at most 1,000 ms; passthrough and tracking normal during and for 30 s after; clean shutdown; green input aborts (G2) | L-D4, approval |
 
 The red LED is a code property (no software path touches it), not a wearer
 observation; the step cards say so.
@@ -146,10 +148,13 @@ fixed in the cloud (#76) and unverified on Turnip; offline review follow-up 2
 (the bridge's six-second connection budget) needs its device check, now on the
 helper-plus-bridge path.
 
-#### Camera display decisions for the owner
+#### Camera display decisions (answered 2026-11-16)
 
-Each has a recommendation. Decisions 1, 9 (the chair) and 14 are the owner's
-alone; the others can be taken as recommended.
+The owner took every recommended answer ("Yes, take all (Recommended)"),
+allowed display (decision 14, "Yes, allow display (Recommended)"), accepted one
+record per displayed step (decision 15, "Yes, one per step (Recommended)"),
+and for decision 9 answered that no chair is available and chose the bottle.
+The list keeps each question as it was put.
 
 1. **Input and gates.** The left SDK camera supersedes the mirror as the
    display's input, and displayed labels are gated use: new rows G7 to G10,
@@ -176,8 +181,8 @@ alone; the others can be taken as recommended.
 8. **Presence.** Operator-attended bounded runs with the helper ending on
    removal, as the agreement's interim; one typed start per launch.
    Recommended: yes.
-9. **Object and numbers.** Is a chair available where the Frame is used? The
-   proposed thresholds: removal stop within 3.0 s; coverage at least 80%; G10
+9. **Object and numbers.** Is a chair available where the Frame is used? No:
+   the bottle, held within 1 m. The thresholds, as proposed: removal stop within 3.0 s; coverage at least 80%; G10
    at least 90% of 60 s with no gap over 2 s; capture-to-display p95 at most
    400 ms; expiry within 1,000 ms plus one poll.
 10. **Age clock.** Ages and expiry from the host acquire time, at 1 s, with
@@ -522,6 +527,13 @@ handler on the main thread ([checks reference](reference/development-checks.md#h
   input, and the toolchain beyond the host compiler the build script uses.
   Next device approvals on this lane, each separate, after the S1 to S3 PRs
   merge: S4, then S5, then S8, then S9.
+- Decided 2026-11-16: the [camera display work order](#camera-display-work-order-adopted-2026-11-16)
+  is adopted with all fifteen answers (scope row of that date): the SDK camera
+  becomes the display's input, display to the wearer is allowed in attended
+  bounded runs, one record per displayed step, F3 cancelled and E100 to E103
+  released (lane R's R0 records it in this page), and the bottle replaces the
+  chair as the object. Next device approvals on that lane, each separate:
+  L-D1, then L-D2, then L-D3 to L-D5 after their cloud items.
 - The Frame rebooted into SteamOS 0.5.8 ([E85](evidence/e085.md)); a Frame
   manager session exists and the "Frame update check" scheduled task was
   rebound to it on 2026-11-07, with the old task left disabled as a record.
