@@ -19,6 +19,8 @@
     "test_latency_statistics": 30,
     "test_camera_helper_source": 90,
     "test_camera_recognize": 90,
-    "test_fixed_hud_runtime": 90
+    "test_fixed_hud_runtime": 90,
+    "test_camera_hud_stage": 90,
+    "test_observed_frame_client": 45
   }
 }

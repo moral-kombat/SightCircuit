@@ -125,7 +125,8 @@ Expiry is separate from the three/ten-second transport timeouts.
 
 Both Python and the bridge reject opcode 4 for real output. The one
 real-output mode with expiry, [`--fixed-hud`](#fixed-hud-mode-work-order-item-l7-2026-11-16),
-takes opcode 6 instead, and no Python client starts it. Existing replay opcode
+takes opcode 6 instead; its client refuses to start it
+([camera HUD reference](camera-hud.md#the-observed-frame-client)). Existing replay opcode
 1 and paused-replay behavior remain available under their existing
 authorization. A stalled native process, blocked API call or stuck kernel I/O
 can prevent timely expiry, and no real-time bound or headset hide result is
@@ -199,7 +200,7 @@ The validation bridge takes opcode `6` under the same rules, and still takes
 opcode `4` exactly as before, bounded at one second from arrival; the
 synthetic pipeline and its ledger are unchanged.
 `sightcircuit.overlay.observed_frame_packet` encodes the packet and refuses
-what the bridge would; no client sends it yet.
+what the bridge would; `ObservedFrameClient` (L8) is its only sender.
 
 ### Expiry
 
@@ -258,8 +259,12 @@ not what the headset displayed.
 **Python stays the outer guard.** `OverlayClient` starts `--validate-stdin` or
 `--stdin` and nothing else, and `submit_frame(expires_ns=...)` and
 `freeze_settings` still refuse real output through `LIVE_HUD_OUTPUT`, whatever
-a bridge reports. A client for this mode arrives with the later work-order
-items (L8 to L10), behind their scope record.
+a bridge reports. The mode's client, `ObservedFrameClient` (L8, the
+[camera HUD reference](camera-hud.md#the-observed-frame-client)), starts the
+validation bridge and refuses to start this mode through the same gate; the
+scope record that could permit one run arrives with L10. While its tile is
+taken down that client's keepalive is a hide request, not the show described
+above, so that it cannot bring back a tile that has not reached its deadline.
 
 **The Frame's bridge.** The binary on the Frame predates this mode and rejects
 `--fixed-hud` as an unknown mode (exit 64). Rebuilding it there

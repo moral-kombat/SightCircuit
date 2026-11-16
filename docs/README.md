@@ -54,6 +54,9 @@ Each device guide describes prerequisites, operating limits, and shutdown.
 - [Camera helper](reference/camera-helper.md) — the containment for the
   Arcturus camera SDK: one SDK translation unit, a fake backend for CI, an
   operator-only build against the Client Library, metadata-only modes.
+- [Camera HUD stage](reference/camera-hud.md) — the stage that turns each
+  processed camera frame into an observed frame on the bridge, its client and
+  its report; library code, cloud-checked, real output refused.
 - [Agent-on-Frame design](agent-on-frame.md) and
   [third-party attribution](../THIRD_PARTY.md).
 

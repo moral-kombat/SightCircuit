@@ -16,6 +16,10 @@
   3x3 direction cell over the full frame, or names only. It shares the row
   hygiene in ``contract`` (``row_label``, ``select_rows``) with ``HudMask`` and
   imports no mask, mapping or qualification code.
+* ``camera_stage``: ``CameraHudStage``, the camera route's run (source,
+  detector, ``camera_rows``, tile, one observed frame per result on the
+  bridge) and its report. Imported from its module, not from this package:
+  it needs the overlay transport, which imports this package's contract.
 * ``stage``: ``HudStage``, the engine stage that masks before the detector and
   renders after it, with each frame's exclusion checks (``HudChecks``), and
   ``HudPipelineAdapter``, the stage bound to its sink's fixed output contract.
