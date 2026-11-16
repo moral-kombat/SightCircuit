@@ -476,12 +476,12 @@ nothing presented, answers `no_image`. The report
 `frame_expired` line for the frame that was up. The bound is two named
 parameters of the driver, with acceptance row G9 as their source, both
 measured from the frame's deadline: `hide_called_within_ms` (one bridge
-poll, 20 ms) and `hide_returned_allowance_ms` (250 ms by default, a proposed
-value under the owner's review). Each stop reports both measured values and
+poll, 20 ms) and `hide_returned_allowance_ms` (250 ms, the owner's accepted
+value of 2026-11-16, as row G9 states). Each stop reports both measured values and
 the verdict of each (`hide_called_within_poll`,
 `hide_returned_within_allowance`), the same times from the observation, and
-`within_bound_as_written` for the row's own wording (1,000 ms plus one poll
-from the observation), so the evidence stands whatever bound is accepted. On
+`within_bound_as_written` for the row's first wording (1,000 ms plus one poll
+from the observation), kept for comparison. On
 the validation bridge there are no hide times; the time the bridge noticed
 the expiry stands in for the hide's call and the second verdict is null. The camera is never opened and
 `camera_derived` is false by construction: the row's text is built from the
