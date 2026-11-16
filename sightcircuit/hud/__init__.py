@@ -12,6 +12,10 @@
   of names/directions. It accepts unexpired synthetic fixtures only and checks
   their session tokens; ``mask_regions`` is its geometry rule alone.
 * ``render``: the fixed tile, drawn from ``HudRow``s without any scene image.
+* ``camera``: ``camera_rows``, the mask-free selector for camera detections: a
+  3x3 direction cell over the full frame, or names only. It shares the row
+  hygiene in ``contract`` (``row_label``, ``select_rows``) with ``HudMask`` and
+  imports no mask, mapping or qualification code.
 * ``stage``: ``HudStage``, the engine stage that masks before the detector and
   renders after it, with each frame's exclusion checks (``HudChecks``), and
   ``HudPipelineAdapter``, the stage bound to its sink's fixed output contract.
@@ -23,6 +27,7 @@
   It and ``runtime.synthetic.fixture_calibration`` are the only two
   ``Calibration`` factories.
 """
+from .camera import camera_rows
 from .contract import (HUD_CONFIG, Calibration, CaptureFormat, Footprint, HudConfig, HudOutput, HudRow,
                        config_digest, viewports)
 from .mask import HudMask
@@ -30,4 +35,4 @@ from .qualification import MappingCandidate, ValidationLedger
 from .stage import HudPipelineAdapter, HudStage
 
 __all__ = ("HUD_CONFIG", "Calibration", "CaptureFormat", "Footprint", "HudConfig", "HudMask", "HudOutput", "HudPipelineAdapter", "HudRow", "HudStage",
-           "MappingCandidate", "ValidationLedger", "config_digest", "viewports")
+           "MappingCandidate", "ValidationLedger", "camera_rows", "config_digest", "viewports")

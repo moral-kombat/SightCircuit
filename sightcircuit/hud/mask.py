@@ -18,7 +18,7 @@ import time
 from ..frame import Detection
 from ..gates import HARDWARE_MAPPING
 from .contract import (HUD_CONFIG, SESSION_TOKENS, VIEW_FIELDS, Calibration, CaptureFormat, Footprint, HudChecks,
-                       HudConfig, HudRow, margin_valid, viewports)
+                       HudConfig, HudRow, margin_valid, row_label, select_rows, viewports)
 from .geometry import contains, exclusion, expand, within_blind_budget
 from .render import draw_tile
 
@@ -267,19 +267,10 @@ class HudMask:
             cy = ((native[1] + native[3]) / 2 - eye[1]) / (eye[3] - eye[1])
             dx = -1 if cx < 0.4 else 1 if cx > 0.6 else 0
             dy = -1 if cy < 0.4 else 1 if cy > 0.6 else 0
-            name = "".join(c for c in label if c.isascii() and (c.isalnum() or c in " _-"))[:20].strip()
+            name = row_label(label)
             if name:
                 rows.append(HudRow(name, float(score), (dx, dy)))
-        rows.sort(key=lambda row: (-row.confidence, row.label, row.direction))
-        selected, seen = [], set()
-        for row in rows:
-            key = (row.label, row.direction)
-            if key not in seen:
-                seen.add(key)
-                selected.append(row)
-            if len(selected) == self.config.rows:
-                break
-        return tuple(selected), HudChecks(tuple(boxes), dropped["mask_overlap"], dropped["eye_crossing"])
+        return select_rows(rows, self.config.rows), HudChecks(tuple(boxes), dropped["mask_overlap"], dropped["eye_crossing"])
 
     def render(self, detections, inference_shape, threshold):
         rows = self.rows_for(detections, inference_shape, threshold)

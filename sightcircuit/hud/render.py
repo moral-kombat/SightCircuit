@@ -1,4 +1,7 @@
-"""Fixed HUD tile drawing: names and approximate view-direction arrows only."""
+"""Fixed HUD tile drawing: names and approximate view-direction arrows only.
+
+A row without a direction (``contract.NO_DIRECTION``) shows its name alone.
+"""
 
 
 def draw_tile(rows, config):
@@ -14,8 +17,10 @@ def draw_tile(rows, config):
                 0.45, (180, 180, 180), 1, cv2.LINE_AA)
     for index, row in enumerate(rows):
         y = 43 + 29 * index
-        dx, dy = row.direction
-        if dx or dy:
+        dx, dy = row.direction or (None, None)
+        if dx is None:  # A names-only row (contract.NO_DIRECTION): no arrow and no dot.
+            pass
+        elif dx or dy:
             cv2.arrowedLine(image, (23 - 8 * dx, y - 8 * dy), (23 + 8 * dx, y + 8 * dy),
                             (70, 230, 130), 2, cv2.LINE_AA, tipLength=0.4)
         else:
