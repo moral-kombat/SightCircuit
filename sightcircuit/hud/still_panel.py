@@ -21,6 +21,7 @@ step passes. The report states software facts; it is not headset evidence.
     python -m sightcircuit.hud.still_panel --validate --seconds 120
 """
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -30,7 +31,7 @@ import time
 if __name__ == "__main__":
     # Run as a file: import the checkout's packages, never siblings of this file.
     sys.path[0] = str(Path(__file__).resolve().parents[2])
-from sightcircuit import assets, evaluation  # noqa: E402
+from sightcircuit import evaluation  # noqa: E402
 from sightcircuit.hud.contract import HUD_CONFIG, RGBA_BYTES, config_digest  # noqa: E402
 from sightcircuit.overlay import OverlayClient, PanelSettings  # noqa: E402
 
@@ -70,9 +71,11 @@ def seed_tile(image_id=DEFAULT_IMAGE_ID, *, directory=SEED_DOWNLOADS):
     if not path.is_file():
         raise FileNotFoundError(f"still_panel_seed_image_missing: {entry['file']} "
                                 "(run scripts/evaluate_detectors.py --fetch)")
-    if assets.checksum(path) != entry["sha256"]:
+    # One read: the bytes that are hashed are the bytes that are decoded.
+    encoded = path.read_bytes()
+    if hashlib.sha256(encoded).hexdigest() != entry["sha256"]:
         raise ValueError("still_panel_seed_image_digest_mismatch")
-    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    image = cv2.imdecode(np.frombuffer(encoded, dtype=np.uint8), cv2.IMREAD_COLOR)
     if image is None:
         raise ValueError("still_panel_seed_image_undecodable")
     width, height = HUD_CONFIG.width_px, HUD_CONFIG.height_px
@@ -85,15 +88,19 @@ def seed_tile(image_id=DEFAULT_IMAGE_ID, *, directory=SEED_DOWNLOADS):
     rgba = cv2.cvtColor(tile, cv2.COLOR_BGR2RGBA).tobytes()
     source = {"kind": "public_seed_fixture", "manifest": "evaluation/seed.json", "id": image_id,
               "sha256": entry["sha256"], "present_labels": list(entry.get("present", ())),
-              "fit": "letterbox", "picture_px": [fitted.shape[1], fitted.shape[0]]}
+              "fit": "letterbox", "picture_px": [fitted.shape[1], fitted.shape[0]],
+              "tile_sha256": hashlib.sha256(rgba).hexdigest()}
     return rgba, source
 
 
-def run_still_panel(rgba, source, *, seconds, validation_only=True, allow_device_output=False,
-                    client_factory=OverlayClient, stop=None, clock=time.monotonic):
-    """Show the tile at the HUD placement and re-submit it ``UPDATE_HZ`` times a second for ``seconds``; the report.
+def run_still_panel(image_id=DEFAULT_IMAGE_ID, *, seconds, validation_only=True, allow_device_output=False,
+                    directory=SEED_DOWNLOADS, client_factory=OverlayClient, stop=None, clock=time.monotonic):
+    """Show seed image ``image_id`` at the HUD placement, re-submitted ``UPDATE_HZ`` times a second; the report.
 
-    ``rgba`` and ``source`` come from ``seed_tile``. Real output
+    The tile is built here, by ``seed_tile``, from the image id: a caller
+    cannot hand in pixels or a label for them, so what is shown is the verified
+    fixture and ``camera_derived`` false is a fact about this function, not a
+    claim taken from its caller. Real output
     (``validation_only`` false) needs ``allow_device_output``. Every update is
     one frame packet without a deadline; an update whose predecessor the
     writer had not yet taken is counted in ``updates_replaced`` and the run is
@@ -102,12 +109,11 @@ def run_still_panel(rgba, source, *, seconds, validation_only=True, allow_device
     """
     if type(seconds) is not int or not MIN_SECONDS <= seconds <= MAX_SECONDS:
         raise ValueError("still_panel_seconds_out_of_range")
-    if source.get("kind") != "public_seed_fixture":
-        raise ValueError("still_panel_source_not_a_seed_fixture")
-    if len(rgba) != HUD_CONFIG.width_px * HUD_CONFIG.height_px * RGBA_BYTES:
-        raise ValueError("still_panel_tile_size")
     if not validation_only and not allow_device_output:
         raise ValueError("still_panel_device_output_not_allowed")
+    rgba, source = seed_tile(image_id, directory=directory)
+    if len(rgba) != HUD_CONFIG.width_px * HUD_CONFIG.height_px * RGBA_BYTES:
+        raise ValueError("still_panel_tile_size")
     stop = stop or threading.Event()
     updates = seconds * UPDATE_HZ
     placement = hud_placement()
@@ -171,8 +177,7 @@ def main(argv=None):
     from sightcircuit.runtime.guard import stop_on_signals
 
     try:
-        rgba, source = seed_tile(args.image_id)
-        report = run_still_panel(rgba, source, seconds=args.seconds, validation_only=args.validate,
+        report = run_still_panel(args.image_id, seconds=args.seconds, validation_only=args.validate,
                                  allow_device_output=args.allow_device_output, stop=stop_on_signals())
     except (OSError, RuntimeError, ValueError) as error:
         report = {"report_kind": REPORT_KIND, "schema_version": 1, "status": "error", "error": str(error),

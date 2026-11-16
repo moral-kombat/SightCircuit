@@ -14,7 +14,7 @@ from sightcircuit.runtime import live, synthetic
 from sightcircuit.overlay import DEFAULT_BRIDGE, OverlayClient, PanelSettings, packet
 from sightcircuit.overlay import OverlaySink
 from sightcircuit.hud.contract import MAX_DISPLAY_AGE_NS
-from sightcircuit.overlay import BRIDGE_INPUT_POLL_NS, VISIBILITY_DEADLINE_MARGIN_NS
+from sightcircuit.overlay import BRIDGE_INPUT_POLL_NS, VISIBILITY_DEADLINE_MARGIN_NS, observed_frame_packet
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -197,6 +197,41 @@ class DisplayExpiryTests(unittest.TestCase):
         self.assertEqual((result["frames_received"], result["frames_submitted"]), (1, 0))
         self.assertEqual(process.wait(timeout=3), 1)
 
+    def observed_frame(self, frame_id, observed_ns, life_ns):
+        return observed_frame_packet(frame_id, observed_ns, observed_ns + life_ns, 1, 1, bytes(4))
+
+    def test_observed_frames_follow_the_same_rules_under_validation(self):
+        # The observed frame (work-order item L7) on the validation bridge, which runs the judge the fixed HUD
+        # runs: the deadline is bounded by the observation, and only a newer observation renews it.
+        process, events = self.bridge()
+        start = time.monotonic_ns()
+        for frame_id in range(1, 8):  # one observation, re-sent under new identities for 700 ms
+            self.send(process, self.observed_frame(frame_id, start, 400_000_000))
+            time.sleep(0.1)
+        expired = self.event(events, "frame_expired")
+        self.assertEqual((expired["deadline_ns"], expired["frame_observed_ns"]), (start + 400_000_000, start))
+        self.assertIn(expired["frame_id"], (4, 5))  # the last one taken before the deadline
+        self.assertLess(expired["observed_ns"] - expired["deadline_ns"], self.POLL_NS + self.SCHEDULING_MARGIN_NS)
+        self.assertNotIn("hide_returned_ns", expired)  # validation makes no call
+        newer = time.monotonic_ns()
+        self.send(process, self.observed_frame(8, newer, 200_000_000))  # a newer observation renews
+        self.send(process, self.observed_frame(8, newer, 200_000_000))  # its retransmission does nothing
+        self.send(process, self.observed_frame(7, newer, 900_000_000))  # an older identity is stale
+        second = self.event(events, "frame_expired")
+        self.assertEqual((second["frame_id"], second["deadline_ns"]), (8, newer + 200_000_000))
+        report = self.finish(process, events)
+        self.assertEqual((report["observed_frames_received"], report["frames_retransmitted"], report["expired_frames"]),
+                         (10, 1, 2))
+        self.assertEqual(report["frames_received"] + report["stale_frames_dropped"], 9)
+        self.assertGreaterEqual(report["stale_frames_dropped"], 3)
+        # A deadline past the observation's bound ends the run, however recently the frame arrived.
+        process, events = self.bridge()
+        now = time.monotonic_ns()
+        self.send(process, packet(6, struct.pack("<QQQII", 1, now - 500_000_000, now + 600_000_000, 1, 1) + bytes(4)))
+        result = self.event_or_error(events)
+        self.assertEqual((result["error"], result["frames_received"]), ("invalid_frame_expiry", 0))
+        self.assertEqual(process.wait(timeout=3), 1)
+
     def event_or_error(self, events):
         while True:
             event = events.get(timeout=3)
@@ -289,7 +324,8 @@ class ExpiryGateTests(unittest.TestCase):
         # The client can start only the two stream modes it always could; it never names the new one.
         source = (ROOT / "sightcircuit/overlay.py").read_text()
         self.assertIn('mode = "--validate-stdin" if self.validation_only else "--stdin"', source)
-        self.assertNotIn("fixed-hud", source)
+        self.assertNotIn('"--fixed-hud"', source)
+        self.assertEqual(source.count("subprocess.Popen("), 1)
 
     def test_real_output_and_old_bridge_cannot_accept_expiring_live_frames(self):
         for client in (OverlayClient(validation_only=False), OverlayClient(validation_only=True)):

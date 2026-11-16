@@ -12,7 +12,8 @@ import time
 
 from .gates import LIVE_HUD_OUTPUT
 from .hud.contract import (BRIDGE_READY_WAIT_SECONDS, EXPIRING_FRAME_PREFIX_FORMAT, FRAME_PREFIX_FORMAT, HUD_CONFIG,
-                           MAX_DISPLAY_AGE_NS, MAX_SIDE, OPCODE_EXPIRING_FRAME, OPCODE_FRAME, OPCODE_SETTINGS, OPCODE_STOP,
+                           MAX_DISPLAY_AGE_NS, MAX_SIDE, OBSERVED_FRAME_PREFIX_FORMAT, OPCODE_EXPIRING_FRAME, OPCODE_FRAME,
+                           OPCODE_OBSERVED_FRAME, OPCODE_SETTINGS, OPCODE_STOP,
                            OPCODE_VISIBILITY, PACKET_HEADER_FORMAT, PACKET_MAGIC, RGBA_BYTES, SETTINGS_FORMAT,
                            VISIBILITY_EVENT_BOUND_NS, VISIBILITY_FORMAT, VISIBILITY_HIDE_LINES, VISIBILITY_LINES,
                            VISIBILITY_MISSING_LINE, VISIBILITY_SHOW_LINES)
@@ -60,6 +61,31 @@ def visibility_packet(cycle, visible):
     if type(visible) is not bool:
         raise ValueError("Panel visibility must be boolean")
     return packet(OPCODE_VISIBILITY, struct.pack(VISIBILITY_FORMAT, cycle, int(visible)))
+
+
+def observed_frame_packet(frame_id, observed_ns, expires_ns, width, height, rgba):
+    """The bytes of one observed frame (``OPCODE_OBSERVED_FRAME``, work-order item L7); encoding only.
+
+    ``observed_ns`` is when the source frame was observed, on the host's
+    ``CLOCK_MONOTONIC`` (the clock of ``Frame.observed_ns``); ``frame_id``
+    increases with every new frame, and a retransmission repeats all three
+    numbers. The deadline may not be later than ``observed_ns +
+    MAX_DISPLAY_AGE_NS``: the bridge refuses one that is, so only a newer
+    observation renews a deadline. No client here sends this packet: the
+    validation bridge and the ``--fixed-hud`` bridge mode take it, and
+    ``OverlayClient`` starts neither with it. Its sender arrives with the
+    camera display's later items, behind their scope record.
+    """
+    for value in (frame_id, observed_ns, expires_ns):
+        if type(value) is not int or not 0 <= value < 2 ** 64:
+            raise ValueError("observed_frame_number_out_of_range")
+    if not observed_ns < expires_ns <= observed_ns + MAX_DISPLAY_AGE_NS:
+        raise ValueError("invalid_frame_expiry")
+    if (type(width) is not int or type(height) is not int or not 0 < width <= MAX_SIDE or not 0 < height <= MAX_SIDE
+            or len(rgba) != width * height * RGBA_BYTES):
+        raise ValueError("Invalid RGBA overlay frame")
+    return packet(OPCODE_OBSERVED_FRAME,
+                  struct.pack(OBSERVED_FRAME_PREFIX_FORMAT, frame_id, observed_ns, expires_ns, width, height) + bytes(rgba))
 
 
 def _zero(value):

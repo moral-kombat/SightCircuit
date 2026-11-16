@@ -177,7 +177,8 @@ jobs:
             tests/test_capture_service_lifecycle.py tests/test_capture_layer_trial.py tests/test_supervision.py \
             tests/test_arcturus_sdk_headers.py tests/test_camera_helper.py tests/test_camera_helper_boundaries.py \
             tests/test_camera_export.py \
-            tests/test_camera_contract.py tests/test_camera_export_reader.py tests/test_camera_helper_source.py
+            tests/test_camera_contract.py tests/test_camera_export_reader.py tests/test_camera_helper_source.py \
+            tests/test_fixed_hud_runtime.py
 
   replay:
     # The decoder-only and the full replay-window environments, each exercised
@@ -227,7 +228,7 @@ jobs:
             tests/test_run_context_sensors.py tests/test_hud_prediction.py \
             tests/test_seed_pin.py tests/test_observer_scene_seed.py \
             tests/test_camera_contract.py tests/test_camera_export_reader.py tests/test_camera_helper_source.py \
-            tests/test_camera_recognize.py tests/test_still_panel.py
+            tests/test_camera_recognize.py tests/test_still_panel.py tests/test_fixed_hud_runtime.py
       - name: Verify links, compatibility anchors and generated summaries
         run: |
           python scripts/check_docs.py

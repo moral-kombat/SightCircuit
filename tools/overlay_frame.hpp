@@ -11,29 +11,44 @@ inline std::uint32_t read_u32(const std::uint8_t* p) {
     return std::uint32_t(p[0]) | (std::uint32_t(p[1]) << 8) |
            (std::uint32_t(p[2]) << 16) | (std::uint32_t(p[3]) << 24);
 }
+inline std::uint64_t read_u64(const std::uint8_t* p) {
+    return std::uint64_t(read_u32(p)) | (std::uint64_t(read_u32(p + 4)) << 32);
+}
 struct FrameView {
     std::uint32_t width, height;
     std::uint64_t expiry;
     const std::uint8_t* rgba;
+    // An observed frame (kOpcodeObservedFrame) also says which frame it is and when its source was observed.
+    bool observed = false;
+    std::uint64_t frame_id = 0, observed_ns = 0;
 };
 inline FrameView decode_frame(std::uint32_t kind, const std::vector<std::uint8_t>& payload) {
     namespace contract = sightcircuit_contract;
-    if (kind != contract::kOpcodeFrame && kind != contract::kOpcodeExpiringFrame)
+    if (kind != contract::kOpcodeFrame && kind != contract::kOpcodeExpiringFrame &&
+            kind != contract::kOpcodeObservedFrame)
         throw std::runtime_error("invalid_frame_kind");
-    const bool expiring = kind == contract::kOpcodeExpiringFrame;
-    const unsigned pixels = expiring ? contract::kExpiringFramePrefixBytes : contract::kFramePrefixBytes;
+    const bool expiring = kind == contract::kOpcodeExpiringFrame, observed = kind == contract::kOpcodeObservedFrame;
+    const unsigned pixels = observed ? contract::kObservedFramePrefixBytes :
+                            expiring ? contract::kExpiringFramePrefixBytes : contract::kFramePrefixBytes;
     if (payload.size() < pixels) throw std::runtime_error("invalid_rgba_frame");
     const auto w = read_u32(payload.data() +
-        (expiring ? contract::kExpiringFramePrefixWidthOffset : contract::kFramePrefixWidthOffset));
+        (observed ? contract::kObservedFramePrefixWidthOffset :
+         expiring ? contract::kExpiringFramePrefixWidthOffset : contract::kFramePrefixWidthOffset));
     const auto h = read_u32(payload.data() +
-        (expiring ? contract::kExpiringFramePrefixHeightOffset : contract::kFramePrefixHeightOffset));
+        (observed ? contract::kObservedFramePrefixHeightOffset :
+         expiring ? contract::kExpiringFramePrefixHeightOffset : contract::kFramePrefixHeightOffset));
     if (!w || !h || w > contract::kMaxSide || h > contract::kMaxSide ||
             payload.size() != pixels + w*h*contract::kRgbaBytes)
         throw std::runtime_error("invalid_rgba_frame");
-    const auto* deadline = payload.data() + contract::kExpiringFramePrefixExpiresNsOffset;
-    const auto expiry = expiring ? std::uint64_t(read_u32(deadline)) |
-        (std::uint64_t(read_u32(deadline + 4)) << 32) : 0;
-    return {w, h, expiry, payload.data() + pixels};
+    FrameView frame{w, h, 0, payload.data() + pixels};
+    if (expiring) frame.expiry = read_u64(payload.data() + contract::kExpiringFramePrefixExpiresNsOffset);
+    if (observed) {
+        frame.observed = true;
+        frame.frame_id = read_u64(payload.data() + contract::kObservedFramePrefixFrameIdOffset);
+        frame.observed_ns = read_u64(payload.data() + contract::kObservedFramePrefixObservedNsOffset);
+        frame.expiry = read_u64(payload.data() + contract::kObservedFramePrefixExpiresNsOffset);
+    }
+    return frame;
 }
 inline bool deadline_current(const FrameView& frame, std::uint64_t now) {
     if (!frame.expiry || frame.expiry > now + sightcircuit_contract::kMaxDisplayAgeNs)
@@ -42,29 +57,42 @@ inline bool deadline_current(const FrameView& frame, std::uint64_t now) {
 }
 // The three modes that read the stream protocol, and what each accepts. A deadline is honoured only where
 // the bridge itself clears the tile at it: validation, which presents nothing, and the fixed HUD, the one
-// real-output mode with expiry. The replay stream (--stdin) keeps refusing the expiring opcode.
+// real-output mode with expiry. The replay stream (--stdin) keeps refusing every frame with a deadline.
 enum class StreamMode { Replay, Validation, FixedHud };
 inline bool frame_expiry_supported(StreamMode mode) { return mode != StreamMode::Replay; }
+// The largest payload any packet may announce: the longest frame prefix and the largest frame.
+constexpr std::uint32_t kMaxPayloadBytes = sightcircuit_contract::kObservedFramePrefixBytes +
+    sightcircuit_contract::kMaxSide*sightcircuit_contract::kMaxSide*sightcircuit_contract::kRgbaBytes;
+static_assert(sightcircuit_contract::kObservedFramePrefixBytes >= sightcircuit_contract::kExpiringFramePrefixBytes &&
+              sightcircuit_contract::kObservedFramePrefixBytes >= sightcircuit_contract::kFramePrefixBytes);
 // The named refusal of a packet header in this mode, or nullptr when the packet is taken. The fixed HUD's
-// placement is compiled in and every one of its frames carries a deadline, so it takes neither a settings
-// packet nor a frame without one.
-inline const char* packet_refusal(StreamMode mode, std::uint32_t kind, std::uint32_t size, std::uint32_t max_payload) {
+// placement is compiled in and each of its frames must carry its observation time, identity and deadline, so
+// it takes the observed frame alone: no settings packet, no frame without a deadline, and no expiring frame
+// of the validation layout, whose deadline the bridge could not tie to an observation.
+inline const char* packet_refusal(StreamMode mode, std::uint32_t kind, std::uint32_t size) {
     namespace contract = sightcircuit_contract;
-    if (size > max_payload || (kind != contract::kOpcodeFrame && kind != contract::kOpcodeSettings &&
-                               kind != contract::kOpcodeStop && kind != contract::kOpcodeExpiringFrame &&
-                               kind != contract::kOpcodeVisibility))
+    if (size > kMaxPayloadBytes || (kind != contract::kOpcodeFrame && kind != contract::kOpcodeSettings &&
+                                    kind != contract::kOpcodeStop && kind != contract::kOpcodeExpiringFrame &&
+                                    kind != contract::kOpcodeVisibility && kind != contract::kOpcodeObservedFrame))
         return "invalid_packet_header";
     if ((kind == contract::kOpcodeSettings && size != contract::kSettingsBytes) ||
             (kind == contract::kOpcodeStop && size) ||
             (kind == contract::kOpcodeVisibility && size != contract::kVisibilityBytes) ||
             (kind == contract::kOpcodeFrame && size < contract::kFramePrefixBytes))
         return "invalid_packet_size";
+    if (mode == StreamMode::FixedHud) {
+        if (kind == contract::kOpcodeSettings) return "fixed_hud_refuses_settings";
+        if (kind == contract::kOpcodeFrame || kind == contract::kOpcodeExpiringFrame)
+            return "fixed_hud_requires_observed_frame";
+    }
+    // The validation stream keeps the name it has always given a short expiring packet.
     if (kind == contract::kOpcodeExpiringFrame &&
             (!frame_expiry_supported(mode) || size < contract::kExpiringFramePrefixBytes))
-        // The validation stream keeps the name it has always given a short expiring packet.
-        return mode == StreamMode::FixedHud ? "invalid_packet_size" : "expiring_frames_validation_only";
-    if (mode == StreamMode::FixedHud && kind == contract::kOpcodeSettings) return "fixed_hud_refuses_settings";
-    if (mode == StreamMode::FixedHud && kind == contract::kOpcodeFrame) return "fixed_hud_requires_expiring_frame";
+        return "expiring_frames_validation_only";
+    if (kind == contract::kOpcodeObservedFrame) {
+        if (!frame_expiry_supported(mode)) return "observed_frames_fixed_hud_or_validation_only";
+        if (size < contract::kObservedFramePrefixBytes) return "invalid_packet_size";
+    }
     return nullptr;
 }
 // The fixed HUD presents the contract's tile and nothing else.
@@ -73,21 +101,58 @@ inline void check_frame_size(StreamMode mode, const FrameView& frame) {
                                          frame.height != sightcircuit_contract::kHudHeightPx))
         throw std::runtime_error("fixed_hud_frame_size");
 }
-// The deadline of the presented frame; zero while nothing with a deadline is presented. The deadline is the
-// frame's identity on the wire: a retransmission carries the deadline it was first sent with, so admitting it
-// again leaves the deadline where it was, and once that deadline has passed the same packet is refused as
-// expired. Nothing but a frame with a later deadline of its own moves it, and none may lie further ahead of
-// the time the bridge observes the frame than the contract's maximum display age.
+// What becomes of an arriving frame.
+enum class Arrival {
+    Present,         // may be presented; its deadline is committed once its pixels are
+    Expired,         // its deadline had passed when the bridge observed it: refused, never presented
+    Stale,           // older than the frame already taken (a lower identity or an earlier observation): refused
+    Retransmission,  // the frame already taken, sent again unchanged: ignored, its deadline stays where it was
+};
+// The deadline of the presented frame, and the identity and observation time of the last frame taken.
+//
+// A frame is judged when the bridge observes it and committed only once its pixels are presented, so a
+// slow upload can never leave a deadline standing for pixels that are not up, nor hide a tile's expiry
+// behind its successor's deadline.
+//
+// An observed frame carries its identity and the time its source was observed. Its deadline may not be later
+// than that observation plus the contract's maximum display age, its observation may not lie in the future
+// (beyond a small tolerance) and neither its identity nor its observation may go backwards. A deadline
+// is therefore renewed only by a frame with a newer identity, and never beyond one maximum display age after
+// what that frame says it observed. The same identity again is a retransmission and changes nothing; the
+// same identity with another observation or deadline is a contradiction and ends the run.
+//
+// The validation layout (kOpcodeExpiringFrame) carries a deadline alone; the bound there is one maximum
+// display age from arrival, as it has always been.
 struct FrameDeadline {
-    std::uint64_t expiry = 0;
-    // An arriving frame, observed at `now`: true when it may be presented and its deadline is kept, false when
-    // it arrived already expired (refused: never presented, and the presented frame keeps its own deadline).
-    // A zero or over-long deadline throws invalid_frame_expiry. A frame without a deadline (the replay
+    std::uint64_t expiry = 0;  // of the presented frame; zero while nothing with a deadline is presented
+    bool identified = false;   // an observed frame has been taken; the three values below are its own
+    std::uint64_t frame_id = 0, observed_ns = 0, frame_expiry = 0;
+
+    Arrival judge(const FrameView& frame, bool expiring, std::uint64_t now) const {
+        namespace contract = sightcircuit_contract;
+        if (!expiring) return Arrival::Present;
+        if (!frame.observed) return deadline_current(frame, now) ? Arrival::Present : Arrival::Expired;
+        if (!frame.expiry || frame.expiry <= frame.observed_ns ||
+                frame.expiry - frame.observed_ns > contract::kMaxDisplayAgeNs)
+            throw std::runtime_error("invalid_frame_expiry");
+        if (frame.observed_ns > now && frame.observed_ns - now > contract::kObservationFutureToleranceNs)
+            throw std::runtime_error("frame_observed_in_future");
+        if (identified && frame.frame_id == frame_id) {
+            if (frame.observed_ns != observed_ns || frame.expiry != frame_expiry)
+                throw std::runtime_error("frame_identity_changed");
+            return Arrival::Retransmission;
+        }
+        if (identified && (frame.frame_id < frame_id || frame.observed_ns < observed_ns)) return Arrival::Stale;
+        return frame.expiry > now ? Arrival::Present : Arrival::Expired;
+    }
+    // The frame's pixels are presented: its deadline now stands. A frame without a deadline (the replay
     // opcode) clears it.
-    bool admit(const FrameView& frame, bool expiring, std::uint64_t now) {
-        if (expiring && !deadline_current(frame, now)) return false;
+    void commit(const FrameView& frame, bool expiring) {
         expiry = expiring ? frame.expiry : 0;
-        return true;
+        if (frame.observed) {
+            identified = true;
+            frame_id = frame.frame_id; observed_ns = frame.observed_ns; frame_expiry = frame.expiry;
+        }
     }
     // The deadline that has passed at `now`, once (it is cleared), or zero.
     std::uint64_t due(std::uint64_t now) {
@@ -96,6 +161,8 @@ struct FrameDeadline {
         expiry = 0;
         return passed;
     }
+    // Whether `passed` (a value due() returned) was the deadline of the identified frame.
+    bool names(std::uint64_t passed) const { return identified && passed == frame_expiry; }
 };
 template <class Target> void dispatch_frame(Target& target, const FrameView& frame) {
     target.frame(frame.width, frame.height, frame.rgba);

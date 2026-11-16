@@ -192,25 +192,42 @@ bool read_exact(std::uint8_t* data, std::size_t size, bool eof_allowed, Overlay&
 }
 } // namespace
 void stream(Overlay& overlay, StreamMode mode, Json::Value& report) {
+    using sightcircuit_overlay::Arrival;
     const bool validate = mode == StreamMode::Validation;
     std::array<std::uint8_t,contract::kPacketHeaderBytes> header{};
     sightcircuit_overlay::FrameDeadline deadline;
     bool current = false, visible = true;
     overlay.validation_only = validate;
     report["visibility_requests_received"] = 0U; report["visibility_events_missing"] = 0U;
+    const auto count = [&](const char* name) { report[name] = report[name].asUInt()+1; };
+    // One frame_expired line for a deadline that has passed. In real output the tile is first withdrawn
+    // (hide, confirm, clear) unless its successor's pixels already replaced it; the line is written after
+    // the hide returned and carries both times. A hide that failed, or an overlay the runtime still reports
+    // visible, ends the run once the line is written, and cleanup then retires the overlay.
+    const auto expired = [&](std::uint64_t passed, std::uint64_t now, const char* outcome, bool withdraw,
+                             const sightcircuit_overlay::FrameView* frame = nullptr) {
+        ExpiryRecord record;
+        record.deadline_ns = passed; record.observed_ns = now; record.validate = validate; record.outcome = outcome;
+        if (frame ? frame->observed : deadline.names(passed)) {
+            record.identified = true;
+            record.frame_id = frame ? frame->frame_id : deadline.frame_id;
+            record.frame_observed_ns = frame ? frame->observed_ns : deadline.observed_ns;
+        }
+        current = false;
+        Withdrawal withdrawal;
+        if (validate) overlay.has_image = false;
+        else if (withdraw) { withdrawal = overlay.withdraw(); record.withdrawal = &withdrawal; }
+        count("expired_frames");
+        emit_frame_expired(record);
+        if (record.withdrawal && !withdrawal.ok())
+            throw std::runtime_error(withdrawal.hide_ok ? "overlay_visible_after_hide" :
+                                     "HideOverlay:" + withdrawal.hide_error);
+    };
     // Polled on every input wait, so the stdin loop keeps reading while a hidden event is awaited: the
-    // expiry of the presented frame, then the bound on a pending visibility request. Neither blocks. At a
-    // deadline the image is withdrawn and visibility() (the F1 path) hides the overlay; frame_expired is
-    // written after the hide call returned, with the time the deadline was observed to have passed.
+    // expiry of the presented frame, then the bound on a pending visibility request. Neither blocks.
     const auto expire = [&] {
         const auto now = monotonic_ns();
-        if (const auto passed = deadline.due(now)) {
-            current = false;
-            overlay.has_image = false;
-            if (!validate) overlay.visibility();
-            report["expired_frames"] = report["expired_frames"].asUInt()+1;
-            emit_frame_expired(passed, now, validate);
-        }
+        if (const auto passed = deadline.due(now)) expired(passed, now, "hidden", true);
         overlay.settle_visibility(now);
         report["visibility_events_missing"] = overlay.visibility_events_missing;
         report["content_current"] = current;
@@ -223,7 +240,7 @@ void stream(Overlay& overlay, StreamMode mode, Json::Value& report) {
         const auto kind = read_u32(header.data()+contract::kPacketHeaderOpcodeOffset);
         const auto size = read_u32(header.data()+contract::kPacketHeaderPayloadBytesOffset);
         // What this mode takes is decided on the header, before any payload is read (overlay_frame.hpp).
-        if (const char* refusal = sightcircuit_overlay::packet_refusal(mode, kind, size, kMaxPayload))
+        if (const char* refusal = sightcircuit_overlay::packet_refusal(mode, kind, size))
             throw std::runtime_error(refusal);
         std::vector<std::uint8_t> payload(size);
         if (size) read_exact(payload.data(),size,false,overlay,expire);
@@ -233,25 +250,49 @@ void stream(Overlay& overlay, StreamMode mode, Json::Value& report) {
             const auto s = settings(payload);
             visible = s.visible;
             if (!validate) overlay.configure(s);
-            report["settings_received"] = report["settings_received"].asUInt()+1;
+            count("settings_received");
         } else if (kind == contract::kOpcodeVisibility) {
             visible = overlay.visibility_request(payload, validate, report);
         } else {
             const auto frame = sightcircuit_overlay::decode_frame(kind, payload);
             sightcircuit_overlay::check_frame_size(mode, frame);
             const auto w = frame.width, h = frame.height;
-            const bool expiring = kind == contract::kOpcodeExpiringFrame;
-            // The frame is observed here: an expired arrival is refused before anything is presented, and
-            // the frame already presented keeps its own deadline.
-            const bool admitted = deadline.admit(frame, expiring, monotonic_ns());
-            if (expiring) report["expiring_frames_received"] = report["expiring_frames_received"].asUInt()+1;
-            if (!admitted) {
-                report["stale_frames_dropped"] = report["stale_frames_dropped"].asUInt()+1;
-                continue;
+            const bool expiring = kind != contract::kOpcodeFrame;
+            // The frame is observed here. Anything but Present is refused before a pixel is uploaded, and the
+            // frame already presented keeps its own deadline.
+            const auto arrival = deadline.judge(frame, expiring, monotonic_ns());
+            if (expiring) count("expiring_frames_received");
+            if (frame.observed) count("observed_frames_received");
+            if (arrival == Arrival::Retransmission) { count("frames_retransmitted"); continue; }
+            if (arrival != Arrival::Present) { count("stale_frames_dropped"); continue; }
+            count("frames_received");
+            if (validate) {
+                deadline.commit(frame, expiring);
+                current = true;
+            } else if (!expiring) {
+                sightcircuit_overlay::dispatch_frame(overlay, frame);
+                deadline.commit(frame, expiring);
+                current = true;
+            } else {
+                // SetOverlayRaw is synchronous and may return late. Nothing can be hidden while it runs (the
+                // loop is one thread; the step watchdog bounds it), so both deadlines are re-read when it
+                // returns, before any show: the old tile's, which is recorded under its own deadline, and the
+                // new frame's, which is committed only if it has not passed.
+                overlay.upload(w, h, frame.rgba);
+                const auto now = monotonic_ns();
+                const bool late = frame.expiry <= now;
+                if (const auto passed = deadline.due(now)) expired(passed, now, "replaced", false);
+                if (late) {
+                    // Its pixels are in the overlay and may be visible if the old tile was up: take them down.
+                    deadline.expiry = 0;
+                    count("frames_expired_in_upload");
+                    expired(frame.expiry, now, "expired_before_show", true, &frame);
+                } else {
+                    deadline.commit(frame, expiring);
+                    overlay.present();
+                    current = true;
+                }
             }
-            current = true;
-            report["frames_received"] = report["frames_received"].asUInt()+1;
-            if (!validate) sightcircuit_overlay::dispatch_frame(overlay, frame);
             if (!validate) report["frames_submitted"] = report["frames_received"];
             if (report["frames_received"].asUInt() == 1) emit_first_frame(validate, w, h);
         }

@@ -168,16 +168,19 @@ applies to the ledger too. Calibration expiry can shorten the deadline further.
 
 The bridge enforces its side of this in two modes only, `--validate-stdin`
 and the real-output [`--fixed-hud`](overlay.md#fixed-hud-mode-work-order-item-l7-2026-11-16)
-(work-order item L7, 2026-11-16, cloud-checked only). There it hides the tile
-itself within one 20 ms input poll of the deadline and writes `frame_expired`;
-the same packet sent again keeps its first deadline; a deadline more than
-`MAX_DISPLAY_AGE_NS` past the time the bridge observes the frame is refused,
-and so is a frame that arrives already expired. Every other real-output mode
-still refuses an expiring frame, Python's `LIVE_HUD_OUTPUT` check still
-refuses to send one to a real bridge, and the Frame's bridge is rebuilt with
-the mode only under a device approval. The bridge sees deadlines, not
-observation times, so the rule that the deadline begins at the original
-frame's observation stays with the producer.
+(work-order item L7, 2026-11-16, cloud-checked against a fake runtime only).
+There it takes the tile down itself within one 20 ms input poll of the
+deadline and writes `frame_expired` with the time the hide returned. In
+`--fixed-hud` every frame is an [observed frame](overlay.md#the-observed-frame-opcode-6)
+carrying its identity and its source's observation time, so the bridge refuses
+a deadline later than `observed_ns + MAX_DISPLAY_AGE_NS`: a retransmission
+changes nothing, and only a newer observation renews a deadline. A frame that
+arrives expired, or whose upload returns after its deadline, is never shown.
+Every other real-output mode still refuses a frame with a deadline, Python's
+`LIVE_HUD_OUTPUT` check still refuses to send one to a real bridge, and the
+Frame's bridge is rebuilt with the mode only under a device approval. That
+`observed_ns` is truly the source frame's capture time stays the producer's
+rule; the bridge can only hold it to the number it sends.
 
 The default-detector synthetic run now passes after the neutral-fill change
 below. The earlier zero-fill failure and its measurement details remain in

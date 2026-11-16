@@ -121,6 +121,12 @@ PACKET_HEADER_FIELDS = (("magic", "4s"), ("opcode", "I"), ("payload_bytes", "I")
 SETTINGS_FIELDS = (("width", "f"), ("distance", "f"), ("x", "f"), ("y", "f"), ("opacity", "f"), ("visible", "I"))
 FRAME_PREFIX_FIELDS = (("width", "I"), ("height", "I"))
 EXPIRING_FRAME_PREFIX_FIELDS = (("expires_ns", "Q"), ("width", "I"), ("height", "I"))
+# An expiring frame that also says which frame it is and when its source frame was observed (work-order item
+# L7): ``observed_ns`` is the capture time on the host's CLOCK_MONOTONIC, the clock of ``Frame.observed_ns``,
+# and ``frame_id`` increases with every new frame. With them the bridge itself can refuse a deadline later than
+# ``observed_ns + MAX_DISPLAY_AGE_NS``, so a deadline is renewed only by a newer observation.
+OBSERVED_FRAME_PREFIX_FIELDS = (("frame_id", "Q"), ("observed_ns", "Q"), ("expires_ns", "Q"), ("width", "I"),
+                                ("height", "I"))
 # A show or hide request of one fallback cycle (docs/reference/hud-fallback.md#bridge-events, F1): the bridge
 # answers with timestamped lines that carry the cycle number, so the Python side can correlate them.
 VISIBILITY_FIELDS = (("cycle", "I"), ("visible", "I"))
@@ -129,6 +135,11 @@ OPCODE_SETTINGS = 2
 OPCODE_STOP = 3
 OPCODE_EXPIRING_FRAME = 4  # Validation bridge only.
 OPCODE_VISIBILITY = 5
+OPCODE_OBSERVED_FRAME = 6  # The fixed-HUD bridge mode's only frame; the validation bridge takes it too.
+# How far ahead of the bridge's own clock reading an observation time may lie. Both read the same host clock,
+# so an observation is never truly in the future; the tolerance only absorbs a capture timestamp converted
+# from another timebase. A cloud choice, unmeasured on the Frame.
+OBSERVATION_FUTURE_TOLERANCE_NS = 10_000_000
 
 
 def layout_format(fields):
@@ -140,6 +151,7 @@ PACKET_HEADER_FORMAT = layout_format(PACKET_HEADER_FIELDS)
 SETTINGS_FORMAT = layout_format(SETTINGS_FIELDS)
 FRAME_PREFIX_FORMAT = layout_format(FRAME_PREFIX_FIELDS)
 EXPIRING_FRAME_PREFIX_FORMAT = layout_format(EXPIRING_FRAME_PREFIX_FIELDS)
+OBSERVED_FRAME_PREFIX_FORMAT = layout_format(OBSERVED_FRAME_PREFIX_FIELDS)
 VISIBILITY_FORMAT = layout_format(VISIBILITY_FIELDS)
 
 # The bridge's lines for one visibility request, in its CLOCK_MONOTONIC nanoseconds (the clock of

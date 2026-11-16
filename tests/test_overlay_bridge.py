@@ -287,7 +287,8 @@ class FixedHudModeTests(unittest.TestCase):
 
     @unittest.skipUnless(DEFAULT_BRIDGE.is_file(), "Build scripts/build_overlay_bridge.sh first")
     def test_the_mode_takes_no_argument_and_reports_its_pinned_geometry_before_any_connect(self):
-        from sightcircuit.hud.contract import HUD_CONFIG, MAX_DISPLAY_AGE_NS, config_digest
+        from sightcircuit.hud.contract import (HUD_CONFIG, MAX_DISPLAY_AGE_NS, OBSERVATION_FUTURE_TOLERANCE_NS,
+                                               config_digest)
 
         for extra in (("--seconds", "5"), ("--allow-calibration-output",), ("--width", "0.8"), ("extra",)):
             with self.subTest(extra=extra):
@@ -309,6 +310,8 @@ class FixedHudModeTests(unittest.TestCase):
         self.assertEqual(hud["max_display_age_ns"], MAX_DISPLAY_AGE_NS)
         self.assertIs(hud["settings_accepted"], False)
         self.assertIs(hud["frames_without_deadline_accepted"], False)
+        self.assertIs(hud["frames_without_observation_accepted"], False)
+        self.assertEqual(hud["observation_future_tolerance_ns"], OBSERVATION_FUTURE_TOLERANCE_NS)
         # No other mode carries the record.
         for arguments in (("--stdin",), ("--validate-stdin",), ("--test-panel",)):
             self.assertNotIn("fixed_hud", self.run_bridge(*arguments)[1][-1], arguments)
@@ -324,6 +327,7 @@ class FixedHudModeTests(unittest.TestCase):
         result, messages = self.run_bridge("--validate-stdin", data=data)
         self.assertEqual(result.returncode, 0, messages)
         self.assertEqual(messages[0], {"event": "ready", "validation_only": True, "frame_expiry_supported": True,
+                                       "observed_frames_supported": True,
                                        "runtime_initialized": False, "overlay_interface": messages[0]["overlay_interface"],
                                        "report_kind": "sightcircuit_overlay_bridge", "schema_version": 1})
         final = messages[-1]
@@ -336,6 +340,8 @@ class FixedHudModeTests(unittest.TestCase):
     def test_expiry_is_reported_supported_by_validation_and_the_fixed_hud_only(self):
         reporting = self.units["overlay_bridge_reporting.cpp"]
         self.assertEqual(re.findall(r'ready\["frame_expiry_supported"\]=(.*);', reporting),
+                         ['mode=="--validate-stdin" || mode=="--fixed-hud"'])
+        self.assertEqual(re.findall(r'ready\["observed_frames_supported"\]=(.*);', reporting),
                          ['mode=="--validate-stdin" || mode=="--fixed-hud"'])
         # The packet rule is one helper, and it agrees: expiry everywhere but the replay stream.
         frame = self.units["overlay_frame.hpp"]
@@ -360,21 +366,43 @@ class FixedHudModeTests(unittest.TestCase):
         loop = sensing.split("void stream(Overlay& overlay, StreamMode mode, Json::Value& report) {", 1)[1]
         loop, marker = loop.split("void MarkerInput::poll_input", 1)
         # One refusal call on the header, before the payload is read; the size and deadline rules after decode.
-        self.assertEqual(loop.count("packet_refusal(mode, kind, size, kMaxPayload)"), 1)
+        self.assertEqual(loop.count("packet_refusal(mode, kind, size)"), 1)
         self.assertLess(loop.index("packet_refusal("), loop.index("std::vector<std::uint8_t> payload(size);"))
         self.assertEqual(loop.count("sightcircuit_overlay::check_frame_size(mode, frame);"), 1)
-        self.assertEqual(loop.count("deadline.admit(frame, expiring, monotonic_ns())"), 1)
-        self.assertLess(loop.index("deadline.admit("), loop.index("dispatch_frame(overlay, frame)"))
+        self.assertEqual(loop.count("deadline.judge(frame, expiring, monotonic_ns())"), 1)
+        self.assertLess(loop.index("deadline.judge("), loop.index("dispatch_frame(overlay, frame)"))
+        self.assertLess(loop.index("deadline.judge("), loop.index("overlay.upload("))
+        # A frame with a deadline is uploaded, then both deadlines are re-read, and only then is it committed
+        # and presented: a late SetOverlayRaw return never initiates a show, and the tile it replaced is
+        # recorded under its own deadline.
+        staged = loop.split("overlay.upload(w, h, frame.rgba);", 1)[1].split("if (!validate) report", 1)[0]
+        order = [staged.index(text) for text in (
+            "const auto now = monotonic_ns();", "const bool late = frame.expiry <= now;",
+            'deadline.due(now)) expired(passed, now, "replaced", false);',
+            'expired(frame.expiry, now, "expired_before_show", true, &frame);',
+            "deadline.commit(frame, expiring);", "overlay.present();")]
+        self.assertEqual(order, sorted(order))
+        self.assertEqual(loop.count("overlay.present();"), 1)
+        self.assertNotIn("overlay.frame(", loop)
         # The loop holds no acceptance rule of its own: no opcode comparison decides a refusal, and the only
         # writer of the deadline is the helper.
         self.assertNotIn("expiring_frames_validation_only", sensing)
         self.assertNotIn("fixed_hud", sensing)
-        self.assertNotRegex(loop, r"deadline\.expiry\s*=")
+        self.assertEqual(re.findall(r"deadline\.expiry\s*=\s*(\w+)", loop), ["0"])  # cleared, never set, here
         # At a deadline: the image is withdrawn, visibility() hides, then the record is written.
         expire = loop.split("const auto expire = [&] {", 1)[1].split("};", 1)[0]
-        order = [expire.index(text) for text in ("deadline.due(now)", "overlay.has_image = false;",
-                                                 "if (!validate) overlay.visibility();",
-                                                 "emit_frame_expired(passed, now, validate);")]
+        self.assertIn('if (const auto passed = deadline.due(now)) expired(passed, now, "hidden", true);', expire)
+        record = loop.split("const auto expired = [&]", 1)[1].split("};", 1)[0]
+        order = [record.index(text) for text in ("withdrawal = overlay.withdraw();", "emit_frame_expired(record);",
+                                                 "if (record.withdrawal && !withdrawal.ok())", "throw")]
+        self.assertEqual(order, sorted(order))
+        # The withdrawal: hide, ask the runtime, clear the texture; the times around the hide call itself.
+        withdraw = self.units["overlay_bridge_rendering.cpp"].split("Withdrawal Overlay::withdraw() noexcept {", 1)[1]
+        withdraw = withdraw.split("\n}\n", 1)[0]
+        order = [withdraw.index(text) for text in (
+            "has_image = false;", "result.hide_called_ns = monotonic_ns();", "api->HideOverlay(handle)",
+            "result.hide_returned_ns = monotonic_ns();", "api->IsOverlayVisible(handle)",
+            "api->ClearOverlayTexture(handle)")]
         self.assertEqual(order, sorted(order))
         # The marker modes still take the visibility request alone, expiring frames included in the refusal.
         self.assertIn('if (kind != contract::kOpcodeVisibility) throw std::runtime_error("marker_accepts_visibility_only");',

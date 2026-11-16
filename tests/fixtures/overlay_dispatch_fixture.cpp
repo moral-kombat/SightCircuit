@@ -48,15 +48,12 @@ int main() {
         catch (const std::runtime_error&) { rejected = true; }
         assert(rejected);
     }
-    // What each stream mode takes, decided on the packet header. Only validation and the fixed HUD take the
-    // expiring opcode; the replay stream refuses it; the fixed HUD refuses settings and frames without a deadline.
+    // What each stream mode takes, decided on the packet header. Only validation and the fixed HUD take a frame
+    // with a deadline; the replay stream refuses both layouts; the fixed HUD takes the observed frame alone.
     namespace contract = sightcircuit_contract;
-    constexpr std::uint32_t hud_bytes = contract::kExpiringFramePrefixBytes +
-        contract::kHudWidthPx*contract::kHudHeightPx*contract::kRgbaBytes;
-    constexpr std::uint32_t limit = contract::kExpiringFramePrefixBytes +
-        contract::kMaxSide*contract::kMaxSide*contract::kRgbaBytes;
+    constexpr std::uint32_t pixels = contract::kHudWidthPx*contract::kHudHeightPx*contract::kRgbaBytes;
     const auto refusal = [&](StreamMode mode, std::uint32_t kind, std::uint32_t size) {
-        const char* name = packet_refusal(mode, kind, size, limit);
+        const char* name = packet_refusal(mode, kind, size);
         return std::string(name ? name : "");
     };
     assert(!frame_expiry_supported(StreamMode::Replay));
@@ -65,21 +62,25 @@ int main() {
         const bool fixed = mode == StreamMode::FixedHud, replay = mode == StreamMode::Replay;
         assert(refusal(mode, contract::kOpcodeStop, 0).empty());
         assert(refusal(mode, contract::kOpcodeVisibility, contract::kVisibilityBytes).empty());
-        assert(refusal(mode, contract::kOpcodeExpiringFrame, hud_bytes) ==
-               (replay ? "expiring_frames_validation_only" : ""));
+        assert(refusal(mode, contract::kOpcodeObservedFrame, contract::kObservedFramePrefixBytes + pixels) ==
+               (replay ? "observed_frames_fixed_hud_or_validation_only" : ""));
+        assert(refusal(mode, contract::kOpcodeExpiringFrame, contract::kExpiringFramePrefixBytes + pixels) ==
+               (replay ? "expiring_frames_validation_only" : fixed ? "fixed_hud_requires_observed_frame" : ""));
         assert(refusal(mode, contract::kOpcodeSettings, contract::kSettingsBytes) ==
                (fixed ? "fixed_hud_refuses_settings" : ""));
         assert(refusal(mode, contract::kOpcodeFrame, contract::kFramePrefixBytes + 4) ==
-               (fixed ? "fixed_hud_requires_expiring_frame" : ""));
+               (fixed ? "fixed_hud_requires_observed_frame" : ""));
         // Malformed headers keep their names in every mode, ahead of the mode's own refusals.
-        assert(refusal(mode, 0, 0) == "invalid_packet_header" && refusal(mode, 6, 0) == "invalid_packet_header");
-        assert(refusal(mode, contract::kOpcodeExpiringFrame, limit + 1) == "invalid_packet_header");
+        assert(refusal(mode, 0, 0) == "invalid_packet_header" && refusal(mode, 7, 0) == "invalid_packet_header");
+        assert(refusal(mode, contract::kOpcodeObservedFrame, kMaxPayloadBytes + 1) == "invalid_packet_header");
         assert(refusal(mode, contract::kOpcodeSettings, 4) == "invalid_packet_size");
         assert(refusal(mode, contract::kOpcodeFrame, 4) == "invalid_packet_size");
         assert(refusal(mode, contract::kOpcodeStop, 1) == "invalid_packet_size");
         assert(refusal(mode, contract::kOpcodeVisibility, 4) == "invalid_packet_size");
         assert(refusal(mode, contract::kOpcodeExpiringFrame, 8) ==
-               (fixed ? "invalid_packet_size" : "expiring_frames_validation_only"));
+               (fixed ? "fixed_hud_requires_observed_frame" : "expiring_frames_validation_only"));
+        assert(refusal(mode, contract::kOpcodeObservedFrame, 8) ==
+               (replay ? "observed_frames_fixed_hud_or_validation_only" : "invalid_packet_size"));
     }
     // The fixed HUD presents the contract's tile size only; the other modes keep every valid size.
     const FrameView tile{contract::kHudWidthPx, contract::kHudHeightPx, deadline, nullptr};
@@ -94,34 +95,83 @@ int main() {
         catch (const std::runtime_error& error) { rejected = std::string(error.what()) == "fixed_hud_frame_size"; }
         assert(rejected);
     }
-    // The presented frame's deadline. It falls due once, at the deadline and not a nanosecond before.
+    // The observed frame's prefix decodes field by field.
+    std::vector<std::uint8_t> observed_payload;
+    const auto append64 = [&](std::uint64_t n) { append32(observed_payload, n & 0xffffffff); append32(observed_payload, n >> 32); };
+    append64(0x1122334455667788ULL); append64(now - 5); append64(deadline);
+    append32(observed_payload, 1); append32(observed_payload, 1);
+    for (unsigned i = 0; i < 4; ++i) observed_payload.push_back(i);
+    const auto decoded = decode_frame(contract::kOpcodeObservedFrame, observed_payload);
+    assert(decoded.observed && decoded.frame_id == 0x1122334455667788ULL && decoded.observed_ns == now - 5);
+    assert(decoded.expiry == deadline && decoded.width == 1 && decoded.rgba == observed_payload.data() + 32);
+    assert(!frame.observed && !plain.observed);
+
+    // The validation layout: judged against arrival, committed only when presented, due once and not early.
     FrameDeadline shown;
     assert(shown.due(now) == 0);
-    assert(shown.admit(tile, true, now) && shown.expiry == deadline);
+    assert(shown.judge(tile, true, now) == Arrival::Present && shown.expiry == 0);  // judging commits nothing
+    shown.commit(tile, true);
+    assert(shown.expiry == deadline && !shown.identified);
     assert(shown.due(deadline - 1) == 0 && shown.expiry == deadline);
-    // A retransmission of the same frame, however late it is observed, leaves the deadline where it was.
-    assert(shown.admit(tile, true, deadline - 1) && shown.expiry == deadline);
-    assert(shown.due(deadline) == deadline && shown.expiry == 0);
-    assert(shown.due(deadline + 1) == 0);
-    // Once expired, the same frame is refused: never presented again, and no deadline is set.
-    assert(!shown.admit(tile, true, deadline) && shown.expiry == 0);
-    assert(!shown.admit(tile, true, deadline + cap) && shown.expiry == 0);
-    // A frame that arrives expired leaves the presented frame's deadline alone.
-    const FrameView next{contract::kHudWidthPx, contract::kHudHeightPx, deadline + 5, nullptr};
-    assert(shown.admit(next, true, deadline) && shown.expiry == deadline + 5);
-    assert(!shown.admit(tile, true, deadline + 1) && shown.expiry == deadline + 5);
-    // No deadline further ahead of the observed time than the maximum display age is accepted, and the
-    // refusal changes nothing; exactly the maximum is accepted.
+    assert(shown.judge(tile, true, deadline - 1) == Arrival::Present);  // the same packet again: the same deadline
+    shown.commit(tile, true);
+    assert(shown.due(deadline) == deadline && shown.expiry == 0 && shown.due(deadline + 1) == 0);
+    assert(shown.judge(tile, true, deadline) == Arrival::Expired && shown.expiry == 0);
     for (auto expiry : {std::uint64_t{0}, deadline + cap + 1}) {
         rejected = false;
-        try { shown.admit({contract::kHudWidthPx, contract::kHudHeightPx, expiry, nullptr}, true, deadline); }
+        try { shown.judge({contract::kHudWidthPx, contract::kHudHeightPx, expiry, nullptr}, true, deadline); }
         catch (const std::runtime_error& error) { rejected = std::string(error.what()) == "invalid_frame_expiry"; }
-        assert(rejected && shown.expiry == deadline + 5);
+        assert(rejected);
     }
-    assert(shown.admit({contract::kHudWidthPx, contract::kHudHeightPx, deadline + cap, nullptr}, true, deadline));
-    assert(shown.expiry == deadline + cap);
-    // The replay opcode carries no deadline: admitted with none (modes that take it never expire it).
-    assert(shown.admit(plain, false, now) && shown.expiry == 0 && shown.due(~std::uint64_t{0}) == 0);
+    // The replay opcode carries no deadline: committed with none.
+    assert(shown.judge(plain, false, now) == Arrival::Present);
+    shown.commit(plain, false);
+    assert(shown.expiry == 0 && shown.due(~std::uint64_t{0}) == 0);
+
+    // Observed frames: identity, observation time and deadline together.
+    const auto observed = [&](std::uint64_t id, std::uint64_t seen, std::uint64_t expiry) {
+        FrameView view{contract::kHudWidthPx, contract::kHudHeightPx, expiry, nullptr};
+        view.observed = true; view.frame_id = id; view.observed_ns = seen;
+        return view;
+    };
+    const auto thrown = [&](const FrameDeadline& state, const FrameView& view, std::uint64_t at) {
+        try { state.judge(view, true, at); } catch (const std::runtime_error& error) { return std::string(error.what()); }
+        return std::string();
+    };
+    constexpr auto tolerance = contract::kObservationFutureToleranceNs;
+    FrameDeadline hud;
+    // The deadline is bounded by the observation, not by the arrival: observed + cap exactly, never a nanosecond more,
+    // however recently the frame arrived; and never at or before the observation itself.
+    assert(hud.judge(observed(1, now, now + cap), true, now) == Arrival::Present);
+    assert(thrown(hud, observed(1, now, now + cap + 1), now) == "invalid_frame_expiry");
+    assert(thrown(hud, observed(1, now - cap, now + 1), now) == "invalid_frame_expiry");  // an old observation, restamped
+    assert(thrown(hud, observed(1, now, now), now) == "invalid_frame_expiry");
+    assert(thrown(hud, observed(1, now, 0), now) == "invalid_frame_expiry");
+    // An observation in the future is refused beyond the tolerance, accepted within it.
+    assert(hud.judge(observed(1, now + tolerance, now + tolerance + 5), true, now) == Arrival::Present);
+    assert(thrown(hud, observed(1, now + tolerance + 1, now + tolerance + 5), now) == "frame_observed_in_future");
+    // An old observation whose deadline has passed is expired on arrival.
+    assert(hud.judge(observed(1, now - cap, now - 1), true, now) == Arrival::Expired && !hud.identified);
+    const auto first = observed(10, now, now + 300);
+    hud.commit(first, true);
+    assert(hud.identified && hud.expiry == now + 300 && hud.frame_id == 10 && hud.observed_ns == now);
+    assert(hud.names(now + 300) && !hud.names(now + 301));
+    // The same frame again is a retransmission, before its deadline and after it; it never moves the deadline.
+    assert(hud.judge(first, true, now + 100) == Arrival::Retransmission && hud.expiry == now + 300);
+    // The same identity with a later deadline or another observation is a contradiction, not a renewal.
+    assert(thrown(hud, observed(10, now, now + 900), now + 100) == "frame_identity_changed");
+    assert(thrown(hud, observed(10, now + 50, now + 300), now + 100) == "frame_identity_changed");
+    assert(hud.due(now + 300) == now + 300 && hud.expiry == 0);
+    assert(hud.judge(first, true, now + 400) == Arrival::Retransmission);
+    // A lower identity or an earlier observation is stale, whatever its deadline.
+    assert(hud.judge(observed(9, now + 10, now + 900), true, now + 100) == Arrival::Stale);
+    assert(hud.judge(observed(11, now - 1, now + 900), true, now + 100) == Arrival::Stale);
+    // A renewed deadline needs a newer identity, and reaches no further than its own observation allows.
+    assert(thrown(hud, observed(11, now, now + cap + 200), now + 200) == "invalid_frame_expiry");
+    const auto second = observed(11, now + 200, now + 200 + cap);
+    assert(hud.judge(second, true, now + 250) == Arrival::Present);
+    hud.commit(second, true);
+    assert(hud.expiry == now + 200 + cap && hud.frame_id == 11);
     // Every failure position still attempts every teardown call, in order.
     for (unsigned fail = 0; fail <= 3; ++fail) {
         std::string calls;

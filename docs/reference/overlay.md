@@ -97,8 +97,9 @@ The ten- and three-second input timeouts are the bridge's own.
 | `1`: frame | uint32 width, uint32 height, tightly packed RGBA bytes; each side 1–512 |
 | `2`: settings | five float32 values: width, distance, x, y, opacity; then uint32 visibility (0 or 1) |
 | `3`: quit | Empty |
-| `4`: expiring frame (`--validate-stdin` and [`--fixed-hud`](#fixed-hud-mode-work-order-item-l7-2026-11-16) only) | uint64 absolute `CLOCK_MONOTONIC` nanosecond expiry, uint32 width/height, RGBA bytes |
+| `4`: expiring frame (validation-only) | uint64 absolute `CLOCK_MONOTONIC` nanosecond expiry, uint32 width/height, RGBA bytes |
 | `5`: visibility request (fallback item F1, 2026-11-08) | uint32 cycle, uint32 visible (0 or 1); the stream modes and, since F3a, the [marker modes](#marker-mode-input-fallback-item-f3a-2026-11-08) answer with the timestamped lines `hide_requested`/`show_requested`, `hide_returned`/`show_returned`, `overlay_hidden`/`overlay_shown` and `visibility_event_missing`, each carrying `cycle` and `validation_only`, as [the fallback reference](hud-fallback.md#bridge-events) specifies; the return line names the call made and a request without its runtime event within `VISIBILITY_EVENT_BOUND_NS` (250 ms, a cloud default, unmeasured on the Frame), or superseded or ended first, gets one `visibility_event_missing` line. Encoded by `sightcircuit.overlay.visibility_packet`, sent and answered through the [visibility cycle API](#visibility-cycle-api-fallback-item-f2-2026-11-08) (F2) |
+| `6`: observed frame ([`--fixed-hud`](#fixed-hud-mode-work-order-item-l7-2026-11-16) and `--validate-stdin` only; work-order item L7, 2026-11-16) | uint64 frame identity, uint64 `CLOCK_MONOTONIC` nanosecond observation time, uint64 absolute expiry, uint32 width/height, RGBA bytes; the bridge refuses an expiry later than the observation plus 1 s, an observation in the future, and an identity or observation older than the one already taken |
 
 Settings ranges match the UI: width 0.25–1.5 m, distance 0.5–3 m, offsets −1–1 m,
 opacity 0.2–1. Input rejects nonfinite values and malformed lengths. The sender
@@ -122,13 +123,13 @@ the previous expiry. `frame_expired` events and final presentation fields report
 software state; `presentation_state_scope` explicitly disclaims headset evidence.
 Expiry is separate from the three/ten-second transport timeouts.
 
-Python rejects opcode 4 for real output, and so does the bridge in every
-real-output mode but one: [`--fixed-hud`](#fixed-hud-mode-work-order-item-l7-2026-11-16),
-which no Python client starts. Existing replay opcode 1 and paused-replay
-behavior remain available under their existing authorization. Tests of the
-expiry loop run under `--validate-stdin` exclusively; a stalled native process,
-blocked API call or stuck kernel I/O can prevent timely expiry, and no
-real-time bound or headset hide result is claimed.
+Both Python and the bridge reject opcode 4 for real output. The one
+real-output mode with expiry, [`--fixed-hud`](#fixed-hud-mode-work-order-item-l7-2026-11-16),
+takes opcode 6 instead, and no Python client starts it. Existing replay opcode
+1 and paused-replay behavior remain available under their existing
+authorization. A stalled native process, blocked API call or stuck kernel I/O
+can prevent timely expiry, and no real-time bound or headset hide result is
+claimed.
 
 ```bash
 bash scripts/build_overlay_bridge.sh
@@ -145,60 +146,114 @@ timeouts, channel order, resizing, Qt forwarding and the existing replay tests.
 a frame carries a deadline and the bridge clears the tile itself when the
 deadline passes. It exists for the
 [camera display work order](../live-capture.md#camera-display-work-order-adopted-2026-11-16);
-it is **cloud-checked only**. No runtime has run it, the Frame's bridge has
-not been rebuilt with it, and no gate changes.
+it is **cloud-checked only**: it has run against a fake runtime in tests, never
+against SteamVR, the Frame's bridge has not been rebuilt with it, and no gate
+changes.
 
 | Rule | In `--fixed-hud` |
 | --- | --- |
 | Arguments | none, apart from the trailing `--connect-as` every runtime mode takes; anything else is exit 64 before any connect |
 | Geometry | the `fixed-edge-hud-v1` placement and opacity (`kHud*` in the generated header), applied once at connect by `hud_settings()`; the final report's `fixed_hud` object records it with the configuration digest |
 | Settings packet (opcode `2`) | refused: `fixed_hud_refuses_settings`, exit 1, the usual cleanup. Nothing on the pipe can move, resize or fade the tile |
-| Frame without a deadline (opcode `1`) | refused: `fixed_hud_requires_expiring_frame` |
-| Expiring frame (opcode `4`) | accepted at exactly 320 × 128 (`fixed_hud_frame_size` otherwise) |
+| Frame without a deadline (opcode `1`), expiring frame of the validation layout (opcode `4`) | refused: `fixed_hud_requires_observed_frame` |
+| Observed frame (opcode `6`) | accepted at exactly 320 × 128 (`fixed_hud_frame_size` otherwise) |
 | Visibility request (opcode `5`) and stop (opcode `3`) | as in the stream modes; a show request cannot bring back an expired tile, because a show with no image presented is a `HideOverlay` call (`no_image`) |
-| `ready` line | `frame_expiry_supported: true` and `fixed_hud: true` |
+| `ready` line | `frame_expiry_supported: true`, `observed_frames_supported: true` and `fixed_hud: true` |
 
-`frame_expiry_supported` is true in `--validate-stdin` and `--fixed-hud` and in
-no other mode. `--stdin` still ends a run that sends opcode `4` with
-`expiring_frames_validation_only`, the marker modes still take the visibility
-request alone, and the test panel reads no input.
+`frame_expiry_supported` and `observed_frames_supported` are true in
+`--validate-stdin` and `--fixed-hud` and in no other mode. `--stdin` still ends
+a run that sends opcode `4` with `expiring_frames_validation_only` (and one
+that sends opcode `6` with `observed_frames_fixed_hud_or_validation_only`), the
+marker modes still take the visibility request alone, and the test panel reads
+no input.
 
-**The expiry rule**, the same code in validation and in the fixed HUD
-(`FrameDeadline` in `tools/overlay_frame.hpp`, polled by the stream loop):
+### The observed frame (opcode 6)
 
-- **At the deadline the bridge hides the tile.** Every input wait polls for
-  20 ms at most, so a deadline is noticed within one poll period of passing
-  whether or not anything arrives, including in the middle of a partial
-  packet. The image is withdrawn and `Overlay::visibility()`, the call path of
-  the F1 visibility requests, makes the `HideOverlay` call; then one
-  `frame_expired` line is written with `deadline_ns` and `observed_ns` (the
-  bridge's `CLOCK_MONOTONIC` when it saw the deadline had passed). A hide call
-  that fails ends the run, and cleanup retires the overlay.
-- **A retransmission never renews a deadline.** The deadline is the frame's
-  identity on the wire. The same packet sent again carries the deadline it was
-  first sent with, so the tile still expires then; sent after that deadline it
-  is refused like any expired arrival.
-- **No deadline further ahead than the maximum display age.** A deadline more
-  than `MAX_DISPLAY_AGE_NS` (1 s) after the time the bridge observes the frame,
-  or zero, ends the run as `invalid_frame_expiry`.
-- **An expired arrival is refused, not shown.** It is counted in
-  `stale_frames_dropped`, nothing is uploaded, and the tile already presented
-  keeps its own deadline.
+The mode's only frame says which frame it is and when its source was observed,
+so that the bridge, not only the producer, bounds how long a picture may stay
+up. `observed_ns` is the capture time on the host's `CLOCK_MONOTONIC` (the
+clock of `Frame.observed_ns` and of every time the bridge reports);
+`frame_id` increases with each new frame. The bridge judges each one when it
+arrives (`FrameDeadline::judge` in `tools/overlay_frame.hpp`):
+
+| Arrival | Result |
+| --- | --- |
+| `expires_ns` later than `observed_ns + MAX_DISPLAY_AGE_NS` (1 s), or not after `observed_ns` | the run ends: `invalid_frame_expiry` |
+| `observed_ns` more than `OBSERVATION_FUTURE_TOLERANCE_NS` (10 ms, a cloud choice) ahead of the bridge's clock | the run ends: `frame_observed_in_future` |
+| the identity already taken, with the same observation and deadline | a retransmission: ignored, counted in `frames_retransmitted`, nothing uploaded; before the deadline or after it |
+| the identity already taken, with another observation or deadline | the run ends: `frame_identity_changed` |
+| a lower identity, or an earlier observation, than the frame already taken | stale: refused, counted in `stale_frames_dropped` |
+| its deadline already passed | expired on arrival: refused, counted in `stale_frames_dropped`, never uploaded; the tile presented keeps its own deadline |
+| otherwise | uploaded and presented |
+
+A deadline is therefore renewed only by a frame with a newer identity, and
+never beyond one second after what that frame says it observed. A producer
+whose send loop outlives its detector, re-sending one observation under new
+identities with the longest deadline it may claim, loses its tile one second
+after that observation. What the bridge still cannot know is whether
+`observed_ns` is true: a producer that stamps a stale picture with the current
+time is believed. That rule (`observed_ns` is the source frame's capture time)
+stays with the producer and its tests.
+
+The validation bridge takes opcode `6` under the same rules, and still takes
+opcode `4` exactly as before, bounded at one second from arrival; the
+synthetic pipeline and its ledger are unchanged.
+`sightcircuit.overlay.observed_frame_packet` encodes the packet and refuses
+what the bridge would; no client sends it yet.
+
+### Expiry
+
+- **At the deadline the bridge takes the tile down.** Every input wait polls
+  for 20 ms at most, so a deadline is noticed within one poll period of
+  passing whether or not anything arrives, including in the middle of a
+  partial packet. `Overlay::withdraw()` then calls `HideOverlay`, asks
+  `IsOverlayVisible`, and calls `ClearOverlayTexture` so the expired pixels
+  are gone from the overlay.
+- **The record says when the tile went.** One `frame_expired` line per
+  deadline: `deadline_ns`, `observed_ns` (when the bridge saw the deadline had
+  passed), the frame's `frame_id` and `frame_observed_ns`, and in real output
+  `outcome`, `hide_called_ns`, `hide_returned_ns`, `hide_ok` (with
+  `hide_error`), `api_visible_after_hide` and `texture_cleared`. The earliest
+  the tile can be said to be down is `hide_returned_ns`, and only with
+  `hide_ok` true and `api_visible_after_hide` false; a device criterion
+  should be read against that time, not `observed_ns`. A failed hide, or an
+  overlay still reported visible, ends the run after the line is written
+  (`HideOverlay:<error>` or `overlay_visible_after_hide`), and cleanup hides,
+  clears and destroys the overlay.
+- **A late upload is never shown.** A frame is judged on arrival but its
+  deadline is committed only once its pixels are presented. After
+  `SetOverlayRaw` returns, both deadlines are read again before any
+  `ShowOverlay`: if the new frame's has passed, it is withdrawn with outcome
+  `expired_before_show` (counted in `frames_expired_in_upload`); if the tile
+  it replaced outlived its own deadline during the upload, that expiry is
+  recorded under that tile's deadline with outcome `replaced` and the time it
+  was noticed.
 - **End of input clears the tile.** Stop, end of file, a ten-second silence
   (`stdin_timeout`), a signal and the parent's death all end in the cleanup
-  that hides, clears and destroys the overlay. Without settings packets there
-  is no heartbeat, so a producer must send a frame at least that often.
+  that hides, clears and destroys the overlay.
 
-What the rule does not cover: the bridge sees deadlines, not observation
-times. A producer that stamps an old picture with a new deadline is sending a
-new frame as far as the bridge can tell, so "expires one second after the
-frame was observed" stays the producer's rule
-([maximum age](hud-runtime.md#synthetic-validation-counts-and-one-maximum-age-2026-11-01)),
-and the bridge's bound is one second from arrival. Synchronous OpenVR calls
-(`SetOverlayRaw`, `HideOverlay`) are not interruptible, so the one-poll bound
-holds only while those calls return promptly; the 5 s per-step watchdog is the
-backstop. `frame_expired` reports that the hide call returned, not that the
-headset stopped showing the tile.
+**Staying connected with nothing to show.** Settings are refused, so there is
+no heartbeat, and ten seconds without a complete packet ends the bridge. A
+producer with no labels to show sends a show request (opcode `5`, visible 1)
+at least that often; every few seconds is ample. With nothing presented the
+bridge answers `show_returned` with `ok` false and reason `no_image` (the
+call it makes is `HideOverlay`), displays nothing, and leaves the tile free to
+show when the next frame arrives. Each such request later counts one
+`visibility_events_missing`, which is expected here. A hide request would
+also keep the connection but leaves the tile hidden until a show request, so
+it is the wrong keepalive.
+
+**Limits.** The loop is one thread and OpenVR's calls are synchronous. While
+`SetOverlayRaw` or `HideOverlay` is running nothing else happens: a tile that
+is up stays up past its deadline for as long as the call takes, and when an
+upload replaces a visible tile the new pixels may be on screen from the moment
+the runtime swaps them until the bridge's hide, which follows the call's
+return directly. What bounds this is the 5 s per-step watchdog, which ends the
+process without cleanup (exit 124); whether the runtime then removes a dead
+client's overlay on the Frame is not established. The records state the
+overrun (`observed_ns` and `hide_returned_ns` against `deadline_ns`); they do
+not prevent it. `frame_expired` reports calls and the runtime's own answer,
+not what the headset displayed.
 
 **Python stays the outer guard.** `OverlayClient` starts `--validate-stdin` or
 `--stdin` and nothing else, and `submit_frame(expires_ns=...)` and
@@ -209,16 +264,25 @@ items (L8 to L10), behind their scope record.
 **The Frame's bridge.** The binary on the Frame predates this mode and rejects
 `--fixed-hud` as an unknown mode (exit 64). Rebuilding it there
 (`scripts/build_overlay_bridge.sh`) changes the checkpoint manifest's `bridge`
-and `native_sources` digests and happens only inside an approved device step;
-a cloud session never rebuilds or runs it.
+and `native_sources` digests and the contract digest the bridge reports, and
+happens only inside an approved device step; a cloud session never rebuilds or
+runs it.
 
-Cloud checks: the dispatch fixture (`tests/fixtures/overlay_dispatch_fixture.cpp`)
-runs the packet rule of each mode and the deadline rule with a fake clock;
-`tests/test_overlay_bridge.py` (`FixedHudModeTests`) pins that the units use
-those helpers alone, the mode's arguments and report, and the set of OpenVR
-calls the bridge names; `tests/test_display_expiry.py` times the expiry, the
-retransmission and the refusals on the validation bridge and checks the
-Python gate.
+**Cloud checks.** `tests/test_fixed_hud_runtime.py` runs the real binary in
+`--fixed-hud` against `tests/fixtures/fake_vrclient.cpp`, a `vrclient.so` the
+SDK's loader finds through `VR_PATHREG_OVERRIDE`. The fake displays nothing;
+it logs the bridge's calls with their times and can delay or fail them. The
+tests cover expiry with silent input and with a half-sent packet, a slow
+upload with nothing up and with a tile up, a slow hide, a failing hide and an
+overlay that stays visible, renewal attempts, retransmission and stale frames,
+end of input and SIGTERM with a tile up, each refusal with its cleanup, and
+the keepalive against the ten-second timeout. The dispatch fixture
+(`tests/fixtures/overlay_dispatch_fixture.cpp`) runs the packet rule of each
+mode and the deadline rule with a fake clock; `tests/test_overlay_bridge.py`
+(`FixedHudModeTests`) pins that the units use those helpers alone and the set
+of OpenVR calls the bridge names; `tests/test_display_expiry.py` times the
+same rules on the validation bridge and checks the Python gate. None of this
+is a Frame measurement.
 
 ## Still panel for L-D2 (work-order item L7, 2026-11-16)
 
@@ -238,8 +302,9 @@ It letterboxes one image of `evaluation/seed.json` (default `darknet-horses`,
 verified by SHA-256 before decoding) into the 320 × 128 tile and sends it
 through `OverlayClient` as frames without a deadline, with the HUD placement
 as the client's settings from its first packet. The only input is a seed image
-id: there is no path, source or device argument, so it cannot show
-camera-derived content. `--validate` uses the validation bridge and displays
+id, to the command and to `run_still_panel` alike: the function builds the
+tile itself, hashing and decoding the same bytes, and takes neither pixels nor
+a source label from its caller, so it cannot show camera-derived content. `--validate` uses the validation bridge and displays
 nothing. `--allow-device-output` in its place uses the replay stream
 (`--stdin`), the path of the [replay panel](../vr-overlay.md), which the
 Frame's current bridge already has; it is for the approved L-D2 step only and

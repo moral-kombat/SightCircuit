@@ -5,6 +5,7 @@ connects to a runtime, and a count from the bridge's report is not a picture
 anyone saw.
 """
 import ast
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -24,7 +25,8 @@ ROOT = Path(__file__).resolve().parents[1]
 CV2 = importlib.util.find_spec("cv2") is not None
 HORSES = still_panel.SEED_DOWNLOADS / "darknet-horses.jpg"
 TILE_BYTES = HUD_CONFIG.width_px * HUD_CONFIG.height_px * RGBA_BYTES
-SOURCE = {"kind": "public_seed_fixture", "id": "darknet-horses"}
+FIXTURE = CV2 and HORSES.is_file()
+NEEDS_FIXTURE = "Needs OpenCV and the fetched seed images (scripts/evaluate_detectors.py --fetch)"
 
 
 class Ticking:
@@ -62,7 +64,7 @@ class ScriptedClient:
 
     def submit_frame(self, width, height, rgba, **options):
         self.calls.append(("frame",))
-        self.frames.append((width, height, len(rgba), tuple(sorted(options))))
+        self.frames.append((width, height, bytes(rgba), tuple(sorted(options))))
         if self.clock:
             self.times.append(self.clock())
 
@@ -71,7 +73,10 @@ class ScriptedClient:
         return {"error": None, "cleanup_confirmed": True, "native_report": {"frames_received": len(self.frames)}}
 
 
+@unittest.skipUnless(FIXTURE, NEEDS_FIXTURE)
 class StillPanelDriverTests(unittest.TestCase):
+    """The driver with a scripted client and the real fixture tile: it builds the tile itself, from the image id."""
+
     def run_scripted(self, seconds, **options):
         ticking = Ticking()
         made = []
@@ -81,8 +86,8 @@ class StillPanelDriverTests(unittest.TestCase):
             made[-1].clock = ticking.clock
             return made[-1]
 
-        report = still_panel.run_still_panel(bytes(TILE_BYTES), SOURCE, seconds=seconds, client_factory=factory,
-                                             stop=ticking, clock=ticking.clock, **options)
+        report = still_panel.run_still_panel(seconds=seconds, client_factory=factory, stop=ticking,
+                                             clock=ticking.clock, **options)
         return report, made[0], ticking
 
     def test_the_documented_run_is_600_updates_at_5_hz_at_the_hud_placement(self):
@@ -100,7 +105,10 @@ class StillPanelDriverTests(unittest.TestCase):
                                        x=HUD_CONFIG.x_m, y=HUD_CONFIG.y_m, opacity=HUD_CONFIG.opacity, visible=True))
         still_panel.hud_placement().encode()  # within the stream mode's panel limits
         # Every update is the 320x128 tile with no deadline, one period apart, and the last stays up a period.
-        self.assertEqual(set(client.frames), {(HUD_CONFIG.width_px, HUD_CONFIG.height_px, TILE_BYTES, ())})
+        rgba, source = still_panel.seed_tile()
+        self.assertEqual(set(client.frames), {(HUD_CONFIG.width_px, HUD_CONFIG.height_px, rgba, ())})
+        self.assertEqual(report["source"], source)
+        self.assertEqual(report["source"]["tile_sha256"], hashlib.sha256(rgba).hexdigest())
         gaps = [later - earlier for earlier, later in zip(client.times, client.times[1:])]
         self.assertAlmostEqual(min(gaps), 0.2, places=6)
         self.assertAlmostEqual(max(gaps), 0.2, places=6)
@@ -133,11 +141,21 @@ class StillPanelDriverTests(unittest.TestCase):
         for seconds in (0, 181, 1.5, True, "120"):
             with self.subTest(seconds=seconds), self.assertRaisesRegex(ValueError, "still_panel_seconds_out_of_range"):
                 self.run_scripted(seconds)
-        with self.assertRaisesRegex(ValueError, "still_panel_tile_size"):
-            still_panel.run_still_panel(bytes(4), SOURCE, seconds=1, client_factory=ScriptedClient)
-        with self.assertRaisesRegex(ValueError, "still_panel_source_not_a_seed_fixture"):
-            still_panel.run_still_panel(bytes(TILE_BYTES), {"kind": "camera"}, seconds=1,
-                                        client_factory=ScriptedClient)
+        # The driver takes an image id and builds the tile itself: pixels or a source label handed in are
+        # refused as an unknown image id or an unexpected argument, before any client exists.
+        made = []
+        factory = lambda validation_only: made.append(1) or ScriptedClient(validation_only)  # noqa: E731
+        for image in (bytes(TILE_BYTES), {"kind": "public_seed_fixture"}, "frame-still-1", None):
+            with self.subTest(image=type(image).__name__), self.assertRaises((ValueError, TypeError)):
+                still_panel.run_still_panel(image, seconds=1, client_factory=factory)
+        for extra in ({"rgba": bytes(TILE_BYTES)}, {"source": {"kind": "public_seed_fixture"}}):
+            with self.subTest(extra=list(extra)), self.assertRaises(TypeError):
+                still_panel.run_still_panel(seconds=1, client_factory=factory, **extra)
+        with tempfile.TemporaryDirectory() as temporary:  # a file of the fixture's name with other bytes
+            (Path(temporary) / "darknet-horses.jpg").write_bytes(HORSES.read_bytes() + b"\0")
+            with self.assertRaisesRegex(ValueError, "still_panel_seed_image_digest_mismatch"):
+                still_panel.run_still_panel(seconds=1, client_factory=factory, directory=temporary)
+        self.assertEqual(made, [])
 
         class Failing(ScriptedClient):
             def submit_frame(self, *args, **options):
@@ -146,8 +164,7 @@ class StillPanelDriverTests(unittest.TestCase):
                     self.error = "Overlay bridge pipe closed"
 
         ticking = Ticking()
-        report = still_panel.run_still_panel(bytes(TILE_BYTES), SOURCE, seconds=2, client_factory=Failing,
-                                             stop=ticking, clock=ticking.clock)
+        report = still_panel.run_still_panel(seconds=2, client_factory=Failing, stop=ticking, clock=ticking.clock)
         self.assertEqual((report["status"], report["error"], report["updates_submitted"], report["complete"]),
                          ("error", "Overlay bridge pipe closed", 3, False))
         self.assertIn("bridge", report)  # closed all the same
@@ -158,8 +175,7 @@ class StillPanelDriverTests(unittest.TestCase):
                 self.pending_frame = b"untaken"
 
         ticking = Ticking()
-        report = still_panel.run_still_panel(bytes(TILE_BYTES), SOURCE, seconds=1, client_factory=Slow,
-                                             stop=ticking, clock=ticking.clock)
+        report = still_panel.run_still_panel(seconds=1, client_factory=Slow, stop=ticking, clock=ticking.clock)
         self.assertEqual((report["status"], report["updates_replaced"], report["complete"]), ("completed", 4, False))
 
     def test_a_stop_ends_the_run_early_and_still_closes(self):
@@ -171,11 +187,12 @@ class StillPanelDriverTests(unittest.TestCase):
                 if len(self.frames) == 2:
                     stop.set()
 
-        report = still_panel.run_still_panel(bytes(TILE_BYTES), SOURCE, seconds=60, client_factory=Stopping,
-                                             stop=stop)
+        report = still_panel.run_still_panel(seconds=60, client_factory=Stopping, stop=stop)
         self.assertEqual((report["status"], report["updates_submitted"], report["complete"]), ("stopped", 2, False))
         self.assertTrue(report["cleanup_confirmed"])
 
+
+class StillPanelCommandLineTests(unittest.TestCase):
     def test_the_command_line_takes_a_seed_image_id_and_nothing_that_could_name_a_live_source(self):
         source = Path(still_panel.__file__).read_text()
         flags = sorted(argument.value for node in ast.walk(ast.parse(source))
@@ -266,8 +283,8 @@ class StillPanelValidationBridgeTests(unittest.TestCase):
                 sent.append(bytes(data))
                 super()._send(data)
 
-        rgba, source = still_panel.seed_tile()
-        report = still_panel.run_still_panel(rgba, source, seconds=1, client_factory=Recording)
+        rgba, _ = still_panel.seed_tile()
+        report = still_panel.run_still_panel(seconds=1, client_factory=Recording)
         self.assertTrue(report["complete"], report)
         header = struct.calcsize(PACKET_HEADER_FORMAT)
         self.assertEqual(sent[0], still_panel.hud_placement().encode())

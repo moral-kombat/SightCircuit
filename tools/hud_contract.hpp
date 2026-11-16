@@ -61,11 +61,18 @@ constexpr std::uint32_t kExpiringFramePrefixBytes = 16;
 constexpr std::uint32_t kVisibilityCycleOffset = 0;
 constexpr std::uint32_t kVisibilityVisibleOffset = 4;
 constexpr std::uint32_t kVisibilityBytes = 8;
+constexpr std::uint32_t kObservedFramePrefixFrameIdOffset = 0;
+constexpr std::uint32_t kObservedFramePrefixObservedNsOffset = 8;
+constexpr std::uint32_t kObservedFramePrefixExpiresNsOffset = 16;
+constexpr std::uint32_t kObservedFramePrefixWidthOffset = 24;
+constexpr std::uint32_t kObservedFramePrefixHeightOffset = 28;
+constexpr std::uint32_t kObservedFramePrefixBytes = 32;
 constexpr std::uint32_t kOpcodeFrame = 1;
 constexpr std::uint32_t kOpcodeSettings = 2;
 constexpr std::uint32_t kOpcodeStop = 3;
 constexpr std::uint32_t kOpcodeExpiringFrame = 4;
 constexpr std::uint32_t kOpcodeVisibility = 5;
+constexpr std::uint32_t kOpcodeObservedFrame = 6;
 
 // Limits: sightcircuit.hud.contract
 constexpr int kMarkerMinSeconds = 1;
@@ -75,6 +82,7 @@ constexpr std::uint32_t kMaxSide = 512;
 constexpr std::uint32_t kRgbaBytes = 4;
 constexpr std::uint32_t kBridgeConnectBudgetSeconds = 6;
 constexpr std::uint64_t kVisibilityEventBoundNs = 250000000ULL;
+constexpr std::uint64_t kObservationFutureToleranceNs = 10000000ULL;
 
 // Panel limits and defaults: sightcircuit.overlay.PANEL_LIMITS and PanelSettings
 constexpr float kPanelWidthMin = 0.25f;
@@ -95,5 +103,5 @@ constexpr float kPanelDefaultOpacity = 0.95f;
 constexpr bool kPanelDefaultVisible = true;
 
 // SHA-256 of every value above; --render-calibration-marker reports it.
-constexpr char kContractDigest[] = "b7f6e41202dbd49244b440fd319b1e2f56d72be222c5b3749a64ab50477cd4a5";
+constexpr char kContractDigest[] = "70663bdcb8b2fecb0f653666852142b2eaf2ff342e24874b53e11c66b04f6c98";
 } // namespace sightcircuit_contract

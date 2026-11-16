@@ -34,7 +34,7 @@ std::string usage_text() {
     std::ostringstream usage;
     usage << "Usage: sightcircuit-overlay-bridge --test-panel [--seconds 1..30]\n"
                  "       sightcircuit-overlay-bridge --stdin\n"
-                 "       sightcircuit-overlay-bridge --fixed-hud (expiring HUD tiles only, fixed placement)\n"
+                 "       sightcircuit-overlay-bridge --fixed-hud (observed, expiring HUD tiles only; fixed placement)\n"
                  "       sightcircuit-overlay-bridge --validate-stdin (no OpenVR calls)\n"
                  "       sightcircuit-overlay-bridge --validate-calibration-marker --seconds " << marker_seconds << "\n"
                  "       sightcircuit-overlay-bridge --calibration-marker --seconds " << marker_seconds <<
@@ -45,8 +45,8 @@ std::string usage_text() {
                  "never starts a vrserver. A SIGALRM watchdog ends a stalled step with one JSON error.\n"
                  "A runtime mode may end with --connect-as overlay (default) or --connect-as background,\n"
                  "which keeps the Background client and never connects as Overlay (device check, opt-in).\n"
-                 "--fixed-hud takes 320x128 expiring frames (opcode 4), visibility requests and stop; it hides the tile\n"
-                 "itself at each frame's deadline and refuses settings and frames without a deadline.\n"
+                 "--fixed-hud takes 320x128 observed frames (opcode 6), visibility requests and stop; it hides the tile\n"
+                 "itself at each frame's deadline and refuses settings and every other frame.\n"
                  "The marker modes accept only the visibility request (opcode 5) on stdin, beside their display\n"
                  "timer, which end of input never ends; the stream modes take the whole pipe protocol.\n";
     return usage.str();
@@ -57,6 +57,7 @@ Json::Value closed_report(const std::string& mode) {
     report["frames_received"]=0U; report["frames_submitted"]=0U; report["settings_received"]=0U;
     report["expired_frames"]=0U; report["stale_frames_dropped"]=0U;
     report["expiring_frames_received"]=0U;
+    report["observed_frames_received"]=0U; report["frames_retransmitted"]=0U; report["frames_expired_in_upload"]=0U;
     report["presentation_state_scope"]="software_state_before_close_not_headset_evidence";
     report["mode"]=mode;
     return report;
@@ -99,13 +100,16 @@ void describe_fixed_hud(Json::Value& report, const Settings& applied) {
     hud["panel_width_m"]=applied.width; hud["distance_m"]=applied.distance;
     hud["x_m"]=applied.x; hud["y_m"]=applied.y; hud["opacity"]=applied.alpha;
     hud["max_display_age_ns"]=Json::UInt64(contract::kMaxDisplayAgeNs);
+    hud["observation_future_tolerance_ns"]=Json::UInt64(contract::kObservationFutureToleranceNs);
     hud["settings_accepted"]=false; hud["frames_without_deadline_accepted"]=false;
+    hud["frames_without_observation_accepted"]=false;
 }
 void emit_ready(const std::string& mode, bool validate, bool marker, std::uint64_t marker_deadline_ns) {
     Json::Value ready;
     ready["event"]="ready"; ready["validation_only"]=validate;
     // Expiry is honoured where the bridge clears the tile itself: validation and the fixed HUD, no other mode.
     ready["frame_expiry_supported"]=mode=="--validate-stdin" || mode=="--fixed-hud";
+    ready["observed_frames_supported"]=mode=="--validate-stdin" || mode=="--fixed-hud";
     if (mode=="--fixed-hud") ready["fixed_hud"]=true;
     ready["runtime_initialized"]=!validate; ready["overlay_interface"]=vr::IVROverlay_Version;
     if (marker) ready["display_deadline_ns"]=Json::UInt64(marker_deadline_ns);
@@ -117,13 +121,31 @@ void emit_test_panel_submitted(int seconds, bool api_visible) {
     shown["api_visible"]=api_visible;
     emit(shown);
 }
-void emit_frame_expired(std::uint64_t deadline_ns, std::uint64_t observed_ns, bool validate) {
+void emit_frame_expired(const ExpiryRecord& record) {
     Json::Value event;
     event["event"] = "frame_expired";
-    event["deadline_ns"] = Json::UInt64(deadline_ns);
-    event["observed_ns"] = Json::UInt64(observed_ns);
-    event["validation_only"] = validate;
+    event["deadline_ns"] = Json::UInt64(record.deadline_ns);
+    event["observed_ns"] = Json::UInt64(record.observed_ns);
+    event["validation_only"] = record.validate;
     event["content_current"] = false;
+    if (record.identified) {
+        event["frame_id"] = Json::UInt64(record.frame_id);
+        event["frame_observed_ns"] = Json::UInt64(record.frame_observed_ns);
+    }
+    if (!record.validate) {
+        // Real output: what became of the tile, and when the hide that took it down returned. observed_ns is
+        // when the bridge saw the deadline had passed; hide_returned_ns is the earliest the tile can be said
+        // to be down, and only when hide_ok is true and api_visible_after_hide is false.
+        event["outcome"] = record.outcome;
+        if (const auto* withdrawal = record.withdrawal) {
+            event["hide_called_ns"] = Json::UInt64(withdrawal->hide_called_ns);
+            event["hide_returned_ns"] = Json::UInt64(withdrawal->hide_returned_ns);
+            event["hide_ok"] = withdrawal->hide_ok;
+            if (!withdrawal->hide_ok) event["hide_error"] = withdrawal->hide_error;
+            event["api_visible_after_hide"] = withdrawal->visible_after;
+            event["texture_cleared"] = withdrawal->texture_cleared;
+        }
+    }
     emit(event);
 }
 void emit_first_frame(bool validate, std::uint32_t width, std::uint32_t height) {
