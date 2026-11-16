@@ -25,9 +25,9 @@ namespace sightcircuit_bridge {
 namespace contract = sightcircuit_contract;
 namespace lifecycle = sightcircuit_lifecycle;
 using sightcircuit_overlay::read_u32;
+using sightcircuit_overlay::StreamMode;
 using Clock = std::chrono::steady_clock;
-constexpr std::uint32_t kMaxPayload =
-    contract::kExpiringFramePrefixBytes + contract::kMaxSide*contract::kMaxSide*contract::kRgbaBytes;
+constexpr std::uint32_t kMaxPayload = sightcircuit_overlay::kMaxPayloadBytes;
 static_assert(sizeof contract::kPacketMagic - 1 ==
               contract::kPacketHeaderOpcodeOffset - contract::kPacketHeaderMagicOffset);
 constexpr bool kCalibrationVisibleInDashboard = true;
@@ -46,6 +46,25 @@ struct Settings {
     float width = contract::kPanelDefaultWidth, distance = contract::kPanelDefaultDistance,
           x = contract::kPanelDefaultX, y = contract::kPanelDefaultY, alpha = contract::kPanelDefaultOpacity;
     bool visible = contract::kPanelDefaultVisible;
+};
+
+// What withdraw() did and when (rendering unit); written on the frame_expired line.
+struct Withdrawal {
+    bool hide_ok = false, visible_after = false, texture_cleared = false;
+    std::uint64_t hide_called_ns = 0, hide_returned_ns = 0;
+    std::string hide_error;
+    bool ok() const { return hide_ok && !visible_after; }
+};
+// One frame_expired line (reporting unit). outcome says what became of the tile: "hidden" (withdrawn at its
+// deadline), "replaced" (its successor's pixels took its place while an upload overran its deadline; no hide
+// of its own) or "expired_before_show" (its own upload returned after its deadline; never shown by a show
+// call). withdrawal is null in validation and for "replaced".
+struct ExpiryRecord {
+    std::uint64_t deadline_ns = 0, observed_ns = 0;
+    bool validate = false, identified = false;
+    std::uint64_t frame_id = 0, frame_observed_ns = 0;
+    const char* outcome = "hidden";
+    const Withdrawal* withdrawal = nullptr;
 };
 
 // The one overlay and its connection. The state is shared; the member
@@ -78,6 +97,14 @@ public:
     void configure(const Settings& s);
     void visibility();
     void frame(std::uint32_t w, std::uint32_t h, const void* rgba);
+    // The two halves of frame(), for a frame with a deadline: the stream loop re-checks the deadline between
+    // them, so an upload that returns late never leads to a ShowOverlay. upload() is SetOverlayRaw alone.
+    void upload(std::uint32_t w, std::uint32_t h, const void* rgba);
+    void present();
+    // Take the tile down at its deadline: HideOverlay, then IsOverlayVisible to confirm, then
+    // ClearOverlayTexture so the expired pixels are gone from the overlay. Never throws; the caller records
+    // the result and then ends the run when the hide failed or the overlay still reports visible.
+    Withdrawal withdraw() noexcept;
     // Sensing: runtime events, visibility queries and the read-only view record.
     void events();
     void calibration_visibility(Json::Value& sample);
@@ -109,6 +136,7 @@ void watchdog(const std::string& mode, const char* phase, unsigned seconds);
 
 // Rendering (overlay_bridge_rendering.cpp).
 Settings settings(const std::vector<std::uint8_t>& b);
+Settings hud_settings();
 Settings marker_settings();
 std::vector<std::uint8_t> pattern();
 std::vector<std::uint8_t> calibration_marker(Json::Value& description, const Settings& applied);
@@ -122,9 +150,10 @@ std::string usage_text();
 Json::Value closed_report(const std::string& mode);
 void describe_marker_run(Json::Value& report, int seconds, std::uint64_t start_ns, std::uint64_t deadline_ns);
 void describe_connect(Json::Value& report, bool view_record, bool validate, bool background_only);
+void describe_fixed_hud(Json::Value& report, const Settings& applied);
 void emit_ready(const std::string& mode, bool validate, bool marker, std::uint64_t marker_deadline_ns);
 void emit_test_panel_submitted(int seconds, bool api_visible);
-void emit_frame_expired(std::uint64_t deadline_ns, std::uint64_t observed_ns, bool validate);
+void emit_frame_expired(const ExpiryRecord& record);
 void emit_first_frame(bool validate, std::uint32_t width, std::uint32_t height);
 // The visibility lines of one fallback cycle (hud-fallback.md "Bridge events"): hide_requested or
 // show_requested, hide_returned or show_returned, overlay_hidden or overlay_shown, visibility_event_missing.
@@ -140,5 +169,5 @@ int record_cleanup(Json::Value& report, const Overlay& overlay, bool marker, boo
 // Sensing (overlay_bridge_sensing.cpp): the clock every reported timestamp
 // reads, and the stdin protocol loop.
 std::uint64_t monotonic_ns();
-void stream(Overlay& overlay, bool validate, Json::Value& report);
+void stream(Overlay& overlay, StreamMode mode, Json::Value& report);
 } // namespace sightcircuit_bridge

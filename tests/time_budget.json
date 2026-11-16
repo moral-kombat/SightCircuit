@@ -18,6 +18,7 @@
     "test_report_characterization": 40,
     "test_latency_statistics": 30,
     "test_camera_helper_source": 90,
-    "test_camera_recognize": 90
+    "test_camera_recognize": 90,
+    "test_fixed_hud_runtime": 90
   }
 }

@@ -56,10 +56,14 @@ Settings settings(const std::vector<std::uint8_t>& b) {
     if (visible > 1) throw std::runtime_error("invalid_visibility");
     return s;
 }
-Settings marker_settings() {
-    // The fixed HUD placement; the marker never takes settings from stdin.
+Settings hud_settings() {
+    // The fixed HUD placement (fixed-edge-hud-v1), from the generated contract alone.
     return Settings{contract::kHudPanelWidthM, contract::kHudDistanceM, contract::kHudXM, contract::kHudYM,
                     contract::kHudOpacity, true};
+}
+Settings marker_settings() {
+    // The marker is shown at the fixed HUD placement and never takes settings from stdin.
+    return hud_settings();
 }
 void Overlay::configure(const Settings& s) {
     config = s;
@@ -82,10 +86,30 @@ void Overlay::visibility() {
     }
     else check(api->HideOverlay(handle), "HideOverlay");
 }
-void Overlay::frame(std::uint32_t w, std::uint32_t h, const void* rgba) {
+void Overlay::upload(std::uint32_t w, std::uint32_t h, const void* rgba) {
     check(api->SetOverlayRaw(handle,const_cast<void*>(rgba),w,h,4), "SetOverlayRaw");
+}
+void Overlay::present() {
     has_image = true;
     visibility();
+}
+void Overlay::frame(std::uint32_t w, std::uint32_t h, const void* rgba) {
+    upload(w,h,rgba);
+    present();
+}
+Withdrawal Overlay::withdraw() noexcept {
+    Withdrawal result;
+    has_image = false;
+    result.hide_called_ns = monotonic_ns();
+    const auto hidden = api->HideOverlay(handle);
+    result.hide_returned_ns = monotonic_ns();
+    result.hide_ok = hidden == vr::VROverlayError_None;
+    if (!result.hide_ok) result.hide_error = api->GetOverlayErrorNameFromEnum(hidden);
+    // The return code alone is not the tile being down: ask the runtime, and drop the expired pixels so a
+    // later show has nothing of them to bring back.
+    result.visible_after = api->IsOverlayVisible(handle);
+    result.texture_cleared = api->ClearOverlayTexture(handle) == vr::VROverlayError_None;
+    return result;
 }
 std::vector<std::uint8_t> pattern() {
     constexpr unsigned w=256,h=128;

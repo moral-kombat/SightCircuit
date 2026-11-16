@@ -64,10 +64,11 @@ class GeneratedHeaderTests(unittest.TestCase):
                  for field in dataclasses.fields(record)]
         for name in ("MARKER_MIN_SECONDS", "MARKER_MAX_SECONDS", "MAX_DISPLAY_AGE_NS", "MAX_SIDE", "RGBA_BYTES",
                      "BRIDGE_CONNECT_BUDGET_SECONDS", "OPCODE_FRAME", "OPCODE_SETTINGS", "OPCODE_STOP", "OPCODE_EXPIRING_FRAME",
-                     "OPCODE_VISIBILITY", "VISIBILITY_EVENT_BOUND_NS", "PACKET_MAGIC"):
+                     "OPCODE_VISIBILITY", "VISIBILITY_EVENT_BOUND_NS", "PACKET_MAGIC", "OPCODE_OBSERVED_FRAME",
+                     "OBSERVATION_FUTURE_TOLERANCE_NS"):
             cases.append((contract, name, changed(getattr(contract, name)), name))
         for name in ("PACKET_HEADER_FIELDS", "SETTINGS_FIELDS", "FRAME_PREFIX_FIELDS",
-                     "EXPIRING_FRAME_PREFIX_FIELDS", "VISIBILITY_FIELDS"):
+                     "EXPIRING_FRAME_PREFIX_FIELDS", "VISIBILITY_FIELDS", "OBSERVED_FRAME_PREFIX_FIELDS"):
             layout = getattr(contract, name)
             cases.append((contract, name, layout[::-1], f"{name} order"))
             cases.append((contract, name, layout[:-1] + ((layout[-1][0], "Q"),), f"{name} width"))
@@ -149,6 +150,41 @@ class PythonWireFormatTests(unittest.TestCase):
                                   struct.unpack(contract.EXPIRING_FRAME_PREFIX_FORMAT, payload[:prefix]))),
                          {"expires_ns": deadline, "width": 3, "height": 2})
         self.assertEqual(self.split(packet(contract.OPCODE_STOP)), (contract.OPCODE_STOP, b""))
+
+    def test_observed_frames_use_the_contract_layout(self):
+        # Work-order item L7: identity, observation time and deadline ahead of the pixels; encoding only.
+        self.assertEqual(contract.OBSERVED_FRAME_PREFIX_FIELDS,
+                         (("frame_id", "Q"), ("observed_ns", "Q"), ("expires_ns", "Q"), ("width", "I"), ("height", "I")))
+        self.assertEqual(len({contract.OPCODE_FRAME, contract.OPCODE_SETTINGS, contract.OPCODE_STOP,
+                              contract.OPCODE_EXPIRING_FRAME, contract.OPCODE_VISIBILITY,
+                              contract.OPCODE_OBSERVED_FRAME}), 6)
+        self.assertEqual(contract.OBSERVATION_FUTURE_TOLERANCE_NS, 10_000_000)
+        self.assertLess(contract.OBSERVATION_FUTURE_TOLERANCE_NS, contract.MAX_DISPLAY_AGE_NS // 50)
+        pixels = bytes(3 * 2 * contract.RGBA_BYTES)
+        seen, limit = 5_000, 5_000 + contract.MAX_DISPLAY_AGE_NS
+        opcode, payload = self.split(overlay.observed_frame_packet(2 ** 40, seen, limit, 3, 2, pixels))
+        prefix = struct.calcsize(contract.OBSERVED_FRAME_PREFIX_FORMAT)
+        self.assertEqual(opcode, contract.OPCODE_OBSERVED_FRAME)
+        self.assertEqual(dict(zip((name for name, _ in contract.OBSERVED_FRAME_PREFIX_FIELDS),
+                                  struct.unpack(contract.OBSERVED_FRAME_PREFIX_FORMAT, payload[:prefix]))),
+                         {"frame_id": 2 ** 40, "observed_ns": seen, "expires_ns": limit, "width": 3, "height": 2})
+        self.assertEqual(payload[prefix:], pixels)
+        # The encoder refuses what the bridge would: a deadline past the observation's bound, or not after it.
+        for arguments, reason in (((1, seen, limit + 1, 3, 2, pixels), "invalid_frame_expiry"),
+                                  ((1, seen, seen, 3, 2, pixels), "invalid_frame_expiry"),
+                                  ((1, seen, 0, 3, 2, pixels), "invalid_frame_expiry"),
+                                  ((-1, seen, limit, 3, 2, pixels), "observed_frame_number_out_of_range"),
+                                  ((1.0, seen, limit, 3, 2, pixels), "observed_frame_number_out_of_range"),
+                                  ((1, True, limit, 3, 2, pixels), "observed_frame_number_out_of_range"),
+                                  ((1, seen, 2 ** 64, 3, 2, pixels), "observed_frame_number_out_of_range"),
+                                  ((1, seen, limit, 3, 2, pixels[:-1]), "Invalid RGBA overlay frame"),
+                                  ((1, seen, limit, contract.MAX_SIDE + 1, 1, pixels), "Invalid RGBA overlay frame")):
+            with self.subTest(reason=reason, arguments=arguments[:5]), self.assertRaisesRegex(ValueError, reason):
+                overlay.observed_frame_packet(*arguments)
+        # No client sends it: the encoder is a function, and neither OverlayClient nor OverlaySink names it.
+        classes = (ROOT / "sightcircuit/overlay.py").read_text().split("class OverlayClient:", 1)[1]
+        self.assertNotIn("OPCODE_OBSERVED_FRAME", classes)
+        self.assertNotIn("observed_frame_packet", classes)
 
     def test_visibility_requests_use_the_contract_layout(self):
         # Work item F1: the show or hide request of one fallback cycle; encoding only, no client sends it yet.
@@ -498,7 +534,7 @@ class NativeContractTests(unittest.TestCase):
         self.assertEqual((messages[-1]["frames_received"], messages[-1]["settings_received"],
                           messages[-1]["visibility_requests_received"]), (2, 2 * len(PANEL_LIMITS), 2))
         opcodes = (contract.OPCODE_FRAME, contract.OPCODE_SETTINGS, contract.OPCODE_STOP,
-                   contract.OPCODE_EXPIRING_FRAME, contract.OPCODE_VISIBILITY)
+                   contract.OPCODE_EXPIRING_FRAME, contract.OPCODE_VISIBILITY, contract.OPCODE_OBSERVED_FRAME)
         rejected = [(frame(contract.MAX_SIDE + 1, 1), "invalid_rgba_frame"),
                     (frame(1, contract.MAX_SIDE + 1), "invalid_rgba_frame"),
                     (packet(max(opcodes) + 1), "invalid_packet_header"), (packet(0), "invalid_packet_header"),

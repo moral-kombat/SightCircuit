@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import shutil
 import struct
@@ -87,7 +88,7 @@ class OverlayBridgeTests(unittest.TestCase):
         self.assertEqual(messages[-1]["error"], "vrserver_not_running:VRInitError_Init_PathRegistryNotFound")
         self.assertEqual(messages[-1]["frames_submitted"], 0)
 
-    RUNTIME_MODES = (("--test-panel",), ("--test-panel", "--seconds", "1"), ("--stdin",),
+    RUNTIME_MODES = (("--test-panel",), ("--test-panel", "--seconds", "1"), ("--stdin",), ("--fixed-hud",),
                      ("--calibration-marker", "--seconds", "3", "--allow-calibration-output"))
 
     def fake_installed_runtime(self):
@@ -260,6 +261,190 @@ class OverlayBridgeTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "VRInitError_Init_PathRegistryNotFound"):
             client.start()
         self.assertIsNotNone(client.process.poll())
+
+
+@unittest.skipUnless(DEFAULT_BRIDGE.is_file(), "Build scripts/build_overlay_bridge.sh first")
+class FixedHudModeTests(unittest.TestCase):
+    """``--fixed-hud`` (work-order item L7): the one real-output mode with frame expiry, and nothing wider.
+
+    No runtime exists in the cloud, so the mode itself never gets past its
+    connect here. What it accepts is decided by the OpenVR-free helpers of
+    ``tools/overlay_frame.hpp``, which the dispatch fixture exercises for every
+    mode with a fake clock; these tests pin that the bridge's units use those
+    helpers and nothing else, and that every other mode is as it was.
+    """
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.env = dict(os.environ, VR_PATHREG_OVERRIDE=str(Path(self.temporary.name) / "absent.vrpath"))
+        self.units = {Path(path).name: (ROOT / path).read_text() for path in NATIVE_SOURCES}
+
+    def run_bridge(self, *arguments, data=b""):
+        result = subprocess.run([str(DEFAULT_BRIDGE), *arguments], input=data, env=self.env, capture_output=True,
+                                timeout=5)
+        return result, [json.loads(line) for line in result.stdout.splitlines()]
+
+    @unittest.skipUnless(DEFAULT_BRIDGE.is_file(), "Build scripts/build_overlay_bridge.sh first")
+    def test_the_mode_takes_no_argument_and_reports_its_pinned_geometry_before_any_connect(self):
+        from sightcircuit.hud.contract import (HUD_CONFIG, MAX_DISPLAY_AGE_NS, OBSERVATION_FUTURE_TOLERANCE_NS,
+                                               config_digest)
+
+        for extra in (("--seconds", "5"), ("--allow-calibration-output",), ("--width", "0.8"), ("extra",)):
+            with self.subTest(extra=extra):
+                result, messages = self.run_bridge("--fixed-hud", *extra)
+                self.assertEqual((result.returncode, len(messages)), (64, 1), messages)
+                self.assertFalse(messages[0]["runtime_initialized"])
+        # Without a server the run ends at the Background probe; the report already names the placement.
+        result, messages = self.run_bridge("--fixed-hud", data=PanelSettings().encode())
+        self.assertEqual((result.returncode, len(messages)), (1, 1), messages)
+        report = messages[0]
+        self.assertTrue(report["error"].startswith("vrserver_not_running:"))
+        self.assertEqual((report["mode"], report["frames_received"], report["settings_received"]), ("--fixed-hud", 0, 0))
+        hud = report["fixed_hud"]
+        self.assertEqual((hud["config_id"], hud["config_digest"], hud["width"], hud["height"]),
+                         (HUD_CONFIG.layout_id, config_digest(HUD_CONFIG), HUD_CONFIG.width_px, HUD_CONFIG.height_px))
+        for field, value in (("panel_width_m", HUD_CONFIG.panel_width_m), ("distance_m", HUD_CONFIG.distance_m),
+                             ("x_m", HUD_CONFIG.x_m), ("y_m", HUD_CONFIG.y_m), ("opacity", HUD_CONFIG.opacity)):
+            self.assertAlmostEqual(hud[field], value, places=6, msg=field)
+        self.assertEqual(hud["max_display_age_ns"], MAX_DISPLAY_AGE_NS)
+        self.assertIs(hud["settings_accepted"], False)
+        self.assertIs(hud["frames_without_deadline_accepted"], False)
+        self.assertIs(hud["frames_without_observation_accepted"], False)
+        self.assertEqual(hud["observation_future_tolerance_ns"], OBSERVATION_FUTURE_TOLERANCE_NS)
+        # No other mode carries the record.
+        for arguments in (("--stdin",), ("--validate-stdin",), ("--test-panel",)):
+            self.assertNotIn("fixed_hud", self.run_bridge(*arguments)[1][-1], arguments)
+        usage = subprocess.run([str(DEFAULT_BRIDGE), "--help"], env=self.env, capture_output=True,
+                               timeout=5).stdout.decode()
+        self.assertIn("sightcircuit-overlay-bridge --fixed-hud", usage)
+
+    @unittest.skipUnless(DEFAULT_BRIDGE.is_file(), "Build scripts/build_overlay_bridge.sh first")
+    def test_the_validation_stream_is_unchanged_and_carries_no_fixed_hud_rule(self):
+        # Settings, a frame without a deadline and a frame of another size are still taken by --validate-stdin.
+        data = (PanelSettings().encode() + packet(1, struct.pack("<II", 2, 1) + bytes(8)) +
+                packet(4, struct.pack("<QII", time.monotonic_ns() + 900_000_000, 3, 2) + bytes(24)) + packet(3))
+        result, messages = self.run_bridge("--validate-stdin", data=data)
+        self.assertEqual(result.returncode, 0, messages)
+        self.assertEqual(messages[0], {"event": "ready", "validation_only": True, "frame_expiry_supported": True,
+                                       "observed_frames_supported": True,
+                                       "runtime_initialized": False, "overlay_interface": messages[0]["overlay_interface"],
+                                       "report_kind": "sightcircuit_overlay_bridge", "schema_version": 1})
+        final = messages[-1]
+        self.assertEqual((final["status"], final["settings_received"], final["frames_received"],
+                          final["expiring_frames_received"]), ("validated", 1, 2, 1))
+        # A short expiring packet keeps the name the validation stream has always given it.
+        result, messages = self.run_bridge("--validate-stdin", data=packet(4, bytes(8)))
+        self.assertEqual((result.returncode, messages[-1]["error"]), (1, "expiring_frames_validation_only"))
+
+    def test_expiry_is_reported_supported_by_validation_and_the_fixed_hud_only(self):
+        reporting = self.units["overlay_bridge_reporting.cpp"]
+        self.assertEqual(re.findall(r'ready\["frame_expiry_supported"\]=(.*);', reporting),
+                         ['mode=="--validate-stdin" || mode=="--fixed-hud"'])
+        self.assertEqual(re.findall(r'ready\["observed_frames_supported"\]=(.*);', reporting),
+                         ['mode=="--validate-stdin" || mode=="--fixed-hud"'])
+        # The packet rule is one helper, and it agrees: expiry everywhere but the replay stream.
+        frame = self.units["overlay_frame.hpp"]
+        self.assertIn("enum class StreamMode { Replay, Validation, FixedHud };", frame)
+        self.assertIn("inline bool frame_expiry_supported(StreamMode mode) { return mode != StreamMode::Replay; }",
+                      frame)
+        # The entry point is the only place a stream mode is chosen: --fixed-hud alone selects the fixed HUD,
+        # --validate-stdin alone validation, and --stdin (every other stream run) stays the replay stream.
+        entry = self.units["overlay_bridge.cpp"]
+        self.assertIn('const bool fixed_hud=mode=="--fixed-hud";', entry)
+        self.assertEqual(re.findall(r"stream\(overlay,(.*?),\s*report\);", entry, re.S),
+                         ["validate ? StreamMode::Validation : fixed_hud ? StreamMode::FixedHud : StreamMode::Replay"])
+        for name, text in self.units.items():
+            if name not in ("overlay_bridge.cpp", "overlay_frame.hpp"):
+                self.assertNotIn("StreamMode::FixedHud", text, name)
+            if name != "overlay_bridge.cpp":
+                self.assertNotIn('"--fixed-hud"', text.replace('mode=="--validate-stdin" || mode=="--fixed-hud"', "")
+                                 .replace('if (mode=="--fixed-hud") ready["fixed_hud"]=true;', ""), name)
+
+    def test_the_stream_loop_decides_on_the_shared_helpers_and_the_marker_modes_keep_their_refusal(self):
+        sensing = self.units["overlay_bridge_sensing.cpp"]
+        loop = sensing.split("void stream(Overlay& overlay, StreamMode mode, Json::Value& report) {", 1)[1]
+        loop, marker = loop.split("void MarkerInput::poll_input", 1)
+        # One refusal call on the header, before the payload is read; the size and deadline rules after decode.
+        self.assertEqual(loop.count("packet_refusal(mode, kind, size)"), 1)
+        self.assertLess(loop.index("packet_refusal("), loop.index("std::vector<std::uint8_t> payload(size);"))
+        self.assertEqual(loop.count("sightcircuit_overlay::check_frame_size(mode, frame);"), 1)
+        self.assertEqual(loop.count("deadline.judge(frame, expiring, monotonic_ns())"), 1)
+        self.assertLess(loop.index("deadline.judge("), loop.index("dispatch_frame(overlay, frame)"))
+        self.assertLess(loop.index("deadline.judge("), loop.index("overlay.upload("))
+        # A frame with a deadline is uploaded, then both deadlines are re-read, and only then is it committed
+        # and presented: a late SetOverlayRaw return never initiates a show, and the tile it replaced is
+        # recorded under its own deadline.
+        staged = loop.split("overlay.upload(w, h, frame.rgba);", 1)[1].split("if (!validate) report", 1)[0]
+        order = [staged.index(text) for text in (
+            "const auto now = monotonic_ns();", "const bool late = frame.expiry <= now;",
+            'deadline.due(now)) expired(passed, now, "replaced", false);',
+            'expired(frame.expiry, now, "expired_before_show", true, &frame);',
+            "deadline.commit(frame, expiring);", "overlay.present();")]
+        self.assertEqual(order, sorted(order))
+        self.assertEqual(loop.count("overlay.present();"), 1)
+        self.assertNotIn("overlay.frame(", loop)
+        # The loop holds no acceptance rule of its own: no opcode comparison decides a refusal, and the only
+        # writer of the deadline is the helper.
+        self.assertNotIn("expiring_frames_validation_only", sensing)
+        self.assertNotIn("fixed_hud", sensing)
+        self.assertEqual(re.findall(r"deadline\.expiry\s*=\s*(\w+)", loop), ["0"])  # cleared, never set, here
+        # At a deadline: the image is withdrawn, visibility() hides, then the record is written.
+        expire = loop.split("const auto expire = [&] {", 1)[1].split("};", 1)[0]
+        self.assertIn('if (const auto passed = deadline.due(now)) expired(passed, now, "hidden", true);', expire)
+        record = loop.split("const auto expired = [&]", 1)[1].split("};", 1)[0]
+        order = [record.index(text) for text in ("withdrawal = overlay.withdraw();", "emit_frame_expired(record);",
+                                                 "if (record.withdrawal && !withdrawal.ok())", "throw")]
+        self.assertEqual(order, sorted(order))
+        # The withdrawal: hide, ask the runtime, clear the texture; the times around the hide call itself.
+        withdraw = self.units["overlay_bridge_rendering.cpp"].split("Withdrawal Overlay::withdraw() noexcept {", 1)[1]
+        withdraw = withdraw.split("\n}\n", 1)[0]
+        order = [withdraw.index(text) for text in (
+            "has_image = false;", "result.hide_called_ns = monotonic_ns();", "api->HideOverlay(handle)",
+            "result.hide_returned_ns = monotonic_ns();", "api->IsOverlayVisible(handle)",
+            "api->ClearOverlayTexture(handle)")]
+        self.assertEqual(order, sorted(order))
+        # The marker modes still take the visibility request alone, expiring frames included in the refusal.
+        self.assertIn('if (kind != contract::kOpcodeVisibility) throw std::runtime_error("marker_accepts_visibility_only");',
+                      marker)
+        self.assertNotIn("kOpcodeExpiringFrame", marker)
+
+    def test_the_fixed_hud_placement_comes_from_the_contract_and_is_applied_once(self):
+        rendering = self.units["overlay_bridge_rendering.cpp"]
+        body = rendering.split("Settings hud_settings() {", 1)[1].split("}", 1)[0]
+        self.assertIn("return Settings{contract::kHudPanelWidthM, contract::kHudDistanceM, contract::kHudXM, "
+                      "contract::kHudYM,", body)
+        self.assertIn("contract::kHudOpacity, true", body)
+        self.assertNotRegex(body, r"\d\.\d")  # no literal metres: the contract's values only
+        entry = self.units["overlay_bridge.cpp"]
+        self.assertEqual(entry.count("overlay.config=hud_settings();"), 1)
+        self.assertLess(entry.index("overlay.config=hud_settings();"), entry.index("overlay.init("))
+
+    def test_the_bridge_names_no_openvr_call_outside_the_present_set(self):
+        """The mode adds no API: the calls the units make are exactly those made before it."""
+        calls = set()
+        for name, text in self.units.items():
+            calls |= {f"IVROverlay::{call}" for call in re.findall(r"\bapi->(\w+)\(", text)}
+            calls |= {f"IVRSystem::{call}" for call in re.findall(r"\bsystem->(\w+)\(", text)}
+            calls |= {f"IVRHeadsetView::{call}" for call in re.findall(r"\bview->(\w+)\(", text)}
+            calls |= set(re.findall(r"\bvr::(VR\w*)\(", text))
+            self.assertNotIn("SetHeadsetView", text, name)
+            self.assertNotIn("IVRTrackedCamera", text, name)
+            self.assertNotIn("VRCompositor", text, name)
+        self.assertEqual(calls, {
+            "VR_Init", "VR_Shutdown", "VR_GetVRInitErrorAsSymbol", "VROverlay", "VRHeadsetView",
+            "IVROverlay::GetOverlayErrorNameFromEnum", "IVROverlay::CreateOverlay", "IVROverlay::SetOverlayInputMethod",
+            "IVROverlay::SetOverlayTextureColorSpace", "IVROverlay::SetOverlayFlag", "IVROverlay::GetOverlayFlag",
+            "IVROverlay::SetOverlayWidthInMeters", "IVROverlay::SetOverlayAlpha",
+            "IVROverlay::SetOverlayTransformTrackedDeviceRelative", "IVROverlay::ShowOverlay",
+            "IVROverlay::HideOverlay", "IVROverlay::SetOverlayRaw", "IVROverlay::ClearOverlayTexture",
+            "IVROverlay::DestroyOverlay", "IVROverlay::IsOverlayVisible", "IVROverlay::IsDashboardVisible",
+            "IVROverlay::PollNextOverlayEvent",
+            "IVRSystem::IsTrackedDeviceConnected", "IVRSystem::PollNextEvent", "IVRSystem::AcknowledgeQuit_Exiting",
+            "IVRSystem::GetEyeToHeadTransform", "IVRSystem::GetProjectionRaw",
+            "IVRHeadsetView::GetHeadsetViewSize", "IVRHeadsetView::GetHeadsetViewMode",
+            "IVRHeadsetView::GetHeadsetViewCropped", "IVRHeadsetView::GetHeadsetViewAspectRatio",
+            "IVRHeadsetView::GetHeadsetViewBlendRange"})
 
 
 @unittest.skipUnless(DEFAULT_BRIDGE.is_file(), "Build scripts/build_overlay_bridge.sh first")

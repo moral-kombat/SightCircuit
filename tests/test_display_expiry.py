@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import os
+from pathlib import Path
 import queue
 import struct
 import subprocess
@@ -12,6 +13,10 @@ import unittest
 from sightcircuit.runtime import live, synthetic
 from sightcircuit.overlay import DEFAULT_BRIDGE, OverlayClient, PanelSettings, packet
 from sightcircuit.overlay import OverlaySink
+from sightcircuit.hud.contract import MAX_DISPLAY_AGE_NS
+from sightcircuit.overlay import BRIDGE_INPUT_POLL_NS, VISIBILITY_DEADLINE_MARGIN_NS, observed_frame_packet
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 @unittest.skipUnless(os.name == "posix" and DEFAULT_BRIDGE.is_file(), "Build native validation bridge on Linux")
@@ -125,6 +130,114 @@ class DisplayExpiryTests(unittest.TestCase):
             self.assertFalse(result["runtime_initialized"])
             self.assertEqual(process.wait(timeout=3), 1)
 
+    # One input poll of the bridge's loop (20 ms) is the design bound on noticing a deadline; the margin is
+    # for this host's scheduling of the bridge process, as VISIBILITY_DEADLINE_MARGIN_NS is for a request.
+    POLL_NS = BRIDGE_INPUT_POLL_NS
+    SCHEDULING_MARGIN_NS = VISIBILITY_DEADLINE_MARGIN_NS
+
+    def test_expiry_is_observed_within_one_poll_of_the_deadline(self):
+        # Work-order item L7. With no input at all the loop still polls: five frames, each left to expire.
+        process, events = self.bridge()
+        overshoots = []
+        for _ in range(5):
+            deadline = time.monotonic_ns() + 120_000_000
+            self.send(process, self.expiring_frame(deadline))
+            expired = self.event(events, "frame_expired")
+            self.assertEqual(expired["deadline_ns"], deadline)
+            self.assertGreaterEqual(expired["observed_ns"], deadline)  # never early
+            overshoots.append(expired["observed_ns"] - deadline)
+            self.assertIs(expired["content_current"], False)
+        self.assertLess(min(overshoots), self.POLL_NS, overshoots)
+        self.assertLess(max(overshoots), self.POLL_NS + self.SCHEDULING_MARGIN_NS, overshoots)
+        report = self.finish(process, events)
+        self.assertEqual((report["frames_received"], report["expired_frames"], report["stale_frames_dropped"]),
+                         (5, 5, 0))
+        self.assertIs(report["content_current"], False)
+        self.assertIs(report["presentation_visible"], False)
+
+    def test_a_retransmission_never_renews_the_deadline(self):
+        # The same packet again, before the deadline and after it: the deadline it was first sent with stands,
+        # one expiry is recorded at it, and the late copy is refused, never presented.
+        process, events = self.bridge()
+        deadline = time.monotonic_ns() + 300_000_000
+        frame = self.expiring_frame(deadline)
+        self.send(process, frame)
+        self.event(events, "frame_validated")
+        for _ in range(4):
+            time.sleep(0.05)
+            self.send(process, frame)
+        expired = self.event(events, "frame_expired")
+        self.assertEqual(expired["deadline_ns"], deadline)
+        self.assertLess(expired["observed_ns"] - deadline, self.POLL_NS + self.SCHEDULING_MARGIN_NS)
+        self.send(process, frame)
+        self.send(process, frame)
+        report = self.finish(process, events)
+        self.assertEqual((report["frames_received"], report["expiring_frames_received"], report["expired_frames"],
+                          report["stale_frames_dropped"]), (5, 7, 1, 2))
+        self.assertIs(report["content_current"], False)
+        self.assertIs(report["presentation_visible"], False)
+        while not events.empty():  # nothing was presented or expired a second time
+            self.assertNotIn(events.get_nowait()["event"], ("frame_expired", "frame_validated"))
+
+    def test_an_expired_arrival_is_refused_and_an_over_long_deadline_ends_the_run(self):
+        process, events = self.bridge()
+        self.send(process, self.expiring_frame(time.monotonic_ns() - 1))  # expired before it is observed
+        self.send(process, self.expiring_frame(1))  # long expired
+        report = self.finish(process, events)
+        self.assertEqual((report["frames_received"], report["expiring_frames_received"],
+                          report["stale_frames_dropped"], report["expired_frames"]), (0, 2, 2, 0))
+        self.assertIs(report["content_current"], False)
+        # One second past the observed time is the limit: a little under it is taken, a little over refused.
+        process, events = self.bridge()
+        self.send(process, self.expiring_frame(time.monotonic_ns() + MAX_DISPLAY_AGE_NS - 100_000_000))
+        self.event(events, "frame_validated")
+        self.send(process, self.expiring_frame(time.monotonic_ns() + MAX_DISPLAY_AGE_NS + 100_000_000))
+        result = self.event_or_error(events)
+        self.assertEqual((result["event"], result["error"]), ("error", "invalid_frame_expiry"))
+        self.assertEqual((result["frames_received"], result["frames_submitted"]), (1, 0))
+        self.assertEqual(process.wait(timeout=3), 1)
+
+    def observed_frame(self, frame_id, observed_ns, life_ns):
+        return observed_frame_packet(frame_id, observed_ns, observed_ns + life_ns, 1, 1, bytes(4))
+
+    def test_observed_frames_follow_the_same_rules_under_validation(self):
+        # The observed frame (work-order item L7) on the validation bridge, which runs the judge the fixed HUD
+        # runs: the deadline is bounded by the observation, and only a newer observation renews it.
+        process, events = self.bridge()
+        start = time.monotonic_ns()
+        for frame_id in range(1, 8):  # one observation, re-sent under new identities for 700 ms
+            self.send(process, self.observed_frame(frame_id, start, 400_000_000))
+            time.sleep(0.1)
+        expired = self.event(events, "frame_expired")
+        self.assertEqual((expired["deadline_ns"], expired["frame_observed_ns"]), (start + 400_000_000, start))
+        self.assertIn(expired["frame_id"], (4, 5))  # the last one taken before the deadline
+        self.assertLess(expired["observed_ns"] - expired["deadline_ns"], self.POLL_NS + self.SCHEDULING_MARGIN_NS)
+        self.assertNotIn("hide_returned_ns", expired)  # validation makes no call
+        newer = time.monotonic_ns()
+        self.send(process, self.observed_frame(8, newer, 200_000_000))  # a newer observation renews
+        self.send(process, self.observed_frame(8, newer, 200_000_000))  # its retransmission does nothing
+        self.send(process, self.observed_frame(7, newer, 900_000_000))  # an older identity is stale
+        second = self.event(events, "frame_expired")
+        self.assertEqual((second["frame_id"], second["deadline_ns"]), (8, newer + 200_000_000))
+        report = self.finish(process, events)
+        self.assertEqual((report["observed_frames_received"], report["frames_retransmitted"], report["expired_frames"]),
+                         (10, 1, 2))
+        self.assertEqual(report["frames_received"] + report["stale_frames_dropped"], 9)
+        self.assertGreaterEqual(report["stale_frames_dropped"], 3)
+        # A deadline past the observation's bound ends the run, however recently the frame arrived.
+        process, events = self.bridge()
+        now = time.monotonic_ns()
+        self.send(process, packet(6, struct.pack("<QQQII", 1, now - 500_000_000, now + 600_000_000, 1, 1) + bytes(4)))
+        result = self.event_or_error(events)
+        self.assertEqual((result["error"], result["frames_received"]), ("invalid_frame_expiry", 0))
+        self.assertEqual(process.wait(timeout=3), 1)
+
+    def event_or_error(self, events):
+        while True:
+            event = events.get(timeout=3)
+            if "exit_code" in event:
+                return event
+
     @unittest.skipUnless(importlib.util.find_spec("cv2"), "OpenCV is required for the live pipeline detector")
     def test_stalled_inference_cannot_keep_previous_result_current(self):
         blocked, release, stop = threading.Event(), threading.Event(), threading.Event()
@@ -184,6 +297,36 @@ class DisplayExpiryTests(unittest.TestCase):
 
 
 class ExpiryGateTests(unittest.TestCase):
+    def test_expiring_real_output_through_the_sink_is_refused_whatever_the_bridge_reports(self):
+        # Work-order item L7: the bridge's --fixed-hud mode reports frame_expiry_supported in real output, and
+        # Python's gate check stays the outer guard. A real-output client that has seen such a ready line still
+        # refuses an expiring frame, through the sink and directly, before anything is queued for the bridge.
+        from types import SimpleNamespace
+        from sightcircuit import gates
+
+        self.assertEqual(gates.claims(gates.LIVE_HUD_OUTPUT), {"production_hud_enabled": False})
+        client = OverlayClient(validation_only=False)
+        client.frame_expiry_supported = True
+        sink = OverlaySink(client)
+        deadline = time.monotonic_ns() + 100_000_000
+        with self.assertRaisesRegex(ValueError, "^expiring_live_output_not_approved_or_supported$"):
+            client.submit_frame(1, 1, bytes(4), expires_ns=deadline)
+        if importlib.util.find_spec("cv2"):
+            import numpy as np
+
+            with self.assertRaisesRegex(ValueError, "^expiring_live_output_not_approved_or_supported$"):
+                sink.submit(SimpleNamespace(image=np.zeros((128, 320, 3), dtype=np.uint8), expires_ns=deadline))
+        self.assertIsNone(client.pending_frame)
+        self.assertIsNone(client.process)
+        # The fixed placement stays gated for real output too, and a HUD sink still owns a validation client.
+        with self.assertRaisesRegex(ValueError, "^fixed_live_hud_not_approved$"):
+            client.freeze_settings(PanelSettings())
+        # The client can start only the two stream modes it always could; it never names the new one.
+        source = (ROOT / "sightcircuit/overlay.py").read_text()
+        self.assertIn('mode = "--validate-stdin" if self.validation_only else "--stdin"', source)
+        self.assertNotIn('"--fixed-hud"', source)
+        self.assertEqual(source.count("subprocess.Popen("), 1)
+
     def test_real_output_and_old_bridge_cannot_accept_expiring_live_frames(self):
         for client in (OverlayClient(validation_only=False), OverlayClient(validation_only=True)):
             with self.assertRaisesRegex(ValueError, "not_approved_or_supported"):
