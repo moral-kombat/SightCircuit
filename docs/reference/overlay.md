@@ -279,8 +279,9 @@ not what the headset displayed.
 `freeze_settings` still refuse real output through `LIVE_HUD_OUTPUT`, whatever
 a bridge reports. The mode's client, `ObservedFrameClient` (L8, the
 [camera HUD reference](camera-hud.md#the-observed-frame-client)), starts the
-validation bridge and refuses to start this mode through the same gate; the
-scope record that could permit one run arrives with L10. While its tile is
+validation bridge and refuses to start this mode through the same gate unless
+a [one-run scope record](camera-hud.md#the-one-run-scope-record) verifies
+(L10), which opens no gate. While its tile is
 taken down that client's keepalive is a hide request, not the show described
 above, so that it cannot bring back a tile that has not reached its deadline.
 

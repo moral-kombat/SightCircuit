@@ -320,7 +320,8 @@ class FixedHudStartGateTests(unittest.TestCase):
                 self.assertEqual(str(caught.exception), "fixed_hud_output_not_approved")
             launched.assert_not_called()
         self.assertIsNone(client.process)
-        self.assertEqual(gates.claims(), {"production_live_input_enabled": False, "mapping_qualified": False,
+        self.assertEqual(gates.claims(), {"production_live_input_enabled": False,
+                                          "production_camera_input_enabled": False, "mapping_qualified": False,
                                           "production_hud_enabled": False})
 
     def test_the_refusal_is_the_gates_and_has_one_permission_site(self):

@@ -431,7 +431,9 @@ standby manifest through `acquireFrameSet`.
 camera as a frame source for `Pipeline`, built around `run_export`. It is
 library code only: no command constructs it, it opens no gate, and
 `run_pipeline` refuses it (`live_image_source_not_approved`), which a test
-pins. Work-order items L9 and L10 decide how a command may use it. Everything
+pins. Feeding a real display from it is refused through `LIVE_CAMERA_INPUT`
+unless a [one-run scope record](camera-hud.md#the-one-run-scope-record)
+verifies (L10); work-order item L9 is the command that uses it. Everything
 below is checked against the stand-in producer in the cloud; none of it is a
 device result.
 

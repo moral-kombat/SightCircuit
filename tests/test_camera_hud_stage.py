@@ -193,8 +193,8 @@ class StageCase(unittest.TestCase):
 
     def assert_no_gate_opened(self, report):
         self.assertEqual({name: report[name] for name in gates.claims()},
-                         {"production_live_input_enabled": False, "mapping_qualified": False,
-                          "production_hud_enabled": False})
+                         {"production_live_input_enabled": False, "production_camera_input_enabled": False,
+                          "mapping_qualified": False, "production_hud_enabled": False})
         self.assertEqual((report["images_saved"], report["pixels_in_report"], report["physical_display_observed"]),
                          (False, False, False))
 
@@ -553,7 +553,8 @@ class CameraHudStageTests(StageCase):
         self.assert_no_gate_opened(report)
         with self.assertRaisesRegex(ValueError, "camera_hud_stage_already_run"):
             stage.run()
-        self.assertEqual(gates.claims(), {"production_live_input_enabled": False, "mapping_qualified": False,
+        self.assertEqual(gates.claims(), {"production_live_input_enabled": False,
+                                          "production_camera_input_enabled": False, "mapping_qualified": False,
                                           "production_hud_enabled": False})
 
     def test_the_stage_takes_only_the_camera_source_the_observed_frame_client_and_the_fixed_tile(self):
@@ -883,9 +884,11 @@ class CameraHudStageTests(StageCase):
 class FixedHudStageTests(StageCase):
     """The stage on the bridge's ``--fixed-hud`` mode against the fake runtime: what the bridge calls, and when.
 
-    The permission function is patched to permit for these tests alone, which
-    is how the fixture is reached; without the patch the same client is
-    refused (``CameraHudStageTests``). Nothing here is SteamVR or a display.
+    The two permission functions (real output, and camera input to a real
+    display) are patched to permit for these tests alone, which is how the
+    fixture is reached; without the patches the same client is refused
+    (``CameraHudStageTests``, ``tests/test_scope_record.py``). Nothing here
+    is SteamVR or a display.
     """
     runs = 0
 
@@ -899,6 +902,10 @@ class FixedHudStageTests(StageCase):
         permit = mock.patch.object(observed_frames, "fixed_hud_output_permitted", return_value=True)
         self.permitted = permit.start()
         self.addCleanup(permit.stop)
+        from sightcircuit.hud import camera_stage
+        camera = mock.patch.object(camera_stage, "camera_display_input_permitted", return_value=True)
+        self.camera_permitted = camera.start()
+        self.addCleanup(camera.stop)
 
     def client(self, keepalive_seconds=observed_frames.KEEPALIVE_SECONDS, **fake):
         FixedHudStageTests.runs += 1

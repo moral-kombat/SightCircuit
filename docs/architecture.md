@@ -165,8 +165,12 @@ Without the flag the bridge makes no new OpenVR call.
 
 ### Approval tiers
 
-The [gate table](../sightcircuit/gates.py) has three production gates, all
-closed. The plan adds a second, equally closed table for a diagnostic tier: a
+The [gate table](../sightcircuit/gates.py) has four production gates, all
+closed: since work-order item L10 (2026-11-16) camera input is a gate of its
+own, and on the camera route the diagnostic tier is a
+[one-run scope record](reference/camera-hud.md#the-one-run-scope-record)
+checked at the two permission sites, not a second table. The 2026-11-07 plan
+for the mirror route, which follows and was not implemented, adds a second, equally closed table for a diagnostic tier: a
 scope record issued only by a factory, bound to the checkpoint manifest, the
 mapping record and model digests, with an absolute deadline and a consumed run
 identifier. Each gated call site then permits a use when its synthetic

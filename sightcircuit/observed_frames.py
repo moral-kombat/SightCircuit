@@ -5,9 +5,11 @@ visibility requests that take the tile down and bring it back, and the
 keepalive; it never sends a settings packet. It starts the validation bridge,
 which takes opcode 6 under the fixed HUD's rules and displays nothing. It
 would start the bridge's ``--fixed-hud`` mode, which is real output, only if
-``fixed_hud_output_permitted`` said so, and that function permits nothing:
-the start is refused through the ``LIVE_HUD_OUTPUT`` gate before anything is
-launched. The transport (bounded pipe writes, the reader thread, the stop and
+``fixed_hud_output_permitted`` said so. That function permits only a client
+that carries a one-run scope (``runtime.scope.RunScope``, work-order item
+L10) whose record verifies in full; every other start is refused through the
+``LIVE_HUD_OUTPUT`` gate before anything is launched, and the gate itself
+stays closed. The transport (bounded pipe writes, the reader thread, the stop and
 its escalation) is ``overlay.OverlayClient``'s, which itself still starts
 only the validation and replay streams.
 """
@@ -21,6 +23,7 @@ from .gates import LIVE_HUD_OUTPUT
 from .hud.contract import BRIDGE_READY_WAIT_SECONDS, OPCODE_STOP
 from .overlay import (DEFAULT_BRIDGE, OverlayClient, bridge_closed_cleanly, observed_frame_packet, packet,
                       visibility_packet)
+from .runtime.scope import HUD_OUTPUT, RunScope
 
 
 FIXED_HUD_MODE = "--fixed-hud"
@@ -50,15 +53,25 @@ BRIDGE_COUNTS = ("observed_frames_received", "frames_received", "frames_submitte
 
 
 def fixed_hud_output_permitted(client):
-    """Whether ``client`` may start the bridge in ``--fixed-hud``, real output: never, in this checkout.
+    """Whether ``client`` may start the bridge in ``--fixed-hud``, real output: only under a one-run scope record.
 
     This is the one place that decides it. ``ObservedFrameClient.check_start``
     hands the answer to the ``LIVE_HUD_OUTPUT`` gate's ``require``, which
-    refuses everything but the literal ``True``. Work-order item L10 adds its
-    one-run scope record check here and nowhere else; until then no argument,
-    environment variable or bridge line changes the answer.
+    refuses everything but the literal ``True``. The answer is ``True`` only
+    for an ``ObservedFrameClient`` whose ``scope`` is a ``RunScope`` (that
+    exact type) which permits real HUD output: its record verified in full
+    against what is on disk and its run id was consumed, all before this
+    returns and so before anything is launched (``runtime/scope.py`` lists
+    the checks). A scope permits this once, so a second start under the same
+    record is refused. No argument, environment variable, configuration value
+    or bridge line changes the answer. The gate is not open: this is the
+    diagnostic tier of owner decision 15, one record for one displayed step,
+    a procedural control against mistakes and not a cryptographic one.
     """
-    return False
+    scope = getattr(client, "scope", None)
+    if not isinstance(client, ObservedFrameClient) or type(scope) is not RunScope:
+        return False
+    return scope.permit(HUD_OUTPUT) is True
 
 
 class ObservedFrameClient(OverlayClient):
@@ -68,8 +81,10 @@ class ObservedFrameClient(OverlayClient):
     opcode 6 under the fixed HUD's rules and displays nothing) or, with
     ``validation_only`` false, in ``--fixed-hud``. The second is real output
     and is refused before anything is launched (``check_start``, through the
-    ``LIVE_HUD_OUTPUT`` gate): ``fixed_hud_output_permitted`` is the single
-    place that could permit it and it permits nothing.
+    ``LIVE_HUD_OUTPUT`` gate) unless ``fixed_hud_output_permitted``, the single
+    place that decides, finds a one-run scope record that verifies on
+    ``scope``. ``scope`` is a ``runtime.scope.RunScope`` or None; a
+    validation client never consults it.
 
     What it sends, all from one writer thread, so the order on the pipe is
     the order of the calls:
@@ -130,7 +145,7 @@ class ObservedFrameClient(OverlayClient):
     """
 
     def __init__(self, binary=DEFAULT_BRIDGE, *, validation_only=True, env=None, keepalive_seconds=KEEPALIVE_SECONDS,
-                 listener=None):
+                 listener=None, scope=None):
         if type(validation_only) is not bool:
             raise ValueError("observed_frame_client_mode_invalid")
         if (not isinstance(keepalive_seconds, (int, float)) or not math.isfinite(keepalive_seconds)
@@ -138,6 +153,9 @@ class ObservedFrameClient(OverlayClient):
             raise ValueError("observed_frame_keepalive_invalid")
         super().__init__(binary, validation_only=validation_only, env=env)
         self.keepalive_seconds, self.listener = float(keepalive_seconds), listener
+        self.scope = scope  # Read only by ``fixed_hud_output_permitted`` and the stage's camera-input check.
+        self._output_permitted = None  # The permission check's answer once it permitted; set nowhere else.
+        self._started_real_output = False
         self.hidden = False  # The last visibility request written was a hide: the tile is taken down.
         self._want_hidden = False  # What the caller asked for last, under ``condition``; the writer follows it.
         self.final = False  # ``end`` was called: nothing is accepted and nothing is shown any more.
@@ -163,13 +181,24 @@ class ObservedFrameClient(OverlayClient):
         return VALIDATION_MODE if self.validation_only else FIXED_HUD_MODE
 
     def check_start(self):
-        """Refuse real output: validation starts freely, ``--fixed-hud`` only if the one permission check says so."""
+        """Refuse real output: validation starts freely, ``--fixed-hud`` only if the one permission check says so.
+
+        A scope grants real output once and consumes its run id, so a
+        permitted answer is kept for this client: ``start`` after a permitted
+        ``check_start`` (the stage's order) is the same start. A refusal is
+        never kept, and nothing else sets the kept answer.
+        """
         if self.validation_only is not True:
-            LIVE_HUD_OUTPUT.require(fixed_hud_output_permitted(self), FIXED_HUD_REFUSAL)
+            if self._output_permitted is not True:
+                self._output_permitted = fixed_hud_output_permitted(self)
+            LIVE_HUD_OUTPUT.require(self._output_permitted, FIXED_HUD_REFUSAL)
 
     def start(self):
         """Start the bridge in this client's mode, after the gate; otherwise as ``OverlayClient.start``."""
         self.check_start()
+        if self.validation_only is not True and self._started_real_output:
+            raise ValueError("observed_frame_client_already_started")  # One permitted start, one bridge.
+        self._started_real_output = self.validation_only is not True
         if not self.binary.is_file() or not os.access(self.binary, os.X_OK):
             raise RuntimeError("Overlay bridge missing; run bash scripts/build_overlay_bridge.sh")
         self.process = subprocess.Popen([str(self.binary), self.bridge_mode()], stdin=subprocess.PIPE,

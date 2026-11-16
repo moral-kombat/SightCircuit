@@ -18,13 +18,14 @@ device run is approved by this page.
 
 Every gate stays closed and none is lifted by this command. The report of
 every run carries `gates.claims()`: `production_live_input_enabled`,
+`production_camera_input_enabled` (since work-order item L10),
 `mapping_qualified` and `production_hud_enabled` are `false`, and a
 `gate_statement` field says the following. On 2026-11-09 the owner classified
 bounded camera recognition without display (counts, labels, boxes and timings
 only, no saved image, at most 30 seconds) as a confirmed use outside the
 live-input gate, exactly as the bounded SteamVR mirror recognizer of
-[E48](../evidence/e048.md) is; `sightcircuit/gates.py` is unchanged and nothing
-feeds the live `Pipeline` or the HUD path. The command never builds the live
+[E48](../evidence/e048.md) is; that classification changed no gate, and nothing
+here feeds the live `Pipeline` or the HUD path. The command never builds the live
 pipeline, opens no window and writes no image. A run against the helper's SDK
 build on the Frame is still a device step with its own approval, under the
 accepted passthrough rule (any wearer-visible passthrough change during a run
@@ -286,7 +287,7 @@ standard library only. Expect `status: validated` and exit 0.
 | `inference_p95_budget_ms`, `inference_p95_within_budget` | `LIVE_INFERENCE_P95_BUDGET_MS` (200) and whether this run's p95 met it; which machine ran it is the report's business, so a cloud figure is never a Frame figure |
 | `capture` | The source report: `helper` (resolved path, SHA-256, arguments), `supervision` (the primitive's block: pid, exit code, forced termination, tree reaped), `stream` (packets and frames read, frames per camera, dropped frames, the `ready` and `end` headers, `end_received_monotonic_ns`, the refusal if any), `diagnostics` (the collected stderr lines and the counts of dropped, non-JSON and oversize lines), `helper_exit_code` |
 | `camera_data` | The Camera Data statement, `report_saved_by_operator` and `report_path` |
-| `gate_statement`, `production_live_input_enabled`, `mapping_qualified`, `production_hud_enabled` | The owner's 2026-11-09 classification in one sentence, and `gates.claims()`, all `false` |
+| `gate_statement`, `production_live_input_enabled`, `production_camera_input_enabled`, `mapping_qualified`, `production_hud_enabled` | The owner's 2026-11-09 classification in one sentence, and `gates.claims()`, all `false` |
 | `cleanup_ok`, `images_saved`, `pixels_in_report`, `display_started`, `overlay_requested` | The primitive's cleanup verdict and the processing thread's exit; the last four are always `false` |
 
 ## The wire protocol, camera export v2

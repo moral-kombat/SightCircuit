@@ -10,7 +10,12 @@ checkpoint imports. The on-device agent (``sightcircuit/agent``, its two
 scripts and its settings template) is operations tooling outside the
 production gates (decision D7), so it is pinned in its own ``agent`` group:
 recorded and verified like every group, but no longer part of the ``modules``
-group that is the HUD software's identity. Paths are relative to the checkout
+group that is the HUD software's identity. The camera HUD's own files (the
+camera helper built on this machine, its sources and build script, and the
+scope-record staging tool) are the ``camera_hud`` group since schema version
+3, so the manifest's digest, which a one-run scope record names
+(``runtime/scope.py``), covers the helper as well as the bridge and the
+models. Paths are relative to the checkout
 root. It pins software identity only: it is not device, physical-display or
 qualification evidence. ``scripts/checkpoint_manifest.py`` is the command.
 """
@@ -29,7 +34,9 @@ from .. import assets
 from ..errors import SightCircuitError
 
 ROOT = Path(__file__).resolve().parents[2]
-SCHEMA_VERSION = 2  # 2 (2026-11-07): the agent package left ``modules`` for its own ``agent`` group.
+# 2 (2026-11-07): the agent package left ``modules`` for its own ``agent`` group.
+# 3 (2026-11-16): the ``camera_hud`` group (work-order item L10).
+SCHEMA_VERSION = 3
 REPORT_KIND = "checkpoint_artifact_manifest"
 VERIFICATION_KIND = "checkpoint_manifest_verification"
 SCOPE = ("Pins software identity only (checkout, interpreter, packages, the SteamVR package and the bridge built "
@@ -56,7 +63,19 @@ CHECKPOINT_PACKAGES = {"cv2": "opencv-python-headless", "numpy": "numpy"}
 # The on-device agent's own group: its package, its scripts and its settings template (decision D7).
 AGENT_PACKAGE = "sightcircuit/agent"
 AGENT_FILES = ("scripts/frame_agent_guard.py", "scripts/frame_agent_run.py", "sightcircuit/agent/frame-settings.json")
-FILE_GROUPS = ("agent", "assets", "bridge", "modules", "native_sources", "scripts")
+# The camera HUD's group (work-order item L10): the helper the SDK build leaves in the ignored artifacts
+# directory, the translation units scripts/build_camera_helper.sh --sdk compiles with every local header they
+# include (tools/overlay_lifecycle.hpp is already in NATIVE_SOURCES), the shader source, the build script and
+# the scope-record staging tool. tests/test_checkpoint_manifest.py fails when the lists and the build drift.
+CAMERA_HELPER = "artifacts/camera-helper/sightcircuit-camera-helper"
+CAMERA_HELPER_SOURCES = (
+    "tools/camera_backend.hpp", "tools/camera_backend_sdk.cpp", "tools/camera_convert.comp",
+    "tools/camera_convert_spirv.hpp", "tools/camera_export_protocol.hpp", "tools/camera_helper.cpp",
+    "tools/camera_pixels.hpp", "tools/camera_pixels_cpu.cpp", "tools/camera_pixels_gpu.cpp",
+    "tools/camera_sha256.hpp", "tools/camera_status_map.hpp", "tools/camera_ycbcr.hpp")
+CAMERA_HUD_SCRIPTS = ("scripts/build_camera_helper.sh", "scripts/stage_scope_record.py")
+CAMERA_HUD_FILES = (CAMERA_HELPER, *CAMERA_HELPER_SOURCES, *CAMERA_HUD_SCRIPTS)
+FILE_GROUPS = ("agent", "assets", "bridge", "camera_hud", "modules", "native_sources", "scripts")
 GIT_TIMEOUT_SECONDS = 30
 MAX_MANIFEST_BYTES = 1 << 20
 MAX_MANIFEST_DEPTH = 8  # A manifest nests three levels; anything far deeper is foreign.
@@ -290,7 +309,7 @@ def observe(root=ROOT, packages=CHECKPOINT_PACKAGES):
     agent = [path for path in package if path.startswith(AGENT_PACKAGE + "/")]
     modules = [path for path in package if path not in agent]
     groups = {"agent": sorted([*agent, *AGENT_FILES]), "assets": asset_paths(root), "bridge": [BRIDGE],
-              "modules": modules, "native_sources": NATIVE_SOURCES, "scripts": CHECKPOINT_SCRIPTS}
+              "camera_hud": CAMERA_HUD_FILES, "modules": modules, "native_sources": NATIVE_SOURCES, "scripts": CHECKPOINT_SCRIPTS}
     current = {"schema_version": SCHEMA_VERSION, "report_kind": REPORT_KIND, "scope": SCOPE,
                "git": {"commit": commit, "dirty": bool(changes)},
                "python": {"implementation": platform.python_implementation(), "version": platform.python_version()},

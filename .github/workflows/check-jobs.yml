@@ -230,7 +230,7 @@ jobs:
             tests/test_camera_contract.py tests/test_camera_export_reader.py tests/test_camera_helper_source.py \
             tests/test_camera_marks.py \
             tests/test_camera_recognize.py tests/test_still_panel.py tests/test_fixed_hud_runtime.py \
-            tests/test_observed_frame_client.py tests/test_camera_hud_stage.py
+            tests/test_observed_frame_client.py tests/test_camera_hud_stage.py tests/test_scope_record.py
       - name: Verify links, compatibility anchors and generated summaries
         run: |
           python scripts/check_docs.py

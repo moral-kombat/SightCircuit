@@ -21,7 +21,7 @@ Use this page when a guide introduces an unfamiliar term. The
 | Expiry | Removing stale displayed results using the original observation time, independently of inference or heartbeats. |
 | Calibration / qualification | A calibration describes a candidate mapping; qualification requires evidence that the mapping meets the acceptance conditions. |
 | Synthetic input | Generated test images. Passing these tests does not establish headset behavior. |
-| Diagnostic tier | A planned second gate table, as closed as the production one, whose one-run scope would govern the 60-second acceptance run with a union-of-copies mask. Not implemented. |
+| Diagnostic tier | The tier under which a displayed device step runs while every gate is closed. On the camera route (owner decision 15, 2026-11-16) it is one [one-run scope record](reference/camera-hud.md#the-one-run-scope-record) per displayed step, checked at the two permission sites; a procedural control, not a cryptographic one. The mirror route's version, a second gate table with a union-of-copies mask, was never implemented. |
 | Time-multiplexed exclusion | The drafted fallback input design: hide the HUD during each capture window so the detector never sees it. Built only if the marker-observation budget is exhausted. |
 
 ## How to read identifiers

@@ -30,8 +30,9 @@ digests, with one section per measurement; no image is saved and nothing is
 inferred.
 
 What it does not do: no HUD output through the stream mode, no live input, no
-mapping, no gate change. The three software gates stay closed and the report
-says so (`production_hud_enabled`, `production_live_input_enabled` and
+mapping, no gate change. The software gates stay closed and the report
+says so (`production_hud_enabled`, `production_live_input_enabled`,
+`production_camera_input_enabled` since work-order item L10, and
 `mapping_qualified` are `false`). It does not decide the bound B: it produces
 the samples the [fallback reference](../reference/hud-fallback.md#device-evidence-needed)
 asks for, and the bound is set in a reviewed step from them.

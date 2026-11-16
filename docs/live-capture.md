@@ -574,17 +574,30 @@ as a numbered evidence entry, distinct from cloud checks and CI results.
 | G10. combined camera HUD | The [60-second POC acceptance](poc-scope.md#acceptance) on the camera route, step L-D5 after a first-light run (L-D4): the bottle named for at least 90% of a contiguous 60 s window with no gap over 2 s, and the wearer agrees; arrows within the tolerance agreed in writing before the run, or names only; the name gone when the bottle leaves view and the tile cleared on headset removal, by `frame_expired` and by the wearer; nothing displayed past its deadline; input age at most 1,000 ms; inference and processing p95 at most 200 ms and capture-to-display p95 at most 400 ms; passthrough and tracking normal during and for 30 s after; clean shutdown with truthful helper, supervisor, worker and bridge reports; green input aborts the run (G2) | Not run |
 
 [`sightcircuit/gates.py`](../sightcircuit/gates.py) is the code's single gate
-table. Hardware mapping requires G4; production live image input requires
-G4/G5/G6; real HUD output requires G5/G6. All three remain closed. The table
-still names the mirror rows: work-order item L10 is the reviewed edit that
-adds the camera input gate (lifted by G7, G8 and G10) and repoints real HUD
-output to G8, G9 and G10, opening nothing; until it lands no code path may
-show camera-derived labels on the headset. The numbers in G7 to G10 are the
-owner's accepted thresholds of 2026-11-16 (decision 9). Lifting a gate
-requires a reviewed code change after its evidence exists; no configuration
-flag or hand-edited candidate opens one. The separately scoped diagnostic in the
+table, and since work-order item L10 (its reviewed edit 1) it has four gates.
+Hardware mapping requires G4. Live image input from any source other than the
+SDK camera, which is the mirror, is lifted by G4, G5 and G6. Camera input, SDK
+camera frames feeding the live pipeline or the HUD path, is a gate of its own,
+lifted by G7, G8 and G10, so the mirror stays closed whatever happens to the
+camera route. Real HUD output is lifted by G8, G9 and G10. All four remain
+closed and every claim they report is false; a test pins that each G-number
+the table names is a row above. The numbers in G7 to G10 are the owner's
+accepted thresholds of 2026-11-16 (decision 9). Lifting a gate requires a
+reviewed code change after its evidence exists (item L13 for the camera
+route); no configuration flag, environment variable, typed answer or
+hand-edited candidate opens one.
+
+The displayed device steps (L-D3, L-D4, L-D5) collect that evidence while the
+gates are closed, under the diagnostic tier the owner decided on 2026-11-16
+(decision 15): one
+[one-run scope record](reference/camera-hud.md#the-one-run-scope-record) per
+step, a re-run being a new approval with a new record. The record is checked
+at the two permission sites, real HUD output and camera input to the display,
+and nowhere else. It is a procedural control against mistakes, not a
+cryptographic one: the owner's approval in the Frame manager's session is the
+authority. The mirror route's separately scoped diagnostic in the
 [qualification design](hud-qualification.md#separately-scoped-device-validation)
-is needed to collect device validation evidence before production is enabled.
+was never implemented and has no further device work.
 
 ### Acceptance evidence
 

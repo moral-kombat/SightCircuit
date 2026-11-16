@@ -75,13 +75,16 @@ class CheckoutCase(unittest.TestCase):
                      "name": "model.onnx", "url": "https://example.invalid/model.onnx",
                      "sha256": hashlib.sha256(ASSET).hexdigest()}]})}
         files.update({path: f"# {path}\n" for path in manifest.CHECKPOINT_SCRIPTS + manifest.NATIVE_SOURCES +
-                      manifest.AGENT_FILES})
+                      manifest.AGENT_FILES + manifest.CAMERA_HELPER_SOURCES + manifest.CAMERA_HUD_SCRIPTS})
         for path, text in files.items():
             (self.root / path).parent.mkdir(parents=True, exist_ok=True)
             (self.root / path).write_text(text)
         self.bridge = self.root / manifest.BRIDGE
         self.bridge.parent.mkdir(parents=True)
         self.bridge.write_bytes(b"bridge built on this machine")
+        self.helper = self.root / manifest.CAMERA_HELPER
+        self.helper.parent.mkdir(parents=True)
+        self.helper.write_bytes(b"camera helper built on this machine")
         self.asset = self.root / manifest.ASSET_DIRECTORY / "model.onnx"
         self.asset.parent.mkdir(parents=True)
         self.asset.write_bytes(ASSET)
@@ -152,7 +155,7 @@ class WriteTests(CheckoutCase):
         text = self.path.read_text()
         data = json.loads(text)
         self.assertEqual(text, json.dumps(data, sort_keys=True, indent=2) + "\n")
-        self.assertEqual((data["schema_version"], data["report_kind"]), (2, "checkpoint_artifact_manifest"))
+        self.assertEqual((data["schema_version"], data["report_kind"]), (3, "checkpoint_artifact_manifest"))
         self.assertIn("software identity only", data["scope"])
         self.assertIn("not device", data["scope"])
         self.assertEqual(data["git"], {"commit": self.git("rev-parse", "HEAD").strip(), "dirty": False})
@@ -179,6 +182,9 @@ class WriteTests(CheckoutCase):
                                                  "sightcircuit/agent/runner.py"])
         self.assertEqual(data["agent"]["sightcircuit/agent/runner.py"], hashlib.sha256(b"KILL_GRACE = 10\n").hexdigest())
         self.assertEqual(sorted(data["scripts"]), sorted(manifest.CHECKPOINT_SCRIPTS))
+        # The camera HUD's group (L10): the helper built here, its sources, its build script, the staging tool.
+        self.assertEqual(sorted(data["camera_hud"]), sorted(manifest.CAMERA_HUD_FILES))
+        self.assertEqual(data["camera_hud"][manifest.CAMERA_HELPER], hashlib.sha256(self.helper.read_bytes()).hexdigest())
         self.assertIn("tools/hud_contract.hpp", data["native_sources"])
         self.assertEqual(data["assets"], {f"{manifest.ASSET_DIRECTORY}/model.onnx": hashlib.sha256(ASSET).hexdigest()})
         self.assertEqual(data["packages"], VERSIONS)
@@ -324,6 +330,19 @@ class VerifyTests(CheckoutCase):
         self.assertEqual(len(report["differences"]), 1)  # The ignored binary leaves the tree clean.
         self.bridge.unlink()
         self.assertDiffers((f"bridge.{manifest.BRIDGE}", "changed"))
+
+    def test_fails_for_a_rebuilt_or_missing_camera_helper_or_a_changed_helper_source(self):
+        self.write()
+        self.helper.write_bytes(b"camera helper rebuilt")
+        report = self.assertDiffers((f"camera_hud.{manifest.CAMERA_HELPER}", "changed"))
+        self.assertEqual(len(report["differences"]), 1)  # The ignored binary leaves the tree clean.
+        self.helper.unlink()
+        self.assertDiffers((f"camera_hud.{manifest.CAMERA_HELPER}", "changed"))
+        self.helper.write_bytes(b"camera helper built on this machine")
+        self.assertVerifies()
+        (self.root / "tools/camera_helper.cpp").write_text("// edited\n")
+        self.git("commit", "-q", "-am", "change the helper source")
+        self.assertDiffers(("camera_hud.tools/camera_helper.cpp", "changed"), ("git.commit", "changed"))
 
     def test_fails_for_a_modified_tracked_file(self):
         self.write()
@@ -645,8 +664,26 @@ class ProcedureDriftTests(unittest.TestCase):
                               "scripts/build_overlay_bridge.sh", "scripts/checkpoint_manifest.py"}, named)
         self.assertLessEqual(named, set(manifest.CHECKPOINT_SCRIPTS))
 
+    def test_the_camera_group_pins_the_sdk_helpers_units_and_every_local_header_they_include(self):
+        build = (ROOT / "scripts/build_camera_helper.sh").read_text()
+        self.assertIn('helper_binary="$sightcircuit_build/sightcircuit-camera-helper"', build)
+        self.assertIn('sightcircuit_build="$sightcircuit_root/artifacts/camera-helper"', build)
+        units = set(re.findall(r'helper_units=\((.*)\)', build)[0].replace('"$sightcircuit_tools/', "tools/")
+                    .replace('"', "").split()) | {"tools/camera_backend_sdk.cpp"}
+        pinned_units = {path for path in manifest.CAMERA_HELPER_SOURCES if path.endswith(".cpp")}
+        self.assertEqual(units, pinned_units)
+        included = set()
+        for unit in sorted(units):
+            included |= local_includes(ROOT / unit)
+        headers = {path for path in manifest.CAMERA_HELPER_SOURCES if path.endswith(".hpp")}
+        self.assertEqual(included - set(manifest.NATIVE_SOURCES), headers)
+        self.assertIn("tools/camera_convert.comp", manifest.CAMERA_HELPER_SOURCES)  # The SPIR-V header's source.
+        self.assertEqual(manifest.CAMERA_HUD_FILES[0], manifest.CAMERA_HELPER)
+        self.assertNotIn("tools/camera_backend_fake.cpp", manifest.CAMERA_HUD_FILES)  # Never the fake backend.
+
     def test_pinned_files_exist_and_are_listed_once(self):
-        listed = manifest.CHECKPOINT_SCRIPTS + manifest.NATIVE_SOURCES + (manifest.ASSET_MANIFEST,)
+        listed = (manifest.CHECKPOINT_SCRIPTS + manifest.NATIVE_SOURCES + (manifest.ASSET_MANIFEST,) +
+                  manifest.CAMERA_HELPER_SOURCES + manifest.CAMERA_HUD_SCRIPTS)
         self.assertEqual(len(listed), len(set(listed)))
         for path in listed:
             with self.subTest(path=path):
