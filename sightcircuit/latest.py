@@ -8,9 +8,12 @@ class LatestSlot:
         self.item = None
         self.replaced = 0
         self.closed = False
+        self.discarded = False
 
     def put(self, item):
         with self.condition:
+            if self.discarded:
+                return
             if self.item is not None:
                 self.replaced += 1
             self.item = item
@@ -28,4 +31,11 @@ class LatestSlot:
         """Mark that no further items will arrive; a pending item stays takeable."""
         with self.condition:
             self.closed = True
+            self.condition.notify_all()
+
+    def discard(self):
+        """Close, drop the pending item and drop every later one: a finished run keeps no item."""
+        with self.condition:
+            self.closed = self.discarded = True
+            self.item = None
             self.condition.notify_all()

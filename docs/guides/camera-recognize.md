@@ -5,8 +5,10 @@ display, on frames that `sightcircuit-camera-helper --export-frames` writes on
 its stdout. It is the Python half of the proof of concept that lane S builds
 toward ([current work](../live-capture.md#current-work-order)); the helper's
 export mode is the native half. This guide describes the command as it exists
-and is checked in the cloud: against a fake producer, never a camera. Nothing
-here is a device result, and no device run is approved by this page.
+and is checked in the cloud against a fake producer. It has run on the Frame
+against the helper and the camera ([E98](../evidence/e098.md),
+[E99](../evidence/e099.md)); those entries are the device results, and no
+device run is approved by this page.
 
 [Scope](../poc-scope.md) · [Gates](../../sightcircuit/gates.py) ·
 [Input review](../history/2026-11-09-arcturus-sdk-input-review.md) ·
