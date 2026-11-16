@@ -9,8 +9,9 @@ cryptographic one: anyone who can run this on the Frame can write a record,
 so the owner's approval stays the authority and ``--approval`` only names it.
 
 The record is bound to this checkout's commit and to the checkpoint manifest,
-which must verify now (run ``scripts/checkpoint_manifest.py --write`` after
-the builds first). One record serves one run of one step; a re-run is a new
+which must carry the camera HUD's group and verify now (run
+``scripts/checkpoint_manifest.py --write PATH --camera-hud`` after the builds
+first). One record serves one run of one step; a re-run is a new
 approval and a new record.
 """
 import argparse

@@ -297,7 +297,7 @@ def _validate_launch(candidate, returncode):
 
 
 def run_export(binary, limits, cameras, *, on_frame, stop=None, extra_args=(), timeout=None, confirmed=False,
-               on_end=None, on_ready=None):
+               on_end=None, on_ready=None, expected_sha256=None):
     """Export frames from the helper at ``binary`` until its bound; return the source report.
 
     ``limits`` is ``{fps, max_seconds, max_frames}``, passed to the helper and
@@ -319,7 +319,11 @@ def run_export(binary, limits, cameras, *, on_frame, stop=None, extra_args=(), t
     ``no_frames``, ``refused`` (the reader's reason), ``helper_ended_early``
     (the helper's end reason), ``cancelled``, ``timed_out``, ``stopped`` and
     ``error``. The helper's exit code and the primitive's block are reported
-    whatever the outcome.
+    whatever the outcome. ``expected_sha256``, when given, is the digest the
+    helper must have (the checkpoint manifest's, for a run under a scope
+    record): the binary is hashed here, right before the launch, and a
+    different digest ends the run ``error``/``helper_digest_mismatch`` with
+    nothing launched.
     """
     report = new_export_report()
     try:
@@ -330,9 +334,14 @@ def run_export(binary, limits, cameras, *, on_frame, stop=None, extra_args=(), t
         report.update(status="error", reason=getattr(error, "reason", str(error)), error=str(error))
         return report
     command = helper_command(path, limits, cameras, extra_args, confirmed=confirmed)
-    report.update(helper={"path": path, "sha256": helper_digest(path), "arguments": command[1:],
+    digest = helper_digest(path)
+    report.update(helper={"path": path, "sha256": digest, "arguments": command[1:],
                           "parent_confirmed": bool(confirmed)},
                   limits=limits, cameras=list(cameras), status="launching")
+    if expected_sha256 is not None and digest != expected_sha256:
+        report.update(status="error", reason="helper_digest_mismatch",
+                      error="The helper binary is not the one the checkpoint manifest recorded")
+        return report
     stop = threading.Event() if stop is None else stop
     frames_read, frames_write = os.pipe()
     diagnostics_read, diagnostics_write = os.pipe()
@@ -524,6 +533,7 @@ class CameraHelperSource:
         self.binary, self.limits = binary, check_limits(limits)
         self.confirmed, self.extra_args, self.timeout = bool(confirmed), tuple(extra_args), timeout
         self.attach_seconds = attach_seconds
+        self.expected_sha256 = None  # The manifest's digest of the helper, set by a run under a scope record.
         self.status, self.reason, self.end_reason, self.error = "not_started", None, None, None
         self.cleanup_ok = None  # The export's verdict (and the helper's, after a presence end); True when nothing was launched.
         self.helper_exit_code = self.helper_exit_ok = None
@@ -573,7 +583,8 @@ class CameraHelperSource:
                 self.status = "running"
                 self.export = run_export(self.binary, self.limits, (LEFT_CAMERA,), on_frame=self._on_frame,
                                          on_end=self._on_end, on_ready=self._on_ready, stop=self._stop,
-                                         extra_args=self.extra_args, timeout=self.timeout, confirmed=self.confirmed)
+                                         extra_args=self.extra_args, timeout=self.timeout, confirmed=self.confirmed,
+                                         expected_sha256=self.expected_sha256)
                 self._conclude()
         except BaseException as error:
             self._finish("error", getattr(error, "reason", "camera_source_failed"), str(error)[:1024], cleanup_ok=False,

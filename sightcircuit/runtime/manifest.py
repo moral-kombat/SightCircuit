@@ -15,7 +15,13 @@ camera helper built on this machine, its sources and build script, and the
 scope-record staging tool) are the ``camera_hud`` group since schema version
 3, so the manifest's digest, which a one-run scope record names
 (``runtime/scope.py``), covers the helper as well as the bridge and the
-models. Paths are relative to the checkout
+models. That group is optional: a manifest carries it when it is asked for
+or when the helper exists, says so in ``groups``, and is verified with
+exactly the groups it carries, so a machine without the SDK helper still
+writes and verifies a manifest for the commands that never use it; the scope
+record is the consumer that requires the group. ``runtime_packages`` records
+whether the optional inference runtime (``onnxruntime``) is installed and at
+which version, so installing, removing or upgrading it is a difference. Paths are relative to the checkout
 root. It pins software identity only: it is not device, physical-display or
 qualification evidence. ``scripts/checkpoint_manifest.py`` is the command.
 """
@@ -35,7 +41,7 @@ from ..errors import SightCircuitError
 
 ROOT = Path(__file__).resolve().parents[2]
 # 2 (2026-11-07): the agent package left ``modules`` for its own ``agent`` group.
-# 3 (2026-11-16): the ``camera_hud`` group (work-order item L10).
+# 3 (2026-11-16): ``groups``, the optional ``camera_hud`` group and ``runtime_packages`` (work-order item L10).
 SCHEMA_VERSION = 3
 REPORT_KIND = "checkpoint_artifact_manifest"
 VERIFICATION_KIND = "checkpoint_manifest_verification"
@@ -75,7 +81,12 @@ CAMERA_HELPER_SOURCES = (
     "tools/camera_sha256.hpp", "tools/camera_status_map.hpp", "tools/camera_ycbcr.hpp")
 CAMERA_HUD_SCRIPTS = ("scripts/build_camera_helper.sh", "scripts/stage_scope_record.py")
 CAMERA_HUD_FILES = (CAMERA_HELPER, *CAMERA_HELPER_SOURCES, *CAMERA_HUD_SCRIPTS)
-FILE_GROUPS = ("agent", "assets", "bridge", "camera_hud", "modules", "native_sources", "scripts")
+CAMERA_GROUP = "camera_hud"
+BASE_GROUPS = ("agent", "assets", "bridge", "modules", "native_sources", "scripts")  # Every manifest carries these.
+FILE_GROUPS = tuple(sorted((*BASE_GROUPS, CAMERA_GROUP)))
+# Optional packages whose presence and version change what runs: ``detection`` uses onnxruntime when it is
+# installed. Recorded as the version or null; null is not a problem, a change is a difference.
+RUNTIME_PACKAGES = ("onnxruntime",)
 GIT_TIMEOUT_SECONDS = 30
 MAX_MANIFEST_BYTES = 1 << 20
 MAX_MANIFEST_DEPTH = 8  # A manifest nests three levels; anything far deeper is foreign.
@@ -301,22 +312,32 @@ def package_versions(packages=CHECKPOINT_PACKAGES):
     return versions
 
 
-def observe(root=ROOT, packages=CHECKPOINT_PACKAGES):
-    """The manifest of the checkout and interpreter as they are now, plus its dirty entries; writes nothing."""
+def observe(root=ROOT, packages=CHECKPOINT_PACKAGES, camera_hud=None):
+    """The manifest of the checkout and interpreter as they are now, plus its dirty entries; writes nothing.
+
+    ``camera_hud`` says whether the camera HUD's group is carried: True or
+    False, or None for "when the helper exists". ``groups`` records the
+    answer.
+    """
     root = Path(root)
+    if camera_hud is None:
+        camera_hud = (root / CAMERA_HELPER).is_file()
     commit, changes = git_state(root)
     package = sorted(path.relative_to(root).as_posix() for path in (root / "sightcircuit").rglob("*.py"))
     agent = [path for path in package if path.startswith(AGENT_PACKAGE + "/")]
     modules = [path for path in package if path not in agent]
     groups = {"agent": sorted([*agent, *AGENT_FILES]), "assets": asset_paths(root), "bridge": [BRIDGE],
-              "camera_hud": CAMERA_HUD_FILES, "modules": modules, "native_sources": NATIVE_SOURCES, "scripts": CHECKPOINT_SCRIPTS}
+              "modules": modules, "native_sources": NATIVE_SOURCES, "scripts": CHECKPOINT_SCRIPTS}
+    if camera_hud:
+        groups[CAMERA_GROUP] = CAMERA_HUD_FILES
     current = {"schema_version": SCHEMA_VERSION, "report_kind": REPORT_KIND, "scope": SCOPE,
                "git": {"commit": commit, "dirty": bool(changes)},
                "python": {"implementation": platform.python_implementation(), "version": platform.python_version()},
                "platform": {"machine": platform.machine(), "system": platform.system(),
                             "kernel_release": platform.release(), "os_release": os_release(),
                             "steamvr_package": steamvr_package()},
-               "packages": package_versions(packages)}
+               "packages": package_versions(packages),
+               "runtime_packages": package_versions({name: name for name in RUNTIME_PACKAGES}), "groups": sorted(groups)}
     current.update({group: {path: _digest(root / path) for path in paths} for group, paths in groups.items()})
     return current, changes
 
@@ -347,7 +368,7 @@ def problems(current, changes=()):
     if current["git"]["dirty"] is not False:
         found.append(_difference("git.dirty", "dirty_tree", False, True, path_count=len(changes),
                                  paths=list(changes[:MAX_REPORTED_PATHS])))
-    for group in FILE_GROUPS:
+    for group in current["groups"]:
         found += [_difference(f"{group}.{path}", "file_missing", None, None)
                   for path, digest in current[group].items() if digest is None]
     found += [_difference(f"packages.{name}", "package_missing", None, None)
@@ -395,9 +416,12 @@ def _create(path, data):
         os.unlink(temporary)
 
 
-def write_manifest(path, root=ROOT, allow_dirty=False, packages=CHECKPOINT_PACKAGES):
+def write_manifest(path, root=ROOT, allow_dirty=False, packages=CHECKPOINT_PACKAGES, camera_hud=None):
     """Pin the current state to a new file; return the write result.
 
+    ``camera_hud`` is ``observe``'s: True carries the camera HUD's group
+    (a missing helper is then a problem), False leaves it out, None carries
+    it when the helper exists.
     Refuses an existing path, a path that would dirty the checkout and, unless
     ``allow_dirty`` (recorded as ``dirty: true``, which never verifies), a dirty
     tree. Missing files and packages are recorded as null and returned as problems.
@@ -407,7 +431,7 @@ def write_manifest(path, root=ROOT, allow_dirty=False, packages=CHECKPOINT_PACKA
         raise ManifestError("manifest_exists", f"{path} already exists; --write never overwrites")
     if not path.parent.is_dir():
         raise ManifestError("manifest_directory_missing", f"{path.parent} is not an existing directory")
-    current, changes = observe(root, packages)
+    current, changes = observe(root, packages, camera_hud)
     if changes and not allow_dirty:
         raise ManifestError("dirty_tree", f"the checkout has {len(changes)} changed or untracked paths: " +
                             ", ".join(changes[:MAX_REPORTED_PATHS]))
@@ -420,7 +444,7 @@ def write_manifest(path, root=ROOT, allow_dirty=False, packages=CHECKPOINT_PACKA
     except FileExistsError:
         raise ManifestError("manifest_exists", f"{path} already exists; --write never overwrites") from None
     return {"status": "written", "manifest": str(path), "manifest_sha256": hashlib.sha256(data).hexdigest(),
-            "commit": current["git"]["commit"], "dirty": current["git"]["dirty"],
+            "commit": current["git"]["commit"], "dirty": current["git"]["dirty"], "groups": current["groups"],
             "problems": problems(current, changes), "scope": SCOPE}
 
 
@@ -476,13 +500,14 @@ def verify_manifest(path, root=ROOT, packages=CHECKPOINT_PACKAGES):
     except (OSError, ValueError, RecursionError) as error:
         report["differences"] = [_difference("manifest", "unreadable_manifest", None, str(error)[:200])]
         return report
-    try:
-        current, changes = observe(root, packages)
+    try:  # With the groups the manifest carries: one written without the camera group is verified without it.
+        carried = recorded.get("groups")
+        current, changes = observe(root, packages, CAMERA_GROUP in carried if isinstance(carried, list) else None)
     except (OSError, ManifestError) as error:
         reason = getattr(error, "reason", "checkout_unreadable")
         report["differences"] = [_difference("checkout", reason, None, str(error)[:200])]
         return report
     found = differences(recorded, current, changes)
     report.update(status="differs" if found else "verified", exit_code=1 if found else 0,
-                  commit=current["git"]["commit"], differences=found)
+                  commit=current["git"]["commit"], differences=found, groups=current["groups"])
     return report

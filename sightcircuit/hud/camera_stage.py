@@ -450,6 +450,29 @@ def _real(value, reason, *, low, high=None, low_open=False):
 CAMERA_INPUT_REFUSAL = "camera_display_input_not_approved"
 
 
+def camera_display_input_preconditions(stage):
+    """What the camera site checks before anything is consumed; True or False, and it changes nothing.
+
+    The stage's source is a ``CameraHelperSource`` on the left camera whose
+    helper is the checkout's own, at the path the checkpoint manifest
+    hashes; the client's ``scope`` is a ``RunScope`` (that exact type) asked
+    for ``arcturus_camera_left``; and the run is bounded within the scope's
+    seconds by what will actually run: the stage's own ``seconds`` (a stage
+    with none is refused), the helper's ``max_seconds``, and the helper's
+    ``max_frames`` at its frame rate.
+    """
+    scope = getattr(getattr(stage, "client", None), "scope", None)
+    source = getattr(stage, "source", None)
+    if (type(scope) is not RunScope or scope.source != CAMERA_LEFT or not isinstance(source, CameraHelperSource)
+            or source.source_id != camera_contract.source_id(LEFT_CAMERA)
+            or not pinned_binary(source.binary, PINNED_HELPER)):
+        return False
+    permitted, seconds, limits = scope.seconds, getattr(stage, "seconds", None), source.limits
+    if type(permitted) not in (int, float) or type(seconds) not in (int, float) or not 0 < seconds <= permitted:
+        return False
+    return limits["max_seconds"] <= permitted and limits["max_frames"] <= math.ceil(limits["fps"] * permitted)
+
+
 def camera_display_input_permitted(stage):
     """Whether ``stage`` may feed SDK camera frames to a real display: only under a one-run scope record.
 
@@ -458,21 +481,17 @@ def camera_display_input_permitted(stage):
     ``LIVE_CAMERA_INPUT`` gate's ``require`` whenever its client is in real
     output; a validation client displays nothing, so that run is the bounded
     recognition without display the owner classified outside the gate, and
-    is not asked. The answer is ``True`` only when the stage's source is a
-    ``CameraHelperSource`` on the left camera whose helper is the checkout's
-    own, at the path the checkpoint manifest hashes, the client's ``scope`` is a
-    ``RunScope`` (that exact type) asked for ``arcturus_camera_left``, and
-    that scope, already verified and consumed by the output check, permits
-    camera input, which it does once. A record for the synthetic step, the
-    mirror or both cameras never does. The gate is not open.
+    is not asked. The answer is ``True`` only when this site's preconditions
+    hold (``camera_display_input_preconditions``: the left camera's helper
+    source, the pinned helper, bounds within the scope's seconds) and the
+    scope, already verified and consumed by the output check, permits camera
+    input to this stage, checking the deadline and the helper's digest as it
+    answers. A record for the synthetic step, the mirror or both cameras
+    never does. The gate is not open.
     """
-    scope = getattr(getattr(stage, "client", None), "scope", None)
-    source = getattr(stage, "source", None)
-    if (type(scope) is not RunScope or scope.source != CAMERA_LEFT or not isinstance(source, CameraHelperSource)
-            or source.source_id != camera_contract.source_id(LEFT_CAMERA)
-            or not pinned_binary(source.binary, PINNED_HELPER)):
+    if not camera_display_input_preconditions(stage):
         return False
-    return scope.permit(CAMERA_INPUT) is True
+    return stage.client.scope.permit(CAMERA_INPUT, stage) is True
 
 
 class CameraHudStage:
@@ -679,9 +698,21 @@ class CameraHudStage:
         if self._ran:
             raise ValueError("camera_hud_stage_already_run")
         self._ran = True
-        self.client.check_start()
-        if self.client.validation_only is not True:  # Camera frames are about to reach a real display.
-            LIVE_CAMERA_INPUT.require(camera_display_input_permitted(self), CAMERA_INPUT_REFUSAL)
+        real_output = self.client.validation_only is not True  # Fixed at the client's construction.
+        if real_output:
+            # The output site asks this before it consumes the record, so a wrong helper or an unbounded
+            # stage is refused with the record unspent.
+            self.client.prerequisites = (lambda: camera_display_input_preconditions(self),)
+        try:
+            self.client.check_start()
+            if real_output:  # Camera frames are about to reach a real display.
+                LIVE_CAMERA_INPUT.require(camera_display_input_permitted(self), CAMERA_INPUT_REFUSAL)
+                # The launcher hashes the helper once more and ends the run if it is not the manifest's.
+                self.source.expected_sha256 = self.client.scope.pins.get(PINNED_HELPER) if type(
+                    self.client.scope) is RunScope else None
+        except ValueError:
+            self.client.withdraw()  # A refused run gives its scope back: nothing can start under it later.
+            raise
         stop = threading.Event() if stop is None else stop
         self.pipeline = Pipeline(self.source, self.detector, [self], threshold=self.threshold, max_fps=self.max_fps,
                                  latest_only=True, max_input_age_ms=MAX_DISPLAY_AGE_MS, max_frames=self.max_frames,
@@ -695,6 +726,7 @@ class CameraHudStage:
         finally:
             stop.set()
             watcher.join(WATCHER_JOIN_SECONDS)
+            self.client.withdraw()  # A run that failed before the bridge started gives its scope back.
             self.close()  # The pipeline closed it with its sinks; this covers a run that never opened them.
         self.status, self.reason = self._outcome()
         return self.report()
@@ -717,6 +749,8 @@ class CameraHudStage:
             return "cancelled", "signal"
         if source.status == "error":
             return "error", _identifier(source.reason, "camera_source_failed")
+        if self.client.output_bound_reached:  # The client ended real output at its own bound.
+            return "completed", "output_bound"
         if pipeline._limit_reached():
             return "completed", "max_frames"
         if pipeline.deadline is not None and self._stop_seen is not None and self._stop_seen >= pipeline.deadline:

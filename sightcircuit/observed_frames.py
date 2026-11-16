@@ -53,29 +53,53 @@ BRIDGE_COUNTS = ("observed_frames_received", "frames_received", "frames_submitte
                  "visibility_requests_received", "visibility_events_missing")
 
 
+def output_preconditions(client):
+    """What the output site checks before anything is consumed; True or False, and it changes nothing.
+
+    ``client`` is an ``ObservedFrameClient`` in real output; its ``scope`` is
+    a ``RunScope`` (that exact type); its bridge is the checkout's own, at
+    the path the checkpoint manifest hashes; and it carries a duration bound
+    of its own (``max_output_seconds``, which it enforces by ending real
+    output itself) no longer than the scope's seconds. A client with no
+    bound is refused.
+    """
+    scope = getattr(client, "scope", None)
+    if not isinstance(client, ObservedFrameClient) or type(scope) is not RunScope or client.validation_only is not False:
+        return False
+    bound, permitted = client.max_output_seconds, scope.seconds
+    if type(bound) not in (int, float) or type(permitted) not in (int, float) or not 0 < bound <= permitted:
+        return False
+    return pinned_binary(client.binary, PINNED_BRIDGE)
+
+
 def fixed_hud_output_permitted(client):
     """Whether ``client`` may start the bridge in ``--fixed-hud``, real output: only under a one-run scope record.
 
     This is the one place that decides it. ``ObservedFrameClient.check_start``
     hands the answer to the ``LIVE_HUD_OUTPUT`` gate's ``require``, which
-    refuses everything but the literal ``True``. The answer is ``True`` only
-    for an ``ObservedFrameClient`` whose bridge is the checkout's own, at the
-    path the checkpoint manifest hashes, and whose ``scope`` is a ``RunScope``
-    (that exact type) which permits real HUD output: its record verified in full
-    against what is on disk and its run id was consumed, all before this
-    returns and so before anything is launched (``runtime/scope.py`` lists
-    the checks). A scope permits this once, so a second start under the same
-    record is refused. No argument, environment variable, configuration value
-    or bridge line changes the answer. The gate is not open: this is the
-    diagnostic tier of owner decision 15, one record for one displayed step,
-    a procedural control against mistakes and not a cryptographic one.
+    refuses everything but the literal ``True``. The order is: this site's
+    own preconditions (``output_preconditions``); then every callable in the
+    client's ``prerequisites``, which is how a stage has its camera site's
+    preconditions checked before anything is consumed; and only then the
+    scope, whose first answer verifies the record in full against what is on
+    disk and consumes its run id, all before this returns and so before
+    anything is launched (``runtime/scope.py`` lists the checks). The client
+    is the use's holder: when it asks again, at ``start``, the scope checks
+    the deadline and the bridge's digest once more and consumes nothing; any
+    other client is refused. No argument, environment variable,
+    configuration value or bridge line changes the answer. The gate is not
+    open: this is the diagnostic tier of owner decision 15, one record for
+    one displayed step, a procedural control against mistakes and not a
+    cryptographic one.
     """
-    scope = getattr(client, "scope", None)
-    if not isinstance(client, ObservedFrameClient) or type(scope) is not RunScope:
+    if not output_preconditions(client):
         return False
-    if not pinned_binary(client.binary, PINNED_BRIDGE):  # Another bridge is not the one the record's manifest pins.
+    try:
+        if not all(prerequisite() is True for prerequisite in client.prerequisites):
+            return False
+    except Exception:
         return False
-    return scope.permit(HUD_OUTPUT) is True
+    return client.scope.permit(HUD_OUTPUT, client) is True
 
 
 class ObservedFrameClient(OverlayClient):
@@ -88,7 +112,12 @@ class ObservedFrameClient(OverlayClient):
     ``LIVE_HUD_OUTPUT`` gate) unless ``fixed_hud_output_permitted``, the single
     place that decides, finds a one-run scope record that verifies on
     ``scope``. ``scope`` is a ``runtime.scope.RunScope`` or None; a
-    validation client never consults it.
+    validation client never consults it. The mode is fixed at construction:
+    ``validation_only`` cannot be assigned afterwards. ``max_output_seconds``
+    is the client's own bound on real output: that long after ``start`` is
+    called the writer drops what waits, writes the hide and the stop packet
+    and accepts nothing more (``output_bound_reached``), whatever its caller
+    is doing. The permission site refuses a real-output client without it.
 
     What it sends, all from one writer thread, so the order on the pipe is
     the order of the calls:
@@ -149,16 +178,22 @@ class ObservedFrameClient(OverlayClient):
     """
 
     def __init__(self, binary=DEFAULT_BRIDGE, *, validation_only=True, env=None, keepalive_seconds=KEEPALIVE_SECONDS,
-                 listener=None, scope=None):
+                 listener=None, scope=None, max_output_seconds=None):
         if type(validation_only) is not bool:
             raise ValueError("observed_frame_client_mode_invalid")
         if (not isinstance(keepalive_seconds, (int, float)) or not math.isfinite(keepalive_seconds)
                 or not 0 < keepalive_seconds <= KEEPALIVE_MAX_SECONDS):
             raise ValueError("observed_frame_keepalive_invalid")
+        if max_output_seconds is not None and (type(max_output_seconds) not in (int, float)
+                                               or not math.isfinite(max_output_seconds) or max_output_seconds <= 0):
+            raise ValueError("observed_frame_output_bound_invalid")
         super().__init__(binary, validation_only=validation_only, env=env)
+        self.max_output_seconds = max_output_seconds
+        self.output_bound_reached = False
+        self._output_deadline = None  # ``time.monotonic()`` after which real output ends; set by ``start``.
+        self.prerequisites = ()  # Callables the output site asks, each for a literal True, before it consumes.
         self.keepalive_seconds, self.listener = float(keepalive_seconds), listener
-        self.scope = scope  # Read only by ``fixed_hud_output_permitted`` and the stage's camera-input check.
-        self._output_permitted = None  # The permission check's answer once it permitted; set nowhere else.
+        self.scope = scope  # Read only by the two permission sites.
         self._started_real_output = False
         self.hidden = False  # The last visibility request written was a hide: the tile is taken down.
         self._want_hidden = False  # What the caller asked for last, under ``condition``; the writer follows it.
@@ -181,28 +216,54 @@ class ObservedFrameClient(OverlayClient):
 
     # -- the gate ------------------------------------------------------------------------------------------------
 
+    @property
+    def validation_only(self):
+        return self._validation_only
+
+    @validation_only.setter
+    def validation_only(self, value):
+        if hasattr(self, "_validation_only"):  # Set once, by the constructor: the mode the gates saw is the mode started.
+            raise AttributeError("observed_frame_client_mode_is_fixed")
+        self._validation_only = value
+
     def bridge_mode(self):
         return VALIDATION_MODE if self.validation_only else FIXED_HUD_MODE
 
     def check_start(self):
         """Refuse real output: validation starts freely, ``--fixed-hud`` only if the one permission check says so.
 
-        A scope grants real output once and consumes its run id, so a
-        permitted answer is kept for this client: ``start`` after a permitted
-        ``check_start`` (the stage's order) is the same start. A refusal is
-        never kept, and nothing else sets the kept answer.
+        The check is asked every time and nothing is kept here. The scope
+        remembers which client it granted real output to; when that client
+        asks again (``start`` after the stage's ``check_start``) the scope
+        answers after checking the deadline and the bridge's digest once
+        more, and consumes nothing.
         """
         if self.validation_only is not True:
-            if self._output_permitted is not True:
-                self._output_permitted = fixed_hud_output_permitted(self)
-            LIVE_HUD_OUTPUT.require(self._output_permitted, FIXED_HUD_REFUSAL)
+            LIVE_HUD_OUTPUT.require(fixed_hud_output_permitted(self), FIXED_HUD_REFUSAL)
+
+    def withdraw(self):
+        """A run that was refused or failed before the bridge started gives its scope back for good.
+
+        The scope is revoked, so nothing can start under it later; its run id
+        stays spent. Without a scope, or once the bridge has started, this
+        does nothing.
+        """
+        if self.process is None and type(self.scope) is RunScope:
+            self.scope.revoke()
 
     def start(self):
-        """Start the bridge in this client's mode, after the gate; otherwise as ``OverlayClient.start``."""
+        """Start the bridge in this client's mode, after the gate; otherwise as ``OverlayClient.start``.
+
+        In real output the permission is asked again here, right before the
+        launch. What remains between that answer and the launch is the launch
+        itself. The client's own bound on real output counts from this call.
+        """
         self.check_start()
         if self.validation_only is not True and self._started_real_output:
             raise ValueError("observed_frame_client_already_started")  # One permitted start, one bridge.
         self._started_real_output = self.validation_only is not True
+        if self.validation_only is not True and self.max_output_seconds is not None:
+            self._output_deadline = time.monotonic() + self.max_output_seconds
         if not self.binary.is_file() or not os.access(self.binary, os.X_OK):
             raise RuntimeError("Overlay bridge missing; run bash scripts/build_overlay_bridge.sh")
         self.process = subprocess.Popen([str(self.binary), self.bridge_mode()], stdin=subprocess.PIPE,
@@ -345,9 +406,19 @@ class ObservedFrameClient(OverlayClient):
                 with self.condition:
                     if (self._pending_observed is None and not (self._want_hidden and not self.hidden)
                             and not self.stopping.is_set()):
-                        self.condition.wait(timeout=max(0.0, last_packet + self.keepalive_seconds - time.monotonic()))
+                        wake = last_packet + self.keepalive_seconds
+                        if self._output_deadline is not None:
+                            wake = min(wake, self._output_deadline)
+                        self.condition.wait(timeout=max(0.0, wake - time.monotonic()))
+                    bound = (self._output_deadline is not None and time.monotonic() >= self._output_deadline
+                             and not self.stopping.is_set())
+                    if bound:  # The client's own bound on real output: as ``end``, then the stop packet below.
+                        self.output_bound_reached = self.final = self._want_hidden = True
                     frame, self._pending_observed = self._pending_observed, None
                     hide = self._want_hidden
+                if bound and frame is not None:
+                    self._notify("frame_not_sent", frame_id=frame[1], reason="output_bound_reached", token=frame[4])
+                    frame = None
                 # A hide queued with a frame was asked for first (``take_down`` drops the frame that waited), so
                 # the order on the pipe is the hide, the frame, then the show that lets the frame's tile up. At
                 # the end the hide goes out before the stop packet: every run ends with the tile taken down by name.
@@ -358,6 +429,8 @@ class ObservedFrameClient(OverlayClient):
                     if self.final and self.final_hide is None:
                         self.final_hide = {"cycle": self._cycle, "sent_ns": sent_ns}
                     self._notify("taken_down", sent_ns=sent_ns)
+                if bound:
+                    self.stopping.set()
                 if self.stopping.is_set():
                     if frame is not None:
                         self._notify("frame_not_sent", frame_id=frame[1], reason="stopped_before_send", token=frame[4])
@@ -440,6 +513,7 @@ class ObservedFrameClient(OverlayClient):
                     frames_presented=self.presented_count, frames_refused=self.refused_count,
                     refused_reasons=dict(self.refused_reasons),
                     expiry_events=self.expiry_event_count, expiry_events_dropped=self.expiry_events_dropped,
+                    max_output_seconds=self.max_output_seconds, output_bound_reached=self.output_bound_reached,
                     bridge_counts={name: native.get(name) for name in BRIDGE_COUNTS},
                     cleanup_confirmed=(not started and self.error is None) or (bridge_closed_cleanly(report) and mode_ok))
                 self._closed_report = report
