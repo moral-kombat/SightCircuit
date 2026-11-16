@@ -173,8 +173,13 @@ is 1 to 90 (was 60), `--max-frames` is 1 to 900 (was 600; a frame's
 (`contract.EXPORT_NOTICE`, `kExportNotice`) now covers both uses of the
 export: a recognition command that saves counts, labels, boxes and timings
 to the report the operator names and shows nothing, and a display command
-that shows labels and approximate arrows in the headset and saves nothing;
-neither saves an image or shows a camera image. `--fps` stays 1 to 10. The
+that shows labels and approximate arrows in the headset and saves only the
+report the operator names (counts, labels, boxes and timings; the wording
+was "saves nothing" until work-order item L9 gave the display command
+`--report`, 2026-11-16); neither saves an image or shows a camera image. That
+revision moved the contract digest and nothing of the layout, so the
+protocol version stays 2; a helper built before it reports the earlier
+digest and is rebuilt before any run, as the Frame's already had to be. `--fps` stays 1 to 10. The
 helper's flag ranges are the generated header's constants, not a second copy.
 The prefix version and `ready.protocol` are 2, so the versions refuse each
 other on the first packet: this checkout's reader refuses a helper built

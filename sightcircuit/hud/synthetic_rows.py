@@ -4,10 +4,22 @@
 through ``ObservedFrameClient``: a tile with one names-only row, ``count
 NNNN``, drawn by ``hud.render.draw_tile``. Nothing is read from a camera, a
 mirror or a file, and no detector runs. Between segments of updates the
-schedule holds scheduled stops in which nothing is sent, not even a hide
-request, so the bridge itself must take the tile down at the last frame's
-deadline, one second after its observation, and say so with a
-``frame_expired`` line. The report pairs each stop with that line.
+schedule holds scheduled stops in which no frame and no hide request is sent,
+so the bridge itself must take the tile down at the last frame's deadline,
+one second after its observation, and say so with a ``frame_expired`` line.
+The report pairs each stop with that line. A stop is not silent on the pipe:
+the client's keepalive writes one show request about two seconds into it,
+which the bridge, having nothing presented, answers ``no_image``; it brings
+nothing back.
+
+The expiry bound is two named parameters of the driver, with acceptance row
+G9 as their source: ``hide_called_within_ms``, the runtime's hide is called
+within one bridge poll of the deadline, and ``hide_returned_allowance_ms``,
+the hide has returned within a stated allowance after the deadline (250 ms
+by default, the value proposed to the owner; the row's own wording, "within
+1,000 ms plus one poll of the last frame's observation", leaves the runtime's
+call no time at all). Each stop reports both measured values and the verdict
+of each, so the evidence stands whatever bound the owner decides.
 
 Real output is gated exactly as the stage's: ``run`` asks the client's
 ``check_start`` first, which refuses ``--fixed-hud`` through the
@@ -26,7 +38,8 @@ import time
 from .. import gates
 from ..observed_frames import BRIDGE_COUNTS, ObservedFrameClient
 from ..overlay import BRIDGE_INPUT_POLL_NS, CLOSE_REPORT_FIELDS, rgba_from_bgr
-from .camera_stage import HOST_CLOCK, MAX_REPORTED_EXPIRIES, _identifier, check_report, report_value
+from .camera_stage import (HOST_CLOCK, MAX_REPORTED_EXPIRIES, _identifier, bridge_retired_itself, check_report,
+                           report_value)
 from .contract import (HUD_CONFIG, MAX_DISPLAY_AGE_MS, MAX_DISPLAY_AGE_NS, NO_DIRECTION, HudRow, config_digest,
                        row_label)
 from .render import draw_tile
@@ -41,7 +54,11 @@ MAX_STOPS = 8
 MIN_STOP_SECONDS, MAX_STOP_SECONDS = 2.0, 10.0
 MIN_SEGMENT_UPDATES = UPDATE_HZ  # Every segment shows at least one second of updates.
 POLL_MS = BRIDGE_INPUT_POLL_NS / 1e6
-EXPIRY_BOUND_MS = MAX_DISPLAY_AGE_MS + POLL_MS  # G9: within 1,000 ms plus one poll of the last frame's observation.
+EXPIRY_BOUND_MS = MAX_DISPLAY_AGE_MS + POLL_MS  # G9 as written: 1,000 ms plus one poll after the observation.
+# The driver's bound, as two parameters (acceptance row G9 is their source; the allowance is under review).
+HIDE_CALLED_WITHIN_MS = POLL_MS  # The runtime's hide is called within one bridge poll of the deadline.
+HIDE_RETURNED_ALLOWANCE_MS = 250.0  # The hide has returned this long after the deadline at the latest.
+BOUND_SOURCE = "acceptance_row_G9"
 LINE_WAIT_SECONDS = 0.5  # After a stop, how long to wait for the bridge's line before calling it missing.
 STATUSES = ("not_run", "completed", "stopped", "error")
 REPORT_BLOCKS = {
@@ -55,10 +72,11 @@ REPORT_BLOCKS = {
     "updates": ("requested", "submitted", "sent", "replaced", "expired_before_send", "acknowledged_presented",
                 "acknowledged_refused", "refused_reasons", "unacknowledged", "bridge_received", "bridge_accepted",
                 "first_frame_id", "last_frame_id"),
-    "stops": ("requested", "reached", "expired", "within_bound", "bound_ms", "bridge_poll_ms", "basis",
-              "hide_times_reported", "events"),
+    "stops": ("requested", "reached", "expired", "within_bound", "bound_source", "hide_called_within_ms",
+              "hide_returned_allowance_ms", "as_written_bound_ms", "bridge_poll_ms", "basis", "hide_times_reported",
+              "keepalives_sent", "events"),
     "frame_expired": ("count", "recorded", "dropped", "events"),
-    "end": ("run_start_ns", "ended_ns", "timebase", "elapsed_ms"),
+    "end": ("run_start_ns", "ended_ns", "timebase", "elapsed_ms", "bridge_left_on_stop"),
     "bridge": (*CLOSE_REPORT_FIELDS, "started", "mode", "frames_submitted", "frames_replaced", "frames_withdrawn",
                "frames_expired_before_send", "frames_retransmitted", "take_downs", "shows", "keepalives",
                "visibility_requests", "settings_sent", "frames_presented", "frames_refused", "error", "lines",
@@ -110,11 +128,24 @@ class SyntheticRows:
     exception; only the gate's refusal is raised, before anything is
     launched. ``stop`` (an event) ends the run early; the client is always
     closed, which takes the tile down. A driver runs once.
+    ``hide_called_within_ms`` and ``hide_returned_allowance_ms`` are the
+    expiry bound (see the module's docstring): both are measured from the
+    last frame's deadline and both verdicts are reported per stop.
+
+    A bridge that left by itself and cleanly while ``stop`` was set (a
+    terminal's Ctrl-C reaches the bridge too) is a stopped run with a clean
+    bridge, not an error.
     """
 
-    def __init__(self, client, *, seconds, stops=3, stop_seconds=3.0, config=HUD_CONFIG):
+    def __init__(self, client, *, seconds, stops=3, stop_seconds=3.0, config=HUD_CONFIG,
+                 hide_called_within_ms=HIDE_CALLED_WITHIN_MS, hide_returned_allowance_ms=HIDE_RETURNED_ALLOWANCE_MS):
         if not isinstance(client, ObservedFrameClient):
             raise ValueError("synthetic_rows_requires_observed_frame_client")
+        for bound in (hide_called_within_ms, hide_returned_allowance_ms):
+            if type(bound) not in (int, float) or not 0 < bound <= MAX_DISPLAY_AGE_MS:
+                raise ValueError("synthetic_rows_expiry_bound_invalid")
+        self.hide_called_within_ms = float(hide_called_within_ms)
+        self.hide_returned_allowance_ms = float(hide_returned_allowance_ms)
         if config != HUD_CONFIG:
             raise ValueError("synthetic_rows_config_not_fixed")
         self.plan = schedule(seconds, stops, stop_seconds)
@@ -127,6 +158,7 @@ class SyntheticRows:
         self.stop_records = []  # One per stop reached: the segment's last frame and when the stop began and ended.
         self.run_start_ns = self.ended_ns = None
         self._bridge_report = None
+        self.bridge_left_on_stop = False
         self._ran = False
 
     def _tile(self, number):
@@ -198,43 +230,71 @@ class SyntheticRows:
             self.ended_ns = time.monotonic_ns()
             self.client.withdraw()  # A run that failed before the bridge started gives its scope back.
             self._bridge_report = self.client.close()  # Every line the bridge wrote has been read when this returns.
-        if self.status != "error" and self.client.error:
+        self.bridge_left_on_stop = bool(self.client.error) and stop.is_set() and bridge_retired_itself(
+            self._bridge_report, self.client)
+        if self.bridge_left_on_stop:  # The stop's own signal reached the bridge first: stopped, and it cleaned up.
+            self.failure, self.status, self.reason = None, "stopped", "stop_requested"
+        elif self.status != "error" and self.client.error:
             self.status, self.reason = "error", _identifier(self.client.error, "overlay_bridge_failed")
         return self.report()
 
     def _stops(self, validation_only):
-        """Each stop paired with the bridge's ``frame_expired`` line for the frame that was up when it began."""
+        """Each stop paired with the bridge's ``frame_expired`` line for the frame that was up when it began.
+
+        Two measured values per stop, both from the frame's deadline, and a
+        verdict for each: when the runtime's hide was called (in validation,
+        where there is no runtime, when the bridge noticed the expiry)
+        against ``hide_called_within_ms``, and when the hide returned against
+        ``hide_returned_allowance_ms`` (not measurable in validation). A stop
+        is ``within_bound`` when every verdict it has is true and, in real
+        output, the hide succeeded and the runtime reports the tile not
+        visible. The same times from the observation are reported beside
+        them, with the verdict of the acceptance row as it is written.
+        """
         expired = {event.get("frame_id"): event for event in self.client.expiry_events}
         events, count_expired, all_within = [], 0, True
         for index, record in enumerate(self.stop_records, 1):
             event, observed = expired.get(record["last_frame_id"]), record["last_observed_ns"]
+            deadline = None if event is None else event.get("deadline_ns")
 
-            def after(name, event=event, observed=observed):
+            def after(name, origin, event=event):
                 value = None if event is None else event.get(name)
-                return None if type(value) is not int else round((value - observed) / 1e6, 3)
-            # Real output: the time the runtime's hide call returned. Validation: when the bridge noticed.
-            measured = after("observed_ns") if validation_only else after("hide_returned_ns")
-            within = (event is not None and measured is not None and measured <= EXPIRY_BOUND_MS and
-                      (validation_only or (event.get("hide_ok") is True and event.get("api_visible_after_hide") is False)))
+                return None if type(value) is not int or type(origin) is not int else round((value - origin) / 1e6, 3)
+            called = after("observed_ns" if validation_only else "hide_called_ns", deadline)
+            returned = None if validation_only else after("hide_returned_ns", deadline)
+            called_ok = None if called is None else called <= self.hide_called_within_ms
+            returned_ok = None if returned is None else returned <= self.hide_returned_allowance_ms
+            within = (event is not None and called_ok is True and
+                      (validation_only or (returned_ok is True and event.get("hide_ok") is True
+                                           and event.get("api_visible_after_hide") is False)))
+            written = after("observed_ns" if validation_only else "hide_returned_ns", observed)
             count_expired += event is not None
             all_within = all_within and within
             events.append({
                 "index": index, "last_frame_id": record["last_frame_id"], "last_observed_ns": observed,
                 "stop_began_ns": record["began_ns"], "stop_ended_ns": record.get("ended_ns"),
                 "expired": event is not None,
-                "deadline_after_observation_ms": after("deadline_ns"),
-                "noticed_after_observation_ms": after("observed_ns"),
-                "hide_called_after_observation_ms": after("hide_called_ns"),
-                "hide_returned_after_observation_ms": after("hide_returned_ns"),
+                "deadline_after_observation_ms": after("deadline_ns", observed),
+                "noticed_after_deadline_ms": after("observed_ns", deadline),
+                "hide_called_after_deadline_ms": after("hide_called_ns", deadline),
+                "hide_returned_after_deadline_ms": after("hide_returned_ns", deadline),
+                "hide_called_within_poll": called_ok, "hide_returned_within_allowance": returned_ok,
+                "noticed_after_observation_ms": after("observed_ns", observed),
+                "hide_called_after_observation_ms": after("hide_called_ns", observed),
+                "hide_returned_after_observation_ms": after("hide_returned_ns", observed),
+                "within_bound_as_written": None if written is None else written <= EXPIRY_BOUND_MS,
                 "hide_ok": None if event is None else event.get("hide_ok"),
                 "api_visible_after_hide": None if event is None else event.get("api_visible_after_hide"),
                 "texture_cleared": None if event is None else event.get("texture_cleared"),
                 "within_bound": within})
         return {"requested": self.stops, "reached": len(events), "expired": count_expired,
                 "within_bound": bool(events) and all_within if self.stops else True,
-                "bound_ms": EXPIRY_BOUND_MS, "bridge_poll_ms": POLL_MS,
-                "basis": "bridge_noticed_expiry" if validation_only else "runtime_hide_returned",
-                "hide_times_reported": not validation_only, "events": events}
+                "bound_source": BOUND_SOURCE, "hide_called_within_ms": self.hide_called_within_ms,
+                "hide_returned_allowance_ms": self.hide_returned_allowance_ms,
+                "as_written_bound_ms": EXPIRY_BOUND_MS, "bridge_poll_ms": POLL_MS,
+                "basis": "bridge_noticed_expiry" if validation_only else "runtime_hide_called_and_returned",
+                "hide_times_reported": not validation_only,
+                "keepalives_sent": self.client.keepalives, "events": events}
 
     def report(self):
         """The run's report: counts and timings, checked against ``check_report`` with this module's blocks."""
@@ -250,7 +310,7 @@ class SyntheticRows:
             bridge_block["error"] = None if bridge.get("error") is None else _identifier(client.error, "overlay_bridge_failed")
             bridge_block["lines"] = report_value(dict(client.line_counts), withheld)
             bridge_block["final_report"] = report_value({**native, "bridge_error": native.get("error")}, withheld)
-        bridge_ok = bridge is not None and bridge.get("cleanup_confirmed") is True
+        bridge_ok = bridge is not None and (bridge.get("cleanup_confirmed") is True or self.bridge_left_on_stop)
         stops = self._stops(client.validation_only)
         stops["events"] = report_value(stops["events"], withheld)
         sent = client.frames_sent
@@ -284,7 +344,8 @@ class SyntheticRows:
                                                       client.expiry_events[:MAX_REPORTED_EXPIRIES]], withheld)},
             "end": {"run_start_ns": self.run_start_ns, "ended_ns": self.ended_ns, "timebase": HOST_CLOCK,
                     "elapsed_ms": None if self.run_start_ns is None or self.ended_ns is None else
-                    round((self.ended_ns - self.run_start_ns) / 1e6, 3)},
+                    round((self.ended_ns - self.run_start_ns) / 1e6, 3),
+                    "bridge_left_on_stop": self.bridge_left_on_stop},
             "bridge": bridge_block,
             "cleanup": {"bridge_ok": bridge_ok, "ok": bridge_ok},
         }

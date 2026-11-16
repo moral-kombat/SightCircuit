@@ -131,6 +131,11 @@ class BoundaryTests(unittest.TestCase):
             self.assertIn("it is not an approval and creates no scope record", notice)
             self.assertIn("Ctrl-C", notice)
             self.assertIn("green input", notice)
+        # The helper's notice is true of a display command that is given --report (revised with this command).
+        self.assertIn("a display command shows labels and approximate arrows in the headset and saves only the report "
+                      "you name (counts, labels, boxes and timings)", contract.EXPORT_NOTICE)
+        self.assertNotIn("saves nothing", contract.EXPORT_NOTICE)
+        self.assertEqual(contract.VERSION, 2)  # The layout is unchanged; only the digest moved.
         self.assertIn("No camera is opened", confirmation.SYNTHETIC_NOTICE)
         self.assertIn("shows no camera image", confirmation.DISPLAY_NOTICE)
         # The recognition command's start is byte for byte what it was: the export notice and the bounds.
@@ -195,7 +200,18 @@ class ArgumentTests(unittest.TestCase):
             (("--synthetic-rows", *self.DEVICE[:5]), "--scope-record, --manifest and --seconds"),
             (("--synthetic-rows", *self.DEVICE, "--allow-camera-input"), "never opens the camera"),
             (("--synthetic-rows", *self.DEVICE, "--target-label", "bottle"), "never opens the camera"),
-            (("--synthetic-rows", *self.DEVICE[:-1], "121"), "synthetic_rows_seconds_out_of_range"),
+            (("--synthetic-rows", *self.DEVICE[:-1], "121"), "--seconds must be 1..110 for --synthetic-rows"),
+            (("--synthetic-rows", *self.DEVICE[:-1], "111"), "--seconds must be 1..110 for --synthetic-rows"),
+            (("--synthetic-rows", *self.DEVICE, "--fps", "5"), "never opens the camera"),
+            (("--synthetic-rows", *self.DEVICE, "--detector", "mobilenet-ssd"), "never opens the camera"),
+            (("--synthetic-rows", *self.DEVICE, "--threshold", "0.5"), "never opens the camera"),
+            ((*self.CAMERA, "--stops", "2"), "--stops and --stop-seconds belong to --synthetic-rows"),
+            ((*self.CAMERA, "--stop-seconds", "3"), "--stops and --stop-seconds belong to --synthetic-rows"),
+            (("--validate", "--stops", "1"), "--validate takes no run arguments"),
+            ((*self.CAMERA, "--report", "/nonexistent-directory/run.json"), "is not an existing directory"),
+            ((*self.CAMERA, "--report", "run.txt"), "--report needs a .json path"),
+            ((*self.CAMERA, "--report", str(ROOT / "evaluation/seed.json")),
+             "already exists; a report is never overwritten"),
             (("--synthetic-rows", *self.DEVICE[:-1], "8"), "synthetic_rows_schedule_too_short"),
             (("--synthetic-rows", *self.DEVICE, "--helper", "x"), "--helper is for --validate"),
             (("--camera", *self.DEVICE, "--names-only", "--orientation", "identity"), "--allow-camera-input is required"),
@@ -283,6 +299,23 @@ class GuideAndTemplateTests(unittest.TestCase):
                     plan = synthetic_rows.schedule(args.seconds, args.stops, args.stop_seconds)
                     self.assertGreaterEqual(sum(value for kind, value in plan if kind == "rows"), 375)  # Row G9.
         self.assertEqual(modes, ["validate", "rows", "camera", "camera"])
+        # The L-D5 command can pass row G10: under an ideal run (the label up from the bridge's ready until the
+        # out_of_view cue, down for the cued pause, up again to the end) a contiguous 60 s window qualifies, even
+        # when the bridge takes its whole ready wait and the client's bound ends the run that much early.
+        from sightcircuit.camera import marks as camera_marks
+        from sightcircuit.hud.contract import BRIDGE_READY_WAIT_SECONDS
+        final = camera_hud.build_parser().parse_args(commands[-1])
+        cued = dict((label, offset_ms / 1000) for offset_ms, label in
+                    (camera_marks.parse_cue(text, final.seconds) for text in final.cue))
+        self.assertEqual((final.step, final.seconds, sorted(cued)), ("L-D5", 90, ["in_view", "out_of_view"]))
+        for late in (0.0, float(BRIDGE_READY_WAIT_SECONDS)):  # The cues count from the first frame.
+            ideal = [(late, late + cued["out_of_view"]), (late + cued["in_view"], float(final.seconds))]
+            verdict = camera_stage.window_verdict(ideal, float(final.seconds), **camera_hud.G10_WINDOW)
+            with self.subTest(bridge_ready_after=late):
+                self.assertTrue(verdict["found"], verdict)
+                self.assertGreaterEqual(cued["out_of_view"], 60 + 5)  # The pause comes after the window, with margin.
+        earlier = camera_stage.window_verdict([(0.0, 40.0), (45.0, 90.0)], 90.0, **camera_hud.G10_WINDOW)
+        self.assertFalse(earlier["found"])  # The schedule this replaced: a pause in the middle leaves no window.
         staged = self.commands("scripts/stage_scope_record.py")
         self.assertEqual(len(staged), 1)
         args = stage_scope_record.build_parser().parse_args(staged[0])
@@ -421,6 +454,45 @@ class DeviceModeCase(scope_tests.ScopeCase):
             self.addCleanup(signal.signal, number, signal.getsignal(number))
         self.assertEqual((camera_hud.pinned(manifest.BRIDGE), camera_hud.pinned(manifest.CAMERA_HELPER)),
                          (self.bridge, self.helper))
+        # The helper's lock directory, as the helper requires it: a device run checks it before the record.
+        self.runtime_directory = self.out / "xdg-runtime"
+        self.runtime_directory.mkdir(mode=0o700)
+        self.runtime_directory.chmod(0o700)
+        environment = mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": str(self.runtime_directory)})
+        environment.start()
+        self.addCleanup(environment.stop)
+
+    @contextlib.contextmanager
+    def terminal_signal(self, after, number=signal.SIGINT, repeat=1, gap=0.06):
+        """What a terminal's Ctrl-C does, ``after`` seconds from now: the signal goes to this process and to the
+        bridge, which shares the foreground process group (the helper is supervised in a group of its own).
+        The whole group is not signalled here, since the test runner's parents share it. ``repeat`` sends it
+        again every ``gap`` seconds."""
+        import threading
+        real, bridges = subprocess.Popen, []
+
+        def launch(arguments, *more, **options):
+            process = real(arguments, *more, **options)
+            if "--fixed-hud" in list(map(str, arguments)):
+                bridges.append(process)
+            return process
+
+        def send():
+            for index in range(repeat):
+                for process in bridges:
+                    with contextlib.suppress(ProcessLookupError):
+                        process.send_signal(number)
+                os.kill(os.getpid(), number)
+                if index + 1 < repeat:
+                    time.sleep(gap)
+        timer = threading.Timer(after, send)
+        with mock.patch.object(subprocess, "Popen", side_effect=launch):
+            timer.start()
+            try:
+                yield bridges
+            finally:
+                timer.cancel()
+                timer.join()
 
     def camera_scope(self, path, seconds=LIMITS["max_seconds"], step="L-D4"):
         return scope.RunScope(path, self.path, runner="camera_hud", step=step, source=scope.CAMERA_LEFT, seconds=seconds)
@@ -583,7 +655,9 @@ class FixedHudCommandTests(DeviceModeCase):
         self.assertEqual((updates["requested"], updates["submitted"], updates["acknowledged_presented"],
                           updates["acknowledged_refused"], updates["replaced"]), (20, 20, 20, 0, 0))
         self.assertEqual((stops["requested"], stops["reached"], stops["expired"], stops["basis"],
-                          stops["hide_times_reported"], stops["bound_ms"]), (2, 2, 2, "runtime_hide_returned", True, 1020.0))
+                          stops["hide_times_reported"], stops["bound_source"], stops["hide_called_within_ms"],
+                          stops["hide_returned_allowance_ms"], stops["as_written_bound_ms"]),
+                         (2, 2, 2, "runtime_hide_called_and_returned", True, "acceptance_row_G9", 20.0, 250.0, 1020.0))
         self.assertEqual([event["last_frame_id"] for event in stops["events"]], [7, 14])
         for event in stops["events"]:
             self.assertEqual((event["expired"], event["hide_ok"], event["api_visible_after_hide"], event["texture_cleared"],
@@ -591,6 +665,15 @@ class FixedHudCommandTests(DeviceModeCase):
             self.assertGreaterEqual(event["hide_returned_after_observation_ms"], 1000.0)
             self.assertLessEqual(event["hide_returned_after_observation_ms"], 1020.0 + HOST_MARGIN_MS)
             self.assertLessEqual(event["hide_called_after_observation_ms"], event["hide_returned_after_observation_ms"])
+            # Both measured values from the deadline, and a verdict for each (the bound's two parameters).
+            self.assertGreaterEqual(event["hide_called_after_deadline_ms"], 0)
+            self.assertLessEqual(event["hide_called_after_deadline_ms"], event["hide_returned_after_deadline_ms"])
+            self.assertLessEqual(event["hide_returned_after_deadline_ms"], 250.0)
+            self.assertIs(event["hide_returned_within_allowance"], True)
+            self.assertEqual(event["hide_called_within_poll"], event["hide_called_after_deadline_ms"] <= 20.0)
+            self.assertEqual(event["within_bound"], event["hide_called_within_poll"])
+            self.assertEqual(event["within_bound_as_written"], event["hide_returned_after_observation_ms"] <= 1020.0)
+        self.assertGreaterEqual(stops["keepalives_sent"], 0)
         # From the fake runtime's own log: the overlay went down in each stop and came back after it.
         visible, changes = None, []
         for call in fake_vrclient.calls(self.log):
@@ -730,6 +813,310 @@ class FixedHudCommandTests(DeviceModeCase):
             code, again, _ = run_main([*arguments[:-2], "--report", self.out / "again.json"], Terminal())
         self.assertEqual((code, again["status"], again["command"]["refusal"], seen),
                          (1, "refused", "scope_run_id_used", []))
+
+
+@unittest.skipUnless(RUNNABLE, NEEDS)
+class LedgerBudgetTests(unittest.TestCase):
+    """The target label's intervals have a budget of their own: other labels cannot void its verdict."""
+
+    def test_other_labels_flickering_never_drop_the_targets_intervals(self):
+        ledger = camera_stage.DisplayLedger("bottle")
+        second = 1_000_000_000
+        # Ninety seconds at five results a second: the bottle up in about 92% of them (a gap every 2.4 s), and
+        # three other classes flickering on and off with every result.
+        at, others = 0, ("cup", "chair", "person")
+        for index in range(450):
+            labels = [] if index % 12 == 11 else ["bottle"]
+            labels += [name for offset, name in enumerate(others) if (index + offset) % 2]
+            ledger.presented(labels, at, at + second, True)
+            at += second // 5
+        ledger.finish(at)
+        self.assertGreater(ledger.dropped, 100)  # The others overran their shared budget...
+        self.assertEqual((ledger.target_dropped, ledger.target_count), (0, 38))  # ...and the target lost nothing.
+        self.assertEqual(ledger.count, camera_stage.MAX_SPELLS - camera_stage.MAX_TARGET_SPELLS)
+        rows = ledger.rows(0, at)
+        report = {"labels": {"spells_dropped": ledger.dropped, "target_label": "bottle",
+                             "target_spells_dropped": ledger.target_dropped, "run_start_ns": 0, "run_end_ns": at,
+                             "rows": rows}}
+        verdict = camera_stage.named_in_window(report, "bottle", **camera_hud.G10_WINDOW)
+        self.assertEqual((verdict["found"], verdict["named_fraction"] >= 0.9, verdict["longest_gap_seconds"]),
+                         (True, True, 0.2))
+        with self.assertRaisesRegex(ValueError, "camera_hud_window_intervals_incomplete"):
+            camera_stage.named_in_window(report, "cup", **camera_hud.G10_WINDOW)  # Another label's are incomplete.
+        # The target's own budget is its own limit: beyond it, and only then, its verdict is void.
+        ledger = camera_stage.DisplayLedger("bottle")
+        for index in range(camera_stage.MAX_TARGET_SPELLS + 3):
+            ledger.presented(["bottle"], index * 2 * second, index * 2 * second + second, True)
+            ledger.expired(index * 2 * second + second)  # Up for a second, then down for a second.
+        ledger.finish(10 ** 13)
+        self.assertEqual((ledger.target_count, ledger.target_dropped, ledger.dropped),
+                         (camera_stage.MAX_TARGET_SPELLS, 3, 0))
+        report["labels"].update(spells_dropped=0, target_spells_dropped=3)
+        with self.assertRaisesRegex(ValueError, "camera_hud_window_intervals_incomplete"):
+            camera_stage.named_in_window(report, "bottle", **camera_hud.G10_WINDOW)
+        # Without a target the ledger is what it was: one budget for every label.
+        plain = camera_stage.DisplayLedger()
+        for index in range(camera_stage.MAX_SPELLS + 5):
+            plain.presented(["bottle"], index * 2 * second, index * 2 * second + second, True)
+            plain.expired(index * 2 * second + second)
+        plain.finish(10 ** 13)
+        self.assertEqual((plain.count, plain.dropped, plain.target_dropped), (camera_stage.MAX_SPELLS, 5, 0))
+
+
+class OperatorDefectTests(DeviceModeCase):
+    """Mistakes that would spend a one-run record for nothing: each is refused before the record is consulted."""
+    CAMERA = RefusalTests.CAMERA
+    ROWS = RefusalTests.ROWS
+
+    def arguments(self, mode, record, *more):
+        return [*mode, "--scope-record", record, "--manifest", self.path, *more]
+
+    def test_the_report_path_is_checked_before_the_confirmation_and_a_declined_run_writes_no_file(self):
+        record, _ = self.staged("L-D4")
+        taken = self.out / "taken.json"
+        taken.write_text("{}\n")
+        for path, message in ((taken, "already exists"), (self.out / "absent" / "run.json", "not an existing directory"),
+                              (self.out / "run.txt", "needs a .json path")):
+            terminal = Terminal()
+            with self.subTest(path=path.name), self.launches() as seen:
+                code, report, shown = run_main(self.arguments(self.CAMERA, record, "--report", path), terminal)
+                self.assertEqual((code, report, terminal.asked, seen), (2, None, 0, []))  # Before the question.
+                self.assertIn(message, shown)
+        self.assertEqual((taken.read_text(), self.ledger()), ("{}\n", []))
+        # The reviewer's sequence: decline with ``y``, then run the same line and type yes. The declined run
+        # wrote no file, so the path is still free and the real run's report lands in it.
+        saved = self.out / "run.json"
+        line = self.arguments(self.ROWS, self.staged("L-D3")[0], "--report", saved)
+        with self.launches() as seen:
+            code, report, _ = run_main(line, Terminal("y\n"))
+        self.assertEqual((code, report["reason"], report["command"]["report_saved_by_operator"], saved.exists(), seen),
+                         (1, "confirmation_declined", False, False, []))
+        self.assertEqual(self.ledger(), [])
+        # Refused before the record was consulted (here: the lock directory): no file either, record unspent.
+        with mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": "relative/path"}), self.launches() as seen:
+            code, report, _ = run_main(self.arguments(self.CAMERA, record, "--report", saved), Terminal())
+        self.assertEqual((code, report["status"], report["reason"], saved.exists(), seen, self.ledger()),
+                         (1, "error", "helper_runtime_dir_invalid", False, [], []))
+        # A refusal by the record itself is a consulted record: that report is saved where it was named.
+        with self.launches() as seen:
+            code, report, _ = run_main(self.arguments(self.ROWS, self.out / "no-record.json", "--report", saved),
+                                       Terminal())
+        self.assertEqual((code, report["command"]["refusal"], report["command"]["report_saved_by_operator"], seen),
+                         (1, "scope_record_missing", True, []))
+        self.assertEqual(json.loads(saved.read_text())["command"]["refusal"], "scope_record_missing")
+
+    def test_the_helpers_lock_directory_is_a_precondition(self):
+        record, _ = self.staged("L-D4")
+        loose = self.out / "loose"
+        loose.mkdir(mode=0o755)
+        loose.chmod(0o755)
+        link = self.out / "link"
+        link.symlink_to(self.runtime_directory)
+        cases = ((None, "helper_runtime_dir_missing"), ("", "helper_runtime_dir_missing"),
+                 ("relative", "helper_runtime_dir_invalid"), (f"{self.runtime_directory}/", "helper_runtime_dir_invalid"),
+                 (f"{self.runtime_directory}/.", "helper_runtime_dir_invalid"), (str(loose), "helper_runtime_dir_invalid"),
+                 (str(link), "helper_runtime_dir_invalid"), (str(self.out / "absent"), "helper_runtime_dir_invalid"),
+                 (str(self.path), "helper_runtime_dir_invalid"))
+        for value, reason in cases:
+            environment = dict(os.environ)
+            environment.pop("XDG_RUNTIME_DIR", None)
+            if value is not None:
+                environment["XDG_RUNTIME_DIR"] = value
+            run_scope = self.camera_scope(record)
+            with self.subTest(value=value), mock.patch.dict(os.environ, environment, clear=True), self.launches() as seen:
+                self.assertEqual(camera_hud.runtime_dir_refusal(), reason)
+                report = self.camera(run_scope)
+                self.assertEqual((report["status"], report["reason"], seen, run_scope.status, self.ledger()),
+                                 ("error", reason, [], "not_consulted", []))
+        self.assertIsNone(camera_hud.runtime_dir_refusal())
+
+    def test_a_report_that_does_not_fit_its_schema_is_replaced_and_keeps_the_cleanup_and_the_scope(self):
+        failure = ValueError("camera_hud_report_field_invalid:report.frames.sent")
+        with mock.patch.object(camera_stage.CameraHudStage, "report", side_effect=failure):
+            report = camera_hud.run_camera(dict(LIMITS), helper=self.helper, bridge=DEFAULT_BRIDGE, confirmed=True,
+                                           detector_factory=camera_hud.ValidationDetector, validation_only=True)
+        self.assertEqual((report["status"], report["reason"], report["report_replaced"], report["command"]["refusal"],
+                          report["command"]["exit_code"], report["cleanup"]),
+                         ("error", "camera_hud_report_field_invalid:report.frames.sent", True, "report_invalid", 1,
+                          {"source_ok": True, "bridge_ok": True, "ok": True}))
+        self.assertEqual({name: report[name] for name in gates.claims()}, ALL_CLOSED)
+        path, record = self.staged("L-D3")
+        run_scope = self.rows_scope(path)
+        with mock.patch.object(synthetic_rows.SyntheticRows, "report", side_effect=failure), self.launches() as seen:
+            report = camera_hud.run_synthetic_rows(8, stops=1, stop_seconds=2.0, run_scope=self.rows_scope(
+                self.out / "no-record.json"), confirmed=True)
+        self.assertEqual((report["status"], report["report_replaced"], report["scope_record"]["refusal"], seen),
+                         ("error", True, "scope_record_missing", []))
+        self.assertEqual((run_scope.status, self.ledger()), ("not_consulted", []))
+        oversize = {**camera_hud.refused_before_start("camera", "x", camera_hud.CAMERA_BLOCKS, "camera_hud_stage"),
+                    "marks": {"recorded": [{"label": "remove", "index": index} for index in range(200)] * 40}}
+        replaced = camera_hud.finish(oversize, camera_hud.CAMERA_BLOCKS, "camera", cleanup={"bridge_ok": True, "ok": True})
+        self.assertEqual((replaced["status"], replaced["report_replaced"], replaced["cleanup"]),
+                         ("error", True, {"bridge_ok": True, "ok": True}))
+
+
+@unittest.skipUnless(RUNNABLE and fake_vrclient.available(), NEEDS + ", the OpenVR SDK checkout and g++")
+class SignalTests(DeviceModeCase):
+    """Signals during a device run on ``--fixed-hud`` against the fake runtime: the report is always the run's own."""
+    LONG = {"fps": 5, "max_seconds": 20, "max_frames": 100}
+
+    @classmethod
+    def setUpClass(cls):
+        cls.directory = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.directory.cleanup)
+        cls.runtime_env, cls.log = fake_vrclient.runtime(Path(cls.directory.name) / "vr")
+
+    def setUp(self):
+        super().setUp()
+        self.log.unlink(missing_ok=True)
+        environment = mock.patch.dict(os.environ, self.runtime_env)
+        environment.start()
+        self.addCleanup(environment.stop)
+
+    def camera_line(self, record):
+        return ["--camera", "--allow-camera-input", "--allow-hud-output", "--scope-record", record, "--manifest",
+                self.path, "--seconds", "20", "--step", "L-D4", "--names-only", "--orientation", "identity",
+                "--target-label", "bottle"]
+
+    def assert_a_real_cancelled_run(self, code, report, record, number):
+        self.assertEqual((code, report["status"], report["reason"], report["command"]["exit_code"],
+                          report["command"]["refusal"]), (128 + number, "cancelled", "signal", 128 + number, None))
+        self.assertEqual((report["scope_record"]["status"], report["scope_record"]["consumed"],
+                          report["scope_record"]["run_id"]), ("granted", True, record["run_id"]))
+        self.assertIsNotNone(report["bridge"])
+        self.assertEqual((report["bridge"]["final_report"]["mode"], report["bridge"]["final_report"]["exit_code"],
+                          report["cleanup"]["bridge_ok"]), ("--fixed-hud", 0, True))
+        calls = [call["call"] for call in fake_vrclient.calls(self.log)]
+        self.assertEqual(calls[-3:], ["HideOverlay", "ClearOverlayTexture", "DestroyOverlay"])
+        self.assertEqual({name: report[name] for name in gates.claims()}, ALL_CLOSED)
+
+    def run_signalled(self, line, after, number=signal.SIGINT, repeat=1, to_bridge=False):
+        import threading
+        threads = threading.active_count()
+        # A signal the timer sends after the command has returned must not reach the test runner's own handler.
+        for item in (signal.SIGINT, signal.SIGTERM):
+            signal.signal(item, lambda number, frame: None)
+        handlers = {item: signal.getsignal(item) for item in (signal.SIGINT, signal.SIGTERM)}
+        with mock.patch.object(camera_hud, "create_detector", return_value=camera_hud.ValidationDetector()):
+            if to_bridge:
+                with self.terminal_signal(after, number, repeat):
+                    result = run_main(line, Terminal())
+            else:
+                def send():
+                    for index in range(repeat):
+                        os.kill(os.getpid(), number)
+                        time.sleep(0.06)
+                timer = threading.Timer(after, send)
+                timer.start()
+                try:
+                    result = run_main(line, Terminal())
+                finally:
+                    timer.cancel()
+                    timer.join()
+        self.assertEqual(threading.active_count(), threads)  # Nothing of the run outlives it.
+        self.assertEqual({item: signal.getsignal(item) for item in handlers}, handlers)
+        return result
+
+    def test_any_number_of_signals_leave_the_camera_runs_own_report(self):
+        for name, number, repeat, after in (("two SIGINTs 60 ms apart", signal.SIGINT, 2, 2.0),
+                                            ("two SIGTERMs", signal.SIGTERM, 2, 2.0),
+                                            ("five SIGINTs", signal.SIGINT, 5, 2.0)):
+            path, record = self.staged("L-D4")
+            self.log.unlink(missing_ok=True)
+            with self.subTest(case=name):
+                code, report, _ = self.run_signalled(self.camera_line(path), after, number, repeat)
+                self.assert_a_real_cancelled_run(code, report, record, number)
+                self.assertGreater(report["frames"]["sent"], 0)  # Uploads were made, and the report says so.
+                self.assertIsNotNone(report["source"])
+                self.assertEqual(report["cleanup"]["ok"], True)
+
+    def test_a_signal_before_the_helper_is_driven_still_ends_with_the_runs_own_report(self):
+        # During the record's verification and the bridge's start: the stage has not reached the helper yet.
+        path, record = self.staged("L-D4")
+        code, report, _ = self.run_signalled(self.camera_line(path), 0.05, signal.SIGINT, 2)
+        self.assertEqual((code, report["status"], report["reason"], report["report_kind"]),
+                         (130, "cancelled", "signal", "camera_hud_stage"))
+        self.assertEqual((report["scope_record"]["run_id"], report["command"]["confirmation"]),
+                         (record["run_id"], "operator_terminal"))
+        self.assertIsNotNone(report["frames"])
+        self.assertIsNotNone(report["scope_record"]["status"])
+
+    def test_a_terminals_ctrl_c_is_a_cancelled_run_with_a_clean_bridge_in_both_modes(self):
+        # The signal reaches the bridge as well as this process, as a terminal sends it to the foreground group:
+        # the bridge retires and exits 0 by itself while this side is still writing.
+        for attempt in range(3):
+            path, record = self.staged("L-D4")
+            self.log.unlink(missing_ok=True)
+            with self.subTest(mode="camera", attempt=attempt):
+                code, report, _ = self.run_signalled(self.camera_line(path), 2.0, to_bridge=True)
+                self.assert_a_real_cancelled_run(code, report, record, signal.SIGINT)
+                self.assertEqual(report["cleanup"]["ok"], True)
+                if report["bridge"]["error"] is not None:  # The write failed because the bridge had already left.
+                    self.assertIs(report["end"]["bridge_left_on_signal"], True)
+        for attempt in range(3):
+            path, record = self.staged("L-D3")
+            self.log.unlink(missing_ok=True)
+            line = ["--synthetic-rows", "--allow-hud-output", "--scope-record", path, "--manifest", self.path,
+                    "--seconds", "20", "--stops", "1", "--stop-seconds", "2"]
+            with self.subTest(mode="synthetic_rows", attempt=attempt):
+                code, report, _ = self.run_signalled(line, 1.5, to_bridge=True)
+                self.assertEqual((code, report["status"], report["reason"], report["cleanup"]),
+                                 (130, "cancelled", "signal", {"bridge_ok": True, "ok": True}))
+                self.assertEqual(report["bridge"]["final_report"]["exit_code"], 0)
+                if report["bridge"]["error"] is not None:
+                    self.assertIs(report["end"]["bridge_left_on_stop"], True)
+
+    def test_a_bridge_failure_without_a_signal_is_still_an_error(self):
+        path, _ = self.staged("L-D4")
+        real = subprocess.Popen
+        bridges = []
+
+        def launch(arguments, *more, **options):
+            process = real(arguments, *more, **options)
+            if "--fixed-hud" in list(map(str, arguments)):
+                bridges.append(process)
+            return process
+        import threading
+        timer = threading.Timer(2.0, lambda: [process.send_signal(signal.SIGINT) for process in bridges])
+        with mock.patch.object(subprocess, "Popen", side_effect=launch):
+            timer.start()
+            try:
+                report = self.camera(self.camera_scope(path, seconds=20, step="L-D4"), **{"detector_factory": camera_hud.ValidationDetector})
+            finally:
+                timer.cancel()
+                timer.join()
+        # The bridge left cleanly, but nothing signalled this run: it is not excused as a cancellation.
+        self.assertNotEqual(report["status"], "cancelled")
+        self.assertIs(report["end"]["bridge_left_on_signal"], False)
+
+
+@unittest.skipUnless(RUNNABLE and fake_vrclient.available(), NEEDS + ", the OpenVR SDK checkout and g++")
+class SlowBridgeTests(DeviceModeCase):
+    """A bridge that takes six seconds to become ready: the helper's supervision waits for it."""
+    DELAY_SECONDS = 6
+
+    def install_binaries(self):
+        real = self.bridge.with_name("real-bridge")
+        shutil.copy2(DEFAULT_BRIDGE, real)
+        self.bridge.write_text(f"#!/bin/sh\nsleep {self.DELAY_SECONDS}\nexec '{real}' \"$@\"\n")
+        self.helper.write_text(fake_camera_export.SHEBANG_INSTALL.format(python=sys.executable, root=str(ROOT)))
+        scope_tests.ScopeCase.install_binaries(self)
+
+    def test_a_slow_starting_bridge_does_not_end_the_run_after_the_record_is_spent(self):
+        self.assertGreater(self.DELAY_SECONDS, camera_helper.ATTACH_SECONDS)  # Longer than the source's default.
+        self.assertGreater(camera_hud.ATTACH_SECONDS, 8)  # The bridge's ready wait, with margin.
+        with tempfile.TemporaryDirectory() as directory:
+            env, _ = fake_vrclient.runtime(Path(directory) / "vr")
+            path, record = self.staged("L-D4")
+            limits = {"fps": 5, "max_seconds": 12, "max_frames": 60}
+            report = camera_hud.run_camera(limits, run_scope=self.camera_scope(path, seconds=12), confirmed=True,
+                                           detector_factory=camera_hud.ValidationDetector,
+                                           client_env={**os.environ, **env})
+        self.assertNotEqual(report["reason"], "camera_source_not_attached")
+        self.assertEqual((report["status"], report["scope_record"]["consumed"], report["cleanup"]["ok"]),
+                         ("completed", True, True))
+        self.assertGreater(report["frames"]["acknowledged_presented"], 5)  # Frames were shown after the slow start.
+        self.assertEqual(self.ledger(), [f"{record['run_id']}.json"])
 
 
 if __name__ == "__main__":

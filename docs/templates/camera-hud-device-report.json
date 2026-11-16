@@ -106,10 +106,13 @@
     "stops_reached": null,
     "stops_expired": null,
     "stops_within_bound": null,
-    "bound_ms": null,
+    "bound_source": "acceptance_row_G9",
+    "hide_called_within_ms": null,
+    "hide_returned_allowance_ms": null,
+    "as_written_bound_ms": null,
     "stops": []
   },
-  "labels": {"basis": null, "spells_dropped": null, "rows": []},
+  "labels": {"basis": null, "spells_dropped": null, "target_label": null, "target_spells_dropped": null, "rows": []},
   "target": {
     "label": null,
     "rule": "g10_named_in_window",

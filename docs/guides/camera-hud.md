@@ -34,7 +34,7 @@ configuration value or typed answer opens a gate or creates a record.
 | Mode | What it does | Record needed |
 | --- | --- | --- |
 | `--validate` | The helper's fake backend, a scripted detector and the validation bridge, then synthetic rows on the validation bridge with one stop. Nothing is displayed and no camera exists. This is what CI runs | none |
-| `--synthetic-rows` | Step L-D3: one row, `count NNNN`, five times a second on the bridge's `--fixed-hud` mode, with scheduled stops in which nothing is sent so that the bridge's own expiry is observed. The camera is never opened and no detector is loaded | source `synthetic`, step L-D3 |
+| `--synthetic-rows` | Step L-D3: one row, `count NNNN`, five times a second on the bridge's `--fixed-hud` mode, with scheduled stops in which no frame and no hide request is sent (the client's keepalive writes one show request per stop, which the bridge answers `no_image`) so that the bridge's own expiry is observed. The camera is never opened and no detector is loaded | source `synthetic`, step L-D3 |
 | `--camera` | Steps L-D4 and L-D5: the left camera through the stage (detector, rows, tile, one observed frame per result), at most 90 s | source `arcturus_camera_left`, step L-D4 or L-D5 |
 
 A device mode has no option to name another bridge, helper, camera or source.
@@ -125,6 +125,10 @@ the bridge's start, so `--seconds` may be at most 110 under an L-D3 record.
 
 ### Before the wearer puts the headset on
 
+- **The helper's lock directory.** `XDG_RUNTIME_DIR` must be set, absolute,
+  without a trailing slash, and a directory of this user with mode 0700, as
+  the helper requires. The command checks it before the record is consulted
+  (`helper_runtime_dir_missing` or `helper_runtime_dir_invalid`).
 - **G2 recovery ready.** The owner-rehearsed
   [recovery procedure](../evidence/e079.md#recovery-procedure-and-rehearsal)
   is at hand. The green-input cause is unknown; any green input aborts the
@@ -167,8 +171,15 @@ when the headset is back on, and the 30 seconds count from then.
 
 At any passthrough change, any green input, or when the wearer asks, the
 operator presses Ctrl-C. The command takes the tile down, stops the helper
-and reports `cancelled` or `stopped`. Then follow the recovery procedure if
-it is needed. A stopped run is recorded as it happened; it is not a pass.
+and reports `cancelled`, with reason `signal`, exit 130 and the run's own
+report: everything shown up to that point, the scope block and the cleanup
+verdicts. Further presses change nothing; from the typed `yes` to the
+printed report every signal is recorded and none interrupts the teardown or
+the saving of the report. A terminal sends Ctrl-C to the bridge as well, so
+the bridge may retire by itself before the command has asked it to; that is
+still a cancelled run with a clean bridge (`end.bridge_left_on_signal`), not
+a failure. Then follow the recovery procedure if it is needed. A cancelled
+run is recorded as it happened; it is not a pass.
 
 ## Step L-D3: synthetic rows (row G9)
 
@@ -184,11 +195,28 @@ Ninety seconds with three 3-second stops is 405 updates in four segments;
 G9 asks for at least 375 acknowledged updates. The wearer watches the counter
 advance, sees the tile go blank in each stop, and sees it return. Expect
 `report_kind: camera_hud_synthetic_rows`, `status: completed`,
-`complete: true` and exit 0. `stops.events` pairs each stop with the bridge's
-`frame_expired` line: `hide_returned_after_observation_ms` against the bound
-of 1,000 ms plus one 20 ms poll, `hide_ok` true and `api_visible_after_hide`
+`complete: true` and exit 0. `--seconds` is at most 110 here: the record
+allows 120 s and 10 s of them are the bridge's start.
+
+`stops.events` pairs each stop with the bridge's `frame_expired` line. The
+expiry bound is two parameters, with row G9 as their source, both measured
+from the last frame's deadline: the runtime's hide is called within one 20 ms
+bridge poll (`hide_called_after_deadline_ms`, verdict
+`hide_called_within_poll`), and it has returned within an allowance of 250 ms
+(`hide_returned_after_deadline_ms`, verdict
+`hide_returned_within_allowance`). The allowance is the value proposed to
+the owner, not yet an accepted number; G9 as written, 1,000 ms plus one poll
+from the observation, leaves the runtime's call no time, so each stop also
+carries `within_bound_as_written` and the times from the observation. The
+report holds every measured value, so the evidence stands whichever bound is
+accepted. A stop also needs `hide_ok` true and `api_visible_after_hide`
 false. Those are the times the runtime's calls returned; whether the tile was
 seen to go blank is the wearer's observation.
+
+A stop is not silent on the pipe. No frame and no hide request is sent, but
+the client's keepalive writes one show request about two seconds into each
+stop. The bridge has nothing presented by then and answers `no_image`; it
+brings nothing back.
 
 ## Steps L-D4 and L-D5: the left camera
 
@@ -207,7 +235,11 @@ turning away at least three times, the headset removed once at the end.
 ```
 
 L-D5, row G10: the 90 s bound, the bottle within 1 m, head turns, the bottle
-out of view for 5 seconds and back.
+out of view for 5 seconds and back. The pause is cued at 70 s, after the
+60-second window: G10 needs a contiguous 60 s with no gap over 2 s, so a
+5-second pause in the middle of a 90 s run would leave no such window on
+either side. The cues count from the first camera frame, which leaves room
+for the bridge's start before the window and for the return after the pause.
 
 ```bash
 .venv-replay/bin/python scripts/camera_hud.py --camera \
@@ -215,7 +247,7 @@ out of view for 5 seconds and back.
   --scope-record artifacts/camera-hud/scope-L-D5.json \
   --manifest artifacts/camera-hud/checkpoint-manifest.json \
   --step L-D5 --seconds 90 --fps 5 --names-only --orientation identity \
-  --target-label bottle --cue 40:out_of_view --cue 45:in_view \
+  --target-label bottle --cue 70:out_of_view --cue 75:in_view \
   --report artifacts/camera-hud/l-d5.json
 ```
 
@@ -262,7 +294,15 @@ resumes from then for 30 seconds.
 
 The report goes to stdout. It is written to a file only where the operator
 names a new `.json` path with `--report`, which is the operator's action to
-save it. It holds counts, labels, timings and format metadata and is checked
+save it. The path is checked before the question is asked: an existing file,
+a missing directory or another suffix is refused at once, so it can never
+cost a run, and nothing is ever overwritten. The rule for what is written:
+a run that was declined, or refused before its record was consulted (a
+missing helper or bridge, an unusable lock directory, a site's
+preconditions), writes no file and leaves the named path free for the real
+run; its report is on the terminal. Once the record has been consulted,
+whether it was granted or refused by its own content, the report is written
+to the named path. It holds counts, labels, timings and format metadata and is checked
 against a schema that refuses anything else. It never holds a pixel, a
 still, a preview or a calibration value. Labels and their display intervals
 are Camera Data under the SDK agreement; the owner's consent of 2026-11-16
