@@ -83,6 +83,15 @@ and no preview, still or other file is written.
 6. Ends when the helper ends on its bound (`max_frames` or `max_seconds`), and
    reports.
 
+During the export it also keeps time and takes marks
+([below](#times-marks-and-the-target-summary)): a cue you scheduled is
+printed with a bell when due, and, when key marks were asked for, Enter
+records a mark. With none of the new options nothing is printed during the
+run, the terminal is not read or flushed after the confirmation (what is
+typed stays in its input queue, as before), the helper is launched with the
+same arguments, and the status and exit code are what they were; the report
+only gains the times.
+
 Ctrl+C or SIGTERM cancels: the primitive sends the helper SIGTERM, which the
 helper collects between SDK calls and answers with an `end` packet of reason
 `stop_signal`; the command exits 128 + signal.
@@ -134,6 +143,117 @@ whether every frame was stale), `refused` (the stream violated the contract;
 a failing detector, an unusable helper path) and `cleanup_failed`. Every
 status but `recognized` exits 1, a cancellation 128 + signal.
 
+## Times, marks and the target summary
+
+Work-order item L15 added these so that a device run can be measured (the
+removal stop, the coverage and the cued positions of step L-D1 in the
+[camera display work order](../live-capture.md#camera-display-work-order-adopted-2026-11-16)).
+They are checked in the cloud against the fake producer only. The command's
+bounds are unchanged (30 seconds, 300 frames), it still opens no display and
+saves no image, and everything added to the report is a count, a label from a
+closed list, a box, a time or a declared constant.
+
+**Times.** The host monotonic clock is the measurement: the helper stamps
+each frame with it at acquisition (`observed_ns`), and the command reads the
+same clock for marks and for the helper's end record. One realtime sample at
+the run's start (`timebase.anchor`, UTC nanoseconds since the Unix epoch)
+places those times in the day: every `utc_ns` in the report is the anchor
+plus a monotonic difference, never a second reading, so two times differ by
+the same amount on either clock. `timebase.wall_clock_step_ns` is how far a
+second realtime reading at the end differed from the derived one (a clock
+step or slew during the run). Each frame record also carries the helper's own
+realtime stamp, `helper_realtime_ns`, as the header gave it.
+
+**Marks.** A mark is a label and a time. The labels are a closed list:
+`remove`, `reseat`, `near`, `far`, `left`, `centre`, `right`, `up`, `down`,
+`out_of_view`, `in_view`. There is no free text: any other label is refused
+before the confirmation is asked, and what you type during a run is counted
+for line ends and discarded.
+
+- `--cue SECONDS:LABEL` (repeatable, at strictly rising times within
+  `--seconds`, at most 32) schedules a cue from the first frame's acquire
+  time. When it is due the terminal shows `CUE <label>` with a bell, and the
+  mark records the scheduled and the actual time (`late_ms` apart). A cue the
+  run ended before is listed in `cues_not_reached`. The bell is the terminal's:
+  check before a device run that the wearer can hear or see it.
+- With `--key-marks` or `--mark-labels`, and only then, Enter on the terminal
+  during the run records a key mark, for the moment only the operator knows.
+  `--mark-labels LABEL,LABEL` gives successive presses their labels; further
+  presses, or all of them under `--key-marks` alone, record `mark`. The
+  terminal shows `MARK <label>`. With either option the terminal's pending
+  input is discarded when the run starts and everything typed during the run
+  is read and dropped; without them the terminal is left alone. Key marks
+  need the terminal the confirmation was typed on. At most 64 marks are
+  recorded; every scheduled cue keeps its place, key marks take the rest (at
+  least 32) and further presses are counted (`marks_dropped`).
+
+A cue's time is when it was shown, not when the wearer acted on it. Every
+`remove` mark, cue or key, gets its own entry in `summary.removal`, so a run
+can use a cue as the prompt and an operator key mark (`--mark-labels remove`)
+as the moment the headset is actually off. The helper has no presence signal:
+it ends `headset_removed` or `standby` once no frame set has arrived for two
+seconds ([helper reference](../reference/camera-helper.md)), found at the end
+of an acquire that timed out. The time from a cued `remove` to the helper's
+end therefore holds the wearer's reaction, then that two-second gap, then the
+acquire timeout. `last_frame_acquire_after_mark_ms` separates them: it is
+about when frames stopped after the mark, and the rest of
+`helper_end_after_mark_ms` is the helper's.
+
+Neither kind touches the informed start: the typed `yes` is read first, the
+helper is still launched with `--parent-confirmed` and reads no terminal, and
+Ctrl+C still cancels.
+
+**Target.** `--target-label CLASS` names one class of the chosen detector
+(`bottle` for both models; an unknown class is refused before the
+confirmation). It needs a single camera, `--cameras 0` or `--cameras 1`
+(the default `0,1` is refused with it), so no window, cell or coverage tally
+pools the two cameras' frames. Without a target the `frames` counts are over
+every selected camera. Each frame record then has `target`: whether the class was
+detected at or above the threshold, how many boxes, and for the best one its
+confidence, its box and the 3x3 cell of its centre over the full frame. The
+cell uses 0.4 and 0.6 on each axis: a centre below 0.4 of the width is
+`left`, above 0.6 `right`, otherwise `centre`; `up`, `centre`, `down` on the
+height likewise; the nine names are `up_left`, `up`, `up_right`, `left`,
+`centre`, `right`, `down_left`, `down`, `down_right`.
+
+The cell is taken on the image as the helper exported it. Nothing in this
+command knows the camera's mounting orientation, so `left`, `right`, `up` and
+`down` name sides of the exported image, not of the wearer's view. The cued
+run is what shows how the two relate; the report repeats this in
+`target.orientation_statement` and gives no verdict on whether a cue and a
+cell agree.
+
+**Summaries** (`summary`, counts only, derived from the frame records and
+the marks; frames are placed by acquire time). An interval or span is bounded
+by a cue's scheduled time and a key mark's actual time (`boundary`:
+`scheduled` or `actual`), so the span between cues at 3 and 20 seconds is 17
+windows whatever the scheduler's wake-up jitter; the removal figures use each
+mark's actual time:
+
+| Field | Meaning |
+| --- | --- |
+| `windows` | 1-second windows from the first frame's acquire time to the last processed frame: `frames` processed in each and, with a target, `target_frames` |
+| `intervals` | Per mark, from its `boundary` to the next mark's or the run's end (the helper's end record, else the export's return): `frames`, and with a target `target_frames`, the frames per cell (`cells`, all nine names), per `columns` and per `rows`; the whole 1-second `windows` from the mark, those with a frame and those with the target, and the `remainder_ms` left over |
+| `coverage` | With a target. A span opens at `in_view`, `near`, `far` or a position mark and closes at the next `out_of_view` or `remove`, or the run's end. Per span and in total: the whole 1-second windows from the span's start, `windows_with_target`, `windows_without_frames` (they count against coverage) and `fraction` |
+| `removal` | Per `remove` mark: `frames_processed_after_mark`, `frames_acquired_over_limit` (acquire time more than 2,000 ms after the mark), `last_frame_acquire_after_mark_ms`, `helper_end_after_mark_ms` and `helper_end_reason` from the helper's end record, `helper_end_is_presence_stop` (`headset_removed` or `standby`) and `helper_end_within_limit` (3,000 ms); the end fields are `null` when no end record was read |
+
+A run for the removal and the coverage, then one for the cued positions
+(examples of the options, not an approved device step):
+
+```bash
+.venv-replay/bin/python scripts/camera_recognize.py --allow-camera-input \
+  --helper artifacts/camera-helper/sightcircuit-camera-helper \
+  --seconds 30 --max-frames 150 --fps 5 --cameras 0 --target-label bottle \
+  --cue 3:near --cue 11:far --cue 20:remove --mark-labels remove \
+  --report artifacts/camera/run-01.json
+
+.venv-replay/bin/python scripts/camera_recognize.py --allow-camera-input \
+  --helper artifacts/camera-helper/sightcircuit-camera-helper \
+  --seconds 30 --max-frames 150 --fps 5 --cameras 0 --target-label bottle \
+  --cue 2:centre --cue 7:left --cue 12:right --cue 17:up --cue 22:down \
+  --cue 27:out_of_view --report artifacts/camera/run-02.json
+```
+
 ### Validate the reader without any helper
 
 ```bash
@@ -156,11 +276,15 @@ standard library only. Expect `status: validated` and exit 0.
 | `frames_received`, `frames_processed`, `stale_inputs_skipped`, `pending_frames_replaced` | Frames the reader delivered; frames the detector saw; frames older than `maximum_input_observation_age_ms` (1000) at processing; frames replaced in the latest slot |
 | `labels_seen` | Every label detected in the run |
 | `confirmation` | `operator_terminal` once the typed answer was given on this command's terminal; `null` when the run was refused before launch |
-| `detections` | One record per processed frame: `sequence`, `frame_set_sequence` (the acquired set; both cameras of a set share it), `source_id` (`arcturus_camera_left` or `_right`), `camera_index`, `frame_id`, `observed_ns` (the helper's host monotonic clock at acquisition), `input_age_ms`, `processing_ms`, `inference_ms`, `labels`, up to 20 `detections` (`label`, `confidence`, `box_xyxy` in `detector_input_pixels`), `detection_count`, `native_size`, `detector_input_size`; Camera Data |
+| `schema_version` | 2 since item L15 (the times, marks, target and summaries; no earlier field changed) |
+| `timebase`, `run_started`, `first_frame`, `helper_end`, `export_returned` | The declared clocks with the anchor, and `{monotonic_ns, utc_ns}` of the run's start, the first frame's acquire, the helper's end record as read (with its `reason`; `null` without one) and the export's return; see [times](#times-marks-and-the-target-summary) |
+| `marks` | The vocabulary, the cues and key labels requested, `cues_not_reached`, `key_marks_enabled`, `key_presses`, `key_marks_capacity`, `marks_dropped` and `recorded`: per mark `index`, `source` (`cue` or `key`), `label`, `monotonic_ns`, `utc_ns`, `offset_ms` from the first frame's acquire (`null` before it), and for a cue the scheduled offset and times and `late_ms` |
+| `target_label`, `target`, `summary` | The class named with `--target-label` (`null` without); its threshold, frame count, cell thresholds and the orientation statement; the counts-only [summaries](#times-marks-and-the-target-summary) |
+| `detections` | One record per processed frame: `sequence`, `frame_set_sequence` (the acquired set; both cameras of a set share it), `source_id` (`arcturus_camera_left` or `_right`), `camera_index`, `frame_id`, `observed_ns` (the helper's host monotonic clock at acquisition), `observed_utc_ns` (derived), `helper_realtime_ns`, with a target `target` (`present`, `count`, `confidence`, `box_xyxy`, `column`, `row`, `cell`, `centre_fraction`), `input_age_ms`, `processing_ms`, `inference_ms`, `labels`, up to 20 `detections` (`label`, `confidence`, `box_xyxy` in `detector_input_pixels`), `detection_count`, `native_size`, `detector_input_size`; Camera Data |
 | `last_result` | The last record of `detections` |
 | `inference_ms`, `processing_ms`, `input_age_ms` | Count, sample size, nearest-rank p50 and p95 and the maximum, as the pipeline statistics report them |
 | `inference_p95_budget_ms`, `inference_p95_within_budget` | `LIVE_INFERENCE_P95_BUDGET_MS` (200) and whether this run's p95 met it; which machine ran it is the report's business, so a cloud figure is never a Frame figure |
-| `capture` | The source report: `helper` (resolved path, SHA-256, arguments), `supervision` (the primitive's block: pid, exit code, forced termination, tree reaped), `stream` (packets and frames read, frames per camera, dropped frames, the `ready` and `end` headers, the refusal if any), `diagnostics` (the collected stderr lines and the counts of dropped, non-JSON and oversize lines), `helper_exit_code` |
+| `capture` | The source report: `helper` (resolved path, SHA-256, arguments), `supervision` (the primitive's block: pid, exit code, forced termination, tree reaped), `stream` (packets and frames read, frames per camera, dropped frames, the `ready` and `end` headers, `end_received_monotonic_ns`, the refusal if any), `diagnostics` (the collected stderr lines and the counts of dropped, non-JSON and oversize lines), `helper_exit_code` |
 | `camera_data` | The Camera Data statement, `report_saved_by_operator` and `report_path` |
 | `gate_statement`, `production_live_input_enabled`, `mapping_qualified`, `production_hud_enabled` | The owner's 2026-11-09 classification in one sentence, and `gates.claims()`, all `false` |
 | `cleanup_ok`, `images_saved`, `pixels_in_report`, `display_started`, `overlay_requested` | The primitive's cleanup verdict and the processing thread's exit; the last four are always `false` |
@@ -197,10 +321,14 @@ enforces every rule and names its refusals (`export_reader.REASONS`).
 
 ## Cloud checks
 
-`tests/test_camera_contract.py`, `tests/test_camera_export_reader.py` and
+`tests/test_camera_contract.py`, `tests/test_camera_export_reader.py`,
+`tests/test_camera_marks.py` (the vocabulary, the cue schedule, key marks
+through a pseudo-terminal and the summaries on scripted sequences) and
 `tests/test_camera_helper_source.py` run in the dependency-free CI job (the
 stand-in helper, `tests/fake_camera_export.py`, is installed outside the
 checkout and launched exactly as the real helper would be);
 `tests/test_camera_recognize.py` adds the end-to-end runs with a stand-in
-detector in the replay job. Nothing in CI builds against or links the SDK, and
+detector in the replay job, including cued and key-marked runs on the fake
+producer and a check that no field added by item L15 can hold pixels, free
+text or calibration values. Nothing in CI builds against or links the SDK, and
 nothing here ran on the Frame.

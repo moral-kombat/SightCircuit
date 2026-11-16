@@ -163,6 +163,7 @@ class YoloxDetector:
     MODELS = {"yolox-nano": ("yolox_nano.onnx", 416)}
     STRIDES = (8, 16, 32)
     PADDING_VALUE = 114
+    classes = COCO_CLASSES
 
     def __init__(self, name="yolox-nano", runtime="auto", nms_threshold=0.45, threads=2):
         filename, self.size = self._model(name)
@@ -284,6 +285,11 @@ def registered(name):
 
 def create_detector(name=DEFAULT_DETECTOR, **options):
     return registered(name)(name, **options)
+
+
+def class_names(name):
+    """The label vocabulary of detector ``name``, without loading its model."""
+    return tuple(registered(name).classes)
 
 
 def model_files(name):

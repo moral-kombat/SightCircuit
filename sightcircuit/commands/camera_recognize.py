@@ -18,6 +18,26 @@ the inference timing. The report is shaped as the mirror recognizer's where
 the two agree: run limits, per-frame detections, timing statistics with the
 p95 against ``LIVE_INFERENCE_P95_BUDGET_MS``, counts and ``gates.claims()``.
 
+Times, marks and summaries (work-order item L15, so a device run can be
+measured). The report declares its timebase: the host monotonic clock is the
+measurement and one realtime sample at the run's start places it in UTC, so
+the run's start, each frame's acquire time, each mark and the helper's end
+record carry both. A mark is a label from a closed vocabulary
+(``sightcircuit.camera.marks.VOCABULARY``), never free text: ``--cue
+SECONDS:LABEL`` schedules one from the first frame's acquire time and prints
+it on the terminal with a bell when due; with ``--key-marks`` or
+``--mark-labels``, and only then, Enter on the terminal during the run
+records one with the next ``--mark-labels`` label, or ``mark``. What is typed
+is counted for line ends and discarded; without those options the terminal is
+never read after the confirmation. ``--target-label`` names a detector class
+and needs a single camera (``--cameras 0`` or ``1``), so no tally pools the
+two; the report then carries, as counts only, the 1-second windows that
+held it, the coverage over the in-view spans, the 3x3 cell of its best box's
+centre per mark interval and what followed a ``remove`` mark. The cell is
+taken on the image as exported: nothing here knows the camera's mounting
+orientation. Without these options and without a key press the run is what it
+was.
+
 Camera Data. Under the SDK agreement (sections 1 and 3.2) the detections,
 labels, scores and boxes this command derives from camera frames are Camera
 Data, and so is every per-frame record in the report. The report says so.
@@ -52,11 +72,11 @@ if not __package__:  # Run as a file: import the package beside this one.
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from sightcircuit import gates
-from sightcircuit.camera import contract, fake_export
+from sightcircuit.camera import contract, fake_export, marks
 from sightcircuit.camera.export_reader import ExportReader, ExportRefused
 from sightcircuit.convert import to_bgr
 from sightcircuit.detection import (DEFAULT_DETECTOR, DETECTORS, LIVE_INFERENCE_P95_BUDGET_MS, POC_THRESHOLD,
-                                    create_detector, describe, require_result)
+                                    class_names, create_detector, describe, require_result)
 from sightcircuit.frame import DETECTOR_PIXELS
 from sightcircuit.hud.contract import MAX_DISPLAY_AGE_MS
 from sightcircuit.latest import LatestSlot
@@ -65,6 +85,7 @@ from sightcircuit.runtime import guard
 from sightcircuit.sources import camera_helper
 
 REPORT_KIND = "camera_recognition"
+SCHEMA_VERSION = 2  # 2 adds the timebase, wall-clock times, marks, the target and the summaries (item L15).
 # The command's bounds (work-order item S7), inside the helper's own (``contract.LIMITS``: 90 s, 900 frames).
 MAX_SECONDS, MAX_FRAMES = 30, 300
 MAX_FPS = contract.LIMITS["fps"][1]
@@ -89,7 +110,7 @@ OPERATOR_TERMINAL = "operator_terminal"  # The report's ``confirmation`` once th
 
 
 def new_report(mode):
-    return {"report_kind": REPORT_KIND, "schema_version": 1, "mode": mode, "status": "not_started", "exit_code": 1,
+    return {"report_kind": REPORT_KIND, "schema_version": SCHEMA_VERSION, "mode": mode, "status": "not_started", "exit_code": 1,
             "cleanup_ok": True, "images_saved": False, "pixels_in_report": False, "display_started": False,
             "overlay_requested": False, "source_kind": "arcturus_camera_export", "live_input_verified": False,
             "camera_data": {"detections_are_camera_data": True, "statement": CAMERA_DATA_STATEMENT,
@@ -101,24 +122,35 @@ def new_report(mode):
             "confidence_is_calibrated_probability": False, "scope": SCOPE}
 
 
-def frame_record(frame, result, image, input_age_ms, processing_ms):
-    """One per-frame result: identity, timings, labels and up to ``MAX_LISTED_DETECTIONS`` boxes in detector pixels."""
-    return {"sequence": frame.sequence, "frame_set_sequence": frame.metadata.get("frame_set_sequence"),
-            "source_id": frame.source, "camera_index": frame.metadata.get("camera_index"),
-            "frame_id": frame.metadata.get("frame_id"), "observed_ns": frame.observed_ns,
-            "input_age_ms": round(input_age_ms, 3), "processing_ms": round(processing_ms, 3),
-            "inference_ms": round(result.inference_ms, 3), "labels": result.labels,
-            "detections": [item.as_dict() for item in result.detections][:MAX_LISTED_DETECTIONS],
-            "detection_count": len(result.detections), "native_size": [frame.width, frame.height],
-            "detector_input_size": [image.shape[1], image.shape[0]], "box_coordinate_space": DETECTOR_PIXELS}
+def frame_record(frame, result, image, input_age_ms, processing_ms, *, clock=None, target_label=None, threshold=0.0):
+    """One per-frame result: identity, timings, labels and up to ``MAX_LISTED_DETECTIONS`` boxes in detector pixels.
+
+    With a ``clock`` the acquire time also appears as UTC (``observed_utc_ns``,
+    derived) beside the helper's own realtime stamp; with a ``target_label``
+    the record carries ``target``, the best box of that label and its cell.
+    """
+    record = {"sequence": frame.sequence, "frame_set_sequence": frame.metadata.get("frame_set_sequence"),
+              "source_id": frame.source, "camera_index": frame.metadata.get("camera_index"),
+              "frame_id": frame.metadata.get("frame_id"), "observed_ns": frame.observed_ns,
+              "input_age_ms": round(input_age_ms, 3), "processing_ms": round(processing_ms, 3),
+              "inference_ms": round(result.inference_ms, 3), "labels": result.labels,
+              "detections": [item.as_dict() for item in result.detections][:MAX_LISTED_DETECTIONS],
+              "detection_count": len(result.detections), "native_size": [frame.width, frame.height],
+              "detector_input_size": [image.shape[1], image.shape[0]], "box_coordinate_space": DETECTOR_PIXELS}
+    if clock is not None:
+        record.update(observed_utc_ns=clock.utc(frame.observed_ns), helper_realtime_ns=frame.metadata.get("realtime_ns"))
+    if target_label is not None:
+        record["target"] = marks.target_of(result.detections, target_label, threshold, image.shape[1], image.shape[0])
+    return record
 
 
 class Processor(threading.Thread):
     """Takes the latest frame from the slot and runs the detector; stops once the slot is closed and empty."""
 
-    def __init__(self, slot, detector, threshold, max_age_ms=MAX_DISPLAY_AGE_MS):
+    def __init__(self, slot, detector, threshold, max_age_ms=MAX_DISPLAY_AGE_MS, *, clock=None, target_label=None):
         super().__init__(name="camera-recognize-processor", daemon=True)
         self.slot, self.detector, self.threshold, self.max_age_ms = slot, detector, threshold, max_age_ms
+        self.clock, self.target_label = clock, target_label
         self.timings = {name: TimingSample() for name in TIMINGS}
         self.records = []
         self.labels = set()
@@ -153,7 +185,8 @@ class Processor(threading.Thread):
                             ("inference_ms", result.inference_ms)):
             self.timings[name].add(value)
         self.labels.update(result.labels)
-        self.records.append(frame_record(frame, result, image, input_age_ms, processing_ms))
+        self.records.append(frame_record(frame, result, image, input_age_ms, processing_ms, clock=self.clock,
+                                         target_label=self.target_label, threshold=self.threshold))
 
     def report(self):
         return {name: sample.report() for name, sample in self.timings.items()}
@@ -189,7 +222,8 @@ def confirm_on_terminal(limits, cameras, *, stdin=None, output=None):
 
 
 def recognize(binary, limits, cameras, *, threshold=POC_THRESHOLD, detector=DEFAULT_DETECTOR, detector_factory=None,
-              extra_args=(), stop=None, timeout=None, confirmed=False):
+              extra_args=(), stop=None, timeout=None, confirmed=False, cues=(), mark_labels=(), key_fd=None,
+              target_label=None, terminal=None):
     """One bounded run: load the detector, export frames through the helper, detect on the latest; return the report.
 
     ``detector`` names a ``DETECTORS`` entry; an injected ``detector_factory``
@@ -201,8 +235,23 @@ def recognize(binary, limits, cameras, *, threshold=POC_THRESHOLD, detector=DEFA
     ``error``), or ``cleanup_failed``. ``confirmed`` is the terminal
     confirmation's result (``confirm_on_terminal``), passed to the helper as
     ``--parent-confirmed``; the report's ``confirmation`` names it.
+
+    ``cues`` are ``(offset_ms, label)`` and ``mark_labels`` the key-mark
+    labels, both from ``marks.VOCABULARY`` (anything else is a ``ValueError``
+    before anything is loaded); ``key_fd`` is the terminal descriptor Enter
+    presses are read from during the export, or ``None`` for no key marks;
+    ``terminal`` is where a due cue is announced (stderr by default).
+    ``target_label`` needs a single camera (else ``ValueError``: the cell and
+    coverage tallies never pool two cameras) and must be one of the loaded
+    detector's classes, else the run ends ``error``/``target_label_unknown``
+    before the helper is launched; the report names it only once validated.
     """
+    cues, mark_labels = marks.check_cues(cues), marks.check_mark_labels(mark_labels)
+    if target_label is not None and len(tuple(cameras)) != 1:
+        raise ValueError("a target label needs a single camera")
+    clock = marks.Clock()
     report = new_report("recognize")
+    report.update(timebase=clock.report(), run_started=clock.stamp(clock.monotonic_ns), target_label=None)
     report["confirmation"] = OPERATOR_TERMINAL if confirmed else None
     report.update(seconds_requested=limits.get("max_seconds"), max_frames_requested=limits.get("max_frames"),
                   fps_requested=limits.get("fps"), cameras_requested=list(cameras), threshold=threshold,
@@ -214,24 +263,61 @@ def recognize(binary, limits, cameras, *, threshold=POC_THRESHOLD, detector=DEFA
         return report
     if detector_factory is None:
         report["detector"] = describe(model)
+    if target_label is not None and target_label not in model.classes:
+        report.update(status="error", reason="target_label_unknown", phase="closed")
+        return report
+    report["target_label"] = target_label
     slot = LatestSlot()
-    processor = Processor(slot, model, threshold)
+    processor = Processor(slot, model, threshold, clock=clock, target_label=target_label)
+    session = marks.MarkSession(clock, cues, mark_labels, key_fd, sys.stderr if terminal is None else terminal)
+
+    def on_frame(frame):
+        session.first_frame(frame.observed_ns)
+        slot.put(frame)
     processor.start()
     report["phase"] = "exporting"
     started = time.monotonic()
     try:
-        captured = camera_helper.run_export(binary, limits, cameras, on_frame=slot.put, stop=stop, extra_args=extra_args,
+        session.start()
+        captured = camera_helper.run_export(binary, limits, cameras, on_frame=on_frame, stop=stop, extra_args=extra_args,
                                             timeout=timeout, confirmed=confirmed)
     finally:
+        returned_ns = time.monotonic_ns()
+        session.stop()
         slot.close()
         processor.join(PROCESSOR_JOIN_SECONDS)
     report["elapsed_seconds"] = round(time.monotonic() - started, 3)
-    return finish(report, captured, processor, slot)
+    return finish(report, captured, processor, slot, clock=clock, session=session, returned_ns=returned_ns)
 
 
-def finish(report, captured, processor, slot):
+def measurements(captured, processor, clock, session, returned_ns):
+    """The report's L15 fields: the run's times, the marks and the counts-only summaries (``marks.summarize``)."""
+    stream = captured.get("stream") or {}
+    end_ns = stream.get("end_received_monotonic_ns")
+    helper_end = None
+    if end_ns is not None and stream.get("end") is not None:
+        helper_end = dict(clock.stamp(end_ns), reason=stream["end"]["reason"])
+    recorded = session.marks()
+    with_target = processor.target_label is not None
+    fields = {"first_frame": None if session.origin_ns is None else clock.stamp(session.origin_ns),
+              "helper_end": helper_end, "export_returned": clock.stamp(returned_ns), "marks": session.report(),
+              "summary": marks.summarize(processor.records, recorded, origin_ns=session.origin_ns,
+                                         run_end_ns=returned_ns if end_ns is None else end_ns, helper_end=helper_end,
+                                         with_target=with_target)}
+    if with_target:
+        fields["target"] = {"label": processor.target_label, "threshold": processor.threshold,
+                            "frames_with_target": sum(1 for record in processor.records if record["target"]["present"]),
+                            "cell_thresholds": list(marks.CELL_THRESHOLDS), "cell_frame": "image_as_exported",
+                            "orientation_statement": marks.ORIENTATION_STATEMENT}
+    return fields
+
+
+def finish(report, captured, processor, slot, *, clock=None, session=None, returned_ns=None):
     """Fold the source report and the processor's results into the command's report; set status and exit code."""
     timings = processor.report()
+    if clock is not None and session is not None:
+        report.update(measurements(captured, processor, clock, session, returned_ns))
+        report["timebase"] = clock.report()
     report.update(capture=captured, frames_received=captured["frames_read"], frames_processed=len(processor.records),
                   stale_inputs_skipped=processor.stale, pending_frames_replaced=slot.replaced,
                   labels_seen=sorted(processor.labels), detections=processor.records,
@@ -338,11 +424,24 @@ def main(argv=None):
     parser.add_argument("--helper-arg", action="append", default=[], metavar="ARG",
                         help="An extra argument for the helper after the contract ones (a fake build's --fake-scenario)")
     parser.add_argument("--report", type=Path, help="New .json file for the report; saving it is your action (Camera Data)")
+    parser.add_argument("--cue", action="append", default=[], metavar="SECONDS:LABEL",
+                        help="Print LABEL with a bell SECONDS after the first frame and record the mark; repeatable, "
+                             f"rising times; labels: {', '.join(marks.VOCABULARY)}")
+    parser.add_argument("--key-marks", action="store_true",
+                        help=f"Record a mark ({marks.KEY_LABEL}) for each Enter on the terminal during the run; "
+                             "without this or --mark-labels the terminal is not read after the confirmation")
+    parser.add_argument("--mark-labels", default="", metavar="LABEL,LABEL",
+                        help="Labels, from the same list, that successive Enter presses during the run record; "
+                             f"further presses record {marks.KEY_LABEL}; implies --key-marks")
+    parser.add_argument("--target-label", metavar="CLASS",
+                        help="A class of the chosen detector to summarize: windows, coverage, cells (counts only); "
+                             "needs a single camera")
     args = parser.parse_args(argv)
     if not math.isfinite(args.threshold) or not 0 <= args.threshold <= 1:
         parser.error("--threshold must be between zero and one")
     if args.validate:
-        if args.allow_camera_input or args.helper or args.seconds or args.max_frames:
+        if (args.allow_camera_input or args.helper or args.seconds or args.max_frames or args.cue or args.mark_labels or
+                args.key_marks or args.target_label):
             parser.error("--validate takes no run arguments")
         report = validate()
     else:
@@ -351,6 +450,15 @@ def main(argv=None):
         if args.helper is None or args.seconds is None or args.max_frames is None:
             parser.error("--helper, --seconds and --max-frames are required")
         limits = {"fps": args.fps, "max_seconds": args.seconds, "max_frames": args.max_frames}
+        try:
+            cues = marks.check_cues(marks.parse_cue(text, args.seconds) for text in args.cue)
+            mark_labels = marks.check_mark_labels(item for item in args.mark_labels.split(",") if args.mark_labels)
+        except ValueError as error:
+            parser.error(str(error))
+        if args.target_label is not None and args.target_label not in class_names(args.detector):
+            parser.error(f"--target-label must be a class of {args.detector}: {', '.join(class_names(args.detector))}")
+        if args.target_label is not None and len(args.cameras) != 1:
+            parser.error("--target-label needs a single camera (--cameras 0 or 1), so no tally pools the two")
         report = new_report("recognize")
         report.update(confirmation=None, seconds_requested=args.seconds, max_frames_requested=args.max_frames,
                       fps_requested=args.fps, cameras_requested=list(args.cameras))
@@ -361,7 +469,10 @@ def main(argv=None):
                     report.update(status="error", reason=refusal, phase="closed")
                 else:
                     report = recognize(args.helper, limits, args.cameras, threshold=args.threshold,
-                                       detector=args.detector, extra_args=args.helper_arg, confirmed=True)
+                                       detector=args.detector, extra_args=args.helper_arg, confirmed=True,
+                                       cues=cues, mark_labels=mark_labels,
+                                       key_fd=marks.terminal_fd() if args.key_marks or mark_labels else None,
+                                       target_label=args.target_label)
             except guard.CANCELLATION as error:
                 guard.cancelled(report, error)
     if args.report is not None:  # The operator's explicit action to save Camera Data; the file names itself.
