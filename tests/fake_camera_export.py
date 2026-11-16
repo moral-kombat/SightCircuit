@@ -2,7 +2,7 @@
 
 Run as a program with the helper's export arguments (``--export-frames --fps F
 --max-seconds S --max-frames M --cameras 0,1 --parent-confirmed``; without the
-confirmation flag it refuses with exit 5 as the helper does) it writes a camera export v1
+confirmation flag it refuses with exit 5 as the helper does) it writes a camera export v2
 stream on stdout and JSON diagnostic lines on stderr, paced at ``fps`` with
 real host clocks, ending on the frame or time bound (or on SIGTERM/SIGINT
 with reason ``stop_signal`` and exit 130, as the helper does). ``--fake-scenario``
@@ -17,7 +17,11 @@ other limits in ``ready``, ``stderr_noise`` adds non-JSON and many JSON lines
 on stderr, ``exit_failure`` ends normally but exits 1, ``headset_removed``
 ends early with that reason, ``stale_clock`` stamps every frame five
 seconds in the past, ``undecided`` writes a ready with pixel path
-``undecided`` and an end of reason ``watchdog`` with no frame. The tests install it as an executable file
+``undecided`` and an end of reason ``watchdog`` with no frame. ``--fake-clock virtual``
+is the time control: the pacing and the time bound are counted in frame
+periods (``1 / fps`` each) without sleeping, so a 90-second run at 5 frames a
+second writes its 450 frames and ends ``max_seconds`` in well under a second;
+frames are still stamped with the real host clock. The tests install it as an executable file
 outside the checkout and point ``camera_helper.run_export`` at it. Never a
 camera, never the SDK.
 """
@@ -98,6 +102,7 @@ def parse(argv):
     parser.add_argument("--cameras", default="0,1")
     parser.add_argument("--parent-confirmed", action="store_true")
     parser.add_argument("--fake-scenario", default="valid")
+    parser.add_argument("--fake-clock", choices=("real", "virtual"), default="real")
     parser.add_argument("--width", type=int, default=fake_export.WIDTH)
     parser.add_argument("--height", type=int, default=fake_export.HEIGHT)
     parser.add_argument("--stride", type=int, default=None)
@@ -140,11 +145,13 @@ def main(argv=None):
         sys.stderr.write("x" * 9000 + "\n")
         for index in range(300):
             note("outcome", call="acquire", outcome="ok", pass_number=index)
+    virtual = args.fake_clock == "virtual"
+    elapsed_periods = 0  # Virtual clock: frame periods counted instead of slept.
     started = time.monotonic()
     deadline = started + limits["max_seconds"]
     exported, reason = 0, "max_frames"
     while exported < limits["max_frames"]:
-        if time.monotonic() >= deadline:
+        if elapsed_periods >= limits["max_seconds"] * limits["fps"] if virtual else time.monotonic() >= deadline:
             reason = "max_seconds"
             break
         if stopper.poll():
@@ -160,7 +167,8 @@ def main(argv=None):
         if scenario == "headset_removed" and exported == 2:
             reason = "headset_removed"
             break
-        if stopper.wait(1 / limits["fps"]):
+        elapsed_periods += 1
+        if stopper.poll() if virtual else stopper.wait(1 / limits["fps"]):
             reason = "stop_signal"
             break
     if scenario == "no_end":
