@@ -1,4 +1,4 @@
-"""Write or check tools/camera_export_protocol.hpp, the native copy of camera export v1."""
+"""Write or check tools/camera_export_protocol.hpp, the native copy of camera export v2."""
 import argparse
 from pathlib import Path
 import sys

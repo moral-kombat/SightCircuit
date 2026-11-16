@@ -8,8 +8,10 @@ only after the acceptance rows it names pass on the headset
 (``docs/live-capture.md#edge-hud-acceptance-gates``); it is never a new
 condition at a single call site.
 
-Outside these gates: recorded-replay output on the VR panel (E47) and bounded
-SteamVR mirror recognition without display (E48) are confirmed device uses.
+Outside these gates: recorded-replay output on the VR panel (E47), bounded
+SteamVR mirror recognition without display (E48) and bounded SDK camera
+recognition without display (E99, the owner's classification of 2026-11-09)
+are confirmed device uses. Showing camera-derived labels is not among them.
 """
 from dataclasses import dataclass
 

@@ -1,5 +1,10 @@
 # Measure the fallback's device terms with the calibration marker
 
+> **Mirror route, not current (2026-11-16).** The owner adopted the SDK camera as the
+> live display's input ([camera display work order](../live-capture.md#camera-display-work-order-adopted-2026-11-16));
+> step F3 was cancelled without a run and no device work is planned on this procedure. It is kept as a record until
+> lane R retires it.
+
 This is the operator procedure for work-order step F3, the device measurements
 of the [fallback input design](../reference/hud-fallback.md#device-evidence-needed):
 the hide-to-absence latency B, the hidden-event delivery, the loopback's repeat

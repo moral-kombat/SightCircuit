@@ -7,9 +7,9 @@
 namespace sightcircuit_camera_export {
 
 // Packet prefix: sightcircuit.camera.contract PREFIX_FIELDS, little-endian
-constexpr char kProtocol[] = "camera-export/1";
+constexpr char kProtocol[] = "camera-export/2";
 constexpr char kMagic[] = "SCCF";
-constexpr std::uint32_t kVersion = 1;
+constexpr std::uint32_t kVersion = 2;
 constexpr std::uint32_t kPrefixMagicOffset = 0;
 constexpr std::uint32_t kPrefixVersionOffset = 4;
 constexpr std::uint32_t kPrefixHeaderBytesOffset = 8;
@@ -54,7 +54,7 @@ constexpr char kBoundedEndReasons[] = "max_seconds,max_frames,stop_signal";
 constexpr char kConfirmationParent[] = "parent";
 constexpr char kConfirmationTerminal[] = "terminal";
 constexpr char kParentConfirmedFlag[] = "--parent-confirmed";
-constexpr char kExportNotice[] = "sightcircuit-camera-helper --export-frames: activates this client's frame reader for the selected passthrough cameras and exports their frames, within the frame and time bounds shown below, to the parent process, which runs object detection on them. Detections are Camera Data: the parent saves counts, labels, boxes and timings only to the report you name, and no image is saved or shown anywhere. No camera control is written and the recording LED is untouched. The export ends on its bound, on a stop signal, when the headset is removed or on standby. Watch passthrough during the run and for 30 seconds afterwards. Type yes to continue.";
+constexpr char kExportNotice[] = "sightcircuit-camera-helper --export-frames: activates this client's frame reader for the selected passthrough cameras and exports their frames, within the frame and time bounds shown below, to the parent process, which runs object detection on them. Detections are Camera Data. A recognition command saves counts, labels, boxes and timings only to the report you name and shows nothing; a display command shows labels and approximate arrows in the headset and saves nothing. Neither saves an image and neither shows a camera image. No camera control is written and the recording LED is untouched. The export ends on its bound, on a stop signal, when the headset is removed or on standby. Watch passthrough during the run and for 30 seconds afterwards. Type yes to continue.";
 
 // Frames: delivered format, bounds, cameras
 constexpr char kFourcc[] = "BGR3";
@@ -86,10 +86,10 @@ constexpr char kSha256HexPattern[] = "[0-9a-f]{64}";
 constexpr std::uint32_t kMinFps = 1;
 constexpr std::uint32_t kMaxFps = 10;
 constexpr std::uint32_t kMinSeconds = 1;
-constexpr std::uint32_t kMaxSeconds = 60;
+constexpr std::uint32_t kMaxSeconds = 90;
 constexpr std::uint32_t kMinFrames = 1;
-constexpr std::uint32_t kMaxFrames = 600;
+constexpr std::uint32_t kMaxFrames = 900;
 
 // SHA-256 of every value above; the helper may report it in ready.build.
-constexpr char kContractDigest[] = "4553fa4af27c7b5220d0024c6ad85c5e13bba7a20052b03b4cf1b6e0127a891c";
+constexpr char kContractDigest[] = "ce91ee49dbb39a677af08a9bec87bdd63a75767bb4a95e21b8132857f46bfcec";
 } // namespace sightcircuit_camera_export

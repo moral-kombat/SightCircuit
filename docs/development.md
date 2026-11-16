@@ -261,11 +261,11 @@ table and never touches a camera; the helper tests build it again into a
 temporary directory. Besides the metadata modes, the helper has
 `--export-frames`, which delivers BGR3 frames of the cameras named by
 `--cameras 0|1|0,1` to its parent process over stdout as packets of the camera
-export protocol (version 1; `tools/camera_export_protocol.hpp` is the header
+export protocol (version 2; `tools/camera_export_protocol.hpp` is the header
 the S7 camera contract generates, taken as is and pinned by
 `tests/test_camera_export.py`),
-paced at 1 to 10 frames a second by dropping frame sets, for at most 60 seconds
-or 600 frames, and ends on its own when frames stop (the headset removed, by
+paced at 1 to 10 frames a second by dropping frame sets, for at most 90 seconds
+or 900 frames (version 2's bounds; version 1 had 60 and 600), and ends on its own when frames stop (the headset removed, by
 inference from a two-second gap), when the camera service reports not ready or
 unavailable (standby), or when the parent stops reading the pipe for two
 seconds (`consumer_stalled`; the writes are non-blocking and deadline-aware).
@@ -501,7 +501,7 @@ See [Generated HUD contract header](reference/hud-development.md#generated-hud-c
 `sightcircuit/camera/contract.py` by `python3 scripts/camera_contract_header.py --write`
 (`--check` fails when it is stale; CI runs the check) through the renderer
 both contract headers share, `sightcircuit/native_header.py`. The
-[camera recognition guide](guides/camera-recognize.md#the-wire-protocol-camera-export-v1)
+[camera recognition guide](guides/camera-recognize.md#the-wire-protocol-camera-export-v2)
 describes the protocol; `tests/test_camera_contract.py` pins the header.
 
 ## Camera helper build (lane S, 2026-11-09)

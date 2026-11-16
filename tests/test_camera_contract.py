@@ -1,4 +1,4 @@
-"""Camera export v1 as data: the contract module, its generated header and the header script.
+"""Camera export v2 as data: the contract module, its generated header and the header script.
 
 Standard library only; nothing here opens a camera or builds the helper.
 """
@@ -17,16 +17,27 @@ from sightcircuit.hud import native as hud_native  # noqa: E402
 
 HEADER = ROOT / "tools/camera_export_protocol.hpp"
 
+# The wearer-facing notice of camera export v2, in full. Changing it is a contract change (the digest follows).
+EXPORT_NOTICE_V2 = (
+    "sightcircuit-camera-helper --export-frames: activates this client's frame reader for the selected passthrough "
+    "cameras and exports their frames, within the frame and time bounds shown below, to the parent process, which runs "
+    "object detection on them. Detections are Camera Data. A recognition command saves counts, labels, boxes and "
+    "timings only to the report you name and shows nothing; a display command shows labels and approximate arrows in "
+    "the headset and saves nothing. Neither saves an image and neither shows a camera image. No camera control is "
+    "written and the recording LED is untouched. The export ends on its bound, on a stop signal, when the headset is "
+    "removed or on standby. Watch passthrough during the run and for 30 seconds afterwards. Type yes to continue.")
+
 
 class ContractTests(unittest.TestCase):
     def test_prefix_layout_is_sixteen_little_endian_bytes(self):
         self.assertEqual(contract.PREFIX_FORMAT, "<4sIII")
         self.assertEqual(contract.PREFIX_BYTES, 16)
         self.assertEqual(contract.MAGIC, b"SCCF")
-        self.assertEqual(contract.VERSION, 1)
+        self.assertEqual(contract.VERSION, 2)
+        self.assertEqual(contract.PROTOCOL, "camera-export/2")
         prefix = contract.pack_prefix(5, 7)
-        self.assertEqual(prefix, b"SCCF" + struct.pack("<III", 1, 5, 7))
-        self.assertEqual(contract.unpack_prefix(prefix), (b"SCCF", 1, 5, 7))
+        self.assertEqual(prefix, b"SCCF" + struct.pack("<III", 2, 5, 7))
+        self.assertEqual(contract.unpack_prefix(prefix), (b"SCCF", 2, 5, 7))
         with self.assertRaises(ValueError):
             contract.unpack_prefix(prefix[:-1])
 
@@ -42,6 +53,9 @@ class ContractTests(unittest.TestCase):
         self.assertTrue(contract.EXPORT_NOTICE.startswith("sightcircuit-camera-helper --export-frames:"))
         self.assertIn("Camera Data", contract.EXPORT_NOTICE)
         self.assertIn("30 seconds afterwards", contract.EXPORT_NOTICE)
+        # The whole text, pinned (item L4): one notice true for recognition without display and for display.
+        self.assertEqual(contract.EXPORT_NOTICE, EXPORT_NOTICE_V2)
+        self.assertNotIn("no image is saved or shown anywhere", contract.EXPORT_NOTICE)  # The v1 sentence.
         self.assertTrue(set(contract.BOUNDED_END_REASONS) <= set(contract.END_REASONS))
         self.assertEqual(contract.DERIVATIONS, {"cpu_linear": "cpu_converted", "gpu_convert": "gpu_converted"})
         self.assertEqual(tuple(contract.DERIVATIONS), contract.PIXEL_PATHS)
@@ -49,7 +63,10 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn(contract.PIXEL_PATH_UNDECIDED, contract.DERIVATIONS)
         ready = {field.name: field for field in contract.HEADERS["ready"]}
         self.assertEqual(ready["pixel_path"].choices, ("cpu_linear", "gpu_convert", "undecided"))
-        self.assertEqual(contract.LIMITS, {"fps": (1, 10), "max_seconds": (1, 60), "max_frames": (1, 600)})
+        self.assertEqual(contract.LIMITS, {"fps": (1, 10), "max_seconds": (1, 90), "max_frames": (1, 900)})
+        frame = {field.name: field for field in contract.HEADERS["frame"]}
+        self.assertEqual((frame["sequence"].minimum, frame["sequence"].maximum), (1, 900))  # Follows LIMITS.
+        self.assertEqual((ready["protocol"].minimum, ready["protocol"].maximum), (2, 2))
         self.assertEqual(contract.MAX_SIDE, 4096)
         self.assertEqual(contract.source_id(0), "arcturus_camera_left")
         self.assertEqual(contract.source_id(1), "arcturus_camera_right")
@@ -95,9 +112,9 @@ class HeaderTests(unittest.TestCase):
 
     def test_every_contract_value_reaches_the_header(self):
         text = native.header_text()
-        for name, value in (("kMagic", '"SCCF"'), ("kVersion", "1"), ("kPrefixBytes", "16"),
+        for name, value in (("kMagic", '"SCCF"'), ("kVersion", "2"), ("kProtocol", '"camera-export/2"'), ("kPrefixBytes", "16"),
                             ("kMaxHeaderBytes", "16384"), ("kMaxPayloadBytes", "33554432"), ("kFourcc", '"BGR3"'),
-                            ("kMaxSide", "4096"), ("kMaxFrames", "600"), ("kMaxSeconds", "60"), ("kMaxFps", "10"),
+                            ("kMaxSide", "4096"), ("kMaxFrames", "900"), ("kMaxSeconds", "90"), ("kMaxFps", "10"),
                             ("kMinFps", "1"), ("kCameraCount", "2"), ("kSourceIdLeft", '"arcturus_camera_left"')):
             with self.subTest(name=name):
                 self.assertIn(f" {name}[] = {value};" if value.startswith('"') else f" {name} = {value};", text)
@@ -130,7 +147,7 @@ class HeaderTests(unittest.TestCase):
             header = Path(temporary) / "camera_export_protocol.hpp"
             header.write_text(HEADER.read_text())
             self.assertEqual(command.main(["--check", "--header", str(header)]), 0)
-            header.write_text(header.read_text().replace("kMaxFrames = 600", "kMaxFrames = 601"))
+            header.write_text(header.read_text().replace("kMaxFrames = 900", "kMaxFrames = 901"))
             self.assertEqual(command.main(["--check", "--header", str(header)]), 1)
             self.assertEqual(command.main(["--write", "--header", str(header)]), 0)
             self.assertEqual(header.read_text(), native.header_text())
