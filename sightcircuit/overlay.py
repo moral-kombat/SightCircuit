@@ -71,10 +71,10 @@ def observed_frame_packet(frame_id, observed_ns, expires_ns, width, height, rgba
     increases with every new frame, and a retransmission repeats all three
     numbers. The deadline may not be later than ``observed_ns +
     MAX_DISPLAY_AGE_NS``: the bridge refuses one that is, so only a newer
-    observation renews a deadline. No client here sends this packet: the
-    validation bridge and the ``--fixed-hud`` bridge mode take it, and
-    ``OverlayClient`` starts neither with it. Its sender arrives with the
-    camera display's later items, behind their scope record.
+    observation renews a deadline. The validation bridge and the bridge's
+    fixed-HUD mode take it. Nothing in this module sends it: its only sender
+    is ``sightcircuit.observed_frames.ObservedFrameClient`` (work-order item
+    L8), and ``OverlayClient`` starts neither mode with it.
     """
     for value in (frame_id, observed_ns, expires_ns):
         if type(value) is not int or not 0 <= value < 2 ** 64:
@@ -208,6 +208,12 @@ def transition_outcome(cycle, visible, lines, ended=None):
                              call, tuple(own))
 
 
+# The scalar fields of an ``OverlayClient.close()`` report, for a caller that repeats them in its own report.
+CLOSE_REPORT_FIELDS = ("requested", "validation_only", "physical_display_recovery_verified", "frames_sent",
+                       "forced_termination", "stop_requested", "escalated", "worker_reaped", "worker_exit_code",
+                       "transport_threads_stopped", "cleanup_confirmed")
+
+
 def bridge_closed_cleanly(report):
     """The one "bridge closed cleanly" check for an ``OverlayClient.close()`` report.
 
@@ -309,6 +315,9 @@ class OverlayClient:
                 self.visibility_cycles_dropped += 1
             self.visibility_condition.notify_all()
 
+    def _line(self, message):
+        """Called on the reader thread with each line of the bridge before it is acted on; raising fails the client."""
+
     def start(self):
         if not self.binary.is_file() or not os.access(self.binary, os.X_OK):
             raise RuntimeError("Overlay bridge missing; run bash scripts/build_overlay_bridge.sh")
@@ -337,6 +346,7 @@ class OverlayClient:
                 if not line.endswith(b"\n"):
                     raise RuntimeError("Oversized overlay bridge diagnostic")
                 message = json.loads(line)
+                self._line(message)
                 event = message.get("event")
                 if event == "ready":
                     if (message.get("validation_only") != self.validation_only or

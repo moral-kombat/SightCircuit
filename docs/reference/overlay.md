@@ -125,7 +125,8 @@ Expiry is separate from the three/ten-second transport timeouts.
 
 Both Python and the bridge reject opcode 4 for real output. The one
 real-output mode with expiry, [`--fixed-hud`](#fixed-hud-mode-work-order-item-l7-2026-11-16),
-takes opcode 6 instead, and no Python client starts it. Existing replay opcode
+takes opcode 6 instead; its client refuses to start it
+([camera HUD reference](camera-hud.md#the-observed-frame-client)). Existing replay opcode
 1 and paused-replay behavior remain available under their existing
 authorization. A stalled native process, blocked API call or stuck kernel I/O
 can prevent timely expiry, and no real-time bound or headset hide result is
@@ -186,6 +187,24 @@ arrives (`FrameDeadline::judge` in `tools/overlay_frame.hpp`):
 | its deadline already passed | expired on arrival: refused, counted in `stale_frames_dropped`, never uploaded; the tile presented keeps its own deadline |
 | otherwise | uploaded and presented |
 
+The bridge answers every observed frame with one line (work-order item L8):
+
+- `frame_presented` once its pixels are presented: `frame_id`,
+  `frame_observed_ns`, `deadline_ns`, `presented_ns` and `visible`. In real
+  output `presented_ns` is read after `SetOverlayRaw` and the show-or-hide
+  call have returned; it is the return of the runtime's calls, never a
+  display time. `visible` is false when the tile was taken down by a hide
+  request and waits for a show.
+- `frame_refused` otherwise: `frame_id`, `frame_observed_ns`, `refused_ns`
+  and `reason`, one of `stale`, `expired_on_arrival`, `retransmission` and
+  `expired_before_show` (its deadline passed during the upload; the
+  `frame_expired` line with that outcome precedes it).
+
+The validation bridge writes the same lines and, for an observed frame
+within its deadline, now answers a show request `ok` true (`call` `none`),
+as it would have an image to show; frames of opcodes `1` and `4` get neither
+line and are answered `no_image` as before.
+
 A deadline is therefore renewed only by a frame with a newer identity, and
 never beyond one second after what that frame says it observed. A producer
 whose send loop outlives its detector, re-sending one observation under new
@@ -199,7 +218,7 @@ The validation bridge takes opcode `6` under the same rules, and still takes
 opcode `4` exactly as before, bounded at one second from arrival; the
 synthetic pipeline and its ledger are unchanged.
 `sightcircuit.overlay.observed_frame_packet` encodes the packet and refuses
-what the bridge would; no client sends it yet.
+what the bridge would; `ObservedFrameClient` (L8) is its only sender.
 
 ### Expiry
 
@@ -258,8 +277,12 @@ not what the headset displayed.
 **Python stays the outer guard.** `OverlayClient` starts `--validate-stdin` or
 `--stdin` and nothing else, and `submit_frame(expires_ns=...)` and
 `freeze_settings` still refuse real output through `LIVE_HUD_OUTPUT`, whatever
-a bridge reports. A client for this mode arrives with the later work-order
-items (L8 to L10), behind their scope record.
+a bridge reports. The mode's client, `ObservedFrameClient` (L8, the
+[camera HUD reference](camera-hud.md#the-observed-frame-client)), starts the
+validation bridge and refuses to start this mode through the same gate; the
+scope record that could permit one run arrives with L10. While its tile is
+taken down that client's keepalive is a hide request, not the show described
+above, so that it cannot bring back a tile that has not reached its deadline.
 
 **The Frame's bridge.** The binary on the Frame predates this mode and rejects
 `--fixed-hud` as an unknown mode (exit 64). Rebuilding it there

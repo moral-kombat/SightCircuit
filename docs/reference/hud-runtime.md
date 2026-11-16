@@ -258,6 +258,7 @@ of concept). At most 128 detections are accepted per frame.
   direction. Identity is the default, not a finding.
 
 The selector opens no gate and displays nothing. A runner that shows its rows
-remains subject to `sightcircuit/gates.py`. Its tests
+remains subject to `sightcircuit/gates.py`; the stage that sends its tiles to
+the bridge is the [camera HUD stage](camera-hud.md). Its tests
 (`tests/test_hud_camera_rows.py`) are cloud runs on generated detections, not
 Frame evidence.

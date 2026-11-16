@@ -261,14 +261,33 @@ void stream(Overlay& overlay, StreamMode mode, Json::Value& report) {
             // The frame is observed here. Anything but Present is refused before a pixel is uploaded, and the
             // frame already presented keeps its own deadline.
             const auto arrival = deadline.judge(frame, expiring, monotonic_ns());
+            const auto judged_ns = monotonic_ns();
             if (expiring) count("expiring_frames_received");
             if (frame.observed) count("observed_frames_received");
-            if (arrival == Arrival::Retransmission) { count("frames_retransmitted"); continue; }
-            if (arrival != Arrival::Present) { count("stale_frames_dropped"); continue; }
+            // An observed frame that is not presented is answered with the reason, so its sender never has to
+            // assume what became of it.
+            const auto refused = [&](const char* reason, std::uint64_t at) {
+                if (frame.observed) emit_frame_refused(frame.frame_id, frame.observed_ns, reason, at, validate);
+            };
+            if (arrival == Arrival::Retransmission) {
+                count("frames_retransmitted"); refused("retransmission", judged_ns); continue;
+            }
+            if (arrival != Arrival::Present) {
+                count("stale_frames_dropped");
+                refused(arrival == Arrival::Stale ? "stale" : "expired_on_arrival", judged_ns);
+                continue;
+            }
             count("frames_received");
             if (validate) {
                 deadline.commit(frame, expiring);
                 current = true;
+                if (frame.observed) {
+                    // Validation presents nothing, but keeps the state a show request is answered from, as the
+                    // expiry already clears it: an observed frame within its deadline can be shown.
+                    overlay.has_image = true;
+                    emit_frame_presented(frame.frame_id, frame.observed_ns, frame.expiry, monotonic_ns(), visible,
+                                         validate);
+                }
             } else if (!expiring) {
                 sightcircuit_overlay::dispatch_frame(overlay, frame);
                 deadline.commit(frame, expiring);
@@ -287,10 +306,14 @@ void stream(Overlay& overlay, StreamMode mode, Json::Value& report) {
                     deadline.expiry = 0;
                     count("frames_expired_in_upload");
                     expired(frame.expiry, now, "expired_before_show", true, &frame);
+                    refused("expired_before_show", monotonic_ns());
                 } else {
                     deadline.commit(frame, expiring);
                     overlay.present();
                     current = true;
+                    if (frame.observed)
+                        emit_frame_presented(frame.frame_id, frame.observed_ns, frame.expiry, monotonic_ns(), visible,
+                                             validate);
                 }
             }
             if (!validate) report["frames_submitted"] = report["frames_received"];

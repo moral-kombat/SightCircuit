@@ -154,6 +154,24 @@ void emit_first_frame(bool validate, std::uint32_t width, std::uint32_t height) 
     first["width"] = width; first["height"] = height;
     emit(first);
 }
+void emit_frame_presented(std::uint64_t frame_id, std::uint64_t frame_observed_ns, std::uint64_t deadline_ns,
+                          std::uint64_t presented_ns, bool visible, bool validate) {
+    // visible is whether the tile was asked to be up when the frame was presented: false after a hide request,
+    // until a show request. presented_ns is when the bridge's calls returned, not when anything was displayed.
+    Json::Value line;
+    line["event"] = "frame_presented"; line["frame_id"] = Json::UInt64(frame_id);
+    line["frame_observed_ns"] = Json::UInt64(frame_observed_ns); line["deadline_ns"] = Json::UInt64(deadline_ns);
+    line["presented_ns"] = Json::UInt64(presented_ns); line["visible"] = visible; line["validation_only"] = validate;
+    emit(line);
+}
+void emit_frame_refused(std::uint64_t frame_id, std::uint64_t frame_observed_ns, const char* reason,
+                        std::uint64_t refused_ns, bool validate) {
+    Json::Value line;
+    line["event"] = "frame_refused"; line["frame_id"] = Json::UInt64(frame_id);
+    line["frame_observed_ns"] = Json::UInt64(frame_observed_ns); line["reason"] = reason;
+    line["refused_ns"] = Json::UInt64(refused_ns); line["validation_only"] = validate;
+    emit(line);
+}
 namespace {
 Json::Value visibility_line(const char* name, std::uint32_t cycle, bool validate) {
     Json::Value line;
