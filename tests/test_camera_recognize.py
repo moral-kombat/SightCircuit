@@ -7,9 +7,11 @@ without them (the replay environment runs them without skipping in CI). The
 validate-mode and argument tests are standard library only. No camera, no
 SDK, no display, no file but the report a test names.
 """
+import io
 import json
 import os
 from pathlib import Path
+import select
 import signal
 import sys
 import tempfile
@@ -91,7 +93,7 @@ ALLOWED_NAMES = {"cell_frame"}
 def closed_strings():
     """Every string an L15 field may hold: vocabulary, sources, cells, end reasons, classes and declared constants."""
     allowed = {*marks.VOCABULARY, marks.KEY_LABEL, *marks.SOURCES, *marks.CELLS, *marks.COLUMNS, *marks.ROWS,
-               marks.RUN_END, *contract.END_REASONS, *marks.TIMEBASE.values(), marks.ORIENTATION_STATEMENT,
+               marks.RUN_END, *marks.BOUNDARIES, *contract.END_REASONS, *marks.TIMEBASE.values(), marks.ORIENTATION_STATEMENT,
                "image_as_exported", "OSError", "ValueError"}
     for name in DETECTORS:
         allowed.update(class_names(name))
@@ -190,7 +192,7 @@ class ValidateModeTests(unittest.TestCase):
 
     def test_validate_takes_no_run_arguments(self):
         for extra in (["--allow-camera-input"], ["--helper", "/h"], ["--seconds", "1"], ["--max-frames", "1"],
-                      ["--cue", "1:near"], ["--mark-labels", "near"], ["--target-label", "bottle"]):
+                      ["--cue", "1:near"], ["--mark-labels", "near"], ["--key-marks"], ["--target-label", "bottle"]):
             with self.subTest(extra=extra), self.assertRaises(SystemExit) as caught:
                 run_main(["--validate", *extra])
             self.assertEqual(caught.exception.code, 2)
@@ -243,14 +245,14 @@ class ArgumentTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, 2)
 
     def test_marks_outside_the_vocabulary_and_unknown_targets_are_refused_before_anything_runs(self):
-        base = ["--allow-camera-input", "--helper", "/h", "--seconds", "10", "--max-frames", "10"]
+        base = ["--allow-camera-input", "--helper", "/h", "--seconds", "10", "--max-frames", "10", "--cameras", "0"]
         for extra in (["--cue", "5:bottle"], ["--cue", "5:mark"], ["--cue", "5:the wearer sneezed"], ["--cue", "near"],
                       ["--cue", "5"], ["--cue", "11:near"], ["--cue", "-1:near"], ["--cue", "5:near", "--cue", "5:far"],
                       ["--cue", "6:near", "--cue", "5:far"], ["--cue", "5:NEAR"], ["--cue", "5:near;rm"],
                       ["--mark-labels", "near,bottle"], ["--mark-labels", "mark"], ["--mark-labels", "near,"],
                       ["--mark-labels", "a note"], ["--target-label", "wine glass"], ["--target-label", "Bottle"],
                       ["--target-label", ""], ["--detector", "yolox-nano", "--target-label", "sofa"],
-                      [f"--cue={second}:near" for second in range(marks.MAX_CUES + 1)]):
+                      ["--target-label", "bottle", "--cameras", "0,1"]):
             terminal = Terminal()
             with self.subTest(extra=extra[:2]), \
                     mock.patch.object(command, "create_detector", side_effect=AssertionError("loaded")), \
@@ -258,6 +260,22 @@ class ArgumentTests(unittest.TestCase):
                     self.assertRaises(SystemExit) as caught:
                 run_main(base + extra, terminal)
             self.assertEqual((caught.exception.code, terminal.reads), (2, 0))  # Refused before the confirmation is asked.
+        # The cue cap: one more than the cap, every one of them a valid cue inside the run, is refused as too many.
+        within = ["--allow-camera-input", "--helper", "/h", "--seconds", "30", "--max-frames", "10"]
+        for count, refused in ((marks.MAX_CUES + 1, True), (marks.MAX_CUES, False)):
+            cues = [f"--cue={index * 0.5}:near" for index in range(count)]
+            self.assertTrue(all(marks.parse_cue(cue[6:], 30) for cue in cues))
+            errors = io.StringIO()
+            with self.subTest(count=count), mock.patch("sys.stderr", errors), mock.patch("sys.stdout"), \
+                    mock.patch("sys.stdin", Terminal(interactive=False)), \
+                    mock.patch.object(command.camera_helper, "run_export", side_effect=AssertionError("launched")):
+                if refused:
+                    with self.assertRaises(SystemExit) as caught:
+                        command.main(within + cues)
+                    self.assertEqual(caught.exception.code, 2)
+                    self.assertIn(f"at most {marks.MAX_CUES} cues", errors.getvalue())
+                else:  # At the cap the arguments pass; the run then stops at the confirmation (no terminal).
+                    self.assertEqual(command.main(within + cues), 1)
         self.assertIn("bottle", class_names("mobilenet-ssd"))
         self.assertIn("wine glass", class_names("yolox-nano"))
         self.assertEqual(class_names("mobilenet-ssd"), DETECTORS["mobilenet-ssd"].classes)
@@ -266,9 +284,13 @@ class ArgumentTests(unittest.TestCase):
             for options in ({"cues": [(0, "bottle")]}, {"mark_labels": ["free text"]}, {"cues": [(5, "near"), (5, "far")]}):
                 with self.subTest(options=options), self.assertRaises(ValueError):
                     command.recognize("/h", LIMITS, (0,), **options)
+            with self.assertRaises(ValueError):  # A target never pools the two cameras' frames.
+                command.recognize("/h", LIMITS, (0, 1), detector_factory=ScriptedDetector, target_label="bottle")
         with mock.patch.object(command.camera_helper, "run_export", side_effect=AssertionError("launched")):
             report = command.recognize("/h", LIMITS, (0,), detector_factory=StandInDetector, target_label="bottle")
         self.assertEqual((report["status"], report["reason"], report["exit_code"]), ("error", "target_label_unknown", 1))
+        self.assertIsNone(report["target_label"])  # A label that was not validated never reaches the report.
+        self.assertNotIn("bottle", json.dumps(report))
 
     def test_the_informed_start_needs_a_terminal_and_the_exact_typed_answer(self):
         base = ["--allow-camera-input", "--helper", "/nonexistent/helper", "--seconds", "1", "--max-frames", "1"]
@@ -490,7 +512,9 @@ class RecognitionTests(unittest.TestCase):
         left, right = summary["intervals"]
         self.assertEqual((left["label"], right["label"]), ("left", "right"))
         self.assertEqual(left["frames"] + right["frames"],
-                         sum(1 for record in report["detections"] if record["observed_ns"] >= recorded[0]["monotonic_ns"]))
+                         sum(1 for record in report["detections"]
+                             if record["observed_ns"] >= recorded[0]["scheduled_monotonic_ns"]))
+        self.assertEqual((left["boundary"], left["duration_ms"]), ("scheduled", 700.0))
         # The cue lands between frames, so a frame either side may fall in the neighbouring interval: most, not all.
         self.assertGreaterEqual(left["cells"]["left"], 5)
         self.assertLessEqual(left["cells"]["up_right"], 1)
@@ -589,12 +613,46 @@ class RecognitionTests(unittest.TestCase):
         self.assertEqual({record["target"]["cell"] for record in report["detections"]}, {"down_left"})
         self.assertEqual(report["target"]["frames_with_target"], 8)
 
+    def test_main_without_the_new_options_never_reads_the_terminal_after_the_confirmation(self):
+        master, slave = os.openpty()
+        self.addCleanup(os.close, master)
+        os.write(master, b"yes\n")
+        threads = []
+
+        def typed_during_the_run():
+            threads.extend(thread.name for thread in threading.enumerate())
+            os.write(master, b"typed during the run\n")
+        for extra, keys in (([], False), (["--cue", "0.1:near", "--target-label", "bottle"], False)):
+            detector = ScriptedDetector([(0.5, 0.5)] * 6, on_call={2: typed_during_the_run})
+            threads.clear()
+            with self.subTest(extra=extra), os.fdopen(os.dup(slave), "r") as stdin, \
+                    mock.patch.object(command, "create_detector", return_value=detector), \
+                    mock.patch("sys.stdout") as stdout, mock.patch("sys.stderr") as stderr, mock.patch("sys.stdin", stdin):
+                code = command.main(["--allow-camera-input", "--helper", str(self.binary), "--seconds", "5",
+                                     "--max-frames", "6", "--fps", "5", "--cameras", "0", *extra])
+                report = json.loads("".join(call.args[0] for call in stdout.write.call_args_list))
+                printed = "".join(call.args[0] for call in stderr.write.call_args_list)
+                self.assertEqual((code, report["status"], report["frames_processed"]), (0, "recognized", 6))
+                self.assertNotIn("camera-marks-keys", threads)  # No key thread exists during the run.
+                self.assertEqual((report["marks"]["key_marks_enabled"], report["marks"]["key_presses"]), (False, 0))
+                self.assertFalse([entry for entry in report["marks"]["recorded"] if entry["source"] == "key"])
+                self.assertNotIn("MARK", printed)
+                if not extra:
+                    self.assertEqual(report["marks"]["recorded"], [])
+                    self.assertTrue(printed.endswith("Type yes to continue: "))  # Nothing printed after the question.
+                # The line typed during the run was neither read nor flushed: it is still in the terminal's queue.
+                self.assertTrue(select.select([slave], [], [], 1.0)[0])
+                self.assertEqual(os.read(slave, 4096), b"typed during the run\n")
+                os.write(master, b"yes\n")
+        os.read(slave, 4096)
+        os.close(slave)
+
     def test_no_l15_field_can_hold_pixels_free_text_or_calibration_values(self):
         master, slave = os.openpty()
         self.addCleanup(os.close, master)
         self.addCleanup(os.close, slave)
         detector = ScriptedDetector([None, (0.5, 0.5)] * 5, on_call={2: lambda: os.write(master, b"free text\n")})
-        report = command.recognize(self.binary, {"fps": 10, "max_seconds": 5, "max_frames": 10}, (0, 1),
+        report = command.recognize(self.binary, {"fps": 10, "max_seconds": 5, "max_frames": 10}, (0,),
                                    detector_factory=lambda: detector, confirmed=True, target_label="bottle",
                                    mark_labels=["near"], key_fd=slave, cues=[(0, "in_view"), (300, "remove")],
                                    terminal=mock.Mock())

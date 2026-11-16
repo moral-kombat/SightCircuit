@@ -6,9 +6,11 @@ text anywhere. Marks come two ways. A cue is scheduled on the command line
 (``parse_cue``: ``SECONDS:LABEL``, seconds from the first frame's acquire
 time); when it is due ``MarkSession`` prints it on the operator's terminal
 with a bell and records the scheduled and the actual time. A key mark is one
-Enter on the terminal during the run: the bytes typed are counted for line
-ends and discarded, never stored; each press takes the next label of the
-operator's ``--mark-labels`` list, then ``KEY_LABEL``.
+Enter on the terminal during the run, read only when the operator asked for
+key marks (a session without a ``key_fd`` never touches the terminal): the
+bytes typed are counted for line ends and discarded, never stored; each press
+takes the next label of the operator's ``--mark-labels`` list, then
+``KEY_LABEL``.
 
 Timebase. ``Clock`` samples the host's monotonic clock and the realtime clock
 (UTC nanoseconds since the Unix epoch) once, at the run's start; every other
@@ -20,7 +22,9 @@ with the same host monotonic clock at acquisition.
 ``summarize`` derives counts from the per-frame records and the marks:
 1-second windows with the target, coverage over the in-view spans, the 3x3
 cell of the target's box centre per mark interval, and what followed a
-``remove`` mark. The cell is taken on the image as exported: nothing here
+``remove`` mark. Intervals and spans are bounded by a cue's scheduled time
+(a key mark's actual time), so a nominal N-second span between two cues is N
+windows whatever the wake-up jitter. The cell is taken on the image as exported: nothing here
 knows the camera's mounting orientation (``ORIENTATION_STATEMENT``), which a
 cued run is meant to reveal. Standard library only; no pixel, no calibration
 value and no display. Nothing here opens a camera or lifts a gate.
@@ -41,7 +45,10 @@ REMOVE_LABEL = "remove"
 SOURCES = SOURCE_CUE, SOURCE_KEY = ("cue", "key")
 MAX_CUES = 32
 MAX_MARK_LABELS = 32
-MAX_MARKS = 64  # Recorded marks of both kinds; further key presses are counted, not recorded.
+# Recorded marks of both kinds. Every scheduled cue has its place: key marks take what the cues leave (at least
+# ``MAX_MARKS - MAX_CUES``), and further key presses are counted, not recorded.
+MAX_MARKS = 64
+BOUNDARIES = BOUNDARY_SCHEDULED, BOUNDARY_ACTUAL = ("scheduled", "actual")
 CUE_PATTERN = re.compile(r"(\d{1,2}(?:\.\d{1,3})?):([a-z_]+)")
 WINDOW_NS = 1_000_000_000
 MAX_WINDOWS = 64
@@ -149,7 +156,8 @@ class MarkSession:
         self.origin_ns = None
         self.recorded = []
         self.cues_fired = 0
-        self.key_presses = self.dropped = 0
+        self.key_presses = self.key_recorded = self.dropped = 0
+        self.key_capacity = MAX_MARKS - len(self.cues)
         self.key_error = None
         self.threads = []
 
@@ -184,9 +192,11 @@ class MarkSession:
 
     def _record(self, source, label, monotonic_ns, scheduled=None):
         with self.lock:
-            if len(self.recorded) >= MAX_MARKS:
-                self.dropped += 1
-                return False
+            if source == SOURCE_KEY:  # A cue always has its place; key marks never take one.
+                if self.key_recorded >= self.key_capacity:
+                    self.dropped += 1
+                    return False
+                self.key_recorded += 1
             mark = {"index": len(self.recorded) + 1, "source": source, "label": label, **self.clock.stamp(monotonic_ns),
                     "offset_ms": None if self.origin_ns is None else round((monotonic_ns - self.origin_ns) / 1e6, 3)}
             if scheduled is not None:
@@ -211,17 +221,20 @@ class MarkSession:
                     return
             if self.stop_event.is_set():
                 return
-            if self._record(SOURCE_CUE, label, time.monotonic_ns(), (offset_ms, due_ns)):
-                self._announce(f"\aCUE {label}\n")
+            self._record(SOURCE_CUE, label, time.monotonic_ns(), (offset_ms, due_ns))
+            self._announce(f"\aCUE {label}\n")
             self.cues_fired += 1
 
     def _discard_pending_input(self):
         """Drop what was typed before the run (after the confirmation's line): only presses during the run are marks."""
         try:
+            import termios
+        except ImportError:
+            return
+        try:
             if os.isatty(self.key_fd):
-                import termios
                 termios.tcflush(self.key_fd, termios.TCIFLUSH)
-        except (OSError, ImportError):
+        except (OSError, termios.error):  # ``termios.error`` is not an ``OSError`` on every supported Python.
             pass
 
     def _run_keys(self):
@@ -255,7 +268,8 @@ class MarkSession:
                 "cues_not_reached": [{"offset_ms": offset, "label": label} for offset, label in self.cues[self.cues_fired:]],
                 "mark_labels_requested": list(self.labels), "key_marks_enabled": self.key_fd is not None,
                 "key_presses": self.key_presses, "key_listener_error": self.key_error, "marks_dropped": self.dropped,
-                "maximum_marks": MAX_MARKS, "recorded": self.marks()}
+                "maximum_marks": MAX_MARKS, "key_marks_capacity": self.key_capacity,
+                "recorded": self.marks()}
 
 
 def terminal_fd(stream=None):
@@ -337,6 +351,11 @@ def _windows(frames, start_ns, end_ns, with_target):
             "remainder_ms": round(max(0, end_ns - start_ns - whole * WINDOW_NS) / 1e6, 3)}
 
 
+def boundary_ns(mark):
+    """Where a mark bounds an interval: a cue's scheduled time, a key mark's actual time."""
+    return mark.get("scheduled_monotonic_ns", mark["monotonic_ns"])
+
+
 def _between(frames, start_ns, end_ns):
     return [frame for frame in frames if start_ns <= frame["observed_ns"] < end_ns]
 
@@ -359,9 +378,14 @@ def summarize(frames, marks, *, origin_ns, run_end_ns, helper_end=None, with_tar
     next ``OUT_OF_VIEW_LABELS`` mark or the run's end, the whole windows from
     the span's start and how many held the target. ``removal``: per ``remove``
     mark, the frames processed with an acquire time over
-    ``LATE_FRAME_LIMIT_MS`` after it and the time to the helper's end record.
+    ``LATE_FRAME_LIMIT_MS`` after it and the time to the helper's end record,
+    both from the mark's actual time (when the cue was shown or the key pressed).
+    Intervals and spans are bounded by ``boundary_ns``: a cue's scheduled time,
+    a key mark's actual time. The tallies do not separate cameras: the caller
+    gives the frames of one camera when a target is named.
     """
     frames = sorted(frames, key=lambda frame: frame["observed_ns"])
+    marks = sorted(marks, key=boundary_ns)
     windows = []
     if origin_ns is not None and frames:
         last = min((frames[-1]["observed_ns"] - origin_ns) // WINDOW_NS, MAX_WINDOWS - 1)
@@ -373,20 +397,21 @@ def summarize(frames, marks, *, origin_ns, run_end_ns, helper_end=None, with_tar
             windows.append(window)
     intervals = []
     for position, mark in enumerate(marks):
-        start = mark["monotonic_ns"]
-        end = marks[position + 1]["monotonic_ns"] if position + 1 < len(marks) else max(run_end_ns, start)
+        start = boundary_ns(mark)
+        end = boundary_ns(marks[position + 1]) if position + 1 < len(marks) else max(run_end_ns, start)
         inside = _between(frames, start, end)
         intervals.append({"mark_index": mark["index"], "label": mark["label"], "source": mark["source"],
+                          "boundary": BOUNDARY_SCHEDULED if "scheduled_monotonic_ns" in mark else BOUNDARY_ACTUAL,
                           "duration_ms": round((end - start) / 1e6, 3), **_counts(inside, with_target),
                           **_windows(inside, start, end, with_target)})
     spans, opened = [], None
     for mark in marks:
         if opened is None and mark["label"] in IN_VIEW_LABELS:
-            opened = {"mark_index": mark["index"], "labels": [mark["label"]], "start": mark["monotonic_ns"]}
+            opened = {"mark_index": mark["index"], "labels": [mark["label"]], "start": boundary_ns(mark)}
         elif opened is not None and mark["label"] in IN_VIEW_LABELS:
             opened["labels"].append(mark["label"])
         elif opened is not None and mark["label"] in OUT_OF_VIEW_LABELS:
-            spans.append(dict(opened, end=mark["monotonic_ns"], ended_by=mark["label"]))
+            spans.append(dict(opened, end=boundary_ns(mark), ended_by=mark["label"]))
             opened = None
     if opened is not None:
         spans.append(dict(opened, end=max(run_end_ns, opened["start"]), ended_by=RUN_END))

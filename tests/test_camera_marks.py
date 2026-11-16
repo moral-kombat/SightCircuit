@@ -38,8 +38,12 @@ def frame(at_ms, cell_centre=None, *, width=100, height=100):
     return {"observed_ns": ORIGIN + at_ms * MS, "target": marks.target_of(detections, "bottle", 0.5, width, height)}
 
 
-def mark(index, label, at_ms, source="cue"):
-    return {"index": index, "source": source, "label": label, "monotonic_ns": ORIGIN + at_ms * MS}
+def mark(index, label, at_ms, source="cue", late_ns=None):
+    """A mark at ``at_ms``; with ``late_ns`` a cue scheduled then and shown that much later."""
+    entry = {"index": index, "source": source, "label": label, "monotonic_ns": ORIGIN + at_ms * MS + (late_ns or 0)}
+    if late_ns is not None:
+        entry["scheduled_monotonic_ns"] = ORIGIN + at_ms * MS
+    return entry
 
 
 def wait_for(condition, seconds=5.0):
@@ -243,6 +247,43 @@ class SummaryTests(unittest.TestCase):
         self.assertTrue(all(unknown[name] is None for name in ("helper_end_after_mark_ms", "helper_end_reason",
                                                                 "helper_end_is_presence_stop", "helper_end_within_limit")))
 
+    def test_cue_spans_are_bounded_by_scheduled_times_so_wake_up_jitter_never_drops_a_window(self):
+        frames = [frame(at_ms, (50, 50)) for at_ms in range(0, 21000, 200)]
+        for near_late, remove_late in ((300_000, 100_000), (100_000, 300_000), (0, 0), (900_000, 1), (5 * MS, 0)):
+            with self.subTest(near_late=near_late, remove_late=remove_late):
+                recorded = [mark(1, "near", 3000, late_ns=near_late), mark(2, "remove", 20000, late_ns=remove_late)]
+                summary = marks.summarize(frames, recorded, origin_ns=ORIGIN, run_end_ns=ORIGIN + 21000 * MS,
+                                          with_target=True)
+                (span,) = summary["coverage"]["spans"]
+                self.assertEqual((span["windows"], span["windows_with_target"], span["remainder_ms"], span["duration_ms"]),
+                                 (17, 17, 0.0, 17000.0))
+                near = summary["intervals"][0]
+                self.assertEqual((near["boundary"], near["windows"], near["frames"]), ("scheduled", 17, 85))
+                self.assertEqual(summary["coverage"]["fraction"], 1.0)
+        # A key mark has no schedule: its actual time bounds the span, and the interval says which was used.
+        recorded = [mark(1, "near", 3000, late_ns=300_000), mark(2, "out_of_view", 9999, "key")]
+        summary = marks.summarize(frames, recorded, origin_ns=ORIGIN, run_end_ns=ORIGIN + 21000 * MS, with_target=True)
+        self.assertEqual([interval["boundary"] for interval in summary["intervals"]], ["scheduled", "actual"])
+        self.assertEqual((summary["coverage"]["spans"][0]["windows"], summary["coverage"]["spans"][0]["remainder_ms"]),
+                         (6, 999.0))
+        # A key pressed between a cue's scheduled and actual time is ordered by the boundary it has.
+        recorded = [mark(1, "out_of_view", 5001, "key"), mark(2, "near", 5000, late_ns=2 * MS)]
+        summary = marks.summarize(frames, recorded, origin_ns=ORIGIN, run_end_ns=ORIGIN + 21000 * MS, with_target=True)
+        self.assertEqual([interval["label"] for interval in summary["intervals"]], ["near", "out_of_view"])
+        self.assertTrue(all(interval["duration_ms"] >= 0 for interval in summary["intervals"]))
+
+    def test_every_remove_mark_cue_or_key_has_its_own_removal_entry_from_its_actual_time(self):
+        frames = [frame(at_ms) for at_ms in range(0, 8000, 200)]
+        recorded = [mark(1, "remove", 5000, late_ns=400_000), mark(2, "remove", 6100, "key")]
+        cue, key = marks.summarize(frames, recorded, origin_ns=ORIGIN, run_end_ns=ORIGIN + 8300 * MS,
+                                   helper_end={"monotonic_ns": ORIGIN + 8300 * MS, "reason": "headset_removed"})["removal"]
+        self.assertEqual((cue["mark_index"], cue["source"], key["mark_index"], key["source"]), (1, "cue", 2, "key"))
+        self.assertEqual((cue["helper_end_after_mark_ms"], key["helper_end_after_mark_ms"]), (3299.6, 2200.0))
+        self.assertEqual((cue["helper_end_within_limit"], key["helper_end_within_limit"]), (False, True))
+        self.assertEqual((cue["frames_acquired_over_limit"], key["frames_acquired_over_limit"]), (4, 0))
+        self.assertEqual((cue["last_frame_acquire_after_mark_ms"], key["last_frame_acquire_after_mark_ms"]), (2799.6, 1700.0))
+        self.assertEqual(set(cue), set(key))
+
     def test_without_a_target_only_frame_counts_and_the_removal_remain(self):
         frames, recorded = self.scripted()
         for item in frames:
@@ -250,7 +291,7 @@ class SummaryTests(unittest.TestCase):
         summary = marks.summarize(frames, recorded, origin_ns=ORIGIN, run_end_ns=ORIGIN + 9200 * MS)
         self.assertIsNone(summary["coverage"])
         self.assertEqual(summary["windows"][0], {"index": 0, "frames": 5})
-        self.assertEqual(set(summary["intervals"][0]), {"mark_index", "label", "source", "duration_ms", "frames", "windows",
+        self.assertEqual(set(summary["intervals"][0]), {"mark_index", "label", "source", "boundary", "duration_ms", "frames", "windows",
                                                         "windows_with_frames", "windows_with_target", "remainder_ms"})
         self.assertIsNone(summary["intervals"][0]["windows_with_target"])
         self.assertEqual(summary["removal"][0]["frames_processed_after_mark"], 7)
@@ -356,6 +397,47 @@ class MarkSessionTests(unittest.TestCase):
         report = session.report()
         self.assertEqual((len(report["recorded"]), report["marks_dropped"], report["maximum_marks"]),
                          (marks.MAX_MARKS, 3, marks.MAX_MARKS))
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "pseudo-terminals as on the Frame")
+    def test_every_scheduled_cue_keeps_its_place_whatever_the_key_presses(self):
+        master, slave = os.openpty()
+        self.addCleanup(os.close, master)
+        self.addCleanup(os.close, slave)
+        terminal = io.StringIO()
+        cues = [(0, "near"), (50, "far"), (100, "remove"), (150, "reseat")]
+        session = self.session(cues=cues, key_fd=slave, output=terminal)
+        session.start()
+        time.sleep(0.1)
+        for _ in range(marks.MAX_MARKS + 2):  # A held Enter key before any cue is due.
+            os.write(master, b"\n")
+        self.assertTrue(wait_for(lambda: session.key_presses == marks.MAX_MARKS + 2))
+        session.first_frame(time.monotonic_ns())
+        self.assertTrue(wait_for(lambda: session.cues_fired == 4))
+        session.stop()
+        report = session.report()
+        recorded = report["recorded"]
+        self.assertEqual([entry["label"] for entry in recorded if entry["source"] == "cue"],
+                         ["near", "far", "remove", "reseat"])
+        self.assertEqual(sum(1 for entry in recorded if entry["source"] == "key"), marks.MAX_MARKS - 4)
+        self.assertEqual((len(recorded), report["marks_dropped"], report["key_marks_capacity"], report["cues_not_reached"]),
+                         (marks.MAX_MARKS, 6, marks.MAX_MARKS - 4, []))
+        self.assertEqual(terminal.getvalue().count("\aCUE "), 4)  # Each cue was announced as well as recorded.
+        self.assertGreaterEqual(marks.MAX_MARKS - marks.MAX_CUES, 32)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "pseudo-terminals as on the Frame")
+    def test_a_terminal_that_refuses_the_flush_does_not_stop_the_session(self):
+        import termios
+        from unittest import mock
+        master, slave = os.openpty()
+        self.addCleanup(os.close, master)
+        self.addCleanup(os.close, slave)
+        for failure in (termios.error(25, "Inappropriate ioctl for device"), OSError(5, "Input/output error")):
+            with self.subTest(failure=type(failure).__name__), mock.patch.object(termios, "tcflush", side_effect=failure):
+                session = marks.MarkSession(marks.Clock(), key_fd=slave)
+                session.start()
+                os.write(master, b"\n")
+                self.assertTrue(wait_for(lambda: len(session.marks()) == 1))
+                session.stop()
 
     def test_only_a_real_terminal_is_a_key_source(self):
         class Typed:

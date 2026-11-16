@@ -25,10 +25,13 @@ the run's start, each frame's acquire time, each mark and the helper's end
 record carry both. A mark is a label from a closed vocabulary
 (``sightcircuit.camera.marks.VOCABULARY``), never free text: ``--cue
 SECONDS:LABEL`` schedules one from the first frame's acquire time and prints
-it on the terminal with a bell when due; Enter on the terminal during the run
+it on the terminal with a bell when due; with ``--key-marks`` or
+``--mark-labels``, and only then, Enter on the terminal during the run
 records one with the next ``--mark-labels`` label, or ``mark``. What is typed
-is counted for line ends and discarded. ``--target-label`` names a detector
-class; the report then carries, as counts only, the 1-second windows that
+is counted for line ends and discarded; without those options the terminal is
+never read after the confirmation. ``--target-label`` names a detector class
+and needs a single camera (``--cameras 0`` or ``1``), so no tally pools the
+two; the report then carries, as counts only, the 1-second windows that
 held it, the coverage over the in-view spans, the 3x3 cell of its best box's
 centre per mark interval and what followed a ``remove`` mark. The cell is
 taken on the image as exported: nothing here knows the camera's mounting
@@ -238,13 +241,17 @@ def recognize(binary, limits, cameras, *, threshold=POC_THRESHOLD, detector=DEFA
     before anything is loaded); ``key_fd`` is the terminal descriptor Enter
     presses are read from during the export, or ``None`` for no key marks;
     ``terminal`` is where a due cue is announced (stderr by default).
-    ``target_label`` must be one of the loaded detector's classes, else the
-    run ends ``error``/``target_label_unknown`` before the helper is launched.
+    ``target_label`` needs a single camera (else ``ValueError``: the cell and
+    coverage tallies never pool two cameras) and must be one of the loaded
+    detector's classes, else the run ends ``error``/``target_label_unknown``
+    before the helper is launched; the report names it only once validated.
     """
     cues, mark_labels = marks.check_cues(cues), marks.check_mark_labels(mark_labels)
+    if target_label is not None and len(tuple(cameras)) != 1:
+        raise ValueError("a target label needs a single camera")
     clock = marks.Clock()
     report = new_report("recognize")
-    report.update(timebase=clock.report(), run_started=clock.stamp(clock.monotonic_ns), target_label=target_label)
+    report.update(timebase=clock.report(), run_started=clock.stamp(clock.monotonic_ns), target_label=None)
     report["confirmation"] = OPERATOR_TERMINAL if confirmed else None
     report.update(seconds_requested=limits.get("max_seconds"), max_frames_requested=limits.get("max_frames"),
                   fps_requested=limits.get("fps"), cameras_requested=list(cameras), threshold=threshold,
@@ -259,6 +266,7 @@ def recognize(binary, limits, cameras, *, threshold=POC_THRESHOLD, detector=DEFA
     if target_label is not None and target_label not in model.classes:
         report.update(status="error", reason="target_label_unknown", phase="closed")
         return report
+    report["target_label"] = target_label
     slot = LatestSlot()
     processor = Processor(slot, model, threshold, clock=clock, target_label=target_label)
     session = marks.MarkSession(clock, cues, mark_labels, key_fd, sys.stderr if terminal is None else terminal)
@@ -269,8 +277,8 @@ def recognize(binary, limits, cameras, *, threshold=POC_THRESHOLD, detector=DEFA
     processor.start()
     report["phase"] = "exporting"
     started = time.monotonic()
-    session.start()
     try:
+        session.start()
         captured = camera_helper.run_export(binary, limits, cameras, on_frame=on_frame, stop=stop, extra_args=extra_args,
                                             timeout=timeout, confirmed=confirmed)
     finally:
@@ -419,17 +427,21 @@ def main(argv=None):
     parser.add_argument("--cue", action="append", default=[], metavar="SECONDS:LABEL",
                         help="Print LABEL with a bell SECONDS after the first frame and record the mark; repeatable, "
                              f"rising times; labels: {', '.join(marks.VOCABULARY)}")
+    parser.add_argument("--key-marks", action="store_true",
+                        help=f"Record a mark ({marks.KEY_LABEL}) for each Enter on the terminal during the run; "
+                             "without this or --mark-labels the terminal is not read after the confirmation")
     parser.add_argument("--mark-labels", default="", metavar="LABEL,LABEL",
                         help="Labels, from the same list, that successive Enter presses during the run record; "
-                             f"further presses record {marks.KEY_LABEL}")
+                             f"further presses record {marks.KEY_LABEL}; implies --key-marks")
     parser.add_argument("--target-label", metavar="CLASS",
-                        help="A class of the chosen detector to summarize: windows, coverage, cells (counts only)")
+                        help="A class of the chosen detector to summarize: windows, coverage, cells (counts only); "
+                             "needs a single camera")
     args = parser.parse_args(argv)
     if not math.isfinite(args.threshold) or not 0 <= args.threshold <= 1:
         parser.error("--threshold must be between zero and one")
     if args.validate:
         if (args.allow_camera_input or args.helper or args.seconds or args.max_frames or args.cue or args.mark_labels or
-                args.target_label):
+                args.key_marks or args.target_label):
             parser.error("--validate takes no run arguments")
         report = validate()
     else:
@@ -445,6 +457,8 @@ def main(argv=None):
             parser.error(str(error))
         if args.target_label is not None and args.target_label not in class_names(args.detector):
             parser.error(f"--target-label must be a class of {args.detector}: {', '.join(class_names(args.detector))}")
+        if args.target_label is not None and len(args.cameras) != 1:
+            parser.error("--target-label needs a single camera (--cameras 0 or 1), so no tally pools the two")
         report = new_report("recognize")
         report.update(confirmation=None, seconds_requested=args.seconds, max_frames_requested=args.max_frames,
                       fps_requested=args.fps, cameras_requested=list(args.cameras))
@@ -456,7 +470,8 @@ def main(argv=None):
                 else:
                     report = recognize(args.helper, limits, args.cameras, threshold=args.threshold,
                                        detector=args.detector, extra_args=args.helper_arg, confirmed=True,
-                                       cues=cues, mark_labels=mark_labels, key_fd=marks.terminal_fd(),
+                                       cues=cues, mark_labels=mark_labels,
+                                       key_fd=marks.terminal_fd() if args.key_marks or mark_labels else None,
                                        target_label=args.target_label)
             except guard.CANCELLATION as error:
                 guard.cancelled(report, error)

@@ -85,10 +85,12 @@ and no preview, still or other file is written.
 
 During the export it also keeps time and takes marks
 ([below](#times-marks-and-the-target-summary)): a cue you scheduled is
-printed with a bell when due, and Enter records a mark. With no `--cue`, no
-`--mark-labels`, no `--target-label` and no key press, nothing is printed
-during the run, the helper is launched with the same arguments, and the
-status and exit code are what they were; the report only gains the times.
+printed with a bell when due, and, when key marks were asked for, Enter
+records a mark. With none of the new options nothing is printed during the
+run, the terminal is not read or flushed after the confirmation (what is
+typed stays in its input queue, as before), the helper is launched with the
+same arguments, and the status and exit code are what they were; the report
+only gains the times.
 
 Ctrl+C or SIGTERM cancels: the primitive sends the helper SIGTERM, which the
 helper collects between SDK calls and answers with an `end` packet of reason
@@ -174,18 +176,28 @@ for line ends and discarded.
   mark records the scheduled and the actual time (`late_ms` apart). A cue the
   run ended before is listed in `cues_not_reached`. The bell is the terminal's:
   check before a device run that the wearer can hear or see it.
-- Enter on the terminal during the run records a key mark, for the moment
-  only the operator knows. `--mark-labels LABEL,LABEL` gives successive
-  presses their labels; further presses, or all of them without the option,
-  record `mark`. The terminal shows `MARK <label>`. Presses before the run
-  starts (after the typed `yes`) are discarded. Key marks need the terminal
-  the confirmation was typed on; at most 64 marks of both kinds are recorded
-  and the rest counted (`marks_dropped`).
+- With `--key-marks` or `--mark-labels`, and only then, Enter on the terminal
+  during the run records a key mark, for the moment only the operator knows.
+  `--mark-labels LABEL,LABEL` gives successive presses their labels; further
+  presses, or all of them under `--key-marks` alone, record `mark`. The
+  terminal shows `MARK <label>`. With either option the terminal's pending
+  input is discarded when the run starts and everything typed during the run
+  is read and dropped; without them the terminal is left alone. Key marks
+  need the terminal the confirmation was typed on. At most 64 marks are
+  recorded; every scheduled cue keeps its place, key marks take the rest (at
+  least 32) and further presses are counted (`marks_dropped`).
 
-A cue's time is when it was shown, not when the wearer acted on it. For the
-removal measurement that makes a cued `remove` the stricter reading (the
-reaction time counts against the helper); pressing Enter with
-`--mark-labels remove` at the moment of removal is the closer one.
+A cue's time is when it was shown, not when the wearer acted on it. Every
+`remove` mark, cue or key, gets its own entry in `summary.removal`, so a run
+can use a cue as the prompt and an operator key mark (`--mark-labels remove`)
+as the moment the headset is actually off. The helper has no presence signal:
+it ends `headset_removed` or `standby` once no frame set has arrived for two
+seconds ([helper reference](../reference/camera-helper.md)), found at the end
+of an acquire that timed out. The time from a cued `remove` to the helper's
+end therefore holds the wearer's reaction, then that two-second gap, then the
+acquire timeout. `last_frame_acquire_after_mark_ms` separates them: it is
+about when frames stopped after the mark, and the rest of
+`helper_end_after_mark_ms` is the helper's.
 
 Neither kind touches the informed start: the typed `yes` is read first, the
 helper is still launched with `--parent-confirmed` and reads no terminal, and
@@ -193,7 +205,10 @@ Ctrl+C still cancels.
 
 **Target.** `--target-label CLASS` names one class of the chosen detector
 (`bottle` for both models; an unknown class is refused before the
-confirmation). Each frame record then has `target`: whether the class was
+confirmation). It needs a single camera, `--cameras 0` or `--cameras 1`
+(the default `0,1` is refused with it), so no window, cell or coverage tally
+pools the two cameras' frames. Without a target the `frames` counts are over
+every selected camera. Each frame record then has `target`: whether the class was
 detected at or above the threshold, how many boxes, and for the best one its
 confidence, its box and the 3x3 cell of its centre over the full frame. The
 cell uses 0.4 and 0.6 on each axis: a centre below 0.4 of the width is
@@ -209,12 +224,16 @@ run is what shows how the two relate; the report repeats this in
 cell agree.
 
 **Summaries** (`summary`, counts only, derived from the frame records and
-the marks; frames are placed by acquire time):
+the marks; frames are placed by acquire time). An interval or span is bounded
+by a cue's scheduled time and a key mark's actual time (`boundary`:
+`scheduled` or `actual`), so the span between cues at 3 and 20 seconds is 17
+windows whatever the scheduler's wake-up jitter; the removal figures use each
+mark's actual time:
 
 | Field | Meaning |
 | --- | --- |
 | `windows` | 1-second windows from the first frame's acquire time to the last processed frame: `frames` processed in each and, with a target, `target_frames` |
-| `intervals` | Per mark, from it to the next mark or the run's end (the helper's end record, else the export's return): `frames`, and with a target `target_frames`, the frames per cell (`cells`, all nine names), per `columns` and per `rows`; the whole 1-second `windows` from the mark, those with a frame and those with the target, and the `remainder_ms` left over |
+| `intervals` | Per mark, from its `boundary` to the next mark's or the run's end (the helper's end record, else the export's return): `frames`, and with a target `target_frames`, the frames per cell (`cells`, all nine names), per `columns` and per `rows`; the whole 1-second `windows` from the mark, those with a frame and those with the target, and the `remainder_ms` left over |
 | `coverage` | With a target. A span opens at `in_view`, `near`, `far` or a position mark and closes at the next `out_of_view` or `remove`, or the run's end. Per span and in total: the whole 1-second windows from the span's start, `windows_with_target`, `windows_without_frames` (they count against coverage) and `fraction` |
 | `removal` | Per `remove` mark: `frames_processed_after_mark`, `frames_acquired_over_limit` (acquire time more than 2,000 ms after the mark), `last_frame_acquire_after_mark_ms`, `helper_end_after_mark_ms` and `helper_end_reason` from the helper's end record, `helper_end_is_presence_stop` (`headset_removed` or `standby`) and `helper_end_within_limit` (3,000 ms); the end fields are `null` when no end record was read |
 
@@ -225,7 +244,7 @@ A run for the removal and the coverage, then one for the cued positions
 .venv-replay/bin/python scripts/camera_recognize.py --allow-camera-input \
   --helper artifacts/camera-helper/sightcircuit-camera-helper \
   --seconds 30 --max-frames 150 --fps 5 --cameras 0 --target-label bottle \
-  --cue 3:near --cue 11:far --cue 20:remove \
+  --cue 3:near --cue 11:far --cue 20:remove --mark-labels remove \
   --report artifacts/camera/run-01.json
 
 .venv-replay/bin/python scripts/camera_recognize.py --allow-camera-input \
@@ -259,7 +278,7 @@ standard library only. Expect `status: validated` and exit 0.
 | `confirmation` | `operator_terminal` once the typed answer was given on this command's terminal; `null` when the run was refused before launch |
 | `schema_version` | 2 since item L15 (the times, marks, target and summaries; no earlier field changed) |
 | `timebase`, `run_started`, `first_frame`, `helper_end`, `export_returned` | The declared clocks with the anchor, and `{monotonic_ns, utc_ns}` of the run's start, the first frame's acquire, the helper's end record as read (with its `reason`; `null` without one) and the export's return; see [times](#times-marks-and-the-target-summary) |
-| `marks` | The vocabulary, the cues and key labels requested, `cues_not_reached`, `key_marks_enabled`, `key_presses`, `marks_dropped` and `recorded`: per mark `index`, `source` (`cue` or `key`), `label`, `monotonic_ns`, `utc_ns`, `offset_ms` from the first frame's acquire (`null` before it), and for a cue the scheduled offset and times and `late_ms` |
+| `marks` | The vocabulary, the cues and key labels requested, `cues_not_reached`, `key_marks_enabled`, `key_presses`, `key_marks_capacity`, `marks_dropped` and `recorded`: per mark `index`, `source` (`cue` or `key`), `label`, `monotonic_ns`, `utc_ns`, `offset_ms` from the first frame's acquire (`null` before it), and for a cue the scheduled offset and times and `late_ms` |
 | `target_label`, `target`, `summary` | The class named with `--target-label` (`null` without); its threshold, frame count, cell thresholds and the orientation statement; the counts-only [summaries](#times-marks-and-the-target-summary) |
 | `detections` | One record per processed frame: `sequence`, `frame_set_sequence` (the acquired set; both cameras of a set share it), `source_id` (`arcturus_camera_left` or `_right`), `camera_index`, `frame_id`, `observed_ns` (the helper's host monotonic clock at acquisition), `observed_utc_ns` (derived), `helper_realtime_ns`, with a target `target` (`present`, `count`, `confidence`, `box_xyxy`, `column`, `row`, `cell`, `centre_fraction`), `input_age_ms`, `processing_ms`, `inference_ms`, `labels`, up to 20 `detections` (`label`, `confidence`, `box_xyxy` in `detector_input_pixels`), `detection_count`, `native_size`, `detector_input_size`; Camera Data |
 | `last_result` | The last record of `detections` |
