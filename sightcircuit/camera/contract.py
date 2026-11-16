@@ -70,13 +70,16 @@ CONFIRMATIONS = ("parent", "terminal")
 PARENT_CONFIRMED_FLAG = "--parent-confirmed"  # Accepted by the helper only together with --export-frames.
 # The export mode's notice, printed verbatim by whichever side asks for the typed confirmation (owner decision
 # 2026-11-09). One text for both uses of the export (owner decision 14, 2026-11-16): bounded recognition without
-# display, and a display command that shows labels and approximate arrows in the headset and saves nothing.
+# display, and a display command that shows labels and approximate arrows in the headset and saves only the
+# report the operator names (revised 2026-11-16, work-order item L9: the display command has ``--report``).
+# The text is part of the contract digest; the layout and the protocol version (2) are unchanged.
 EXPORT_NOTICE = (
     "sightcircuit-camera-helper --export-frames: activates this client's frame reader for the selected passthrough "
     "cameras and exports their frames, within the frame and time bounds shown below, to the parent process, which runs "
     "object detection on them. Detections are Camera Data. A recognition command saves counts, labels, boxes and "
     "timings only to the report you name and shows nothing; a display command shows labels and approximate arrows in "
-    "the headset and saves nothing. Neither saves an image and neither shows a camera image. No camera control is "
+    "the headset and saves only the report you name (counts, labels, boxes and timings). Neither saves an image and "
+    "neither shows a camera image. No camera control is "
     "written and the recording LED is untouched. The export ends on its bound, on a stop signal, when the headset is removed or on standby. Watch "
     "passthrough during the run and for 30 seconds afterwards. Type yes to continue.")
 # End reasons that complete a run the operator asked for; every other reason is a failure of the helper's.

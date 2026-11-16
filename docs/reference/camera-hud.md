@@ -7,8 +7,8 @@ the joint between the left-camera frame source
 ([L6](hud-runtime.md#row-selection)) and the bridge's observed-frame path
 ([L7](overlay.md#fixed-hud-mode-work-order-item-l7-2026-11-16)).
 
-**Status: library code, cloud-checked only.** No command constructs the stage
-(that is L9), it opens no gate, and real output is refused unless a
+**Status: cloud-checked only.** The [`camera_hud` command](#the-command-l9)
+(L9) constructs the stage; it opens no gate, and real output is refused unless a
 [one-run scope record](#the-one-run-scope-record) verifies (L10). Everything below
 is checked against the camera stand-in, the validation bridge and, for the
 real-output path, a fake OpenVR runtime that logs the bridge's calls. None of
@@ -448,7 +448,119 @@ exception's message is therefore never in the report; `status`, `reason` and
 `error_type` are. The placement numbers in the bridge's `fixed_hud` block are
 the HUD contract's constants.
 
+## The command (L9)
+
+`sightcircuit/commands/camera_hud.py` is the fifteenth command; the
+[camera HUD guide](../guides/camera-hud.md) owns the operator procedure. It
+is the only code that builds a `RunScope`, and it has three modes.
+
+**`--validate`** runs `run_camera` on the helper's fake backend with a
+scripted detector and the validation bridge, then the synthetic rows on the
+validation bridge with one stop. Before asking the helper to export anything
+it reads the helper's `--describe` record (no connect, no camera) and refuses
+unless it says `backend: fake` with no SDK release. It needs no record and no
+terminal.
+
+**`--synthetic-rows`** runs `SyntheticRows`
+(`sightcircuit/hud/synthetic_rows.py`), the driver of step L-D3. It sends one
+observed frame five times a second, a tile whose single names-only row is
+`count NNNN`, with `observed_ns` the time the tile was drawn and a deadline
+one second later. `schedule(seconds, stops, stop_seconds)` splits the run
+into `stops + 1` segments of updates with a stop between each (2 to 10 s
+each, at most 8 stops, at most 120 s in all, at least one second of updates
+per segment). In a stop no frame and no hide request is sent, so the bridge
+takes the tile down at the last frame's deadline by itself; the client's
+keepalive does write one show request per stop, which the bridge, with
+nothing presented, answers `no_image`. The report
+(`camera_hud_synthetic_rows`) pairs each stop with the bridge's
+`frame_expired` line for the frame that was up. The bound is two named
+parameters of the driver, with acceptance row G9 as their source, both
+measured from the frame's deadline: `hide_called_within_ms` (one bridge
+poll, 20 ms) and `hide_returned_allowance_ms` (250 ms by default, a proposed
+value under the owner's review). Each stop reports both measured values and
+the verdict of each (`hide_called_within_poll`,
+`hide_returned_within_allowance`), the same times from the observation, and
+`within_bound_as_written` for the row's own wording (1,000 ms plus one poll
+from the observation), so the evidence stands whatever bound is accepted. On
+the validation bridge there are no hide times; the time the bridge noticed
+the expiry stands in for the hide's call and the second verdict is null. The camera is never opened and
+`camera_derived` is false by construction: the row's text is built from the
+counter alone.
+
+**`--camera`** runs `run_camera`: `CameraHelperSource` on the left camera,
+the chosen detector, `CameraHudStage` and an `ObservedFrameClient` in real
+output carrying the run's `RunScope`. `--step` (L-D4 or L-D5) is required
+and must be the record's step. `--directions` or `--names-only` and
+`--orientation` are required and passed to the stage. The client's own bound
+on real output is the scope's seconds: the run's `--seconds`, which also
+bound the stage and the helper; for the synthetic rows it is `--seconds`
+plus a 10 s allowance for the bridge's start. The run is on the main
+thread, the helper under the supervision primitive, and never routed through
+`ReplayWorker` or the live runner.
+
+**Signals.** In both device modes, from the typed `yes` until the report is
+printed, SIGINT, SIGTERM and SIGHUP are recorded and never raised
+(`guard.cancellation`). The run stops at the next 50 ms poll, its teardown
+finishes, and the report is the run's own, `cancelled` with reason `signal`,
+however many signals arrive and whenever (during the record's verification,
+the bridge's start, the run or the teardown). The previous handlers are
+restored afterwards and no thread or descriptor is left behind. A terminal's
+Ctrl-C also reaches the bridge, which shares the foreground process group:
+it retires its overlay and exits 0 by itself, and this side's next write
+fails. A run that saw a signal and whose bridge reported a clean retirement
+of its own is `cancelled` with `cleanup.bridge_ok` true
+(`camera_stage.bridge_retired_itself`; `end.bridge_left_on_signal` or
+`end.bridge_left_on_stop` says so). Without a signal the same bridge exit is
+still an error. That judgement is the stage's and the driver's; the client's
+own `cleanup_confirmed` is unchanged.
+
+**Preconditions before the record.** The `--report` path (before the
+question), the pinned helper and bridge, the helper's lock directory
+(`XDG_RUNTIME_DIR`, by the helper's own rule), the detector and the target
+label. The helper's supervision waits `ATTACH_SECONDS` (the bridge's ready
+wait plus 5 s) for the pipeline to attach, because the pipeline starts the
+bridge first; a bridge that takes six seconds no longer ends the run.
+
+**The target label's intervals.** With `--target-label` the stage keeps that
+label's display intervals in a budget of their own (128) and every other
+label shares the rest (128), so other labels flickering cannot drop one of
+the target's intervals and void its G10 verdict
+(`labels.target_spells_dropped`).
+
+In both device modes the order is: the parser's checks; the informed start on
+the terminal (`sightcircuit/camera/confirmation.py`, shared with
+`camera_recognize`); then the cheap preconditions (the pinned helper and
+bridge exist, the detector loads, the target label is one of its classes),
+checked before the record so a typo does not spend it; then the stage or the
+driver, whose first act is the permission check. A gate's refusal ends
+`refused` with nothing launched. The typed answer never creates a record and
+never stands in for one.
+
+The `--camera` report is the stage's report plus `command`, `scope_record`,
+`marks`, `timebase` and `target`, checked by `check_report` with the
+command's field table and a size limit of 61,440 bytes (the stage's 40,960
+plus 20,480 for those blocks; still well under one tile). `target` is
+`named_in_window` for `--target-label` with row G10's numbers (60 s, 90%,
+2 s). A report that does not fit its schema, the stage's or the driver's own
+included, is replaced by a short error report that says so
+(`report_replaced: true`) and keeps the command's block, the scope's block
+and the cleanup verdicts; it is never printed as it is.
+
 ## Cloud checks
+
+`tests/test_camera_hud_command.py` covers the command: validate mode on the
+helper's fake build, and its refusal of every helper that does not describe
+itself as the fake; the parser's refusals; no terminal, a declined answer and
+a typed `yes` without a record, each with nothing launched and no record
+written; a record for the wrong source, the mirror, both cameras, another
+runner, a longer run and an expired record; the cheap preconditions leaving
+the record unspent; the synthetic-rows schedule; and, on `--fixed-hud`
+against the fake runtime under a test fixture record (a temporary checkout
+whose pinned bridge is a copy of the bridge built here and whose pinned
+helper is the camera stand-in), the synthetic rows expiring at each stop and
+returning after it, the camera mode end to end, a headset removal, and the
+command line from the typed `yes` to the saved report, with the second
+launch on the same record refused.
 
 `tests/test_observed_frame_client.py` (standard library, validation bridge):
 the packets and their order, the take-down and the show, the end latch and a

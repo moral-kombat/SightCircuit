@@ -621,8 +621,10 @@ counts-only summaries of the recognition report (G7, G8), every
 `frame_expired` record with its hide times (G9, G10), the exposure-minus-acquire
 offset as a timing, per-label display seconds and the longest gap (G10), and
 the wearer's observations. No pixel, still, preview or calibration value is
-recorded anywhere. The camera-HUD report template follows the stage's report
-(work-order items L8 and L9).
+recorded anywhere. The
+[camera-HUD device report template](templates/camera-hud-device-report.json)
+follows the stage's report (work-order items L8 and L9); the
+[camera HUD guide](guides/camera-hud.md) owns the operator procedure.
 
 ## Risks
 

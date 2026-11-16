@@ -54,7 +54,7 @@ constexpr char kBoundedEndReasons[] = "max_seconds,max_frames,stop_signal";
 constexpr char kConfirmationParent[] = "parent";
 constexpr char kConfirmationTerminal[] = "terminal";
 constexpr char kParentConfirmedFlag[] = "--parent-confirmed";
-constexpr char kExportNotice[] = "sightcircuit-camera-helper --export-frames: activates this client's frame reader for the selected passthrough cameras and exports their frames, within the frame and time bounds shown below, to the parent process, which runs object detection on them. Detections are Camera Data. A recognition command saves counts, labels, boxes and timings only to the report you name and shows nothing; a display command shows labels and approximate arrows in the headset and saves nothing. Neither saves an image and neither shows a camera image. No camera control is written and the recording LED is untouched. The export ends on its bound, on a stop signal, when the headset is removed or on standby. Watch passthrough during the run and for 30 seconds afterwards. Type yes to continue.";
+constexpr char kExportNotice[] = "sightcircuit-camera-helper --export-frames: activates this client's frame reader for the selected passthrough cameras and exports their frames, within the frame and time bounds shown below, to the parent process, which runs object detection on them. Detections are Camera Data. A recognition command saves counts, labels, boxes and timings only to the report you name and shows nothing; a display command shows labels and approximate arrows in the headset and saves only the report you name (counts, labels, boxes and timings). Neither saves an image and neither shows a camera image. No camera control is written and the recording LED is untouched. The export ends on its bound, on a stop signal, when the headset is removed or on standby. Watch passthrough during the run and for 30 seconds afterwards. Type yes to continue.";
 
 // Frames: delivered format, bounds, cameras
 constexpr char kFourcc[] = "BGR3";
@@ -91,5 +91,5 @@ constexpr std::uint32_t kMinFrames = 1;
 constexpr std::uint32_t kMaxFrames = 900;
 
 // SHA-256 of every value above; the helper may report it in ready.build.
-constexpr char kContractDigest[] = "ce91ee49dbb39a677af08a9bec87bdd63a75767bb4a95e21b8132857f46bfcec";
+constexpr char kContractDigest[] = "f3afd174074dd70fcfde4cbdf4cd4f039bb4510c8da4fbc1785c0bebb0e600a4";
 } // namespace sightcircuit_camera_export

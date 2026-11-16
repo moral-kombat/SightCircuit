@@ -74,6 +74,7 @@ from .contract import HUD_CONFIG, MAX_DISPLAY_AGE_MS, MAX_DISPLAY_AGE_NS, ROW_LA
 from .render import draw_tile
 
 __all__ = ("CAMERA_INPUT_REFUSAL", "MAX_REPORT_BYTES", "REPORT_KIND", "CameraHudStage", "DisplayLedger",
+           "bridge_retired_itself",
            "camera_display_input_permitted", "check_report", "named_in_window", "report_value", "window_verdict")
 
 REPORT_KIND = "camera_hud_stage"
@@ -96,6 +97,10 @@ INTEGER_RANGE = (-2 ** 63, 2 ** 64)  # What a 64-bit counter or nanosecond clock
 # bytes each, 11.5 kB) and up to MAX_REPORTED_EXPIRIES expiry events (about 400 bytes each, 12.8 kB), plus margin.
 MAX_REPORT_BYTES = 40_960
 MAX_SPELLS = 256  # Display intervals kept over all labels; later ones are counted in ``spells_dropped``.
+# With a target label (the class a run's acceptance verdict is about) the budget is split, so that other labels
+# flickering can never drop one of the target's intervals and void its verdict: the target has this many of its
+# own (``target_spells_dropped`` counts what exceeds them) and every other label shares the rest.
+MAX_TARGET_SPELLS = 128
 MAX_REPORTED_EXPIRIES = 32  # ``frame_expired`` events repeated in the report; the count covers them all.
 # Keys of the embedded source and bridge reports that hold prose, paths or argument vectors: left out by name.
 WITHHELD_KEYS = ("error", "detail", "path", "arguments", "definition", "scope", "observed_ns_clock")
@@ -114,12 +119,13 @@ REPORT_BLOCKS = {
                "retransmitted", "refused", "expired", "expired_in_upload"),
     "deadlines": ("cap_ms", "max_deadline_after_observation_ms", "within_cap"),
     "end": ("run_start_ns", "ended_ns", "timebase", "tile_already_down", "hide_written_ns", "hide_written_after_end_ms",
-            "bridge_hide_returned_ns", "bridge_hide_after_end_ms", "bridge_ended_first"),
+            "bridge_hide_returned_ns", "bridge_hide_after_end_ms", "bridge_ended_first", "bridge_left_on_signal"),
     "timings": ("percentile_method", "input_age_ms", "inference_ms", "processing_ms", "result_age_ms", "output_age_ms",
                 "capture_to_display_age_ms"),
     "frame_expired": ("count", "recorded", "dropped", "bridge_poll_ms", "max_noticed_after_deadline_ms",
                       "max_hide_returned_after_deadline_ms", "hide_times_reported", "events"),
-    "labels": ("basis", "timebase", "run_start_ns", "run_end_ns", "spells_dropped", "physical_display_observed", "rows"),
+    "labels": ("basis", "timebase", "run_start_ns", "run_end_ns", "spells_dropped", "target_label",
+               "target_spells_dropped", "physical_display_observed", "rows"),
     "pipeline": ("frames_received", "frames_processed", "frames_submitted", "stale_inputs_skipped",
                  "stale_results_skipped", "pending_replaced", "elapsed_ms", "processed_fps", "cancelled",
                  "sink_clear_ok", "sink_close_ok", "stage_ms", "capture_thread_alive"),
@@ -176,8 +182,15 @@ def _check(value, path, key, depth):
         refuse()
 
 
-def check_report(report):
+def check_report(report, blocks=None, max_bytes=None):
     """Raise ``ValueError('camera_hud_report_field_invalid:<path>')`` unless ``report`` fits the report schema.
+
+    ``blocks`` is the schema's field table, ``REPORT_BLOCKS`` (the stage's
+    report) unless a caller with a report of its own passes another: the
+    ``camera_hud`` command does, for the stage's report plus its own blocks
+    and for the synthetic-rows report. Every rule below applies to any table.
+    ``max_bytes`` is the size limit, ``MAX_REPORT_BYTES`` unless that caller
+    passes its own for a report with more blocks.
 
     What is enforced:
 
@@ -202,9 +215,10 @@ def check_report(report):
     would pass. ``report_value`` and the fixed set of fields the stage
     writes are what keep that out, not this function.
     """
-    if type(report) is not dict or set(report) != set(REPORT_BLOCKS):
+    blocks = REPORT_BLOCKS if blocks is None else blocks
+    if type(report) is not dict or set(report) != set(blocks):
         raise ValueError("camera_hud_report_field_invalid:report")
-    for name, keys in REPORT_BLOCKS.items():
+    for name, keys in blocks.items():
         value = report[name]
         if keys is None:
             if type(value) in (dict, list):
@@ -212,7 +226,7 @@ def check_report(report):
         elif value is not None and (type(value) is not dict or not set(value) <= set(keys)):
             raise ValueError(f"camera_hud_report_field_invalid:report.{name}")
         _check(value, f"report.{name}", name, 1)
-    if len(json.dumps(report).encode()) > MAX_REPORT_BYTES:
+    if len(json.dumps(report).encode()) > (MAX_REPORT_BYTES if max_bytes is None else max_bytes):
         raise ValueError("camera_hud_report_field_invalid:report_size")
     return report
 
@@ -286,11 +300,13 @@ class DisplayLedger:
     last one ended extends it.
     """
 
-    def __init__(self):
+    def __init__(self, target_label=None):
         self.current = None  # (labels, start_ns, deadline_ns): the tile the bridge has up.
         self.waiting = None  # (labels, deadline_ns): presented, hidden, could still be shown.
         self.spells = {}  # label -> [[start_ns, end_ns], ...] in order.
-        self.count = self.dropped = 0
+        self.count = self.dropped = 0  # Of every label but the target.
+        self.target_label = target_label  # Its intervals have a budget of their own (``MAX_TARGET_SPELLS``).
+        self.target_count = self.target_dropped = 0
 
     def _end(self, at_ns):
         if self.current is None:
@@ -302,7 +318,13 @@ class DisplayLedger:
             spells = self.spells.get(label)
             if spells and spells[-1][1] == start:
                 spells[-1][1] = at_ns
-            elif self.count < MAX_SPELLS:
+            elif self.target_label is not None and label == self.target_label:
+                if self.target_count < MAX_TARGET_SPELLS:
+                    self.spells.setdefault(label, []).append([start, at_ns])
+                    self.target_count += 1
+                else:
+                    self.target_dropped += 1
+            elif self.count < (MAX_SPELLS if self.target_label is None else MAX_SPELLS - MAX_TARGET_SPELLS):
                 self.spells.setdefault(label, []).append([start, at_ns])
                 self.count += 1
             else:
@@ -416,10 +438,14 @@ def named_in_window(report, label, *, window_seconds, fraction, max_gap_seconds)
     no gap over ``max_gap_seconds``, from the report's own intervals and its run start and end.
 
     A label the report never booked gives ``found`` false. The verdict is
-    void (``ValueError``) when the report dropped intervals.
+    void (``ValueError``) when the report dropped intervals of that label:
+    the run's target label has a budget of its own
+    (``target_spells_dropped``), every other label shares ``spells_dropped``.
     """
     labels = report["labels"]
-    if labels["spells_dropped"]:
+    # A run's target label has intervals of its own: only its own dropped intervals void its verdict.
+    own = labels.get("target_label") is not None and labels.get("target_label") == label
+    if labels.get("target_spells_dropped") if own else labels["spells_dropped"]:
         raise ValueError("camera_hud_window_intervals_incomplete")
     if labels["run_start_ns"] is None or labels["run_end_ns"] is None:
         raise ValueError("camera_hud_window_run_not_bounded")
@@ -448,6 +474,29 @@ def _real(value, reason, *, low, high=None, low_open=False):
 
 
 CAMERA_INPUT_REFUSAL = "camera_display_input_not_approved"
+
+
+def bridge_retired_itself(report, client):
+    """Whether the bridge of ``client`` left by itself and cleanly, from the client's ``close()`` report.
+
+    Reaped with exit 0, not forced, and its own final report says the mode
+    this client started, exit 0, cleanup, and in real output a returned
+    hide, texture clear and destroy. That is everything
+    ``cleanup_confirmed`` asks except that this side's writer was still
+    writing when the bridge went. A terminal's Ctrl-C goes to the whole
+    foreground process group, so the bridge receives the signal too and
+    retires before this side has sent its stop; a runner that also saw the
+    signal reads that as a cancellation with a clean bridge, never as a
+    failure. Without a signal of its own a runner must not use this.
+    """
+    report = report or {}
+    native = report.get("native_report") or {}
+    if not (report.get("worker_reaped") is True and report.get("worker_exit_code") == 0
+            and report.get("forced_termination") is False and native.get("exit_code") == 0
+            and native.get("cleanup_ok") is True and native.get("mode") == client.bridge_mode()):
+        return False
+    return client.validation_only or all(native.get(name) is True for name in (
+        "hide_returned_ok", "clear_texture_returned_ok", "destroy_returned_ok"))
 
 
 def camera_display_input_preconditions(stage):
@@ -507,6 +556,11 @@ class CameraHudStage:
     HUD configuration, the only tile the bridge's fixed mode takes. The
     numbers are checked and turned into plain ``float`` and ``int`` here, so
     a NumPy scalar cannot fail the report at the end of a run.
+    ``target_label``, when given, is the label a run's verdict is about: its
+    display intervals get a budget of their own in the ledger.
+    ``signalled``, when given, is a callable that says whether the caller
+    recorded a stop signal for this run; with the source's own
+    ``cancelled`` it is how the stage knows a signal ended the run.
 
     ``run(stop)`` must be called on the main thread (the supervision
     primitive takes the process's signals). It refuses real output first
@@ -525,7 +579,8 @@ class CameraHudStage:
     """
 
     def __init__(self, source, detector, client, *, threshold=POC_THRESHOLD, directions=True, orientation="identity",
-                 max_fps=5, max_frames=0, seconds=None, config=HUD_CONFIG, convert=to_bgr):
+                 max_fps=5, max_frames=0, seconds=None, config=HUD_CONFIG, convert=to_bgr, target_label=None,
+                 signalled=None):
         if not isinstance(source, CameraHelperSource):
             raise ValueError("camera_hud_requires_camera_helper_source")
         if not isinstance(client, ObservedFrameClient):
@@ -549,7 +604,10 @@ class CameraHudStage:
         self.directions, self.orientation, self.convert = directions, orientation, convert
         self.pipeline = self.failure = None
         self.status, self.reason = "not_run", None
-        self.ledger = DisplayLedger()
+        if target_label is not None and not _label(target_label):
+            raise ValueError("camera_hud_target_label_invalid")
+        self.ledger = DisplayLedger(target_label)
+        self.signalled = signalled  # A callable: whether the caller recorded a stop signal for this run.
         self.counts = dict.fromkeys(("results", "results_with_rows", "results_without_rows", "results_too_old",
                                      "results_after_end", "frames_queued", "frames_sent", "frames_not_sent",
                                      "frames_written_past_deadline", "frames_presented", "frames_refused"), 0)
@@ -736,16 +794,39 @@ class CameraHudStage:
         gone = self.client.final_report is None or self.client.forced_termination
         return _identifier(self.client.error, "overlay_bridge_failed" if gone else "overlay_client_failed")
 
+    def _signalled(self):
+        """Whether a stop signal ended this run: the helper's supervision took one, or the caller recorded one."""
+        if self.source.status == "cancelled":
+            return True
+        try:
+            return self.signalled is not None and self.signalled() is True
+        except Exception:
+            return False
+
+    def _bridge_retired_itself(self):
+        return bridge_retired_itself(self._bridge_report, self.client)
+
+    def _excused(self):
+        """A client error that is only the bridge having left on the same signal that ended the run.
+
+        A terminal's Ctrl-C goes to the whole foreground process group, so
+        the bridge receives it too, retires its overlay and exits 0 while
+        this side's writer is still writing; the write then fails. That run
+        was cancelled, not failed, and its bridge cleaned up.
+        """
+        return bool(self.client.error) and self._signalled() and self._bridge_retired_itself()
+
     def _outcome(self):
         source, pipeline, failure = self.source, self.pipeline, self.failure
-        if self.client.error:
+        excused = self._excused()
+        if self.client.error and not excused:
             return "error", self._client_reason()
-        if failure is not None:
+        if failure is not None and not (excused and str(failure) == str(self.client.error)):
             return "error", (_identifier(getattr(failure, "reason", None), None)
                              or _identifier(str(failure), "camera_hud_run_failed"))
         if source.status == "presence_ended":
             return "presence_ended", _identifier(source.reason, "presence_ended")
-        if source.status == "cancelled":
+        if source.status == "cancelled" or self._signalled():
             return "cancelled", "signal"
         if source.status == "error":
             return "error", _identifier(source.reason, "camera_source_failed")
@@ -821,7 +902,9 @@ class CameraHudStage:
                 "tile_already_down": final is None and client.hidden,
                 "hide_written_ns": written, "hide_written_after_end_ms": after(written),
                 "bridge_hide_returned_ns": returned, "bridge_hide_after_end_ms": after(returned),
-                "bridge_ended_first": self.bridge_ended_first}
+                "bridge_ended_first": self.bridge_ended_first,
+                # The client's error is only the bridge having retired cleanly on the signal that ended the run.
+                "bridge_left_on_signal": self._excused()}
 
     def report(self):
         """The run's report: counts, labels, timings and format metadata, checked against ``check_report``."""
@@ -832,7 +915,7 @@ class CameraHudStage:
             counts = dict(self.counts)
             run_end_ns = self.ended_ns if self.ended_ns is not None else self.run_start_ns
             labels = self.ledger.rows(self.run_start_ns, run_end_ns) if self.run_start_ns is not None else []
-            spells_dropped = self.ledger.dropped
+            spells_dropped, target_dropped = self.ledger.dropped, self.ledger.target_dropped
         stats = pipeline.stats.report() if pipeline is not None else None
         native = (bridge or {}).get("native_report") or {}
         bridge_counts = {name: native.get(name) for name in BRIDGE_COUNTS}
@@ -859,7 +942,8 @@ class CameraHudStage:
                 "event": first["event"], "width": first["width"], "height": first["height"], "read_ns": first["read_ns"]}
             bridge_block["final_report"] = report_value({**native, "bridge_error": native.get("error")}, withheld)
         source_ok = source_report.get("cleanup_ok") is True
-        bridge_ok = bridge is not None and bridge.get("cleanup_confirmed") is True
+        # Confirmed by the client, or the bridge retired itself cleanly on the signal that ended the run.
+        bridge_ok = bridge is not None and (bridge.get("cleanup_confirmed") is True or self._excused())
         expiry = self._expiry(client.validation_only)
         expiry["events"] = report_value(expiry["events"], withheld)
         report = {
@@ -901,7 +985,9 @@ class CameraHudStage:
             "frame_expired": expiry,
             "labels": {"basis": "bridge_frame_presented_hide_show_and_expiry_lines", "timebase": HOST_CLOCK,
                        "run_start_ns": self.run_start_ns, "run_end_ns": run_end_ns if self.run_start_ns else None,
-                       "spells_dropped": spells_dropped, "physical_display_observed": False, "rows": labels},
+                       "spells_dropped": spells_dropped, "target_label": self.ledger.target_label,
+                       "target_spells_dropped": target_dropped if self.ledger.target_label is not None else None,
+                       "physical_display_observed": False, "rows": labels},
             "pipeline": pipeline_block,
             "source": report_value(source_report, withheld),
             "bridge": bridge_block,

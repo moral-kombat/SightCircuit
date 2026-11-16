@@ -46,13 +46,17 @@ class ScopeCase(checkpoint.CheckoutCase):
 
     def setUp(self):
         super().setUp()
-        for binary in (self.bridge, self.helper):  # Stand-ins the manifest pins; no test executes them.
-            binary.chmod(0o755)
+        self.install_binaries()
         self.write()  # The checkpoint manifest, at self.path.
         root = mock.patch.object(scope, "ROOT", self.root)
         root.start()
         self.addCleanup(root.stop)
         self.records = 0
+
+    def install_binaries(self):
+        """The bridge and the helper the manifest pins: here stand-in bytes that no test executes."""
+        for binary in (self.bridge, self.helper):
+            binary.chmod(0o755)
 
     def staged(self, step="L-D4", **options):
         """A record the writer made, as the Frame manager's tool would: ``(path, record)``."""
@@ -657,7 +661,7 @@ class OutputSiteTests(ScopeCase):
         self.assertEqual(require_calls("sightcircuit/observed_frames.py"), {"LIVE_HUD_OUTPUT": ["fixed_hud_output_permitted"]})
         self.assertEqual(users_of("fixed_hud_output_permitted("), ["sightcircuit/observed_frames.py"])
         self.assertEqual(users_of(".permit("), ["sightcircuit/hud/camera_stage.py", "sightcircuit/observed_frames.py"])
-        self.assertEqual(users_of("RunScope("), [])  # No library code builds a scope: the command will (L9).
+        self.assertEqual(users_of("RunScope("), ["sightcircuit/commands/camera_hud.py"])  # Only the command (L9).
 
 
 @unittest.skipUnless(NUMPY_CV2, "The camera HUD stage needs NumPy and OpenCV")

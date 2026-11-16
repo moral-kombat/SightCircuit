@@ -73,6 +73,8 @@ if not __package__:  # Run as a file: import the package beside this one.
 
 from sightcircuit import gates
 from sightcircuit.camera import contract, fake_export, marks
+# The informed start, shared with ``camera_hud`` (work-order item L9); the names stay this module's.
+from sightcircuit.camera.confirmation import CONFIRMATION_ANSWER, OPERATOR_TERMINAL, confirm_on_terminal  # noqa: F401
 from sightcircuit.camera.export_reader import ExportReader, ExportRefused
 from sightcircuit.convert import to_bgr
 from sightcircuit.detection import (DEFAULT_DETECTOR, DETECTORS, LIVE_INFERENCE_P95_BUDGET_MS, POC_THRESHOLD,
@@ -105,8 +107,6 @@ GATE_STATEMENT = ("Confirmed use outside the live-input gate (owner decision 202
 SCOPE = ("Bounded recognition on frames the camera helper exported; camera identity, clocks and the pixel path are "
          "what the helper declares; no display, no preview, no still; a device run needs the owner's approval")
 TIMINGS = ("input_age_ms", "processing_ms", "inference_ms")
-CONFIRMATION_ANSWER = "yes"
-OPERATOR_TERMINAL = "operator_terminal"  # The report's ``confirmation`` once the operator typed the answer here.
 
 
 def new_report(mode):
@@ -190,35 +190,6 @@ class Processor(threading.Thread):
 
     def report(self):
         return {name: sample.report() for name, sample in self.timings.items()}
-
-
-def confirm_on_terminal(limits, cameras, *, stdin=None, output=None):
-    """The informed start (owner decision 2026-11-09): print the helper's export notice and read the typed answer.
-
-    The notice (``contract.EXPORT_NOTICE``, verbatim) and the run's bounds go
-    to ``output`` (stderr, never the report stream); the answer is read from
-    ``stdin``, which must be an interactive terminal, and must be exactly
-    ``yes``. No flag, variable or piped text stands in for it. Returns
-    ``None`` when confirmed, else the named refusal:
-    ``confirmation_requires_terminal``, ``confirmation_unavailable`` (end of
-    input) or ``confirmation_declined``.
-    """
-    stdin = sys.stdin if stdin is None else stdin
-    output = sys.stderr if output is None else output
-    try:
-        interactive = stdin.isatty()
-    except (AttributeError, ValueError):
-        interactive = False
-    if not interactive:
-        return "confirmation_requires_terminal"
-    output.write(contract.EXPORT_NOTICE + "\n")
-    output.write(f"Bounds: {limits['max_frames']} frames, {limits['max_seconds']} seconds, {limits['fps']} frames a "
-                 f"second, cameras {','.join(str(index) for index in cameras)}.\nType {CONFIRMATION_ANSWER} to continue: ")
-    output.flush()
-    answer = stdin.readline()
-    if not answer:
-        return "confirmation_unavailable"
-    return None if answer.rstrip("\r\n \t") == CONFIRMATION_ANSWER else "confirmation_declined"
 
 
 def recognize(binary, limits, cameras, *, threshold=POC_THRESHOLD, detector=DEFAULT_DETECTOR, detector_factory=None,

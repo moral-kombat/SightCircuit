@@ -72,14 +72,14 @@ AGENT_FILES = ("scripts/frame_agent_guard.py", "scripts/frame_agent_run.py", "si
 # The camera HUD's group (work-order item L10): the helper the SDK build leaves in the ignored artifacts
 # directory, the translation units scripts/build_camera_helper.sh --sdk compiles with every local header they
 # include (tools/overlay_lifecycle.hpp is already in NATIVE_SOURCES), the shader source, the build script and
-# the scope-record staging tool. tests/test_checkpoint_manifest.py fails when the lists and the build drift.
+# the camera_hud command's wrapper (its body is in ``modules``) and the scope-record staging tool. tests/test_checkpoint_manifest.py fails when the lists and the build drift.
 CAMERA_HELPER = "artifacts/camera-helper/sightcircuit-camera-helper"
 CAMERA_HELPER_SOURCES = (
     "tools/camera_backend.hpp", "tools/camera_backend_sdk.cpp", "tools/camera_convert.comp",
     "tools/camera_convert_spirv.hpp", "tools/camera_export_protocol.hpp", "tools/camera_helper.cpp",
     "tools/camera_pixels.hpp", "tools/camera_pixels_cpu.cpp", "tools/camera_pixels_gpu.cpp",
     "tools/camera_sha256.hpp", "tools/camera_status_map.hpp", "tools/camera_ycbcr.hpp")
-CAMERA_HUD_SCRIPTS = ("scripts/build_camera_helper.sh", "scripts/stage_scope_record.py")
+CAMERA_HUD_SCRIPTS = ("scripts/build_camera_helper.sh", "scripts/camera_hud.py", "scripts/stage_scope_record.py")
 CAMERA_HUD_FILES = (CAMERA_HELPER, *CAMERA_HELPER_SOURCES, *CAMERA_HUD_SCRIPTS)
 CAMERA_GROUP = "camera_hud"
 BASE_GROUPS = ("agent", "assets", "bridge", "modules", "native_sources", "scripts")  # Every manifest carries these.
