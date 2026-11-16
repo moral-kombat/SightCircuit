@@ -1,4 +1,4 @@
-"""The camera helper's ``--export-frames`` mode on the fake build: camera export protocol version 1.
+"""The camera helper's ``--export-frames`` mode on the fake build: camera export protocol version 2.
 
 The fake backend serves memfd-backed linear NV12 and P010 frame sets with
 synthetic content (``tools/camera_backend_fake.cpp``); this module renders the
@@ -150,7 +150,7 @@ def parse_packets(data):
     while offset < len(data):
         magic, version, header_bytes, payload_bytes = PREFIX.unpack_from(data, offset)
         assert magic == MAGIC, (magic, offset)
-        assert version == 1, version
+        assert version == 2, version
         assert header_bytes <= 16384 and payload_bytes <= 33554432
         offset += PREFIX.size
         header = json.loads(data[offset:offset + header_bytes].decode("utf-8"))
@@ -189,15 +189,15 @@ def lavapipe_manifests():
 
 
 class ProtocolConstantsTests(unittest.TestCase):
-    def test_the_protocol_header_pins_camera_export_v1(self):
+    def test_the_protocol_header_pins_camera_export_v2(self):
         """The generated header (sightcircuit.camera.contract, S7) carries the values this module tests against."""
         text = PROTOCOL_HEADER.read_text()
         strings = dict(re.findall(r"constexpr char (\w+)\[\] = \"([^\"]*)\";", text))
         numbers = {name: int(value) for name, value in re.findall(r"constexpr std::uint32_t (\w+) = (\d+);", text)}
         self.assertEqual(strings["kMagic"], "SCCF")
-        self.assertEqual(strings["kProtocol"], "camera-export/1")
+        self.assertEqual(strings["kProtocol"], "camera-export/2")
         self.assertEqual((numbers["kVersion"], numbers["kPrefixBytes"], numbers["kMaxHeaderBytes"], numbers["kMaxPayloadBytes"]),
-                         (1, 16, 16384, 33554432))
+                         (2, 16, 16384, 33554432))
         self.assertEqual((numbers["kPrefixMagicOffset"], numbers["kPrefixVersionOffset"], numbers["kPrefixHeaderBytesOffset"],
                           numbers["kPrefixPayloadBytesOffset"]), (0, 4, 8, 12))
         self.assertEqual((strings["kKindReady"], strings["kKindFrame"], strings["kKindEnd"]), ("ready", "frame", "end"))
@@ -217,7 +217,7 @@ class ProtocolConstantsTests(unittest.TestCase):
                          END_REASONS)
         self.assertEqual(strings["kPixelPathUndecided"], "undecided")
         self.assertEqual((numbers["kMinFps"], numbers["kMaxFps"], numbers["kMinSeconds"], numbers["kMaxSeconds"],
-                          numbers["kMinFrames"], numbers["kMaxFrames"]), (1, 10, 1, 60, 1, 600))
+                          numbers["kMinFrames"], numbers["kMaxFrames"]), (1, 10, 1, 90, 1, 900))
         self.assertEqual((numbers["kMaxSide"], numbers["kMaxPlanes"], numbers["kCameraCount"]), (4096, 4, 2))
         self.assertRegex(strings["kContractDigest"], r"^[0-9a-f]{64}$")
         # Constants only: no function, no class, no include beyond <cstdint>.
@@ -347,7 +347,7 @@ class CameraExportTests(unittest.TestCase):
         self.assertEqual(end["kind"], "end")
         self.assertEqual([header["kind"] for header, _ in packets[1:-1]], ["frame"] * (len(packets) - 2))
         self.assertEqual(tuple(ready), READY_KEYS)
-        self.assertEqual(ready["protocol"], 1)
+        self.assertEqual(ready["protocol"], 2)
         self.assertEqual(ready["backend"], "fake")
         self.assertEqual(ready["pixel_path"], "undecided" if undecided else pixel_path)
         if undecided:
@@ -488,7 +488,7 @@ class CameraExportTests(unittest.TestCase):
         while offset < len(out):
             self.assertEqual(out[offset:offset + 4], MAGIC)
             version, header_bytes, payload_bytes = struct.unpack_from("<III", out, offset + 4)
-            self.assertEqual(version, 1)
+            self.assertEqual(version, 2)
             header_text = out[offset + 16:offset + 16 + header_bytes]
             header = json.loads(header_text.decode("utf-8"))
             self.assertEqual(header_text, header_text.strip())  # no newline or padding around the JSON
@@ -510,7 +510,7 @@ class CameraExportTests(unittest.TestCase):
                                                                   {"offset": 32, "stride": 8, "size": 16}])
         # Rebuild the frame packet from its parts: the prefix is exactly these sixteen bytes.
         prefix = out[out.index(b"SCCF", 16):out.index(b"SCCF", 16) + 16]
-        self.assertEqual(prefix, MAGIC + struct.pack("<III", 1, len(json.dumps(header, separators=(",", ":"))), 96))
+        self.assertEqual(prefix, MAGIC + struct.pack("<III", 2, len(json.dumps(header, separators=(",", ":"))), 96))
         self.assertEqual(seen[0][1], b"")
         self.assertEqual(seen[2][1], b"")
 
@@ -543,16 +543,23 @@ class CameraExportTests(unittest.TestCase):
         self.assertEqual((end["reason"], end["counts"]["exported"]), ("max_frames", 3))
         self.assertEqual([header["camera_index"] for header, _ in packets[1:-1]], [0, 1, 0])
         started = time.monotonic()
-        code, packets, _ = self.export("export_nv12", max_seconds=1, max_frames=600, fps=1)
+        code, packets, _ = self.export("export_nv12", max_seconds=1, max_frames=900, fps=1)
         elapsed = time.monotonic() - started
         self.assertEqual(code, 0)
-        _, end = self.check_stream(packets, "export_nv12")
+        ready, end = self.check_stream(packets, "export_nv12")
+        self.assertEqual(ready["limits"], {"fps": 1, "max_seconds": 1, "max_frames": 900})  # v2's frame bound.
         self.assertEqual(end["reason"], "max_seconds")
         self.assertIn(end["counts"]["exported"], (1, 2))
         self.assertGreaterEqual(end["elapsed_ns"], 1_000_000_000)
         self.assertLess(end["elapsed_ns"], 2_500_000_000)
         self.assertLess(elapsed, 6)
         self.assertGreater(end["counts"]["dropped"], 20)
+        # Camera export v2's time bound is accepted and echoed; the frame bound ends the run long before it.
+        code, packets, _ = self.export("export_nv12", max_seconds=90, max_frames=2)
+        self.assertEqual(code, 0)
+        ready, end = self.check_stream(packets, "export_nv12")
+        self.assertEqual(ready["limits"], {"fps": 10, "max_seconds": 90, "max_frames": 2})
+        self.assertEqual((ready["protocol"], end["reason"], end["counts"]["exported"]), (2, "max_frames", 2))
 
     # -- the ends the agreement asks for, and the others --------------------------------------
 
@@ -829,7 +836,7 @@ class CameraExportTests(unittest.TestCase):
                 torn = True
                 break
             magic, version, header_bytes, payload_bytes = PREFIX.unpack_from(out, offset)
-            self.assertEqual((magic, version), (MAGIC, 1))
+            self.assertEqual((magic, version), (MAGIC, 2))
             if offset + PREFIX.size + header_bytes + payload_bytes > len(out):
                 torn = True
                 break
@@ -888,8 +895,8 @@ class CameraExportTests(unittest.TestCase):
         base = ["--export-frames", "--max-seconds", 2, "--max-frames", 3]
         cases = (
             ["--export-frames"], ["--export-frames", "--max-seconds", 2], ["--export-frames", "--max-frames", 3],
-            ["--export-frames", "--max-seconds", 0, "--max-frames", 3], ["--export-frames", "--max-seconds", 61, "--max-frames", 3],
-            ["--export-frames", "--max-seconds", 2, "--max-frames", 0], ["--export-frames", "--max-seconds", 2, "--max-frames", 601],
+            ["--export-frames", "--max-seconds", 0, "--max-frames", 3], ["--export-frames", "--max-seconds", 91, "--max-frames", 3],
+            ["--export-frames", "--max-seconds", 2, "--max-frames", 0], ["--export-frames", "--max-seconds", 2, "--max-frames", 901],
             base + ["--fps", 0], base + ["--fps", 11], base + ["--fps", "5.0"], base + ["--fps"],
             base + ["--cameras", "2"], base + ["--cameras"], base + ["--cameras", "left"], base + ["--cameras", "0,0"],
             base + ["--cameras", "0,1,"], base + ["--cameras", ",1"], base + ["--cameras", "0, 1"], base + ["--camera", "0"],

@@ -1,4 +1,4 @@
-"""Camera export v1: the packet stream of ``sightcircuit-camera-helper --export-frames``, as data.
+"""Camera export v2: the packet stream of ``sightcircuit-camera-helper --export-frames``, as data.
 
 The helper's stdout is a sequence of packets and nothing else. A packet is a
 16-byte prefix (``PREFIX_FORMAT``: the magic ``SCCF``, the version, the header
@@ -27,15 +27,23 @@ from this module (``sightcircuit.camera.native``); ``export_reader`` enforces
 it. Detections derived from these frames are Camera Data under the SDK
 agreement (sections 1 and 3.2): saving or sending them needs the operator's
 explicit, informed authorization. Nothing here opens a camera or lifts a gate.
+
+Version 2 (owner decision 4, 2026-11-16) differs from version 1 in the run
+limits (``max_seconds`` to 90 and ``max_frames`` to 900, where version 1 had 60
+and 600) and in the notice text; the packet layout and the header fields are
+unchanged. The two versions refuse each other on the first packet: the prefix
+carries ``VERSION``, a reader accepts only its own (``unsupported_version``),
+and ``ready.protocol`` repeats it. A helper binary is therefore rebuilt from
+the checkout whose reader will launch it.
 """
 from dataclasses import dataclass
 import struct
 
 from ..frame import MAX_NATIVE_SIDE
 
-PROTOCOL = "camera-export/1"
+PROTOCOL = "camera-export/2"
 MAGIC = b"SCCF"
-VERSION = 1
+VERSION = 2
 # The packet prefix: magic, version, header_bytes, payload_bytes; little-endian, 16 bytes.
 PREFIX_FIELDS = (("magic", "4s"), ("version", "I"), ("header_bytes", "I"), ("payload_bytes", "I"))
 PREFIX_FORMAT = "<" + "".join(code for _, code in PREFIX_FIELDS)
@@ -60,13 +68,16 @@ END_REASONS = ("max_seconds", "max_frames", "stop_signal", "headset_removed", "s
 # the helper's own terminal; ``ready`` and ``end`` say which.
 CONFIRMATIONS = ("parent", "terminal")
 PARENT_CONFIRMED_FLAG = "--parent-confirmed"  # Accepted by the helper only together with --export-frames.
-# The export mode's notice, printed verbatim by whichever side asks for the typed confirmation (owner decision 2026-11-09).
+# The export mode's notice, printed verbatim by whichever side asks for the typed confirmation (owner decision
+# 2026-11-09). One text for both uses of the export (owner decision 14, 2026-11-16): bounded recognition without
+# display, and a display command that shows labels and approximate arrows in the headset and saves nothing.
 EXPORT_NOTICE = (
     "sightcircuit-camera-helper --export-frames: activates this client's frame reader for the selected passthrough "
     "cameras and exports their frames, within the frame and time bounds shown below, to the parent process, which runs "
-    "object detection on them. Detections are Camera Data: the parent saves counts, labels, boxes and timings only to "
-    "the report you name, and no image is saved or shown anywhere. No camera control is written and the recording LED "
-    "is untouched. The export ends on its bound, on a stop signal, when the headset is removed or on standby. Watch "
+    "object detection on them. Detections are Camera Data. A recognition command saves counts, labels, boxes and "
+    "timings only to the report you name and shows nothing; a display command shows labels and approximate arrows in "
+    "the headset and saves nothing. Neither saves an image and neither shows a camera image. No camera control is "
+    "written and the recording LED is untouched. The export ends on its bound, on a stop signal, when the headset is removed or on standby. Watch "
     "passthrough during the run and for 30 seconds afterwards. Type yes to continue.")
 # End reasons that complete a run the operator asked for; every other reason is a failure of the helper's.
 BOUNDED_END_REASONS = ("max_seconds", "max_frames", "stop_signal")
@@ -84,8 +95,9 @@ U64_MAX = 2**64 - 1
 I64_MIN, I64_MAX = -2**63, 2**63 - 1
 
 # The run limits the helper accepts (``--fps``, ``--max-seconds``, ``--max-frames``) and echoes in ``ready``: the
-# helper's own bounds (work-order item S6). ``camera_recognize`` asks for at most 30 s and 300 frames (item S7).
-LIMITS = {"fps": (1, 10), "max_seconds": (1, 60), "max_frames": (1, 600)}
+# helper's own bounds (work-order item S6, raised by item L4 so the 60 s display acceptance has margin).
+# ``camera_recognize`` asks for at most 30 s and 300 frames (item S7). The frame ``sequence`` bound follows.
+LIMITS = {"fps": (1, 10), "max_seconds": (1, 90), "max_frames": (1, 900)}
 
 
 @dataclass(frozen=True)

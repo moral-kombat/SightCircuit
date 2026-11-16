@@ -73,9 +73,10 @@ constexpr int64_t kPresenceGapNs = 2000000000ll;
 constexpr int64_t kConsumerStallNs = 2000000000ll;
 constexpr int64_t kEndPacketGraceNs = 1000000000ll;
 constexpr unsigned kConvertWatchdogSeconds = 10;
-constexpr unsigned kMaxExportFps = 10;
-constexpr unsigned kMaxExportSeconds = 60;
-constexpr unsigned kMaxExportFrames = 600;
+// The export mode's flag ranges are the contract's (camera_export_protocol.hpp, generated): 1-10, 1-90, 1-900.
+constexpr unsigned kMaxExportFps = sightcircuit_camera_export::kMaxFps;
+constexpr unsigned kMaxExportSeconds = sightcircuit_camera_export::kMaxSeconds;
+constexpr unsigned kMaxExportFrames = sightcircuit_camera_export::kMaxFrames;
 constexpr unsigned kMaxProbeSeconds = 10;
 
 #ifdef SIGHTCIRCUIT_CAMERA_BACKEND_FAKE
@@ -467,9 +468,9 @@ const char* usage_text() {
            "                                              one pass per M ms (100-1000, default 200); no pixels are read\n"
            "  --export-frames --max-seconds S --max-frames N [--fps F] [--cameras 0|1|0,1]\n"
            "                 [--pixel-path auto|cpu_linear|gpu_convert] [--timeout-ms T] [--parent-confirmed]\n"
-           "                                              BGR3 frames to the parent over stdout (camera export protocol 1),\n"
-           "                                              at most F per second (1-10, default 5), S seconds (1-60) and\n"
-           "                                              N frames (1-600); stdout must be a pipe; stderr carries JSON lines;\n"
+           "                                              BGR3 frames to the parent over stdout (camera export protocol 2),\n"
+           "                                              at most F per second (1-10, default 5), S seconds (1-90) and\n"
+           "                                              N frames (1-900); stdout must be a pipe; stderr carries JSON lines;\n"
            "                                              --parent-confirmed: the parent process gave the confirmation\n"
            "  --timeout-ms N                              connect timeout, 1-10000 (default 2000)\n"
            "--hello, --probe-frames and --export-frames ask for confirmation on the terminal and take a lock in\n"

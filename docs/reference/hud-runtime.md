@@ -212,3 +212,52 @@ costs and limitations are retained in [E78](../evidence/e078.md) and the
 `scripts/evaluate_mask_fill.py` compares fills without changing the runtime.
 Its library is never imported by the live path. The
 [development procedure](../development.md#hud-mask-fill-evaluation) owns its commands.
+
+## Row selection
+
+A HUD row (`HudRow`) is a sanitised name, a score and an approximate view
+direction; it is never a position. Two selectors produce rows, and both end in
+the same hygiene, which `sightcircuit/hud/contract.py` owns:
+
+- `row_label(label)` keeps ASCII letters, digits, spaces, `_` and `-`, cuts
+  the result to 20 characters (`ROW_LABEL_CHARS`) and strips it. A label with
+  nothing left gets no row.
+- `select_rows(rows, limit)` orders rows by descending score, then label, then
+  direction, keeps the first of each `(label, direction)` pair and stops at
+  `limit` rows (`HudConfig.rows`, 3 in `fixed-edge-hud-v1`).
+
+`HudMask.select` is the masked selector for mirror-style input: it drops a box
+that touches a masked region or crosses an eye, and takes the direction from
+the box centre inside its own eye.
+
+`camera_rows(detections, frame_shape, config, *, threshold, directions=True,
+orientation="identity")` in `sightcircuit/hud/camera.py` is the mask-free
+selector for camera detections
+([work order item L6](../live-capture.md#camera-display-work-order-adopted-2026-11-16)).
+It uses no calibration, footprint or eye split, and a test pins that the module
+imports only `Detection` and the shared row names. A detection gets a row when
+its score is from `threshold` to 1 and its box is finite, nonempty and inside
+the frame; the caller passes the threshold (`POC_THRESHOLD`, 0.5, for the proof
+of concept). At most 128 detections are accepted per frame.
+
+- **With directions.** The direction is the 3x3 cell of the box centre over
+  the full frame: a centre fraction below 0.4 or above 0.6 on an axis leaves
+  the middle cell, and exactly 0.4 or 0.6 stays in it. The nine cells are the
+  eight directions and the centre `(0, 0)`, which the tile draws as a dot.
+- **Names only.** With `directions=False` every row carries `NO_DIRECTION`
+  (`None`), and rows deduplicate by name alone. `draw_tile` draws such a row's
+  name in its usual place with no arrow and no dot; rows that carry a
+  direction draw exactly as before, which pinned tile digests check. The
+  tile's fixed header line still reads "View direction (approx.)" on a
+  names-only tile; changing that is left to the runner item.
+- **Orientation.** Whether the camera image's axes match the wearer's view is
+  not measured; a device step decides it. `orientation` names the operation
+  that would make the image upright: `identity`, `flip_horizontal`,
+  `flip_vertical`, `rotate_180`, `rotate_90_cw`, `rotate_90_ccw`, `transpose`
+  or `transverse` (`ORIENTATIONS`). It turns the image cell into the view
+  direction. Identity is the default, not a finding.
+
+The selector opens no gate and displays nothing. A runner that shows its rows
+remains subject to `sightcircuit/gates.py`. Its tests
+(`tests/test_hud_camera_rows.py`) are cloud runs on generated detections, not
+Frame evidence.

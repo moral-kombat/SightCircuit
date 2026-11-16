@@ -1,4 +1,4 @@
-"""Strict reader of the camera export v1 packet stream (``sightcircuit.camera.contract``).
+"""Strict reader of the camera export v2 packet stream (``sightcircuit.camera.contract``).
 
 ``ExportReader`` reads packets from a binary stream or a file descriptor and
 validates every byte of framing and every header field against the contract:
@@ -223,7 +223,10 @@ class ExportReader:
         if magic != contract.MAGIC:
             raise self._refuse("bad_magic", f"packet {index} does not start with {contract.MAGIC!r}", index)
         if version != contract.VERSION:
-            raise self._refuse("unsupported_version", f"packet {index} declares version {version}", index)
+            raise self._refuse("unsupported_version",
+                               f"packet {index} declares camera export version {version}; this reader accepts only "
+                               f"version {contract.VERSION} ({contract.PROTOCOL}): rebuild the helper from this "
+                               "checkout (scripts/build_camera_helper.sh)", index)
         if header_bytes == 0:
             raise self._refuse("header_empty", f"packet {index} has no header", index)
         if header_bytes > contract.MAX_HEADER_BYTES:

@@ -14,6 +14,7 @@ import time
 if not __package__:  # Run as a file (self-spawned worker): import the package beside this one.
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from sightcircuit.detection import DEFAULT_DETECTOR, DETECTORS, POC_THRESHOLD, create_detector, describe
+from sightcircuit.gates import LIVE_IMAGE_INPUT
 from sightcircuit.pipeline import LatestResultSink, Pipeline, report_fields
 from sightcircuit.sources.replay import ReplaySource
 from sightcircuit.sources.recording import RecordingError, latest_recording
@@ -22,25 +23,37 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKER_JOIN_SECONDS = 5  # Shutdown wait; a worker still running afterwards fails the run.
 
 
+RECORDED_SOURCE_REQUIRED = "replay_live_source_not_approved"
+
+
 class ReplayWorker(threading.Thread):
-    """Run file replay through the shared pipeline; retain one latest result for the UI."""
+    """Run file replay through the shared pipeline; retain one latest result for the UI.
+
+    The worker is recorded-only. It builds its own ``ReplaySource`` from
+    ``path``; a caller may instead pass one it built, and nothing else: a
+    ``source`` that is not exactly a ``ReplaySource`` (a camera, the mirror, a
+    synthetic generator, a subclass or a look-alike) is refused through the
+    live-image gate before a pipeline or a sink exists, so no live frame can
+    reach the VR panel through this window. Recorded replay on the panel is
+    the confirmed use outside the gates (E47, ``sightcircuit/gates.py``); it
+    covers recordings only.
+    """
     def __init__(self, path, ordinal, threshold, max_fps, max_frames, sinks=(), detector=DEFAULT_DETECTOR,
                  realtime=False, decode_threads=2, source=None):
         super().__init__(daemon=True)
+        if source is None:
+            source = ReplaySource(path, ordinal, realtime=realtime, decode_threads=decode_threads)
+        LIVE_IMAGE_INPUT.require(type(source) is ReplaySource, RECORDED_SOURCE_REQUIRED)
         self.detector_name = detector
-        live = source is not None
-        self.source = source or ReplaySource(path, ordinal, realtime=realtime, decode_threads=decode_threads)
-        # Live sources have no transport; the controls become inert events.
-        self.playing = getattr(self.source, "playing", threading.Event())
-        self.restart = getattr(self.source, "restart", threading.Event())
-        self.looping = getattr(self.source, "looping", threading.Event())
-        self.at_end = getattr(self.source, "at_end", threading.Event())
+        self.source = source
+        self.playing, self.restart = source.playing, source.restart
+        self.looping, self.at_end = source.looping, source.at_end
         self.stopping, self.done = threading.Event(), threading.Event()
         self.results = LatestResultSink()
         # Realtime decoding runs on its own thread and only the newest frame is
         # processed; otherwise every decoded frame is processed in order.
         self.pipeline = Pipeline(self.source, None, (self.results, *sinks), threshold=threshold,
-                                 max_fps=max_fps, latest_only=live or realtime, max_frames=max_frames, join_timeout=5)
+                                 max_fps=max_fps, latest_only=source.realtime, max_frames=max_frames, join_timeout=5)
         self.error = None
 
     @property
@@ -49,7 +62,7 @@ class ReplayWorker(threading.Thread):
 
     @property
     def stream_index(self):
-        return getattr(self.source, "stream_index", None)
+        return self.source.stream_index
 
     @property
     def limit(self):

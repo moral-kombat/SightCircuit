@@ -6,7 +6,7 @@ for; a path inside the work tree is refused unless it is under the ignored
 no tracked file can be run as the helper) through
 ``runtime.supervision.supervise_owned``: the one owned session, deadline,
 signal handling, group termination and cleanup verdict every bounded child
-of this checkout gets. The helper's stdout is the camera export v1 packet
+of this checkout gets. The helper's stdout is the camera export v2 packet
 stream, so it cannot be the primitive's report stream: the launched command
 is ``exec_helper``, a trampoline of this module that writes one launch record
 on the report stream, moves two pipes of the caller onto its stdout and
@@ -29,7 +29,7 @@ import threading
 import time
 
 from ..camera import contract
-from ..camera.export_reader import ExportReader, ExportRefused
+from ..camera.export_reader import ExportReader, ExportRefused, frame_of
 from ..errors import SightCircuitError
 from ..runtime import guard
 from ..runtime.supervision import (ARMED_FD_VARIABLE, COOPERATIVE_GRACE_VARIABLE, SUPERVISOR_PID_VARIABLE, Grace,
@@ -226,10 +226,16 @@ class FrameReader(threading.Thread):
         self.frames = 0
         self.error = None
         self.first_frame_monotonic = None
+        self.end_received_monotonic_ns = None  # When the helper's end record was read (host monotonic clock).
 
     def run(self):
         try:
-            for frame in self.reader.frames():
+            for packet in self.reader.packets():
+                if packet.kind == contract.KIND_END:
+                    self.end_received_monotonic_ns = time.monotonic_ns()
+                if packet.kind != contract.KIND_FRAME:
+                    continue
+                frame = frame_of(packet, self.reader.ready)
                 self.frames += 1
                 if self.first_frame_monotonic is None:
                     self.first_frame_monotonic = time.monotonic()
@@ -258,7 +264,8 @@ class FrameReader(threading.Thread):
 
     def report(self):
         report = self.reader.report()
-        report.update(frames_delivered=self.frames, handler_error=self.error, finished=not self.is_alive())
+        report.update(frames_delivered=self.frames, handler_error=self.error, finished=not self.is_alive(),
+                      end_received_monotonic_ns=self.end_received_monotonic_ns)
         return report
 
 

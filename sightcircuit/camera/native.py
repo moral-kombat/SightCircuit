@@ -1,4 +1,4 @@
-"""Generated native copy of camera export v1: ``tools/camera_export_protocol.hpp``.
+"""Generated native copy of camera export v2: ``tools/camera_export_protocol.hpp``.
 
 The helper's ``--export-frames`` mode includes the header instead of repeating
 Python values: the packet prefix layout, the size bounds, the header kinds,

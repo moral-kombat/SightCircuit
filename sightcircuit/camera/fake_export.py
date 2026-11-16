@@ -1,6 +1,6 @@
 """Fake camera export streams: valid ones, and one deliberately invalid stream per contract rule.
 
-``valid_stream`` writes a complete camera export v1 stream (``ready``, frames,
+``valid_stream`` writes a complete camera export v2 stream (``ready``, frames,
 ``end``) with deterministic pixels; ``INVALID`` maps a name to a builder of a
 stream that violates exactly one rule and the reason ``ExportReader`` must
 refuse it with. ``camera_recognize --validate`` runs the reader over all of
@@ -133,7 +133,9 @@ INVALID = {
     # Framing.
     "truncated_prefix": (lambda: _ready()[:10], "truncated_prefix"),
     "bad_magic": (lambda: encode(ready_header(), magic=b"FJO1"), "bad_magic"),
-    "unsupported_version": (lambda: encode(ready_header(), version=2), "unsupported_version"),
+    "unsupported_version": (lambda: encode(ready_header(), version=contract.VERSION + 1), "unsupported_version"),
+    # A helper built from a version 1 checkout: its prefix and its ready both say 1.
+    "version_1_helper": (lambda: encode(ready_header(protocol=1), version=1), "unsupported_version"),
     "header_empty": (lambda: encode(ready_header(), header_bytes=0), "header_empty"),
     "header_too_large_prefix": (lambda: encode(ready_header(), header_bytes=contract.MAX_HEADER_BYTES + 1),
                                 "header_too_large"),
@@ -149,7 +151,7 @@ INVALID = {
     "header_not_object": (lambda: encode(None, header_text=b'["ready"]'), "header_not_object"),
     "header_deep_brackets": (lambda: encode(None, header_text=b"[" * 16000), "header_not_json"),
     "header_too_deep": (lambda: encode(dict(ready_header(), build={"a": {"b": {"c": {"d": 1}}}})), "header_too_deep"),
-    "missing_kind": (lambda: encode({"protocol": 1}), "missing_kind"),
+    "missing_kind": (lambda: encode({"protocol": contract.VERSION}), "missing_kind"),
     "unknown_kind": (lambda: encode({"kind": "frames"}), "unknown_kind"),
     "kind_not_string": (lambda: encode({"kind": 1}), "unknown_kind"),
     # Order of kinds.
@@ -164,7 +166,8 @@ INVALID = {
     # Ready fields.
     "ready_missing_field": (lambda: encode(_without(ready_header(), "limits")), "missing_field:limits"),
     "ready_unexpected_field": (lambda: _ready(camera="left"), "unexpected_field:camera"),
-    "ready_protocol": (lambda: _ready(protocol=2), "invalid_field:protocol"),
+    "ready_protocol": (lambda: _ready(protocol=contract.VERSION + 1), "invalid_field:protocol"),
+    "ready_protocol_1": (lambda: _ready(protocol=1), "invalid_field:protocol"),
     "ready_protocol_bool": (lambda: _ready(protocol=True), "invalid_field:protocol"),
     "ready_backend": (lambda: _ready(backend="real"), "invalid_field:backend"),
     "ready_pixel_path": (lambda: _ready(pixel_path="cpu"), "invalid_field:pixel_path"),
@@ -178,8 +181,8 @@ INVALID = {
     "ready_cameras_repeated": (lambda: _ready(cameras=(0, 0)), "invalid_field:cameras"),
     "ready_cameras_descending": (lambda: _ready(cameras=(1, 0)), "invalid_field:cameras"),
     "ready_limits_fps": (lambda: _ready(limits=dict(LIMITS, fps=11)), "invalid_field:limits.fps"),
-    "ready_limits_seconds": (lambda: _ready(limits=dict(LIMITS, max_seconds=61)), "invalid_field:limits.max_seconds"),
-    "ready_limits_frames": (lambda: _ready(limits=dict(LIMITS, max_frames=601)), "invalid_field:limits.max_frames"),
+    "ready_limits_seconds": (lambda: _ready(limits=dict(LIMITS, max_seconds=contract.LIMITS["max_seconds"][1] + 1)), "invalid_field:limits.max_seconds"),
+    "ready_limits_frames": (lambda: _ready(limits=dict(LIMITS, max_frames=contract.LIMITS["max_frames"][1] + 1)), "invalid_field:limits.max_frames"),
     "ready_limits_missing": (lambda: _ready(limits={"fps": 5, "max_seconds": 2}), "missing_field:limits.max_frames"),
     "ready_payload": (lambda: encode(ready_header(), b"x"), "ready_payload_not_empty"),
     "ready_confirmation": (lambda: _ready(confirmation="flag"), "invalid_field:confirmation"),

@@ -379,15 +379,45 @@ class Calibration:
                 "capture_layout": self.capture_layout, "hud_config_sha256": self.hud_config_sha256}
 
 
+NO_DIRECTION = None  # ``HudRow.direction`` of a names-only row: the tile draws neither an arrow nor a dot.
+ROW_LABEL_CHARS = 20  # Longest label a row shows.
+
+
 @dataclass(frozen=True)
 class HudRow:
     """One HUD line: a sanitized name and an approximate view direction, never a position."""
     label: str
     confidence: float
-    direction: tuple  # (dx, dy), each -1, 0 or 1 relative to the eye's view centre.
+    direction: tuple | None  # (dx, dy), each -1, 0 or 1 relative to the view centre, or ``NO_DIRECTION``.
 
     def as_dict(self):
-        return {"label": self.label, "confidence": self.confidence, "direction": list(self.direction)}
+        return {"label": self.label, "confidence": self.confidence,
+                "direction": None if self.direction is None else list(self.direction)}
+
+
+def row_label(label):
+    """The label a row may show: ASCII letters, digits, space, ``_`` and ``-``, at most ``ROW_LABEL_CHARS``.
+
+    Returns ``""`` when nothing printable remains; such a detection gets no row.
+    """
+    return "".join(c for c in label if c.isascii() and (c.isalnum() or c in " _-"))[:ROW_LABEL_CHARS].strip()
+
+
+def select_rows(rows, limit):
+    """The row hygiene every selector shares: order, the ``(label, direction)`` dedupe and the rows cap.
+
+    Rows are ordered by descending confidence, then label, then direction; the
+    first of each ``(label, direction)`` pair is kept, up to ``limit`` rows.
+    """
+    selected, seen = [], set()
+    for row in sorted(rows, key=lambda row: (-row.confidence, row.label, row.direction or ())):
+        key = (row.label, row.direction)
+        if key not in seen:
+            seen.add(key)
+            selected.append(row)
+        if len(selected) == limit:
+            break
+    return tuple(selected)
 
 
 @dataclass(frozen=True)

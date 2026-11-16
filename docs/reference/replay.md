@@ -77,6 +77,21 @@ from the worker thread. The prototype has pause/resume, replay and loop controls
 replay is capped at 10 fps by default and preserves every processed frame's
 association with its detections; this is not a real-time source-timing player.
 
+The worker (`ReplayWorker`) is recorded-only. It builds its own `ReplaySource`
+from the recording path, or takes one the caller built, and nothing else: a
+`source` that is not exactly a `ReplaySource` (a camera source, the mirror, a
+synthetic generator, a subclass or a look-alike) raises
+`replay_live_source_not_approved` through the `LIVE_IMAGE_INPUT` gate
+(`sightcircuit/gates.py`) in the constructor, before a pipeline or a sink
+exists, so nothing is displayed in the window or on the VR panel. Recorded
+replay on the panel is the confirmed use outside the gates
+([E47](../status.md#e47-recorded-recognition-and-vr-panel-poc-on-frame)); it
+covers recordings only. This closes finding 1 of the
+[2026-11-09 input review](../history/2026-11-09-arcturus-sdk-input-review.md#1-ungated-live-source-hook-in-the-replay-window)
+([work order item L11](../live-capture.md#camera-display-work-order-adopted-2026-11-16));
+`tests/test_replay_worker_sources.py` holds the refusals. A camera display
+runner is a separate, reviewed command and never goes through this worker.
+
 To run a finite, offscreen check with explicit output files:
 
 ```bash
