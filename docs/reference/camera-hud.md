@@ -481,8 +481,12 @@ counter alone.
 
 **`--camera`** runs `run_camera`: `CameraHelperSource` on the left camera,
 the chosen detector, `CameraHudStage` and an `ObservedFrameClient` in real
-output carrying the run's `RunScope`. `--directions` or `--names-only` and
-`--orientation` are required and passed to the stage. The run is on the main
+output carrying the run's `RunScope`. `--step` (L-D4 or L-D5) is required
+and must be the record's step. `--directions` or `--names-only` and
+`--orientation` are required and passed to the stage. The client's own bound
+on real output is the scope's seconds: the run's `--seconds`, which also
+bound the stage and the helper; for the synthetic rows it is `--seconds`
+plus a 10 s allowance for the bridge's start. The run is on the main
 thread, the helper under the supervision primitive, and never routed through
 `ReplayWorker` or the live runner. The synthetic rows record SIGINT, SIGTERM
 and SIGHUP for the length of the run (`guard.cancellation`) and stop at the

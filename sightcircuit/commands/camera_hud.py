@@ -24,7 +24,10 @@ real HUD output, and for ``--camera`` also camera input to the display. Each
 is refused before the helper or the bridge is launched unless a one-run scope
 record verifies (``runtime/scope.py``): ``--scope-record`` names the record
 the Frame manager staged for one approved step and ``--manifest`` the
-checkpoint manifest it is bound to. Naming them permits nothing, their
+checkpoint manifest it is bound to. ``--camera`` also names its step
+(``--step``), and the record must be for that step. The run's seconds are
+bound to what runs: the client ends real output itself when they are over,
+and the stage and the helper are bounded within them. Naming them permits nothing, their
 content does; the opt-in flags (``--allow-hud-output``,
 ``--allow-camera-input``) are required and permit nothing either. The record
 is a procedural control against mistakes, not a cryptographic one. The device
@@ -95,6 +98,12 @@ RUNNER = scope.RUNNER  # The name a scope record must carry for this command.
 VALIDATION_KIND = "camera_hud_validation"
 MAX_SECONDS = 90  # The camera mode's bound (the export contract's); a record's step bounds it further.
 MAX_FPS, DEFAULT_FPS = 10, 5
+CAMERA_STEPS = tuple(step for step, (source, _) in scope.STEPS.items() if source == scope.CAMERA_LEFT)
+SYNTHETIC_STEP = next(step for step, (source, _) in scope.STEPS.items() if source == scope.SYNTHETIC)
+# The synthetic rows' scope and client bound: the schedule's seconds plus this, for the bridge's start (its
+# connect budget) and the last update's answer. The client ends real output itself when the sum is over, so
+# ``--seconds`` plus this must fit the record's bound.
+SYNTHETIC_ALLOWANCE_SECONDS = 10
 # Acceptance row G10: the label named for at least 90% of a contiguous 60 s window with no gap over 2 s.
 G10_WINDOW = {"window_seconds": 60.0, "fraction": 0.9, "max_gap_seconds": 2.0}
 FAKE_HELPER = "artifacts/camera-helper-fake/sightcircuit-camera-helper-fake"  # scripts/build_camera_helper.sh --fake
@@ -109,7 +118,7 @@ VALIDATION_HELPER_ARGS = ("--fake-scenario", "export_nv12", "--pixel-path", "cpu
 CAMERA_DATA_STATEMENT = "labels_and_display_intervals_are_camera_data"
 COMMAND_KEYS = ("name", "mode", "exit_code", "confirmation", "refusal", "seconds_requested", "fps_requested",
                 "max_frames_requested", "stops_requested", "detector", "report_saved_by_operator", "camera_data")
-SCOPE_KEYS = ("status", "refusal", "consumed", "requested_runner", "requested_source", "step", "source", "run_id",
+SCOPE_KEYS = ("status", "refusal", "consumed", "requested_runner", "requested_step", "requested_source", "step", "source", "run_id",
               "revision", "manifest_sha256", "deadline_utc", "max_seconds", "approval")
 COMMAND_BLOCKS = {"command": COMMAND_KEYS, "scope_record": SCOPE_KEYS}
 CAMERA_BLOCKS = {
@@ -192,6 +201,21 @@ class RecordedStop:
         return self.is_set()
 
 
+def scope_refusal(run_scope):
+    """Why a gate refused, for the report: the scope's own reason, or that a site's preconditions failed."""
+    if run_scope is None:
+        return "scope_record_required"
+    if run_scope.refusal in (None, "scope_revoked"):  # Refused before the record was consulted, then given back.
+        return "site_preconditions_failed"
+    return run_scope.refusal
+
+
+def output_bound(run_scope):
+    """The real-output client's own bound: the scope's seconds, which the client enforces by ending output."""
+    seconds = getattr(run_scope, "seconds", None)
+    return seconds if type(seconds) in (int, float) and 0 < seconds < float("inf") else None
+
+
 def bridge_usable(binary):
     return Path(binary).is_file() and os.access(binary, os.X_OK)
 
@@ -258,7 +282,8 @@ def run_camera(limits, *, run_scope=None, helper=None, bridge=None, detector=DEF
                             detector=detector if detector_factory is None else None,
                             camera_data=CAMERA_DATA_STATEMENT)
     source = CameraHelperSource(helper, limits, confirmed=confirmed, extra_args=extra_args)
-    client = ObservedFrameClient(bridge, validation_only=validation_only, env=client_env, scope=run_scope)
+    client = ObservedFrameClient(bridge, validation_only=validation_only, env=client_env, scope=run_scope,
+                                 max_output_seconds=None if validation_only else output_bound(run_scope))
     refusal = model = None
     try:
         camera_helper.helper_path(helper)
@@ -290,7 +315,7 @@ def run_camera(limits, *, run_scope=None, helper=None, bridge=None, detector=DEF
             if str(error) not in (FIXED_HUD_REFUSAL, CAMERA_INPUT_REFUSAL):
                 raise
             status = ("refused", str(error))  # A gate refused: nothing was launched.
-            refusal = (run_scope.refusal if run_scope is not None else None) or "scope_record_required"
+            refusal = scope_refusal(run_scope)
         finally:
             session.stop()
     report = stage.report()
@@ -314,7 +339,8 @@ def run_synthetic_rows(seconds, *, stops=3, stop_seconds=3.0, run_scope=None, br
     bridge = (DEFAULT_BRIDGE if validation_only else pinned(manifest.BRIDGE)) if bridge is None else bridge
     command = command_block(mode, confirmation=confirmation.OPERATOR_TERMINAL if confirmed else None,
                             seconds_requested=seconds, fps_requested=synthetic_rows.UPDATE_HZ, stops_requested=stops)
-    client = ObservedFrameClient(bridge, validation_only=validation_only, env=client_env, scope=run_scope)
+    client = ObservedFrameClient(bridge, validation_only=validation_only, env=client_env, scope=run_scope,
+                                 max_output_seconds=None if validation_only else output_bound(run_scope))
     driver = synthetic_rows.SyntheticRows(client, seconds=seconds, stops=stops, stop_seconds=stop_seconds)
     status = None
     if not bridge_usable(bridge):
@@ -326,7 +352,8 @@ def run_synthetic_rows(seconds, *, stops=3, stop_seconds=3.0, run_scope=None, br
             if str(error) != FIXED_HUD_REFUSAL:
                 raise
             status = ("refused", str(error))  # The gate refused: the bridge was not launched.
-            command["refusal"] = (run_scope.refusal if run_scope is not None else None) or "scope_record_required"
+            client.withdraw()  # A refused run gives its scope back: nothing can start under it later.
+            command["refusal"] = scope_refusal(run_scope)
     report = driver.report()
     if status is not None:
         report.update(status=status[0], reason=status[1])
@@ -470,7 +497,9 @@ def build_parser():
     parser.add_argument("--scope-record", type=Path, metavar="PATH",
                         help="The one-run scope record the Frame manager staged for this approved step")
     parser.add_argument("--manifest", type=Path, metavar="PATH",
-                        help="The checkpoint manifest the record is bound to; it must verify")
+                        help="The checkpoint manifest the record is bound to; it must carry the camera HUD's group and verify")
+    parser.add_argument("--step", choices=CAMERA_STEPS,
+                        help="--camera: the device step this run is; the record must be for the same step")
     parser.add_argument("--seconds", type=int, metavar="SECONDS",
                         help=f"The run's bound: 1..{MAX_SECONDS} for --camera, up to {synthetic_rows.MAX_SECONDS} "
                              "for --synthetic-rows; the record's own bound is checked too")
@@ -510,7 +539,7 @@ def main(argv=None):
     if not math.isfinite(args.threshold) or not 0 <= args.threshold <= 1:
         parser.error("--threshold must be between zero and one")
     camera_only = (args.allow_camera_input or args.directions is not None or args.orientation or args.target_label
-                   or args.cue or args.key_marks or args.mark_labels)
+                   or args.cue or args.key_marks or args.mark_labels or args.step)
     device_only = args.allow_hud_output or args.scope_record or args.manifest or args.seconds
     if args.validate:
         if camera_only or device_only:
@@ -536,6 +565,8 @@ def main(argv=None):
                 parser.error("--allow-camera-input is required to launch the camera helper")
             if not 1 <= args.seconds <= MAX_SECONDS:
                 parser.error(f"--seconds must be 1..{MAX_SECONDS} for --camera")
+            if args.step is None:
+                parser.error(f"--camera needs --step ({' or '.join(CAMERA_STEPS)}): the record must be for the step that runs")
             if args.directions is None or args.orientation is None:
                 parser.error("--camera needs --directions or --names-only, and --orientation: neither has a default")
             try:
@@ -558,13 +589,14 @@ def main(argv=None):
                 if refusal is not None:  # Nothing is launched, loaded or consulted without the typed answer.
                     report = refused_before_start(mode, refusal, blocks, kind)
                 elif args.synthetic_rows:
-                    run_scope = scope.RunScope(args.scope_record, args.manifest, runner=RUNNER, source=scope.SYNTHETIC,
-                                               seconds=args.seconds)
+                    run_scope = scope.RunScope(args.scope_record, args.manifest, runner=RUNNER, step=SYNTHETIC_STEP,
+                                               source=scope.SYNTHETIC,
+                                               seconds=args.seconds + SYNTHETIC_ALLOWANCE_SECONDS)
                     with guard.cancellation() as recorded:
                         report = run_synthetic_rows(args.seconds, stops=args.stops, stop_seconds=args.stop_seconds,
                                                     run_scope=run_scope, confirmed=True, stop=RecordedStop(recorded))
                 else:
-                    run_scope = scope.RunScope(args.scope_record, args.manifest, runner=RUNNER,
+                    run_scope = scope.RunScope(args.scope_record, args.manifest, runner=RUNNER, step=args.step,
                                                source=scope.CAMERA_LEFT, seconds=args.seconds)
                     report = run_camera(limits, run_scope=run_scope, detector=args.detector, threshold=args.threshold,
                                         directions=args.directions, orientation=args.orientation,

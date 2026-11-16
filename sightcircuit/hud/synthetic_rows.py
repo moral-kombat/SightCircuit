@@ -196,6 +196,7 @@ class SyntheticRows:
             self.reason = _identifier(self.client.error, None) or _identifier(str(error), "synthetic_rows_failed")
         finally:
             self.ended_ns = time.monotonic_ns()
+            self.client.withdraw()  # A run that failed before the bridge started gives its scope back.
             self._bridge_report = self.client.close()  # Every line the bridge wrote has been read when this returns.
         if self.status != "error" and self.client.error:
             self.status, self.reason = "error", _identifier(self.client.error, "overlay_bridge_failed")

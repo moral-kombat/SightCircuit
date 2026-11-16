@@ -84,10 +84,13 @@ All of this is preparation. None of it opens the camera or shows anything.
    ```bash
    mkdir -p artifacts/camera-hud
    .venv-replay/bin/python scripts/checkpoint_manifest.py \
-     --write artifacts/camera-hud/checkpoint-manifest.json
+     --write artifacts/camera-hud/checkpoint-manifest.json --camera-hud
    ```
 
-   `--write` never overwrites; move an earlier manifest aside first.
+   `--camera-hud` makes the manifest carry the camera HUD's group, which a
+   scope record requires for all three steps; a missing helper is then
+   reported as a problem. `--write` never overwrites; move an earlier
+   manifest aside first.
 5. Run `--validate` (above) on the rebuilt binaries.
 
 ### The Frame manager's staging and the record
@@ -110,7 +113,15 @@ write a record. The record is bound to the commit, the manifest's digest, a
 single-use run id, an absolute UTC deadline (the whole run must end before
 it), a duration bound (at most 120 s for L-D3, 30 s for L-D4, 90 s for L-D5),
 the source, the tile configuration and the step. Any rebuild, edit or new
-commit after staging makes the record refuse; so does a second run.
+commit after staging makes the record refuse; so do a second run, a run for
+another step, a clock that reads earlier than the record's creation, and a
+start after the deadline.
+
+The duration is not only a number in the record. The command's client ends
+real output by itself when the run's seconds are over, whatever else is
+happening, and a camera run's stage and helper are bounded within the same
+seconds. For the synthetic rows the bound is `--seconds` plus 10 seconds for
+the bridge's start, so `--seconds` may be at most 110 under an L-D3 record.
 
 ### Before the wearer puts the headset on
 
@@ -140,8 +151,10 @@ The typed `yes` starts this one run. It is not an approval, it creates no
 record and it opens nothing. If the record does not verify the run is
 refused after the `yes`, before the helper or the bridge is launched, with
 `status: refused`, `reason: fixed_hud_output_not_approved` and the scope's
-own reason in `command.refusal` (for example `scope_record_expired` or
-`scope_run_id_used`).
+own reason in `command.refusal` (for example `scope_record_expired`,
+`scope_step_mismatch` or `scope_run_id_used`; `site_preconditions_failed`
+when a permission site refused before the record was consulted, which leaves
+the record unspent).
 
 ## The passthrough watch
 
@@ -187,7 +200,7 @@ turning away at least three times, the headset removed once at the end.
   --allow-camera-input --allow-hud-output \
   --scope-record artifacts/camera-hud/scope-L-D4.json \
   --manifest artifacts/camera-hud/checkpoint-manifest.json \
-  --seconds 30 --fps 5 --names-only --orientation identity \
+  --step L-D4 --seconds 30 --fps 5 --names-only --orientation identity \
   --target-label bottle \
   --mark-labels out_of_view,in_view,out_of_view,in_view,out_of_view,in_view,remove \
   --report artifacts/camera-hud/l-d4.json
@@ -201,13 +214,15 @@ out of view for 5 seconds and back.
   --allow-camera-input --allow-hud-output \
   --scope-record artifacts/camera-hud/scope-L-D5.json \
   --manifest artifacts/camera-hud/checkpoint-manifest.json \
-  --seconds 90 --fps 5 --names-only --orientation identity \
+  --step L-D5 --seconds 90 --fps 5 --names-only --orientation identity \
   --target-label bottle --cue 40:out_of_view --cue 45:in_view \
   --report artifacts/camera-hud/l-d5.json
 ```
 
 What the options mean:
 
+- `--step` names the step this run is, `L-D4` or `L-D5`. The record must be
+  for the same step: an L-D5 record does not serve an L-D4 run.
 - `--directions` or `--names-only` has no default. Owner decision 3: arrows
   if L-D1's offline check passed, else names only. The arrow tolerance for
   L-D5 is agreed in writing before the run.
@@ -226,7 +241,8 @@ What the options mean:
   return `in_view`, the removal `remove`.
 
 Expect `report_kind: camera_hud_stage`. A run that ends on its bound is
-`status: completed`; a run ended by the headset's removal is
+`status: completed` (reason `output_bound` when the client's own bound ended
+it); a run ended by the headset's removal is
 `status: presence_ended` with reason `headset_removed` or `standby`. Both
 exit 0 when `cleanup.ok` is true. `cancelled` exits 130; everything else
 exits 1.

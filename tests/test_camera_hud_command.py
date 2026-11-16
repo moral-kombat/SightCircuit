@@ -19,6 +19,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -89,7 +90,7 @@ class BoundaryTests(unittest.TestCase):
         self.assertEqual(manifest.CAMERA_HUD_SCRIPTS, ("scripts/build_camera_helper.sh", "scripts/camera_hud.py",
                                                        "scripts/stage_scope_record.py"))
         self.assertNotIn("scripts/camera_hud.py", manifest.CHECKPOINT_SCRIPTS)
-        current, _ = manifest.observe(ROOT)
+        current, _ = manifest.observe(ROOT, camera_hud=True)  # The group is optional; a scope record requires it.
         self.assertIn("sightcircuit/commands/camera_hud.py", current["modules"])
         self.assertIn("sightcircuit/runtime/scope.py", current["modules"])
         self.assertEqual(sorted(current["camera_hud"]), sorted(manifest.CAMERA_HUD_FILES))
@@ -180,7 +181,7 @@ class ScheduleTests(unittest.TestCase):
 class ArgumentTests(unittest.TestCase):
     """The parser refuses a device mode that lacks its opt-ins, its record or its explicit choices."""
     DEVICE = ("--allow-hud-output", "--scope-record", "record.json", "--manifest", "manifest.json", "--seconds", "20")
-    CAMERA = ("--camera", "--allow-camera-input", *DEVICE, "--names-only", "--orientation", "identity")
+    CAMERA = ("--camera", "--allow-camera-input", *DEVICE, "--names-only", "--orientation", "identity", "--step", "L-D4")
 
     def test_argument_refusals(self):
         cases = (
@@ -199,11 +200,16 @@ class ArgumentTests(unittest.TestCase):
             (("--synthetic-rows", *self.DEVICE, "--helper", "x"), "--helper is for --validate"),
             (("--camera", *self.DEVICE, "--names-only", "--orientation", "identity"), "--allow-camera-input is required"),
             (("--camera", "--allow-camera-input", *self.DEVICE[1:]), "--allow-hud-output is required"),
-            (("--camera", "--allow-camera-input", *self.DEVICE), "neither has a default"),
-            (("--camera", "--allow-camera-input", *self.DEVICE, "--names-only"), "neither has a default"),
-            (("--camera", "--allow-camera-input", *self.DEVICE, "--orientation", "identity"), "neither has a default"),
+            (("--camera", "--allow-camera-input", *self.DEVICE, "--names-only", "--orientation", "identity"),
+             "--camera needs --step (L-D4 or L-D5)"),
+            ((*self.CAMERA[:-1], "L-D3"), "invalid choice"),
+            (("--synthetic-rows", *self.DEVICE, "--step", "L-D4"), "never opens the camera"),
+            (("--camera", "--allow-camera-input", *self.DEVICE, "--step", "L-D4"), "neither has a default"),
+            (("--camera", "--allow-camera-input", *self.DEVICE, "--step", "L-D4", "--names-only"), "neither has a default"),
+            (("--camera", "--allow-camera-input", *self.DEVICE, "--step", "L-D4", "--orientation", "identity"),
+             "neither has a default"),
             ((*self.CAMERA, "--directions"), "not allowed with"),
-            ((*self.CAMERA[:-1], "sideways"), "invalid choice"),
+            ((*self.CAMERA[:-3], "sideways", "--step", "L-D4"), "invalid choice"),
             ((*self.CAMERA[:8], "91", *self.CAMERA[9:]), "--seconds must be 1..90"),
             ((*self.CAMERA, "--target-label", "unicorn"), "--target-label must be a class"),
             ((*self.CAMERA, "--cue", "5:turn_away"), ""),
@@ -228,7 +234,7 @@ class ArgumentTests(unittest.TestCase):
         self.assertEqual(options & {"--bridge", "--cameras", "--helper-arg", "--source", "--device", "--mirror",
                                     "--approve", "--yes", "--force", "--no-confirm", "--run-id"}, set())
         self.assertLessEqual({"--validate", "--synthetic-rows", "--camera", "--allow-hud-output", "--allow-camera-input",
-                              "--scope-record", "--manifest", "--seconds", "--directions", "--names-only",
+                              "--scope-record", "--manifest", "--seconds", "--step", "--directions", "--names-only",
                               "--orientation", "--target-label", "--cue", "--key-marks", "--mark-labels", "--report"},
                              options)
         self.assertEqual(camera_hud.G10_WINDOW, {"window_seconds": 60.0, "fraction": 0.9, "max_gap_seconds": 2.0})
@@ -263,7 +269,10 @@ class GuideAndTemplateTests(unittest.TestCase):
                 modes.append("validate" if args.validate else "rows" if args.synthetic_rows else "camera")
                 if not args.validate:
                     self.assertTrue(args.allow_hud_output and args.scope_record and args.manifest and args.report)
-                    self.assertLessEqual(args.seconds, scope.STEPS[args.scope_record.stem.removeprefix("scope-")][1])
+                    step = args.scope_record.stem.removeprefix("scope-")
+                    allowance = camera_hud.SYNTHETIC_ALLOWANCE_SECONDS if args.synthetic_rows else 0
+                    self.assertLessEqual(args.seconds + allowance, scope.STEPS[step][1])  # Within the record's bound.
+                    self.assertEqual(args.step, None if args.synthetic_rows else step)
                 if args.camera:
                     self.assertTrue(args.allow_camera_input and args.orientation and args.directions is False)
                     self.assertEqual(args.target_label, "bottle")
@@ -278,8 +287,11 @@ class GuideAndTemplateTests(unittest.TestCase):
         self.assertEqual(len(staged), 1)
         args = stage_scope_record.build_parser().parse_args(staged[0])
         self.assertEqual((args.step, args.valid_minutes), ("L-D3", 60))
+        written = []
         for arguments in self.commands("scripts/checkpoint_manifest.py"):
-            checkpoint_manifest.build_parser().parse_args(arguments)
+            parsed = checkpoint_manifest.build_parser().parse_args(arguments)
+            written += [parsed.camera_hud] if parsed.write is not None else []
+        self.assertEqual(written, [True])  # The manifest is written with the camera HUD's group asked for.
         text = " ".join(self.GUIDE.read_text().split())
         for sentence in ("This guide is a procedure, not an approval.", "Nothing here has run on the Frame.",
                          "not a cryptographic one", "No screen showing the Frame's desktop, the replay window or the "
@@ -410,11 +422,11 @@ class DeviceModeCase(scope_tests.ScopeCase):
         self.assertEqual((camera_hud.pinned(manifest.BRIDGE), camera_hud.pinned(manifest.CAMERA_HELPER)),
                          (self.bridge, self.helper))
 
-    def camera_scope(self, path, seconds=LIMITS["max_seconds"]):
-        return scope.RunScope(path, self.path, runner="camera_hud", source=scope.CAMERA_LEFT, seconds=seconds)
+    def camera_scope(self, path, seconds=LIMITS["max_seconds"], step="L-D4"):
+        return scope.RunScope(path, self.path, runner="camera_hud", step=step, source=scope.CAMERA_LEFT, seconds=seconds)
 
-    def rows_scope(self, path, seconds=8):
-        return scope.RunScope(path, self.path, runner="camera_hud", source=scope.SYNTHETIC, seconds=seconds)
+    def rows_scope(self, path, seconds=8 + 10):  # The schedule's seconds plus the command's start-up allowance.
+        return scope.RunScope(path, self.path, runner="camera_hud", step="L-D3", source=scope.SYNTHETIC, seconds=seconds)
 
     def camera(self, run_scope, **options):
         options.setdefault("detector_factory", camera_hud.ValidationDetector)
@@ -432,7 +444,7 @@ class DeviceModeCase(scope_tests.ScopeCase):
 class RefusalTests(DeviceModeCase):
     """A device mode without a verifying record is refused before the helper or the bridge is launched."""
     CAMERA = ("--camera", "--allow-camera-input", "--allow-hud-output", "--seconds", "3", "--names-only",
-              "--orientation", "identity")
+              "--orientation", "identity", "--step", "L-D4")
     ROWS = ("--synthetic-rows", "--allow-hud-output", "--seconds", "8", "--stops", "1", "--stop-seconds", "2")
 
     def arguments(self, mode, record):
@@ -477,7 +489,12 @@ class RefusalTests(DeviceModeCase):
         rows_record, _ = self.staged("L-D3")
         camera_record, _ = self.staged("L-D4")
         cases = (
-            ("the synthetic record for a camera run", self.camera_scope(rows_record), "scope_source_mismatch"),
+            ("the synthetic record for a camera run", self.camera_scope(rows_record), "scope_step_mismatch"),
+            ("the acceptance step's record for the first-light run", self.camera_scope(self.staged("L-D5")[0]),
+             "scope_step_mismatch"),
+            ("a record staged 200 days ahead", self.camera_scope(self.forged(
+                created_utc=scope._stamp(int(time.time()) + 200 * 86400),
+                deadline_utc=scope._stamp(int(time.time()) + 200 * 86400 + 600))), "scope_record_from_the_future"),
             ("the mirror", self.camera_scope(self.forged(source="steamvr_mirror")), "scope_source_not_permitted"),
             ("both cameras", self.camera_scope(self.forged(source="arcturus_camera_both")), "scope_source_not_permitted"),
             ("another runner", self.camera_scope(self.forged(runner="mirror_recognize")), "scope_runner_not_permitted"),
@@ -495,15 +512,23 @@ class RefusalTests(DeviceModeCase):
         with self.launches() as seen:
             report = camera_hud.run_synthetic_rows(8, stops=1, stop_seconds=2.0, run_scope=self.rows_scope(camera_record),
                                                    confirmed=True)
-        self.assert_refused(report, "fixed_hud_output_not_approved", "scope_source_mismatch", camera_hud.SYNTHETIC_BLOCKS)
+        self.assert_refused(report, "fixed_hud_output_not_approved", "scope_step_mismatch", camera_hud.SYNTHETIC_BLOCKS)
         self.assertEqual((seen, report["complete"], report["updates"]["submitted"]), ([], False, 0))
-        # A camera scope that the output site grants is still refused at the camera site for another helper.
+        # Another helper than the one the manifest pins: refused before the record is consulted, so it is unspent.
         elsewhere = self.out / "sightcircuit-camera-helper"
         shutil.copy2(self.helper, elsewhere)
+        run_scope = self.camera_scope(self.staged("L-D4")[0])
         with self.launches() as seen, mock.patch.object(camera_helper, "run_export", side_effect=AssertionError("exported")):
-            report = self.camera(self.camera_scope(self.staged("L-D4")[0]), helper=elsewhere)
-        self.assertEqual((report["status"], report["reason"], seen), ("refused", "camera_display_input_not_approved", []))
-        self.assertEqual(len(self.ledger()), 1)  # Only that last record was reached and spent.
+            report = self.camera(run_scope, helper=elsewhere)
+        self.assert_refused(report, "fixed_hud_output_not_approved", "site_preconditions_failed", camera_hud.CAMERA_BLOCKS)
+        self.assertEqual((seen, run_scope.consumed, run_scope.status), ([], False, "revoked"))
+        # A run longer than its scope: the stage and the helper are bounded by what the scope was asked for.
+        run_scope = self.camera_scope(self.staged("L-D4")[0], seconds=2)
+        with self.launches() as seen:
+            report = self.camera(run_scope)  # LIMITS ask the helper for three seconds.
+        self.assert_refused(report, "fixed_hud_output_not_approved", "site_preconditions_failed", camera_hud.CAMERA_BLOCKS)
+        self.assertEqual((seen, run_scope.consumed), ([], False))
+        self.assertEqual(self.ledger(), [])  # No record in this test was spent.
 
     def test_cheap_preconditions_are_checked_before_the_record_is_spent(self):
         record, _ = self.staged("L-D4")
@@ -635,9 +660,11 @@ class FixedHudCommandTests(DeviceModeCase):
         self.assertEqual((report["source"]["source_id"], report["source"]["camera_index"],
                           report["config"]["directions"], report["config"]["orientation"]),
                          ("arcturus_camera_left", 0, True, "identity"))
-        # The run's three seconds and the helper's own three-second bound end together; either may come first.
-        self.assertIn((report["reason"], report["source"]["status"]), (("seconds", "stopped"), ("max_seconds", "completed"),
-                                                                       ("seconds", "completed")))
+        # The run's three seconds, the helper's own three-second bound and the client's own bound on real output
+        # end together; any of them may come first, and each is a completed run.
+        self.assertIn((report["reason"], report["source"]["status"]),
+                      (("seconds", "stopped"), ("max_seconds", "completed"), ("seconds", "completed"),
+                       ("output_bound", "stopped"), ("output_bound", "completed")))
         frames = report["frames"]
         self.assertGreater(frames["sent"], 5)
         self.assertEqual((frames["acknowledged_presented"], frames["acknowledged_refused"]), (frames["sent"], 0))
@@ -681,7 +708,8 @@ class FixedHudCommandTests(DeviceModeCase):
         path, record = self.staged("L-D4")
         saved = self.out / "run.json"
         arguments = ["--camera", "--allow-camera-input", "--allow-hud-output", "--scope-record", path, "--manifest",
-                     self.path, "--seconds", "3", "--directions", "--orientation", "identity", "--target-label", "bottle",
+                     self.path, "--seconds", "3", "--step", "L-D4", "--directions", "--orientation", "identity",
+                     "--target-label", "bottle",
                      "--cue", "0.4:out_of_view", "--report", saved]
         terminal = Terminal()
         with mock.patch.dict(os.environ, self.runtime_env), \
