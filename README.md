@@ -1,17 +1,23 @@
 # SightCircuit
 
-**Names for the things you look at, inside a Steam Frame.**
+**Look at something. See what it is.**
 
-SightCircuit reads the headset's own passthrough camera, recognises everyday
-objects on the device's CPU, and is being built to show their names, each
-with an approximate direction arrow, on a small strip at the edge of your
-view. No cloud service is involved, and a camera run saves no image: it
+SightCircuit is an open experiment in giving a Steam Frame a little sight of
+its own. It reads the headset's passthrough camera, recognises everyday
+objects right on the device, and is working toward one simple thing: a box
+and a name drawn around each object in your view, as you look around the
+room. No cloud service is involved, and a camera run saves no image. It
 leaves counts, labels, boxes and timings, nothing else.
 
-> **Experimental, and honest about it.** Recognising objects from the headset's
-> camera has run on a real Steam Frame. Showing the labels in the headset is
-> built and tested in the cloud, and has **not yet run on the device**. Every
-> claim below says which kind of evidence stands behind it.
+> **Where things stand.** The headset can already recognise objects from its
+> own camera: that has run on a real Steam Frame. Drawing the results in your
+> view is the part being built now. It works in cloud tests and has **not yet
+> run on the device**. Everything below says plainly which is which, so you
+> always know what is real today.
+
+Curious, sceptical or keen to help? You are welcome here. You can run the
+whole camera-to-display path on your own Linux machine in a few minutes, no
+headset required: see the [quick start](#quick-start).
 
 ```text
    .        *            .       +            .          *        .
@@ -50,19 +56,32 @@ __________________/___________________|__________________\__________________
 ## How it works
 
 ```text
- passthrough      camera        object        label        overlay       strip at the
-   camera    ──►  helper   ──►  detector ──►  rows    ──►  bridge   ──►  edge of view
- (left, SDK)    (bounded,      (CPU, about   (name and    (each label
-                 no pixels      36 ms a       arrow)       expires 1 s
-                 saved)         frame)                     after its frame)
+ passthrough      camera        object        boxes and     overlay       drawn in
+   camera    ──►  helper   ──►  detector ──►  names    ──►  bridge   ──►  your view
+ (left, SDK)    (bounded,      (CPU, about   (one per      (each result
+                 no pixels      36 ms a       object)       expires 1 s
+                 saved)         frame)                      after its frame)
 ```
 
-Three rules shape everything:
+The detector already finds a box and a name for each object, many times a
+second. What is left is the last step: drawing them where you are looking.
+
+That is being done in two stages. The **first display** is deliberately
+modest: a small strip at the edge of your view that lists what was recognised.
+It is a holdover from an earlier design, which read frames back from the
+headset's mirror and had to keep the display from recognising its own output.
+Reading the camera directly should make that problem disappear (one of the
+next headset sessions checks exactly that), and the strip stays on as the
+simplest safe way to put results in front of your eyes for the first time. The **destination** is boxes drawn around the objects themselves.
+That needs one more piece, matching a spot in the camera's picture to the
+same spot in your view, and that work has not started.
+
+Three rules shape everything, whichever display is showing:
 
 - **Bounded.** Every camera run has a time limit and starts with a typed
   confirmation. It is built to stop when the headset comes off; proving that
   on the device is the next step.
-- **Nothing stale.** A label carries the time its camera frame was taken. The
+- **Nothing stale.** A result carries the time its camera frame was taken. The
   display drops it one second later unless a newer frame confirms it.
 - **Closed until proven.** Live display sits behind gates in
   [`sightcircuit/gates.py`](sightcircuit/gates.py). They open only after
@@ -75,14 +94,14 @@ Three rules shape everything:
 | Recognise objects from the headset camera, bounded, nothing displayed | **On a Steam Frame** (reported by the wearer) | 100 of 100 frames in a 20-second run, detection in about 39 ms at the 95th percentile, passthrough undisturbed. It missed a small bottle at a distance and reported one unlikely `car`; accuracy is not yet measured. [E99](docs/evidence/e099.md) |
 | Replay a recording with labels, in a window and on a VR panel | **On a Steam Frame** | A 400-frame panel run updated to the end and shut down cleanly; label accuracy unevaluated. [E47](docs/evidence/e047.md), [E81](docs/evidence/e081.md) |
 | Recognise objects in a short capture of the SteamVR mirror | **On a Steam Frame** | An earlier route, kept as a diagnostic. [E48](docs/evidence/e048.md), [E81](docs/evidence/e081.md) |
-| Show camera labels on the headset strip (`camera_hud`) | **Cloud tests only** | The whole path runs against stand-ins in CI, including label expiry on a simulated VR runtime. It has not met SteamVR or the camera on the device. [Guide](docs/guides/camera-hud.md) |
-| Labels fixed to objects in the room, depth, splats | Not started | Deferred until the strip is accepted |
+| Show what was recognised, in the headset: the first display, a strip of names (`camera_hud`) | **Cloud tests only** | The whole path runs against stand-ins in CI, including results expiring on a simulated VR runtime. It has not met SteamVR or the camera on the device. [Guide](docs/guides/camera-hud.md) |
+| **The goal:** boxes and names drawn around objects in your view | Not started | Needs the camera-to-view matching described above; planned after the first display is accepted on the headset. Depth and splats come later still |
 
 **What comes next** is a short series of headset sessions, each approved
 separately by the project's owner: confirm a run stops when the headset comes
-off, confirm the camera cannot see the strip's own labels, confirm labels
-expire on the real display, then show the first camera labels and hold one
-named for 60 seconds. [Current work and acceptance](docs/live-capture.md) has
+off, confirm the camera cannot see what the headset itself displays, confirm
+results expire on the real display, then show the first names from the camera
+and keep one on screen for 60 seconds. After that, the boxes. [Current work and acceptance](docs/live-capture.md) has
 the steps and their pass marks; [capabilities and evidence](docs/status.md)
 has the full record, including what failed.
 
@@ -90,7 +109,7 @@ has the full record, including what failed.
 
 ### In the cloud or on Linux x86_64: development smoke check
 
-No headset needed. Install Python 3.12 or 3.14,
+No headset needed, and a good place to start. Install Python 3.12 or 3.14,
 [uv](https://docs.astral.sh/uv/getting-started/installation/), and the Linux
 libraries listed in [development setup](docs/development.md). From the
 repository root:
@@ -103,7 +122,7 @@ bash scripts/setup.sh
 A successful run reports `"status": "passed"` after decoding 12 generated
 frames, running CPU inference, and rendering offscreen.
 
-To watch the camera-to-label path run end to end on stand-ins (a fake camera,
+Want to see more? To watch the camera-to-display path run end to end on stand-ins (a fake camera,
 a scripted detector and a bridge that displays nothing), set up the replay
 environment as [development setup](docs/development.md) describes, then:
 
@@ -136,7 +155,8 @@ permission, and every device procedure keeps its own operating restrictions
   along the way.
 - [Current work](docs/live-capture.md#current-work-order): what is open and
   what each step must show.
-- [Contributing](CONTRIBUTING.md): checks and review expectations.
+- [Contributing](CONTRIBUTING.md): how to send a change, and what review
+  looks for. Questions and small fixes are as welcome as big ones.
 - [Project history](docs/project-history.md): how the project got here.
 
 ## License
