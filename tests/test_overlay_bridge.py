@@ -447,6 +447,7 @@ class FixedHudModeTests(unittest.TestCase):
             "IVRHeadsetView::GetHeadsetViewBlendRange"})
 
 
+@unittest.skipUnless(DEFAULT_BRIDGE.is_file(), "Build scripts/build_overlay_bridge.sh first")
 class VisibilityLineTests(unittest.TestCase):
     """The fallback's visibility lines (work item F1) on the validation bridge: software timing, no runtime.
 
