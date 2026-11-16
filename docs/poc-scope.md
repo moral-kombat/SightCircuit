@@ -90,6 +90,13 @@ clean shutdown with truthful cleanup reporting; and the report recorded as a
 numbered evidence entry separate from cloud results. Detection accuracy beyond
 that object, and any world position, are not claimed.
 
+On the camera route (owner, 2026-11-16) the object is a bottle held within
+1 m, the input is the left SDK camera, and "no detections from the HUD's own
+footprint" is replaced by the measured absence of feedback (row G8 of the
+[acceptance table](live-capture.md#edge-hud-acceptance-gates)); the arrow
+clause applies if the offline position check of step L-D1 passes and is
+otherwise replaced by names only. Rows G7 to G10 carry the numbers.
+
 ## Owner decisions (2026-11-03)
 
 These are the accepted decisions recorded in this checkout. Device approvals

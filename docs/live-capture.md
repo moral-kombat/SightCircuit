@@ -95,7 +95,7 @@ the report carries both.
 | --- | --- | --- | --- |
 | L1 | Done (2026-11-16, this change). Record the owner's answers as dated scope rows, quoting the owner: the SDK camera (left, index 0) supersedes the mirror as the display's input; displayed labels are gated use; the diagnostic tier as decided; the passthrough definition; the presence interim; the consent answer for display; the calibration answer; the contract bound; F3's disposition. Superseded sentences are marked, not deleted (including the 2026-11-08 ordering clause that SDK probes follow F3 and C5/C6). No row opens a gate or authorises a device run | S, docs | the owner's answers |
 | L2 | Done (2026-11-16). Truth fixes, independent of the decisions: the S2 row's "no probe has run" and the helper reference's "unverified on the device" paragraph now cite E95 to E99 (the foreign-queue acquire and DMA-BUF sync observed working, not verified in general); the recognition guide's "nothing here is a device result"; the lane S heading's "cloud-only"; a `gates.py` docstring naming bounded camera recognition as an out-of-gate use (docstring only) | S, docs | none |
-| L3 | Reviewed acceptance-row edit (F6's role): mark G1 to G6 mirror route, G2 carrying over closed; add G7 to G10 with numeric criteria and the evidence type (headset report, distinct from cloud and CI); restate the scope's acceptance for camera input; a camera-HUD device-report template; rewrite the work-order intro, critical path and risks; a docs test pins every G-number `gates.py` names to the table | M, docs and decision | L1 |
+| L3 | Rows done (2026-11-16): G7 to G10 are in the [acceptance table](#edge-hud-acceptance-gates) and the scope's acceptance is restated; the report template and the docs test pinning `gates.py`'s G-numbers follow L8 and L10. Reviewed acceptance-row edit (F6's role): mark G1 to G6 mirror route, G2 carrying over closed; add G7 to G10 with numeric criteria and the evidence type (headset report, distinct from cloud and CI); restate the scope's acceptance for camera input; a camera-HUD device-report template; rewrite the work-order intro, critical path and risks; a docs test pins every G-number `gates.py` names to the table | M, docs and decision | L1 |
 | L4 | Done (#80, 2026-11-16): the two versions refuse each other on the first packet with an instruction to rebuild, so the Frame's helper is rebuilt before any camera run. Camera export contract v2: `max_seconds` 1 to 90 and `max_frames` 1 to 900 (fps 1 to 10 unchanged), protocol `camera-export/2` so an old helper is refused, a regenerated header, a revised wearer-facing notice that says labels are shown; `camera_recognize` keeps its 30 s and 300 frames | S to M, cloud | owner decision 4 |
 | L5 | Done (#83, 2026-11-16), independently reviewed: the source acts on the presence end when the end packet is accepted, a stop clears the sinks without waiting for the helper's teardown, `drive` raises the source's failure, and a non-zero helper exit after a presence end reports a failed cleanup. `CameraHelperSource`: a pipeline frame source around the export reader; left camera only; `headset_removed` and `standby` end the run as `presence_ended`, never retried; acquire-time `observed_ns`; the exposure-minus-acquire offset reported as a timing, never as calibration; a test that no pixel array or intrinsics field reaches a report or log; `run_pipeline` still refuses the source | M, cloud | none (L4 beyond 600 frames) |
 | L6 | Done (#84, 2026-11-16): `sightcircuit/hud/camera.py`, with the image-to-view orientation an explicit argument that a device step sets. Mask-free `camera_rows`: the sanitising, dedupe and row cap extracted from `HudMask.select` into a shared helper; direction per owner decision 3, a 3x3 cell from the box centre over the full frame (thresholds 0.4 and 0.6) or names only; no calibration; digest-pinned tile output | S, cloud | none (decision 3 picks the default) |
@@ -552,6 +552,13 @@ A gate passes only on its required evidence. Offline tests, ARM64 CI and a
 successful process exit are not headset acceptance. A failed device run remains
 recorded; investigate it before proposing a changed run.
 
+Since 2026-11-16 the live display's input is the left SDK camera
+([work order](#camera-display-work-order-adopted-2026-11-16)). G1 to G6 are
+the mirror route's rows: they keep their numbers and their recorded state, G2
+carries over closed, and G3 to G6 have no further device work. G7 to G10 are
+the camera route's rows; each is accepted only on a headset report recorded
+as a numbered evidence entry, distinct from cloud checks and CI results.
+
 | Gate | Required evidence | Accepted state in this checkout |
 | --- | --- | --- |
 | G1. synthetic mask and expiry | Native full-footprint masking, margins/eye union, changed-context rejection and independent stale expiry | Passes offline; [E69](evidence/e069.md), [E74](evidence/e074.md), [E78](evidence/e078.md) |
@@ -559,11 +566,20 @@ recorded; investigate it before proposing a changed run.
 | G3. mapping observed on Frame | Bounded marker/observer report ending `observed_unqualified`, with clean cleanup and normal passthrough confirmed | Open. V4 was rejected; the November 3 attempt stopped at `observer_contour_budget` before any marker was shown ([E83](evidence/e083.md)); the November 7 attempt passed the precondition, showed the marker and matched its whole pattern, then rejected on the tag decode at the mirror's scale ([E89](evidence/e089.md)); the November 8 attempt, after the reviewed decode change, accepted one complete decoded copy at 0.885 of native and then rejected on marker movement of about 45 px between two reads 0.2 s apart while the wearer turned, against the 8 px sampled-drift limit ([E90](evidence/e090.md)). The D2 budget is exhausted; the exit rule is reached and the owner's decision is pending |
 | G4. mapping qualified | Reviewed evidence for eye composition, all HUD copies, conservative margins, operating limits and exact context | Proposed method; device qualification pending |
 | G5. feedback exclusion and physical expiry | HUD visible during head motion with no detections from its footprint; independently observed expiry within the declared bound | Not run in committed evidence |
-| G6. combined live HUD | The [60-second POC acceptance](poc-scope.md#acceptance), with the report fields below | Not run. The POC object is chair; the 400-frame replay panel continued updating on the tested device/runtime, but that is not combined live acceptance; [E81](evidence/e081.md) |
+| G6. combined live HUD | The [60-second POC acceptance](poc-scope.md#acceptance), with the report fields below | Not run. The POC object is chair; the 400-frame replay panel continued updating on the tested device/runtime, but that is not combined live acceptance; [E81](evidence/e081.md). Mirror route: superseded by G10 |
+| G7. presence stop and coverage (camera) | Step L-D1, no display: a bounded `camera_recognize` run ends `headset_removed` or `standby` at most 3.0 s after the operator's key mark made once the headset is off, with no frame processed whose acquire time is more than 2.0 s after that mark; the bottle, within 1 m, detected in at least 80% of the in-view 1-second windows; inference and processing p95 at most 200 ms; passthrough unchanged during the run and for 30 s after the headset is back on | Not run. The proof of concept ([E99](evidence/e099.md)) did not exercise removal and did not detect the bottle at distance |
+| G8. coexistence and no feedback (camera) | Step L-D2: with the bridge showing a public seed image of horses at the HUD position and size, updated at 5 Hz for at least 120 s (at least 600 acknowledged updates, no freeze), one bounded `camera_recognize` run reports no `horse` while only the panel shows it and at least one `horse` when a printed copy is held in view (the positive control); camera inference p95 at most 200 ms with the bridge running; both cleanups clean; passthrough unchanged; no screen showing the Frame's output in the cameras' view | Not run. That the camera images the room before compositing is the 2026-11-09 review's statement, not device evidence; a pass holds for the scene and panel tested |
+| G9. real-output expiry and soak | Step L-D3, no camera: synthetic rows through the `--fixed-hud` bridge at 5 Hz for at least 75 s (at least 375 acknowledged updates at 320x128, the wearer sees the counter advance to the end); at each of three stops a `frame_expired` record whose `hide_returned_ns` is within 1,000 ms plus one poll of the last frame's observation, `hide_ok` true and the runtime reporting the tile not visible, and the wearer sees the tile gone; nothing displayed past its deadline; cleanup clean; passthrough and tracking normal during and for 30 s after | Not run. The mode has met only a fake runtime in tests (#81) |
+| G10. combined camera HUD | The [60-second POC acceptance](poc-scope.md#acceptance) on the camera route, step L-D5 after a first-light run (L-D4): the bottle named for at least 90% of a contiguous 60 s window with no gap over 2 s, and the wearer agrees; arrows within the tolerance agreed in writing before the run, or names only; the name gone when the bottle leaves view and the tile cleared on headset removal, by `frame_expired` and by the wearer; nothing displayed past its deadline; input age at most 1,000 ms; inference and processing p95 at most 200 ms and capture-to-display p95 at most 400 ms; passthrough and tracking normal during and for 30 s after; clean shutdown with truthful helper, supervisor, worker and bridge reports; green input aborts the run (G2) | Not run |
 
 [`sightcircuit/gates.py`](../sightcircuit/gates.py) is the code's single gate
 table. Hardware mapping requires G4; production live image input requires
-G4/G5/G6; real HUD output requires G5/G6. All three remain closed. Lifting a gate
+G4/G5/G6; real HUD output requires G5/G6. All three remain closed. The table
+still names the mirror rows: work-order item L10 is the reviewed edit that
+adds the camera input gate (lifted by G7, G8 and G10) and repoints real HUD
+output to G8, G9 and G10, opening nothing; until it lands no code path may
+show camera-derived labels on the headset. The numbers in G7 to G10 are the
+owner's accepted thresholds of 2026-11-16 (decision 9). Lifting a gate
 requires a reviewed code change after its evidence exists; no configuration
 flag or hand-edited candidate opens one. The separately scoped diagnostic in the
 [qualification design](hud-qualification.md#separately-scoped-device-validation)
@@ -582,6 +598,15 @@ using the [device report template](templates/hud-device-validation-report.json):
   the report's declared units and timebase.
 - Wearer observations of the HUD, arrow direction, object-leaving-view expiry,
   and normal passthrough/tracking during and for 30 seconds afterward.
+
+For the camera rows the entry carries no mask regions and no mapping. It adds
+the helper's ready and end records (format metadata only), the marks and the
+counts-only summaries of the recognition report (G7, G8), every
+`frame_expired` record with its hide times (G9, G10), the exposure-minus-acquire
+offset as a timing, per-label display seconds and the longest gap (G10), and
+the wearer's observations. No pixel, still, preview or calibration value is
+recorded anywhere. The camera-HUD report template follows the stage's report
+(work-order items L8 and L9).
 
 ## Risks
 
