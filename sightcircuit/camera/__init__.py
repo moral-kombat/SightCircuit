@@ -1,6 +1,6 @@
 """The Arcturus camera export: the helper's wire protocol as data and its strict reader.
 
-``contract`` is the one statement of camera export v1, the packet stream
+``contract`` is the one statement of camera export v2, the packet stream
 ``sightcircuit-camera-helper --export-frames`` writes on its stdout;
 ``scripts/camera_contract_header.py`` generates ``tools/camera_export_protocol.hpp``
 from it, so the helper and Python share one vocabulary. ``export_reader``

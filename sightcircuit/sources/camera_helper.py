@@ -6,7 +6,7 @@ for; a path inside the work tree is refused unless it is under the ignored
 no tracked file can be run as the helper) through
 ``runtime.supervision.supervise_owned``: the one owned session, deadline,
 signal handling, group termination and cleanup verdict every bounded child
-of this checkout gets. The helper's stdout is the camera export v1 packet
+of this checkout gets. The helper's stdout is the camera export v2 packet
 stream, so it cannot be the primitive's report stream: the launched command
 is ``exec_helper``, a trampoline of this module that writes one launch record
 on the report stream, moves two pipes of the caller onto its stdout and

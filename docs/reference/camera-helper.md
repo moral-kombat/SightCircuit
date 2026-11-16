@@ -51,7 +51,7 @@ What the helper is and is not:
 | `tools/camera_backend_fake.cpp` | The fake backend, built with `-DSIGHTCIRCUIT_CAMERA_BACKEND_FAKE=1`: a scenario table that drives every outcome (success in three pixel formats, permission denied at connect, at the first control read and at the reader, protocol too new and too old, client already connected, resource denied, provider unreachable, out of memory at connect, invalid metadata at connect and an oversized calibration, server timeout then frames, a server timeout on the reader call, not ready, unavailable, an internal error, an invalid argument, transport lost mid-run, a failed release, a standby gap, a format change, a control change mid-run, a sequence gap, bad camera and plane counts, invalid timestamps, a hang in acquire and in release). Records each call in order for the final record's `fake_calls`. Every record it produces says `backend: "fake"`. |
 | `tools/camera_helper.cpp` | The entry point and the session: arguments and their bounds, the typed confirmation, the runtime-directory lock, signals, the watchdog, the records. C++17; includes `overlay_lifecycle.hpp` unchanged for stdout isolation and the SIGALRM watchdog. |
 | `tools/camera_sha256.hpp` | SHA-256 for the calibration and control-state digests, original code, header-only, so the SDK-linked binary links only the Client Library archive, pthread and `dl`. |
-| `tools/camera_export_protocol.hpp` | The constants of camera export protocol version 1 (magic, version, size bounds, the exact field list of each header kind, the vocabulary, the run limits): the header `scripts/camera_contract_header.py` generates from `sightcircuit/camera/contract.py` (work item S7), taken as is. |
+| `tools/camera_export_protocol.hpp` | The constants of camera export protocol version 2 (magic, version, size bounds, the exact field list of each header kind, the vocabulary, the run limits): the header `scripts/camera_contract_header.py` generates from `sightcircuit/camera/contract.py` (work item S7), taken as is. |
 | `tools/camera_ycbcr.hpp` | The full-range YCbCr-to-BGR formula in Q16 fixed point for BT.601, 709 and 2020, shared by the CPU path and (as GLSL) the GPU path's shader. C++11. |
 | `tools/camera_pixels.hpp` | The pixel-path interface: `SourceFrame` (one camera of a held frame set, with its borrowed descriptor), `BgrImage`, the row-stride rule and the `PixelPath` class. C++11. |
 | `tools/camera_pixels_cpu.cpp` | `cpu_linear`: maps a linear buffer read-only with `DMA_BUF_IOCTL_SYNC` around the read and converts on the CPU. C++11. |
@@ -69,7 +69,7 @@ None of these is pinned by the checkpoint manifest; no gate, pinned file or
 | `--query-gpu` | What the Vulkan driver answers for the `gpu_convert` path: one `gpu_query` record ([below](#import-strategies-and-the-gpu-query)). Like `--describe`: no backend, no connect, no camera, no lock, no confirmation, no runtime directory needed; no buffer is imported, mapped or read. Exit 0 when a device opened, 1 when none did (the record says why). |
 | `--hello [--timeout-ms N]` | Connect and the mandatory handshake, one read of the control state, disconnect. The reader stays off. |
 | `--probe-frames N --max-seconds S [--interval-ms M] [--timeout-ms T]` | As `--hello`, then the reader is enabled with `recording` false and up to N frame sets (1 to 50) are acquired within S seconds (1 to 10), one pass per M ms (100 to 1000, default 200), each released before the next pass; the control state is read again at the end to show whether anything changed during the run; the reader is disabled and the session closed. |
-| `--export-frames --max-seconds S --max-frames N [--fps F] [--cameras C] [--pixel-path P] [--timeout-ms T] [--parent-confirmed]` | As `--probe-frames`, but each held frame set's selected cameras are converted to BGR3 and written to the parent as packets ([below](#the-export-mode-s6)); S is 1 to 60, N 1 to 600 frames, F 1 to 10 a second (default 5), C the camera indices `0` (default), `1` or `0,1`, P `auto` (default), `cpu_linear` or `gpu_convert`. `--parent-confirmed` (this mode only) records that the parent process gave the confirmation. |
+| `--export-frames --max-seconds S --max-frames N [--fps F] [--cameras C] [--pixel-path P] [--timeout-ms T] [--parent-confirmed]` | As `--probe-frames`, but each held frame set's selected cameras are converted to BGR3 and written to the parent as packets ([below](#the-export-mode-s6)); S is 1 to 90, N 1 to 900 frames (the generated header's bounds), F 1 to 10 a second (default 5), C the camera indices `0` (default), `1` or `0,1`, P `auto` (default), `cpu_linear` or `gpu_convert`. `--parent-confirmed` (this mode only) records that the parent process gave the confirmation. |
 
 `--hello`, `--probe-frames` and `--export-frames` first take a lock, `sightcircuit-camera-helper.lock`
 in `$XDG_RUNTIME_DIR` (never `/tmp`; without the variable the run is refused
@@ -151,13 +151,13 @@ by row against the vendored headers by `tests/fixtures/camera_status_map_fixture
 
 ## The export mode (S6)
 
-`--export-frames` writes packets of **camera export protocol version 1** to
+`--export-frames` writes packets of **camera export protocol version 2** to
 the real standard output and nothing else there; every record and note the
 helper would otherwise print becomes a JSON line on standard error. Standard
 output must be a pipe or a socket (a file or a terminal is refused, exit 5,
 `stdout_not_a_pipe`), so a pixel can leave the process only through the pipe
 to its parent; the helper writes no file. A packet is the magic `SCCF`, then
-three little-endian `u32` fields (protocol version 1, `header_bytes`,
+three little-endian `u32` fields (protocol version 2, `header_bytes`,
 `payload_bytes`), then `header_bytes` of UTF-8 JSON (one object, at most
 16384 bytes) and `payload_bytes` of payload (at most 33554432). The header's
 `kind` is `ready`, `frame` or `end`; only `frame` carries a payload. Each
@@ -165,6 +165,24 @@ header carries exactly the fields the contract lists for its kind, in that
 order, and nothing else (`tools/camera_export_protocol.hpp`, the generated
 header of the S7 camera contract, pinned by `tests/test_camera_export.py`);
 every other fact of a run is in the stderr `final` record.
+
+**Version 2 (work-order item L4, owner decision 4 of 2026-11-16).** It differs
+from version 1 in three values and in nothing of the layout: `--max-seconds`
+is 1 to 90 (was 60), `--max-frames` is 1 to 900 (was 600; a frame's
+`sequence` has the same bound), and the notice text
+(`contract.EXPORT_NOTICE`, `kExportNotice`) now covers both uses of the
+export: a recognition command that saves counts, labels, boxes and timings
+to the report the operator names and shows nothing, and a display command
+that shows labels and approximate arrows in the headset and saves nothing;
+neither saves an image or shows a camera image. `--fps` stays 1 to 10. The
+helper's flag ranges are the generated header's constants, not a second copy.
+The prefix version and `ready.protocol` are 2, so the versions refuse each
+other on the first packet: this checkout's reader refuses a helper built
+before the change (`unsupported_version`, with the instruction to rebuild),
+and a version 1 reader refuses a version 2 helper the same way. **The
+operator rebuilds the helper on the Frame before any run with a version 2
+checkout** ([build](#build)). `camera_recognize` keeps its own bound of 30
+seconds and 300 frames.
 
 Standard error carries the helper's own records as JSON lines, and the
 helper keeps it that way while text from the libraries it loads arrives
@@ -206,7 +224,7 @@ not keep stable.
 
 | Kind | Header |
 | --- | --- |
-| `ready` (first, once) | `protocol` 1, `backend`, `pixel_path` (`cpu_linear` or `gpu_convert`; under `auto` the first frame set chooses the path and is released unexported, and the ready follows it; `undecided` only in the ready of a run that ends before the path was chosen, which no frame follows), `build` (scalars: the `--describe` facts, the contract digest, `pixel_path_facts` with the GPU path's device, extensions, `import` (`drm_format_modifier` or `linear_copy_fallback`), `import_strategy`, each strategy's answer in `import_strategy_results` and `chroma_location`, `camera_index_mapping` (`avCam0` is taken as left until the transforms say otherwise), `frame_timeout_ms`, `presence_gap_ns`, `hello_camera_count`, `controls_digest_start`, host clocks), `delivered_format` `{"fourcc":"BGR3"}`, `cameras` (the selected indices), `limits` (`fps`, `max_seconds`, `max_frames`, as requested), `confirmation` (`terminal` or `parent`). It is written once the path is known and the connect has given its facts; a run that ends before then (a pixel path that does not open, a refused connect, no frame set before standby or the watchdog) writes it right before its `end`, with the connect's facts null when they were never read. Every run that passed the confirmation writes exactly one `ready` first and one `end` last, and frames only after a ready that names the path. |
+| `ready` (first, once) | `protocol` 2, `backend`, `pixel_path` (`cpu_linear` or `gpu_convert`; under `auto` the first frame set chooses the path and is released unexported, and the ready follows it; `undecided` only in the ready of a run that ends before the path was chosen, which no frame follows), `build` (scalars: the `--describe` facts, the contract digest, `pixel_path_facts` with the GPU path's device, extensions, `import` (`drm_format_modifier` or `linear_copy_fallback`), `import_strategy`, each strategy's answer in `import_strategy_results` and `chroma_location`, `camera_index_mapping` (`avCam0` is taken as left until the transforms say otherwise), `frame_timeout_ms`, `presence_gap_ns`, `hello_camera_count`, `controls_digest_start`, host clocks), `delivered_format` `{"fourcc":"BGR3"}`, `cameras` (the selected indices), `limits` (`fps`, `max_seconds`, `max_frames`, as requested), `confirmation` (`terminal` or `parent`). It is written once the path is known and the connect has given its facts; a run that ends before then (a pixel path that does not open, a refused connect, no frame set before standby or the watchdog) writes it right before its `end`, with the connect's facts null when they were never read. Every run that passed the confirmation writes exactly one `ready` first and one `end` last, and frames only after a ready that names the path. |
 | `frame` | `sequence` (from 1, consecutive per run), `frame_id` (the SDK's), `frame_set_sequence` (from 1 per run, one per exported frame set, the same on both cameras of a set), `camera_index`, `exposure_ns`, `monotonic_ns` and `realtime_ns` (host clocks at acquisition), `width`, `height`, `fourcc` `BGR3`, `stride_bytes` (`ceil(width/4)*12`, rows padded to whole four-pixel groups; `width*3` at 2464), `buffer_bytes` (`stride_bytes*height`, the payload size), `derivation` (`cpu_converted` or `gpu_converted`), `acquisition_format` (`drm_fourcc`, `modifier` as hex, `plane_count`, `planes`, `pixel_format`, `encoding`, `transfer`, `primaries`), `dropped_since_last` (frame sets released without export since the previous exported set; the same value on both packets of one set, camera 0 first). |
 | `end` (last, once) | `reason`, `counts` (`exported`, `dropped`, `acquire_failures`, `release_failures`), `elapsed_ns`, `digests` (`controls_start`, `controls_end` and `offline_cal`, each present when it was read), `confirmation`. The exit code, `cleanup_ok`, `detail`, `frame_sets`, `passes`, `pixel_path_notes`, `stream_torn` and `end_packet_written` are in the stderr `final` record. |
 
@@ -414,6 +432,11 @@ bash scripts/build_camera_helper.sh --fake [--out DIR]          # any architectu
 bash scripts/build_camera_helper.sh --sdk DIR [--check-sdk]     # operator only, aarch64 only
 bash scripts/build_camera_helper.sh --shader                    # regenerate the three SPIR-V modules (glslang-tools)
 ```
+
+**Rebuild for version 2.** The operator rebuilds the helper on the Frame
+(`--sdk DIR`) before any run with a checkout whose contract is
+`camera-export/2`: a binary built earlier writes version 1 and the reader
+refuses its first packet (`unsupported_version`), before any frame.
 
 `--fake` compiles `camera_helper.cpp`, the two pixel-path units and
 `camera_backend_fake.cpp` into

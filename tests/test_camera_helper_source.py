@@ -45,9 +45,10 @@ class RunExportTests(unittest.TestCase):
         for number, handler in self.previous.items():
             self.addCleanup(signal.signal, number, handler)
 
-    def run_export(self, scenario=None, limits=LIMITS, cameras=(0, 1), timeout=None, stop=None, on_frame=None):
+    def run_export(self, scenario=None, limits=LIMITS, cameras=(0, 1), timeout=None, stop=None, on_frame=None,
+                   clock=None):
         frames = []
-        extra = ("--fake-scenario", scenario) if scenario else ()
+        extra = (("--fake-scenario", scenario) if scenario else ()) + (("--fake-clock", clock) if clock else ())
         report = camera_helper.run_export(self.binary, limits, cameras, on_frame=on_frame or frames.append,
                                           extra_args=extra, timeout=timeout, stop=stop, confirmed=True)
         return report, frames
@@ -89,6 +90,35 @@ class RunExportTests(unittest.TestCase):
         self.assertEqual(report["status"], "exported")
         self.assertEqual(report["stream"]["end"]["reason"], "max_seconds")
         self.assertLessEqual(len(frames), 3)
+
+    def test_ninety_seconds_at_five_frames_a_second_is_450_frames_ending_on_the_time_bound(self):
+        """Contract v2's full time bound on the stand-in's virtual clock: nothing here sleeps 90 s."""
+        limits = {"fps": 5, "max_seconds": contract.LIMITS["max_seconds"][1], "max_frames": contract.LIMITS["max_frames"][1]}
+        self.assertEqual(limits, {"fps": 5, "max_seconds": 90, "max_frames": 900})
+        sequences = []
+        started = time.monotonic()
+        report, _ = self.run_export(limits=limits, cameras=(0,), clock="virtual",
+                                    on_frame=lambda frame: sequences.append(frame.sequence))
+        self.assertLess(time.monotonic() - started, 30)
+        self.assertEqual((report["status"], report["cleanup_ok"], report["frames_read"]), ("exported", True, 450))
+        self.assertEqual(sequences, list(range(1, 451)))
+        self.assertEqual(report["protocol"], "camera-export/2")
+        self.assertEqual((report["stream"]["end"]["reason"], report["stream"]["end"]["counts"]["exported"]),
+                         ("max_seconds", 450))
+        self.assertEqual(report["stream"]["ready"]["limits"], limits)
+        self.assertEqual(report["helper"]["arguments"][1:6], ["--fps", "5", "--max-seconds", "90", "--max-frames"])
+        # The frame bound, the other way: 900 frames at 10 a second are 90 s of periods, and the frame bound ends it.
+        report, _ = self.run_export(limits=dict(limits, fps=10), cameras=(0,), clock="virtual", on_frame=lambda frame: None)
+        self.assertEqual((report["status"], report["frames_read"], report["stream"]["end"]["reason"]),
+                         ("exported", 900, "max_frames"))
+
+    def test_a_version_1_helper_is_refused_by_name_and_stopped(self):
+        report, frames = self.run_export("invalid:version_1_helper", limits=CATALOGUE_LIMITS)
+        self.assertEqual((report["status"], report["reason"], frames), ("refused", "unsupported_version", []))
+        self.assertIn("declares camera export version 1", report["error"])
+        self.assertIn("accepts only version 2 (camera-export/2)", report["error"])
+        self.assertIn("rebuild the helper", report["error"])
+        self.assertTrue(report["cleanup_ok"])
 
     def test_one_camera_and_a_large_frame(self):
         frames = []
@@ -224,8 +254,8 @@ class RunExportTests(unittest.TestCase):
         self.assertTrue(report["cleanup_ok"])
 
     def test_limits_and_cameras_are_checked_before_launch(self):
-        for limits in ({"fps": 11, "max_seconds": 1, "max_frames": 1}, {"fps": 1, "max_seconds": 61, "max_frames": 1},
-                       {"fps": 1, "max_seconds": 1, "max_frames": 601}, {"fps": 1, "max_seconds": 1},
+        for limits in ({"fps": 11, "max_seconds": 1, "max_frames": 1}, {"fps": 1, "max_seconds": 91, "max_frames": 1},
+                       {"fps": 1, "max_seconds": 1, "max_frames": 901}, {"fps": 1, "max_seconds": 1},
                        {"fps": True, "max_seconds": 1, "max_frames": 1}, "fast"):
             with self.subTest(limits=limits):
                 report = camera_helper.run_export(self.binary, limits, (0,), on_frame=lambda frame: None)
@@ -367,7 +397,7 @@ class CommandLineTests(unittest.TestCase):
                          {"fps": 1, "max_seconds": 1, "max_frames": 1})
         self.assertEqual(camera_helper.check_cameras([0, 1]), (0, 1))
         self.assertEqual(camera_helper.helper_command("/h", camera_helper.check_limits(
-            {name: high for name, (_, high) in contract.LIMITS.items()}), (0, 1))[3::2][:3], ["10", "60", "600"])
+            {name: high for name, (_, high) in contract.LIMITS.items()}), (0, 1))[3::2][:3], ["10", "90", "900"])
 
 
 if __name__ == "__main__":

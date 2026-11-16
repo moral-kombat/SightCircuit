@@ -91,9 +91,16 @@ helper collects between SDK calls and answers with an `end` packet of reason
 
 Both bounds are required and both are checked by the helper and the command:
 `--seconds` is at most 30, `--max-frames` at most 300, `--fps` at most 10
-(default 5). The helper's own bounds are wider (60 seconds, 600 frames,
-work-order item S6); the command never asks for more than its own. `--allow-camera-input` is the opt-in, named like the observer's
+(default 5). The helper's own bounds are wider (90 seconds, 900 frames,
+camera export v2, work-order items S6 and L4); the command never asks for more than its own. `--allow-camera-input` is the opt-in, named like the observer's
 flags; without it nothing is launched.
+
+**Rebuild the helper first.** The checkout speaks camera export v2. A helper
+built from an earlier checkout writes version 1, and the reader refuses its
+first packet (`refused`, `unsupported_version`) before any frame is read, so
+the operator rebuilds the helper on the Frame
+(`bash scripts/build_camera_helper.sh --sdk DIR`, the build step of the [probe guide](camera-probe.md#preparation))
+before any run with this checkout.
 
 ```bash
 .venv-replay/bin/python scripts/camera_recognize.py --allow-camera-input \
@@ -158,10 +165,10 @@ standard library only. Expect `status: validated` and exit 0.
 | `gate_statement`, `production_live_input_enabled`, `mapping_qualified`, `production_hud_enabled` | The owner's 2026-11-09 classification in one sentence, and `gates.claims()`, all `false` |
 | `cleanup_ok`, `images_saved`, `pixels_in_report`, `display_started`, `overlay_requested` | The primitive's cleanup verdict and the processing thread's exit; the last four are always `false` |
 
-## The wire protocol, camera export v1
+## The wire protocol, camera export v2
 
 The helper's stdout is a sequence of packets and nothing else. A packet is a
-16-byte little-endian prefix (the magic `SCCF`, the version 1, the header size,
+16-byte little-endian prefix (the magic `SCCF`, the version 2, the header size,
 the payload size), then the header (UTF-8 JSON, one object, at most 16384
 bytes), then the payload (at most 33554432 bytes). The header's `kind` is
 `ready` (first, once; backend, pixel path, build facts, the delivered format
@@ -180,8 +187,10 @@ the confirmation; no payload). The helper's stderr carries JSON diagnostic lines
 `sightcircuit/camera/contract.py` is the protocol as data: the prefix layout,
 the bounds, the exact fields of each kind with types and bounds, the end
 reasons, the format vocabulary (the helper's spelling of the SDK enumerators)
-and the helper's run limits (`fps` 1 to 10, `max_seconds` 1 to 60,
-`max_frames` 1 to 600, the bounds of work-order item S6). `python3 scripts/camera_contract_header.py --write` generates
+and the helper's run limits (`fps` 1 to 10, `max_seconds` 1 to 90,
+`max_frames` 1 to 900, the bounds of work-order item S6 as raised by L4;
+version 1 had 60 and 600, and the two versions refuse each other by the
+prefix version, `unsupported_version`). `python3 scripts/camera_contract_header.py --write` generates
 `tools/camera_export_protocol.hpp` for the helper and `--check` fails when it
 is stale (CI runs it; `tests/test_camera_contract.py` pins it). The reader
 enforces every rule and names its refusals (`export_reader.REASONS`).

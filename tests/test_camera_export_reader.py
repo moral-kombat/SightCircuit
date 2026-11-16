@@ -6,6 +6,7 @@ import io
 from pathlib import Path
 import sys
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -174,6 +175,66 @@ class InvalidStreamTests(unittest.TestCase):
             for frame in reader.frames():
                 delivered.append(frame.sequence)
         self.assertEqual(delivered, [1])
+
+
+class ContractV2Tests(unittest.TestCase):
+    """Camera export v2 (work-order item L4): 90 s and 900 frames, and the two versions refuse each other."""
+    FULL = {"fps": 10, "max_seconds": 90, "max_frames": 900}
+
+    def test_sequence_900_is_accepted_and_901_is_refused(self):
+        self.assertEqual(self.FULL, {name: high for name, (_, high) in contract.LIMITS.items()})
+        reader, frames = read_all(fake_export.valid_stream(900, limits=self.FULL, cameras=(0,)), limits=self.FULL)
+        self.assertEqual((reader.report()["status"], len(frames), frames[-1].sequence), ("complete", 900, 900))
+        self.assertEqual(reader.end["counts"]["exported"], 900)
+        over = (fake_export.encode(fake_export.ready_header(limits=self.FULL, cameras=(0,))) +
+                b"".join(fake_export.frame_packet(sequence, camera_index=0, frame_set_sequence=sequence)
+                         for sequence in range(1, 902)))
+        reader = ExportReader(io.BytesIO(over), limits=self.FULL)
+        delivered = []
+        with self.assertRaises(ExportRefused) as caught:
+            for frame in reader.frames():
+                delivered.append(frame.sequence)
+        self.assertEqual((caught.exception.reason, caught.exception.packet), ("invalid_field:sequence", 902))
+        self.assertEqual(delivered[-1], 900)
+
+    def test_limits_beyond_the_contract_are_refused_in_ready(self):
+        for name, value in (("max_seconds", 91), ("max_frames", 901), ("fps", 11), ("max_seconds", 0)):
+            limits = dict(self.FULL, **{name: value})
+            with self.subTest(name=name, value=value):
+                reader = ExportReader(io.BytesIO(fake_export.encode(fake_export.ready_header(limits=limits))), limits=limits)
+                with self.assertRaises(ExportRefused) as caught:
+                    list(reader.frames())
+                self.assertEqual(caught.exception.reason, f"invalid_field:limits.{name}")
+        for name in ("max_seconds", "max_frames"):  # The bounds themselves are accepted.
+            limits = dict(LIMITS, **{name: contract.LIMITS[name][1]})
+            reader, _ = read_all(fake_export.undecided_stream(limits=limits), limits=limits)
+            self.assertEqual(reader.report()["status"], "complete")
+
+    def test_a_version_1_helper_is_refused_by_this_reader_with_a_clear_reason(self):
+        """What a helper built before v2 writes: prefix version 1 and ``ready.protocol`` 1."""
+        old = fake_export.encode(fake_export.ready_header(protocol=1), version=1)
+        reader = ExportReader(io.BytesIO(old), limits=LIMITS)
+        with self.assertRaises(ExportRefused) as caught:
+            list(reader.frames())
+        self.assertEqual((caught.exception.reason, caught.exception.packet), ("unsupported_version", 1))
+        message = str(caught.exception)
+        for part in ("declares camera export version 1", "accepts only version 2 (camera-export/2)", "rebuild the helper"):
+            self.assertIn(part, message)
+        self.assertEqual(reader.report()["refusal"]["detail"], message)
+        # A current prefix around a version 1 ready is refused on the field instead.
+        self.assertEqual(fake_export.INVALID["ready_protocol_1"][1], "invalid_field:protocol")
+
+    def test_a_version_1_reader_refuses_a_version_2_helper(self):
+        """The reader of a v1 checkout compares the prefix with its own version: reproduced by reading as version 1."""
+        stream = fake_export.valid_stream()
+        self.assertEqual(contract.unpack_prefix(stream[:contract.PREFIX_BYTES])[1], 2)
+        with mock.patch.object(contract, "VERSION", 1), mock.patch.object(contract, "PROTOCOL", "camera-export/1"):
+            reader = ExportReader(io.BytesIO(stream), limits=LIMITS)
+            with self.assertRaises(ExportRefused) as caught:
+                list(reader.frames())
+        self.assertEqual((caught.exception.reason, caught.exception.packet), ("unsupported_version", 1))
+        self.assertIn("declares camera export version 2", str(caught.exception))
+        self.assertEqual(reader.frames_read, 0)
 
 
 class FieldTests(unittest.TestCase):

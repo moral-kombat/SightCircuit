@@ -9,7 +9,7 @@ variable or piped answer), and only then launches the helper with
 ``sightcircuit-camera-helper`` binary the operator names (``--helper``) in
 ``--export-frames`` mode under the supervision primitive, with the same
 limits the command enforces (``--seconds`` at most 30 and ``--max-frames`` at
-most 300, both required; ``--fps`` at most 10), and reads its camera export v1
+most 300, both required; ``--fps`` at most 10), and reads its camera export v2
 stream with the strict reader. Each validated frame is kept in a one-frame
 latest slot; the processing thread converts it to the detector's input (at
 most 960 pixels), skips it when its acquisition is older than the one-second
@@ -65,7 +65,7 @@ from sightcircuit.runtime import guard
 from sightcircuit.sources import camera_helper
 
 REPORT_KIND = "camera_recognition"
-# The command's bounds (work-order item S7), inside the helper's own (``contract.LIMITS``: 60 s, 600 frames).
+# The command's bounds (work-order item S7), inside the helper's own (``contract.LIMITS``: 90 s, 900 frames).
 MAX_SECONDS, MAX_FRAMES = 30, 300
 MAX_FPS = contract.LIMITS["fps"][1]
 assert MAX_SECONDS <= contract.LIMITS["max_seconds"][1] and MAX_FRAMES <= contract.LIMITS["max_frames"][1]

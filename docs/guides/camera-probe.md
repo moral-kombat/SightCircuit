@@ -221,6 +221,11 @@ the phase; nothing in them needs the owner's Camera Switch change.
    bash scripts/build_camera_helper.sh --sdk DIR
    ```
 
+   Repeat this build after any checkout change that touches the export
+   contract: from camera export v2 (90 seconds, 900 frames) a helper built
+   earlier is refused on its first packet (`unsupported_version`), so the
+   operator rebuilds on the Frame before any run with a v2 checkout.
+
    Expect `Built …/artifacts/camera-helper/sightcircuit-camera-helper` and the
    reminder that the binary and the library are never committed, uploaded or
    shared. `artifacts/camera-helper/build-report.json` records the SDK release,

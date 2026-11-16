@@ -162,6 +162,25 @@ class IncludeAndTextBoundaries(unittest.TestCase):
         self.assertEqual(text.count("confirm(notice_for(options), reason)"), 1)
         self.assertEqual(text.count("options.parent_confirmed)"), 2)  # the parse check and the one branch in main
 
+    def test_the_export_flag_ranges_are_the_generated_contracts(self):
+        """Camera export v2 (item L4): the helper's ranges come from the generated header, and its usage states them."""
+        from sightcircuit.camera import contract
+        text = (ROOT / "tools/camera_helper.cpp").read_text()
+        for name, constant in (("Fps", "kMaxFps"), ("Seconds", "kMaxSeconds"), ("Frames", "kMaxFrames")):
+            self.assertIn(f"constexpr unsigned kMaxExport{name} = sightcircuit_camera_export::{constant};", text)
+        self.assertFalse(re.search(r"kMaxExport(Fps|Seconds|Frames) = \d", text))  # No second copy of a bound.
+        for flag, field, bound in (("--max-seconds", "max_seconds", "kMaxExportSeconds"),
+                                   ("--max-frames", "max_frames", "kMaxExportFrames"), ("--fps", "fps", "kMaxExportFps")):
+            self.assertIn(f'take_value(index, "{flag}", options.{field}, 1, {bound})', text)
+        self.assertEqual({name: low for name, (low, _) in contract.LIMITS.items()}, {"fps": 1, "max_seconds": 1, "max_frames": 1})
+        usage = text.split("const char* usage_text() {", 1)[1].split("}", 1)[0]
+        self.assertIn(f"(camera export protocol {contract.VERSION})", usage)
+        self.assertIn(f"at most F per second (1-{contract.LIMITS['fps'][1]}, default 5), "
+                      f"S seconds (1-{contract.LIMITS['max_seconds'][1]}) and", usage)
+        self.assertIn(f"N frames (1-{contract.LIMITS['max_frames'][1]});", usage)
+        self.assertIn('put_u32(bytes, export_protocol::kVersion);', text)
+        self.assertIn('.integer("protocol", export_protocol::kVersion)', text)
+
     def test_the_gpu_query_mode_makes_no_sdk_call_and_reads_no_buffer(self):
         text = (ROOT / "tools/camera_helper.cpp").read_text()
         # main leaves for the query before a backend exists, before the lock and before the confirmation.
