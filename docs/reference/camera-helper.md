@@ -421,6 +421,79 @@ acquire preserving contents, whether the SDK's descriptors answer the
 DMA-BUF sync ioctl, timings at camera size, and how removal and standby
 manifest through `acquireFrameSet`.
 
+## The pipeline source (L5)
+
+`CameraHelperSource` in `sightcircuit/sources/camera_helper.py` is the left
+camera as a frame source for `Pipeline`, built around `run_export`. It is
+library code only: no command constructs it, it opens no gate, and
+`run_pipeline` refuses it (`live_image_source_not_approved`), which a test
+pins. Work-order items L9 and L10 decide how a command may use it. Everything
+below is checked against the stand-in producer in the cloud; none of it is a
+device result.
+
+**Identity.** `kind` is `arcturus_camera` and `source_id` is
+`arcturus_camera_left`; a latest-only `Pipeline` with an input age limit pins
+both in its `CaptureContext` before the helper is launched. `cameras` other
+than `(0,)` is refused when the source is built (`camera_source_left_only`
+for `0,1` and for `1`). A frame of another camera ends the run
+(`camera_frame_not_left`), as does a `ready` naming other cameras
+(`camera_selection_not_honoured`); the pinned context would refuse such a
+frame as well (`source_or_session_changed`).
+
+**Two threads.** The supervision primitive takes the process's signals and so
+runs on the main thread, while a latest-only `Pipeline` calls a source's
+`run(emit, stop)` on its capture thread. The source therefore has two halves:
+
+- `run(emit, stop)`, called by the pipeline, attaches the pipeline's `emit`
+  and `stop`, waits for the export to finish and raises the run's error where
+  the pipeline expects a source's.
+- `supervise()`, called on the main thread, waits for that attachment (at most
+  `ATTACH_SECONDS`, else `camera_source_not_attached` with nothing launched),
+  runs `run_export` with the pipeline's `stop` as the helper's stop signal,
+  and returns the source's report. Frames go from the reader thread straight
+  to `emit`.
+- `drive(pipeline, stop)` does both: the pipeline on a worker thread, the
+  supervision on the calling thread. A pipeline given this source should use
+  `join_timeout=SOURCE_JOIN_SECONDS`, the helper's whole stop escalation.
+
+**How a run ends.** The helper's end reason, read from its validated `end`
+packet, decides:
+
+| Helper's end | Source `status` | What the pipeline sees |
+| --- | --- | --- |
+| `max_frames`, `max_seconds` | `completed` | `run` returns; the last pending frame is still processed |
+| `stop_signal` after the pipeline set `stop` (its frame limit, its deadline, the caller) | `stopped` | `run` returns |
+| `headset_removed`, `standby` | `presence_ended` | `stop` is set on the reader thread as soon as the end packet is validated, before the helper has exited; the pipeline takes no further frame and its slot is emptied (`LatestSlot.discard`); `run` returns |
+| `sdk_error`, `pixel_path_error`, `watchdog`, `consumer_stalled` | `error`, with that reason | `run` raises `SightCircuitError` with the reason |
+| no valid end: a reader refusal, the deadline, a non-zero exit, a launch failure | `error`, with the reader's or the export's reason | `run` raises it |
+| a signal taken by the primitive | `cancelled` | `stop` is set; `run` returns |
+
+Nothing is retried, a presence end least of all: a source runs once, and a
+second `run`, `supervise` or `drive` raises `camera_source_already_run`
+without launching anything. A `stop_signal` end that nobody here asked for
+arrives with the helper's exit code 130 and is an `error`
+(`helper_exit_code`).
+
+**Clocks.** A frame's `observed_ns` stays the host monotonic time of its
+acquisition (the header's `monotonic_ns`), which is what the pipeline's input
+age and expiry are measured from, and `exposure_ns` stays in the frame's
+metadata, used by nothing. The report's `timings.exposure_minus_acquire_ms`
+gives the count, nearest-rank p50, minimum and maximum of their difference
+over the emitted frames. It describes what the helper's headers declared for
+one run; it is verified against nothing and is never applied to a frame.
+
+**The report** (`report()`, kind `camera_helper_source`) holds the status,
+reason and end reason, `presence_ended`, `retried` (always false), the counts
+of frames emitted and refused, the limits, the timing above, `cleanup_ok`, and
+from the export report only counts, timings, the helper's path, digest and
+arguments, the primitive's block and the format metadata of `ready` and `end`.
+It leaves out the helper's diagnostic lines (the hello record, with the size
+and digest of the camera service's data, is among them) and the `end` packet's
+`digests`; `run_export`'s own report still carries both for
+`camera_recognize`. The source prints and logs nothing, and a test checks that
+no pixel buffer and no such field reaches the source's report or the
+pipeline's.
+
 ## Build
 
 ```bash

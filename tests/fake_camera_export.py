@@ -17,7 +17,12 @@ other limits in ``ready``, ``stderr_noise`` adds non-JSON and many JSON lines
 on stderr, ``exit_failure`` ends normally but exits 1, ``headset_removed``
 ends early with that reason, ``stale_clock`` stamps every frame five
 seconds in the past, ``undecided`` writes a ready with pixel path
-``undecided`` and an end of reason ``watchdog`` with no frame. ``--fake-clock virtual``
+``undecided`` and an end of reason ``watchdog`` with no frame, ``end:<reason>`` ends after
+two frames with that contract end reason, ``right_camera`` and
+``both_cameras`` export camera 1 or both whatever ``--cameras`` asked for, and
+``hello_noise`` adds diagnostic lines shaped like the helper's hello
+record (calibration digest and size, and an invented intrinsics entry) that no
+source report may repeat. ``--fake-clock virtual``
 is the time control: the pacing and the time bound are counted in frame
 periods (``1 / fps`` each) without sleeping, so a 90-second run at 5 frames a
 second writes its 450 frames and ends ``max_seconds`` in well under a second;
@@ -123,6 +128,8 @@ def main(argv=None):
     stopper = Stopper(deaf=scenario == "hang_deaf")
     limits = {"fps": args.fps, "max_seconds": args.max_seconds, "max_frames": args.max_frames}
     cameras = tuple(int(item) for item in args.cameras.split(","))
+    cameras = {"right_camera": (1,), "both_cameras": (0, 1)}.get(scenario, cameras)  # Not what was asked for.
+    end_after_two = scenario.split(":", 1)[1] if scenario.startswith("end:") else None
     stride = args.stride or args.width * 3 + 8
     if scenario.startswith("invalid:"):
         emit(fake_export.INVALID[scenario.split(":", 1)[1]][0]())
@@ -138,6 +145,9 @@ def main(argv=None):
         note("final", reason="watchdog", exported=0, exit_code=0)
         return 0
     note("ready", backend="fake", limits=limits)
+    if scenario == "hello_noise":
+        note("hello", camera_count=2, offline_cal_source="fake", offline_cal_size=4321, offline_cal_sha256="c" * 64,
+             intrinsics={"fx": 1234, "fy": 1235, "cx": 617, "cy": 618})
     echoed = dict(limits, max_frames=limits["max_frames"] + 1) if scenario == "wrong_limits" else limits
     emit(fake_export.encode(fake_export.ready_header(limits=echoed, cameras=cameras)))
     if scenario == "stderr_noise":
@@ -166,6 +176,9 @@ def main(argv=None):
         emit(fake_export.encode(header, fake_export.pixels(exported, args.width, args.height, stride)))
         if scenario == "headset_removed" and exported == 2:
             reason = "headset_removed"
+            break
+        if end_after_two is not None and exported == 2:
+            reason = end_after_two
             break
         elapsed_periods += 1
         if stopper.poll() if virtual else stopper.wait(1 / limits["fps"]):

@@ -506,6 +506,7 @@ class Pipeline:
             self.stats.cancelled = stop.is_set()
         finally:
             stop.set()
+            slot.discard()  # A run that has stopped holds no frame: the pending one, and any a source still emits.
             thread.join(timeout=self.join_timeout)
             self.capture_thread_alive = thread.is_alive()
             self.stats.pending_replaced = slot.replaced

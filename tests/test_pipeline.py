@@ -77,6 +77,18 @@ class LatestSlotTests(unittest.TestCase):
         self.assertIsNone(slot.take(5))
         self.assertLess(time.monotonic() - started, 1)
 
+    def test_discard_drops_the_pending_item_and_every_later_one(self):
+        slot = LatestSlot()
+        slot.put("pending")
+        slot.discard()
+        self.assertEqual((slot.item, slot.closed, slot.discarded), (None, True, True))
+        self.assertIsNone(slot.take(0))
+        slot.put("late")  # A source still emitting after the run stopped.
+        self.assertEqual((slot.take(0), slot.replaced), (None, 0))
+        started = time.monotonic()
+        self.assertIsNone(slot.take(5))  # Closed: a waiter is not held.
+        self.assertLess(time.monotonic() - started, 1)
+
 
 class PipelineTests(unittest.TestCase):
     def test_inline_mode_processes_every_frame_in_order(self):
