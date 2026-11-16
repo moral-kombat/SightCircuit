@@ -231,13 +231,18 @@ dirty the tree and no environment variable moves it; a fresh clone has an
 empty ledger, which is one of the ways this control is procedural.
 
 **The two call sites.** `fixed_hud_output_permitted` (above) asks the scope
-for real output. `camera_display_input_permitted` in
+for real output, and only for a client whose bridge is the checkout's own
+`artifacts/overlay-bridge/sightcircuit-overlay-bridge`, the file the manifest
+hashes (`scope.pinned_binary`; a copy elsewhere is refused, a link to it is
+it). `camera_display_input_permitted` in
 `sightcircuit/hud/camera_stage.py` is the one check for camera input feeding
 the display path: `CameraHudStage.run` hands its answer to the
 `LIVE_CAMERA_INPUT` gate's `require` whenever its client is in real output,
 after the output check and before the helper or the bridge is launched. It
 answers `True` only when the source is a `CameraHelperSource` on the left
-camera and the client's scope, asked for `arcturus_camera_left`, permits
+camera whose helper is the checkout's own
+`artifacts/camera-helper/sightcircuit-camera-helper`, the file the manifest
+hashes, and the client's scope, asked for `arcturus_camera_left`, permits
 camera input. A stage on the validation bridge displays nothing and asks
 neither site; that run stays the bounded recognition without display. Both
 sites take only a `RunScope` of that exact type and only its literal `True`.

@@ -66,7 +66,8 @@ from ..gates import LIVE_CAMERA_INPUT
 from ..observed_frames import BRIDGE_COUNTS, MAX_ACKNOWLEDGEMENTS, ObservedFrameClient
 from ..overlay import BRIDGE_INPUT_POLL_NS, CLOSE_REPORT_FIELDS, rgba_from_bgr
 from ..pipeline import PERCENTILE_METHOD, TIMINGS, Pipeline, TimingSample
-from ..runtime.scope import CAMERA_INPUT, CAMERA_LEFT, RunScope
+from ..runtime.manifest import CAMERA_HELPER as PINNED_HELPER
+from ..runtime.scope import CAMERA_INPUT, CAMERA_LEFT, RunScope, pinned_binary
 from ..sources.camera_helper import LEFT_CAMERA, CameraHelperSource
 from .camera import ORIENTATIONS, camera_rows
 from .contract import HUD_CONFIG, MAX_DISPLAY_AGE_MS, MAX_DISPLAY_AGE_NS, ROW_LABEL_CHARS, config_digest, row_label
@@ -458,7 +459,8 @@ def camera_display_input_permitted(stage):
     output; a validation client displays nothing, so that run is the bounded
     recognition without display the owner classified outside the gate, and
     is not asked. The answer is ``True`` only when the stage's source is a
-    ``CameraHelperSource`` on the left camera, the client's ``scope`` is a
+    ``CameraHelperSource`` on the left camera whose helper is the checkout's
+    own, at the path the checkpoint manifest hashes, the client's ``scope`` is a
     ``RunScope`` (that exact type) asked for ``arcturus_camera_left``, and
     that scope, already verified and consumed by the output check, permits
     camera input, which it does once. A record for the synthetic step, the
@@ -467,7 +469,8 @@ def camera_display_input_permitted(stage):
     scope = getattr(getattr(stage, "client", None), "scope", None)
     source = getattr(stage, "source", None)
     if (type(scope) is not RunScope or scope.source != CAMERA_LEFT or not isinstance(source, CameraHelperSource)
-            or source.source_id != camera_contract.source_id(LEFT_CAMERA)):
+            or source.source_id != camera_contract.source_id(LEFT_CAMERA)
+            or not pinned_binary(source.binary, PINNED_HELPER)):
         return False
     return scope.permit(CAMERA_INPUT) is True
 

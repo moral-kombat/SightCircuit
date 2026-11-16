@@ -23,7 +23,8 @@ from .gates import LIVE_HUD_OUTPUT
 from .hud.contract import BRIDGE_READY_WAIT_SECONDS, OPCODE_STOP
 from .overlay import (DEFAULT_BRIDGE, OverlayClient, bridge_closed_cleanly, observed_frame_packet, packet,
                       visibility_packet)
-from .runtime.scope import HUD_OUTPUT, RunScope
+from .runtime.manifest import BRIDGE as PINNED_BRIDGE
+from .runtime.scope import HUD_OUTPUT, RunScope, pinned_binary
 
 
 FIXED_HUD_MODE = "--fixed-hud"
@@ -58,8 +59,9 @@ def fixed_hud_output_permitted(client):
     This is the one place that decides it. ``ObservedFrameClient.check_start``
     hands the answer to the ``LIVE_HUD_OUTPUT`` gate's ``require``, which
     refuses everything but the literal ``True``. The answer is ``True`` only
-    for an ``ObservedFrameClient`` whose ``scope`` is a ``RunScope`` (that
-    exact type) which permits real HUD output: its record verified in full
+    for an ``ObservedFrameClient`` whose bridge is the checkout's own, at the
+    path the checkpoint manifest hashes, and whose ``scope`` is a ``RunScope``
+    (that exact type) which permits real HUD output: its record verified in full
     against what is on disk and its run id was consumed, all before this
     returns and so before anything is launched (``runtime/scope.py`` lists
     the checks). A scope permits this once, so a second start under the same
@@ -70,6 +72,8 @@ def fixed_hud_output_permitted(client):
     """
     scope = getattr(client, "scope", None)
     if not isinstance(client, ObservedFrameClient) or type(scope) is not RunScope:
+        return False
+    if not pinned_binary(client.binary, PINNED_BRIDGE):  # Another bridge is not the one the record's manifest pins.
         return False
     return scope.permit(HUD_OUTPUT) is True
 

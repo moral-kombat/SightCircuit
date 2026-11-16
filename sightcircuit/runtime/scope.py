@@ -9,7 +9,8 @@ small JSON file that ties one run to that approval. It is bound to:
 * the checkout revision (the full commit);
 * the checkpoint manifest's digest (the manifest pins the helper, the bridge,
   the models, every module and the camera HUD's scripts, so one digest covers
-  them all);
+  them all; the permission sites launch only the bridge and the helper at
+  the paths the manifest hashes, ``pinned_binary``);
 * a run id, which the ledger makes single-use;
 * an absolute UTC deadline, by which the whole run must have ended;
 * the duration bound, at most the step's own;
@@ -195,6 +196,19 @@ def _consume(root, record):
     except OSError:
         return "scope_ledger_unavailable"  # The entry exists, so the id is spent either way.
     return None
+
+
+def pinned_binary(path, pinned):
+    """Whether ``path`` is the checkout's file at checkout-relative ``pinned``, the one the manifest hashes.
+
+    The two permission sites ask this of the bridge and of the camera helper
+    they are about to launch, so a record cannot cover a binary the manifest
+    never saw. Symbolic links are resolved on both sides.
+    """
+    try:
+        return os.path.realpath(os.fspath(path)) == os.path.realpath(Path(ROOT) / pinned)
+    except (TypeError, ValueError, OSError):
+        return False
 
 
 class RunScope:

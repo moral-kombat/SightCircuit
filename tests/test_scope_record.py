@@ -46,6 +46,8 @@ class ScopeCase(checkpoint.CheckoutCase):
 
     def setUp(self):
         super().setUp()
+        for binary in (self.bridge, self.helper):  # Stand-ins the manifest pins; no test executes them.
+            binary.chmod(0o755)
         self.write()  # The checkpoint manifest, at self.path.
         root = mock.patch.object(scope, "ROOT", self.root)
         root.start()
@@ -404,8 +406,8 @@ class RefusalTests(ScopeCase):
 class OutputSiteTests(ScopeCase):
     """The output site: only the literal True of a verifying record's scope permits, and before any launch."""
 
-    def client(self, run=None, **options):
-        return ObservedFrameClient(Path(sys.executable), validation_only=False, scope=run, **options)
+    def client(self, run=None, binary=None, **options):
+        return ObservedFrameClient(binary or self.bridge, validation_only=False, scope=run, **options)
 
     def test_real_output_is_permitted_only_by_a_verifying_scope_and_the_id_is_spent_before_the_launch(self):
         path, record = self.staged("L-D3")
@@ -415,7 +417,7 @@ class OutputSiteTests(ScopeCase):
             client.check_start()
             with self.assertRaisesRegex(RuntimeError, "the test stops at the launch"):
                 client.start()
-        self.assertEqual(seen, [([sys.executable, "--fixed-hud"], [f"{record['run_id']}.json"])])
+        self.assertEqual(seen, [([str(self.bridge), "--fixed-hud"], [f"{record['run_id']}.json"])])
         self.assertEqual([(call.args[0], call.args[1]) for call in required.call_args_list],
                          [(gates.LIVE_HUD_OUTPUT, True)] * 2)
         with self.launches() as seen, self.assertRaisesRegex(ValueError, "observed_frame_client_already_started"):
@@ -427,6 +429,27 @@ class OutputSiteTests(ScopeCase):
                 other.start()
             self.assertEqual(seen, [])
         self.assertEqual(gates.claims(), ALL_CLOSED)
+
+    def test_real_output_refuses_a_bridge_the_manifest_does_not_pin(self):
+        elsewhere = self.out / "sightcircuit-overlay-bridge"
+        elsewhere.write_bytes(self.bridge.read_bytes())  # The same bytes at another path are still another binary.
+        elsewhere.chmod(0o755)
+        link = self.out / "link-to-the-pinned-bridge"
+        link.symlink_to(self.bridge)
+        path, record = self.staged("L-D3")
+        for binary in (elsewhere, Path(sys.executable), self.helper):
+            run = self.run_scope(path, source=scope.SYNTHETIC)
+            client = self.client(run, binary=binary)
+            with self.subTest(binary=binary.name), self.launches() as seen:
+                with self.assertRaisesRegex(ValueError, "^fixed_hud_output_not_approved$"):
+                    client.start()
+                self.assertEqual((seen, run.status, self.ledger()), ([], "not_consulted", []))
+        client = self.client(self.run_scope(path, source=scope.SYNTHETIC), binary=link)  # A link to it is it.
+        with self.launches("stop") as seen, self.assertRaisesRegex(RuntimeError, "stop"):
+            client.start()
+        self.assertEqual(self.ledger(), [f"{record['run_id']}.json"])
+        self.assertIs(scope.pinned_binary(None, manifest.BRIDGE), False)
+        self.assertIs(scope.pinned_binary(self.bridge, manifest.CAMERA_HELPER), False)
 
     def test_real_output_refuses_everything_that_is_not_a_verifying_scope(self):
         path, _ = self.staged("L-D3")
@@ -463,11 +486,11 @@ class OutputSiteTests(ScopeCase):
 class CameraSiteTests(ScopeCase):
     """The camera-input site and the stage's order: both checks, then the first launch."""
 
-    def source(self):
-        return CameraHelperSource(Path(self.out / "no-helper-is-launched"), LIMITS, confirmed=True)
+    def source(self, binary=None):
+        return CameraHelperSource(binary or self.helper, LIMITS, confirmed=True)
 
-    def client(self, run=None, **options):
-        return ObservedFrameClient(Path(sys.executable), validation_only=False, scope=run, **options)
+    def client(self, run=None, binary=None, **options):
+        return ObservedFrameClient(binary or self.bridge, validation_only=False, scope=run, **options)
 
     def stage(self, client):
         return camera_stage.CameraHudStage(self.source(), synthetic.FixtureDetector(), client)
@@ -558,6 +581,17 @@ class CameraSiteTests(ScopeCase):
                 self.assertIs(camera_stage.camera_display_input_permitted(
                     SimpleNamespace(client=SimpleNamespace(scope=run), source=source)), False)
                 self.assertIs(run.permit(scope.CAMERA_INPUT), True)  # It was never asked: the site refused first.
+        # ... and a helper that is not the one the manifest pins: another path, the fake build's, the bridge.
+        elsewhere = self.out / "sightcircuit-camera-helper"
+        elsewhere.write_bytes(self.helper.read_bytes())
+        elsewhere.chmod(0o755)
+        for binary in (elsewhere, Path(sys.executable), self.bridge):
+            run = self.run_scope(self.staged("L-D4")[0])
+            self.assertIs(run.permit(scope.HUD_OUTPUT), True)
+            with self.subTest(helper=binary.name):
+                self.assertIs(camera_stage.camera_display_input_permitted(
+                    SimpleNamespace(client=SimpleNamespace(scope=run), source=self.source(binary))), False)
+                self.assertIs(run.permit(scope.CAMERA_INPUT), True)
         run = self.run_scope(self.staged("L-D4")[0])
         self.assertIs(run.permit(scope.HUD_OUTPUT), True)
         declared = synthetic.SyntheticSource()
