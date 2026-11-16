@@ -1,5 +1,10 @@
 # Prepare a bounded HUD calibration check
 
+> **Mirror route, not current (2026-11-16).** The owner adopted the SDK camera as the
+> live display's input ([camera display work order](../live-capture.md#camera-display-work-order-adopted-2026-11-16));
+> no further device work is planned on this procedure. It is kept as a record until
+> lane R retires it.
+
 This is the canonical operator procedure for observing a fixed calibration
 marker in the SteamVR mirror. It requires the prerequisites and specific
 device-run authorization described in the [current plan](../live-capture.md).

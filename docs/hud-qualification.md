@@ -2,6 +2,11 @@
 
 # HUD mapping qualification
 
+> **Mirror route, not current (2026-11-16).** The owner adopted the SDK camera as the
+> live display's input ([camera display work order](live-capture.md#camera-display-work-order-adopted-2026-11-16));
+> no further device work is planned on this method (WP9, G3 and G4). It is kept as a record until
+> lane R retires it.
+
 The marker observer can find visible copies of a HUD marker in the mirror.
 **Qualification** is the separate review that establishes whether a mask covers
 all HUD output under known operating conditions. A clean observation or a valid
