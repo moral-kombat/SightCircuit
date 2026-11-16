@@ -25,6 +25,7 @@ namespace sightcircuit_bridge {
 namespace contract = sightcircuit_contract;
 namespace lifecycle = sightcircuit_lifecycle;
 using sightcircuit_overlay::read_u32;
+using sightcircuit_overlay::StreamMode;
 using Clock = std::chrono::steady_clock;
 constexpr std::uint32_t kMaxPayload =
     contract::kExpiringFramePrefixBytes + contract::kMaxSide*contract::kMaxSide*contract::kRgbaBytes;
@@ -109,6 +110,7 @@ void watchdog(const std::string& mode, const char* phase, unsigned seconds);
 
 // Rendering (overlay_bridge_rendering.cpp).
 Settings settings(const std::vector<std::uint8_t>& b);
+Settings hud_settings();
 Settings marker_settings();
 std::vector<std::uint8_t> pattern();
 std::vector<std::uint8_t> calibration_marker(Json::Value& description, const Settings& applied);
@@ -122,6 +124,7 @@ std::string usage_text();
 Json::Value closed_report(const std::string& mode);
 void describe_marker_run(Json::Value& report, int seconds, std::uint64_t start_ns, std::uint64_t deadline_ns);
 void describe_connect(Json::Value& report, bool view_record, bool validate, bool background_only);
+void describe_fixed_hud(Json::Value& report, const Settings& applied);
 void emit_ready(const std::string& mode, bool validate, bool marker, std::uint64_t marker_deadline_ns);
 void emit_test_panel_submitted(int seconds, bool api_visible);
 void emit_frame_expired(std::uint64_t deadline_ns, std::uint64_t observed_ns, bool validate);
@@ -140,5 +143,5 @@ int record_cleanup(Json::Value& report, const Overlay& overlay, bool marker, boo
 // Sensing (overlay_bridge_sensing.cpp): the clock every reported timestamp
 // reads, and the stdin protocol loop.
 std::uint64_t monotonic_ns();
-void stream(Overlay& overlay, bool validate, Json::Value& report);
+void stream(Overlay& overlay, StreamMode mode, Json::Value& report);
 } // namespace sightcircuit_bridge

@@ -56,10 +56,14 @@ Settings settings(const std::vector<std::uint8_t>& b) {
     if (visible > 1) throw std::runtime_error("invalid_visibility");
     return s;
 }
-Settings marker_settings() {
-    // The fixed HUD placement; the marker never takes settings from stdin.
+Settings hud_settings() {
+    // The fixed HUD placement (fixed-edge-hud-v1), from the generated contract alone.
     return Settings{contract::kHudPanelWidthM, contract::kHudDistanceM, contract::kHudXM, contract::kHudYM,
                     contract::kHudOpacity, true};
+}
+Settings marker_settings() {
+    // The marker is shown at the fixed HUD placement and never takes settings from stdin.
+    return hud_settings();
 }
 void Overlay::configure(const Settings& s) {
     config = s;

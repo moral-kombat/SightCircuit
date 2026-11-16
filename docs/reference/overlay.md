@@ -15,8 +15,8 @@ not proof of general Frame compatibility.
 
 ## Connect order, output and watchdog (package K, 2026-11-04)
 
-Every runtime mode (`--test-panel`, `--stdin`, `--calibration-marker`) joins an
-already running SteamVR only. (The read-only `--headset-view-record` mode
+Every runtime mode (`--test-panel`, `--stdin`, `--fixed-hud`,
+`--calibration-marker`) joins an already running SteamVR only. (The read-only `--headset-view-record` mode
 stops after the Background probe; see
 [the prediction cross-check](../hud-qualification.md#geometric-prediction-cross-check-2026-11-04).)
 
@@ -97,7 +97,7 @@ The ten- and three-second input timeouts are the bridge's own.
 | `1`: frame | uint32 width, uint32 height, tightly packed RGBA bytes; each side 1–512 |
 | `2`: settings | five float32 values: width, distance, x, y, opacity; then uint32 visibility (0 or 1) |
 | `3`: quit | Empty |
-| `4`: expiring frame (validation-only) | uint64 absolute `CLOCK_MONOTONIC` nanosecond expiry, uint32 width/height, RGBA bytes |
+| `4`: expiring frame (`--validate-stdin` and [`--fixed-hud`](#fixed-hud-mode-work-order-item-l7-2026-11-16) only) | uint64 absolute `CLOCK_MONOTONIC` nanosecond expiry, uint32 width/height, RGBA bytes |
 | `5`: visibility request (fallback item F1, 2026-11-08) | uint32 cycle, uint32 visible (0 or 1); the stream modes and, since F3a, the [marker modes](#marker-mode-input-fallback-item-f3a-2026-11-08) answer with the timestamped lines `hide_requested`/`show_requested`, `hide_returned`/`show_returned`, `overlay_hidden`/`overlay_shown` and `visibility_event_missing`, each carrying `cycle` and `validation_only`, as [the fallback reference](hud-fallback.md#bridge-events) specifies; the return line names the call made and a request without its runtime event within `VISIBILITY_EVENT_BOUND_NS` (250 ms, a cloud default, unmeasured on the Frame), or superseded or ended first, gets one `visibility_event_missing` line. Encoded by `sightcircuit.overlay.visibility_packet`, sent and answered through the [visibility cycle API](#visibility-cycle-api-fallback-item-f2-2026-11-08) (F2) |
 
 Settings ranges match the UI: width 0.25–1.5 m, distance 0.5–3 m, offsets −1–1 m,
@@ -122,11 +122,13 @@ the previous expiry. `frame_expired` events and final presentation fields report
 software state; `presentation_state_scope` explicitly disclaims headset evidence.
 Expiry is separate from the three/ten-second transport timeouts.
 
-Both Python and the bridge reject opcode 4 for real output. Existing replay
-opcode 1 and paused-replay behavior remain available under their existing
-authorization. Tests of the new expiry use `--validate-stdin` exclusively; a
-stalled native process, blocked API call or stuck kernel I/O can prevent timely
-expiry, and no real-time bound or headset hide result is claimed.
+Python rejects opcode 4 for real output, and so does the bridge in every
+real-output mode but one: [`--fixed-hud`](#fixed-hud-mode-work-order-item-l7-2026-11-16),
+which no Python client starts. Existing replay opcode 1 and paused-replay
+behavior remain available under their existing authorization. Tests of the
+expiry loop run under `--validate-stdin` exclusively; a stalled native process,
+blocked API call or stuck kernel I/O can prevent timely expiry, and no
+real-time bound or headset hide result is claimed.
 
 ```bash
 bash scripts/build_overlay_bridge.sh
@@ -136,6 +138,116 @@ bash scripts/build_overlay_bridge.sh
 With window dependencies and model fixtures installed, this covers valid and
 malformed packets, named missing-runtime failure, signal/EOF cleanup, read
 timeouts, channel order, resizing, Qt forwarding and the existing replay tests.
+
+## Fixed-HUD mode (work-order item L7, 2026-11-16)
+
+`sightcircuit-overlay-bridge --fixed-hud` is the one real-output mode in which
+a frame carries a deadline and the bridge clears the tile itself when the
+deadline passes. It exists for the
+[camera display work order](../live-capture.md#camera-display-work-order-adopted-2026-11-16);
+it is **cloud-checked only**. No runtime has run it, the Frame's bridge has
+not been rebuilt with it, and no gate changes.
+
+| Rule | In `--fixed-hud` |
+| --- | --- |
+| Arguments | none, apart from the trailing `--connect-as` every runtime mode takes; anything else is exit 64 before any connect |
+| Geometry | the `fixed-edge-hud-v1` placement and opacity (`kHud*` in the generated header), applied once at connect by `hud_settings()`; the final report's `fixed_hud` object records it with the configuration digest |
+| Settings packet (opcode `2`) | refused: `fixed_hud_refuses_settings`, exit 1, the usual cleanup. Nothing on the pipe can move, resize or fade the tile |
+| Frame without a deadline (opcode `1`) | refused: `fixed_hud_requires_expiring_frame` |
+| Expiring frame (opcode `4`) | accepted at exactly 320 × 128 (`fixed_hud_frame_size` otherwise) |
+| Visibility request (opcode `5`) and stop (opcode `3`) | as in the stream modes; a show request cannot bring back an expired tile, because a show with no image presented is a `HideOverlay` call (`no_image`) |
+| `ready` line | `frame_expiry_supported: true` and `fixed_hud: true` |
+
+`frame_expiry_supported` is true in `--validate-stdin` and `--fixed-hud` and in
+no other mode. `--stdin` still ends a run that sends opcode `4` with
+`expiring_frames_validation_only`, the marker modes still take the visibility
+request alone, and the test panel reads no input.
+
+**The expiry rule**, the same code in validation and in the fixed HUD
+(`FrameDeadline` in `tools/overlay_frame.hpp`, polled by the stream loop):
+
+- **At the deadline the bridge hides the tile.** Every input wait polls for
+  20 ms at most, so a deadline is noticed within one poll period of passing
+  whether or not anything arrives, including in the middle of a partial
+  packet. The image is withdrawn and `Overlay::visibility()`, the call path of
+  the F1 visibility requests, makes the `HideOverlay` call; then one
+  `frame_expired` line is written with `deadline_ns` and `observed_ns` (the
+  bridge's `CLOCK_MONOTONIC` when it saw the deadline had passed). A hide call
+  that fails ends the run, and cleanup retires the overlay.
+- **A retransmission never renews a deadline.** The deadline is the frame's
+  identity on the wire. The same packet sent again carries the deadline it was
+  first sent with, so the tile still expires then; sent after that deadline it
+  is refused like any expired arrival.
+- **No deadline further ahead than the maximum display age.** A deadline more
+  than `MAX_DISPLAY_AGE_NS` (1 s) after the time the bridge observes the frame,
+  or zero, ends the run as `invalid_frame_expiry`.
+- **An expired arrival is refused, not shown.** It is counted in
+  `stale_frames_dropped`, nothing is uploaded, and the tile already presented
+  keeps its own deadline.
+- **End of input clears the tile.** Stop, end of file, a ten-second silence
+  (`stdin_timeout`), a signal and the parent's death all end in the cleanup
+  that hides, clears and destroys the overlay. Without settings packets there
+  is no heartbeat, so a producer must send a frame at least that often.
+
+What the rule does not cover: the bridge sees deadlines, not observation
+times. A producer that stamps an old picture with a new deadline is sending a
+new frame as far as the bridge can tell, so "expires one second after the
+frame was observed" stays the producer's rule
+([maximum age](hud-runtime.md#synthetic-validation-counts-and-one-maximum-age-2026-11-01)),
+and the bridge's bound is one second from arrival. Synchronous OpenVR calls
+(`SetOverlayRaw`, `HideOverlay`) are not interruptible, so the one-poll bound
+holds only while those calls return promptly; the 5 s per-step watchdog is the
+backstop. `frame_expired` reports that the hide call returned, not that the
+headset stopped showing the tile.
+
+**Python stays the outer guard.** `OverlayClient` starts `--validate-stdin` or
+`--stdin` and nothing else, and `submit_frame(expires_ns=...)` and
+`freeze_settings` still refuse real output through `LIVE_HUD_OUTPUT`, whatever
+a bridge reports. A client for this mode arrives with the later work-order
+items (L8 to L10), behind their scope record.
+
+**The Frame's bridge.** The binary on the Frame predates this mode and rejects
+`--fixed-hud` as an unknown mode (exit 64). Rebuilding it there
+(`scripts/build_overlay_bridge.sh`) changes the checkpoint manifest's `bridge`
+and `native_sources` digests and happens only inside an approved device step;
+a cloud session never rebuilds or runs it.
+
+Cloud checks: the dispatch fixture (`tests/fixtures/overlay_dispatch_fixture.cpp`)
+runs the packet rule of each mode and the deadline rule with a fake clock;
+`tests/test_overlay_bridge.py` (`FixedHudModeTests`) pins that the units use
+those helpers alone, the mode's arguments and report, and the set of OpenVR
+calls the bridge names; `tests/test_display_expiry.py` times the expiry, the
+retransmission and the refusals on the validation bridge and checks the
+Python gate.
+
+## Still panel for L-D2 (work-order item L7, 2026-11-16)
+
+Device step L-D2 shows a public picture at the HUD position and size,
+re-submitted at 5 Hz for 120 s, while a camera recognition run checks that the
+panel is not recognised. The replay window cannot present it: it needs a
+decodable recording, runs a detector on it, starts at the default placement
+(0.8 m wide, centred) and takes another placement only from its spin boxes.
+`sightcircuit/hud/still_panel.py` is the smallest driver that can:
+
+```bash
+.venv-replay/bin/python scripts/evaluate_detectors.py --fetch > /dev/null   # the seed images, checksum-pinned
+.venv-replay/bin/python -m sightcircuit.hud.still_panel --validate --seconds 120
+```
+
+It letterboxes one image of `evaluation/seed.json` (default `darknet-horses`,
+verified by SHA-256 before decoding) into the 320 × 128 tile and sends it
+through `OverlayClient` as frames without a deadline, with the HUD placement
+as the client's settings from its first packet. The only input is a seed image
+id: there is no path, source or device argument, so it cannot show
+camera-derived content. `--validate` uses the validation bridge and displays
+nothing. `--allow-device-output` in its place uses the replay stream
+(`--stdin`), the path of the [replay panel](../vr-overlay.md), which the
+Frame's current bridge already has; it is for the approved L-D2 step only and
+has not run. The JSON report counts `updates_submitted`,
+`updates_acknowledged` (the bridge's `frames_received`) and
+`updates_replaced`, and `complete` is true only when all 5 × seconds updates
+were acknowledged and the bridge closed cleanly. Those are software counts,
+not a picture anyone saw. `tests/test_still_panel.py` covers it.
 
 ## Visibility cycle API (fallback item F2, 2026-11-08)
 
@@ -288,12 +400,12 @@ mode and no-server refusal pass against the rebuilt binary unchanged.
 | `overlay_bridge.hpp` | shared header | the `Overlay` state (connection, handle, retirement, event flags, settings), the stop flag, the watchdog budgets, `Settings`, and the declarations of the four units |
 | `overlay_bridge.cpp` | entry point | `main`: argument parsing, the opt-in checks, and the connect, run, cleanup, report sequence |
 | `overlay_bridge_lifecycle.cpp` | lifecycle | the stop signal, arming a watchdog phase, the Background-then-Overlay connect (`Overlay::init`), error names, and `Overlay::close` |
-| `overlay_bridge_rendering.cpp` | rendering | settings decoding and bounds, `marker_settings`, the test pattern and the calibration marker, `SetOverlayRaw`, show and hide, and `--render-calibration-marker` |
+| `overlay_bridge_rendering.cpp` | rendering | settings decoding and bounds, `hud_settings` and `marker_settings`, the test pattern and the calibration marker, `SetOverlayRaw`, show and hide, and `--render-calibration-marker` |
 | `overlay_bridge_reporting.cpp` | reporting | `emit` (the only JSON writer), the watchdog line, the usage text, the initial, marker, connect and final report fields, and the `ready`, `frame_*` and `test_panel_submitted` lines |
 | `overlay_bridge_sensing.cpp` | sensing | `monotonic_ns` (the clock every reported timestamp reads), the stdin protocol loop with its bounded reads and expiry poll, the decoded visibility request shared by both loops and the marker mode's stdin poll (`MarkerInput`), runtime event polling, the visibility queries and the read-only headset view record |
 
 `overlay_lifecycle.hpp` (stdout isolation, the SIGALRM handler, the connect
-order) and `overlay_frame.hpp` (packet decoding, retirement) stay the OpenVR-free
+order) and `overlay_frame.hpp` (packet decoding, each stream mode's packet rule, the frame deadline, retirement) stay the OpenVR-free
 helpers that the fixture tests compile on their own; every contract value still
 comes from the generated `hud_contract.hpp`. The `Overlay` member functions are
 defined in the unit that owns them, as the header notes beside each group.

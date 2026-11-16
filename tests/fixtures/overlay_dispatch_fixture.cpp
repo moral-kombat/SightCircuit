@@ -48,6 +48,80 @@ int main() {
         catch (const std::runtime_error&) { rejected = true; }
         assert(rejected);
     }
+    // What each stream mode takes, decided on the packet header. Only validation and the fixed HUD take the
+    // expiring opcode; the replay stream refuses it; the fixed HUD refuses settings and frames without a deadline.
+    namespace contract = sightcircuit_contract;
+    constexpr std::uint32_t hud_bytes = contract::kExpiringFramePrefixBytes +
+        contract::kHudWidthPx*contract::kHudHeightPx*contract::kRgbaBytes;
+    constexpr std::uint32_t limit = contract::kExpiringFramePrefixBytes +
+        contract::kMaxSide*contract::kMaxSide*contract::kRgbaBytes;
+    const auto refusal = [&](StreamMode mode, std::uint32_t kind, std::uint32_t size) {
+        const char* name = packet_refusal(mode, kind, size, limit);
+        return std::string(name ? name : "");
+    };
+    assert(!frame_expiry_supported(StreamMode::Replay));
+    assert(frame_expiry_supported(StreamMode::Validation) && frame_expiry_supported(StreamMode::FixedHud));
+    for (auto mode : {StreamMode::Replay, StreamMode::Validation, StreamMode::FixedHud}) {
+        const bool fixed = mode == StreamMode::FixedHud, replay = mode == StreamMode::Replay;
+        assert(refusal(mode, contract::kOpcodeStop, 0).empty());
+        assert(refusal(mode, contract::kOpcodeVisibility, contract::kVisibilityBytes).empty());
+        assert(refusal(mode, contract::kOpcodeExpiringFrame, hud_bytes) ==
+               (replay ? "expiring_frames_validation_only" : ""));
+        assert(refusal(mode, contract::kOpcodeSettings, contract::kSettingsBytes) ==
+               (fixed ? "fixed_hud_refuses_settings" : ""));
+        assert(refusal(mode, contract::kOpcodeFrame, contract::kFramePrefixBytes + 4) ==
+               (fixed ? "fixed_hud_requires_expiring_frame" : ""));
+        // Malformed headers keep their names in every mode, ahead of the mode's own refusals.
+        assert(refusal(mode, 0, 0) == "invalid_packet_header" && refusal(mode, 6, 0) == "invalid_packet_header");
+        assert(refusal(mode, contract::kOpcodeExpiringFrame, limit + 1) == "invalid_packet_header");
+        assert(refusal(mode, contract::kOpcodeSettings, 4) == "invalid_packet_size");
+        assert(refusal(mode, contract::kOpcodeFrame, 4) == "invalid_packet_size");
+        assert(refusal(mode, contract::kOpcodeStop, 1) == "invalid_packet_size");
+        assert(refusal(mode, contract::kOpcodeVisibility, 4) == "invalid_packet_size");
+        assert(refusal(mode, contract::kOpcodeExpiringFrame, 8) ==
+               (fixed ? "invalid_packet_size" : "expiring_frames_validation_only"));
+    }
+    // The fixed HUD presents the contract's tile size only; the other modes keep every valid size.
+    const FrameView tile{contract::kHudWidthPx, contract::kHudHeightPx, deadline, nullptr};
+    check_frame_size(StreamMode::FixedHud, tile);
+    for (const FrameView& other : {FrameView{contract::kHudHeightPx, contract::kHudWidthPx, deadline, nullptr},
+                                   FrameView{contract::kHudWidthPx, contract::kHudHeightPx + 1, deadline, nullptr},
+                                   FrameView{1, 1, deadline, nullptr}}) {
+        check_frame_size(StreamMode::Replay, other);
+        check_frame_size(StreamMode::Validation, other);
+        rejected = false;
+        try { check_frame_size(StreamMode::FixedHud, other); }
+        catch (const std::runtime_error& error) { rejected = std::string(error.what()) == "fixed_hud_frame_size"; }
+        assert(rejected);
+    }
+    // The presented frame's deadline. It falls due once, at the deadline and not a nanosecond before.
+    FrameDeadline shown;
+    assert(shown.due(now) == 0);
+    assert(shown.admit(tile, true, now) && shown.expiry == deadline);
+    assert(shown.due(deadline - 1) == 0 && shown.expiry == deadline);
+    // A retransmission of the same frame, however late it is observed, leaves the deadline where it was.
+    assert(shown.admit(tile, true, deadline - 1) && shown.expiry == deadline);
+    assert(shown.due(deadline) == deadline && shown.expiry == 0);
+    assert(shown.due(deadline + 1) == 0);
+    // Once expired, the same frame is refused: never presented again, and no deadline is set.
+    assert(!shown.admit(tile, true, deadline) && shown.expiry == 0);
+    assert(!shown.admit(tile, true, deadline + cap) && shown.expiry == 0);
+    // A frame that arrives expired leaves the presented frame's deadline alone.
+    const FrameView next{contract::kHudWidthPx, contract::kHudHeightPx, deadline + 5, nullptr};
+    assert(shown.admit(next, true, deadline) && shown.expiry == deadline + 5);
+    assert(!shown.admit(tile, true, deadline + 1) && shown.expiry == deadline + 5);
+    // No deadline further ahead of the observed time than the maximum display age is accepted, and the
+    // refusal changes nothing; exactly the maximum is accepted.
+    for (auto expiry : {std::uint64_t{0}, deadline + cap + 1}) {
+        rejected = false;
+        try { shown.admit({contract::kHudWidthPx, contract::kHudHeightPx, expiry, nullptr}, true, deadline); }
+        catch (const std::runtime_error& error) { rejected = std::string(error.what()) == "invalid_frame_expiry"; }
+        assert(rejected && shown.expiry == deadline + 5);
+    }
+    assert(shown.admit({contract::kHudWidthPx, contract::kHudHeightPx, deadline + cap, nullptr}, true, deadline));
+    assert(shown.expiry == deadline + cap);
+    // The replay opcode carries no deadline: admitted with none (modes that take it never expire it).
+    assert(shown.admit(plain, false, now) && shown.expiry == 0 && shown.due(~std::uint64_t{0}) == 0);
     // Every failure position still attempts every teardown call, in order.
     for (unsigned fail = 0; fail <= 3; ++fail) {
         std::string calls;

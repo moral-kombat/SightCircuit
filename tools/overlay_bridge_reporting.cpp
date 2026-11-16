@@ -34,6 +34,7 @@ std::string usage_text() {
     std::ostringstream usage;
     usage << "Usage: sightcircuit-overlay-bridge --test-panel [--seconds 1..30]\n"
                  "       sightcircuit-overlay-bridge --stdin\n"
+                 "       sightcircuit-overlay-bridge --fixed-hud (expiring HUD tiles only, fixed placement)\n"
                  "       sightcircuit-overlay-bridge --validate-stdin (no OpenVR calls)\n"
                  "       sightcircuit-overlay-bridge --validate-calibration-marker --seconds " << marker_seconds << "\n"
                  "       sightcircuit-overlay-bridge --calibration-marker --seconds " << marker_seconds <<
@@ -44,6 +45,8 @@ std::string usage_text() {
                  "never starts a vrserver. A SIGALRM watchdog ends a stalled step with one JSON error.\n"
                  "A runtime mode may end with --connect-as overlay (default) or --connect-as background,\n"
                  "which keeps the Background client and never connects as Overlay (device check, opt-in).\n"
+                 "--fixed-hud takes 320x128 expiring frames (opcode 4), visibility requests and stop; it hides the tile\n"
+                 "itself at each frame's deadline and refuses settings and frames without a deadline.\n"
                  "The marker modes accept only the visibility request (opcode 5) on stdin, beside their display\n"
                  "timer, which end of input never ends; the stream modes take the whole pipe protocol.\n";
     return usage.str();
@@ -88,10 +91,22 @@ void describe_connect(Json::Value& report, bool view_record, bool validate, bool
         connect["background_only_requested"]=background_only;
     }
 }
+void describe_fixed_hud(Json::Value& report, const Settings& applied) {
+    // The placement and tile size this run is pinned to; no packet can change either.
+    auto& hud=report["fixed_hud"];
+    hud["config_id"]=contract::kHudLayoutId; hud["config_digest"]=contract::kHudConfigDigest;
+    hud["width"]=contract::kHudWidthPx; hud["height"]=contract::kHudHeightPx;
+    hud["panel_width_m"]=applied.width; hud["distance_m"]=applied.distance;
+    hud["x_m"]=applied.x; hud["y_m"]=applied.y; hud["opacity"]=applied.alpha;
+    hud["max_display_age_ns"]=Json::UInt64(contract::kMaxDisplayAgeNs);
+    hud["settings_accepted"]=false; hud["frames_without_deadline_accepted"]=false;
+}
 void emit_ready(const std::string& mode, bool validate, bool marker, std::uint64_t marker_deadline_ns) {
     Json::Value ready;
     ready["event"]="ready"; ready["validation_only"]=validate;
-    ready["frame_expiry_supported"]=mode=="--validate-stdin";
+    // Expiry is honoured where the bridge clears the tile itself: validation and the fixed HUD, no other mode.
+    ready["frame_expiry_supported"]=mode=="--validate-stdin" || mode=="--fixed-hud";
+    if (mode=="--fixed-hud") ready["fixed_hud"]=true;
     ready["runtime_initialized"]=!validate; ready["overlay_interface"]=vr::IVROverlay_Version;
     if (marker) ready["display_deadline_ns"]=Json::UInt64(marker_deadline_ns);
     emit(ready);

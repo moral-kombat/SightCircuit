@@ -28,7 +28,8 @@ int main(int argc, char* argv[]) {
     const bool marker=mode=="--calibration-marker" || mode=="--validate-calibration-marker";
     const bool validate=mode=="--validate-stdin" || mode=="--validate-calibration-marker";
     const bool view_record=mode=="--headset-view-record";
-    const bool runtime_mode=mode=="--test-panel" || mode=="--stdin" || mode=="--calibration-marker";
+    const bool fixed_hud=mode=="--fixed-hud";
+    const bool runtime_mode=mode=="--test-panel" || mode=="--stdin" || mode=="--calibration-marker" || fixed_hud;
     bool background_only=false;
     int seconds=10;
     try {
@@ -55,7 +56,7 @@ int main(int argc, char* argv[]) {
             std::size_t used=0;
             seconds=std::stoi(argv[3],&used);
             if (used!=std::strlen(argv[3]) || seconds<1 || seconds>30) throw std::runtime_error("seconds_out_of_range");
-        } else if (!(argc==2 && (mode=="--test-panel" || mode=="--stdin" || mode=="--validate-stdin"))) {
+        } else if (!(argc==2 && (mode=="--test-panel" || mode=="--stdin" || mode=="--validate-stdin" || fixed_hud))) {
             throw std::runtime_error("Choose --test-panel or --stdin; --help shows usage");
         }
     } catch (const std::exception& error) {
@@ -83,6 +84,11 @@ int main(int argc, char* argv[]) {
         overlay.calibration_show_deadline_ns=marker_deadline;
         overlay.validation_only=validate;
         describe_marker_run(report,seconds,marker_start,marker_deadline);
+    }
+    if (fixed_hud) {
+        // The placement is compiled in and applied once, at connect; the stream then refuses settings.
+        overlay.config=hud_settings();
+        describe_fixed_hud(report,overlay.config);
     }
     describe_connect(report,view_record,validate,background_only);
     try {
@@ -138,7 +144,8 @@ int main(int argc, char* argv[]) {
                 if (stopping) throw Stopped{};
                 overlay.events(); std::this_thread::sleep_for(std::chrono::milliseconds(16));
             }
-        } else stream(overlay,validate,report);
+        } else stream(overlay,validate ? StreamMode::Validation : fixed_hud ? StreamMode::FixedHud : StreamMode::Replay,
+                      report);
         report["status"]=marker ? (validate ? "validated_marker" : "marker_complete") : (validate ? "validated" : "closed");
     } catch (const Stopped&) {
         if (!view_record || report["status"]!="view_recorded") report["status"]="stopped";

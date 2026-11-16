@@ -166,6 +166,19 @@ inference completion nor retransmission renews it. A shorter configured age
 applies to the ledger too. Calibration expiry can shorten the deadline further.
 `Pipeline` rejects a HUD stage with a greater maximum age.
 
+The bridge enforces its side of this in two modes only, `--validate-stdin`
+and the real-output [`--fixed-hud`](overlay.md#fixed-hud-mode-work-order-item-l7-2026-11-16)
+(work-order item L7, 2026-11-16, cloud-checked only). There it hides the tile
+itself within one 20 ms input poll of the deadline and writes `frame_expired`;
+the same packet sent again keeps its first deadline; a deadline more than
+`MAX_DISPLAY_AGE_NS` past the time the bridge observes the frame is refused,
+and so is a frame that arrives already expired. Every other real-output mode
+still refuses an expiring frame, Python's `LIVE_HUD_OUTPUT` check still
+refuses to send one to a real bridge, and the Frame's bridge is rebuilt with
+the mode only under a device approval. The bridge sees deadlines, not
+observation times, so the rule that the deadline begins at the original
+frame's observation stays with the producer.
+
 The default-detector synthetic run now passes after the neutral-fill change
 below. The earlier zero-fill failure and its measurement details remain in
 [the historical analysis](../history/hud-qualification-2026-11-07.md#synthetic-validation-counts-and-one-maximum-age-2026-11-01).

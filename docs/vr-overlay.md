@@ -35,8 +35,10 @@ implementation and native validation passed
 ([E69](status.md#e69-offline-edge-hud-and-native-mask-validation)); actual
 mapping/calibration, head-motion leakage and physical VR expiry remain pending.
 The tile is 320 x 128 with up to three names/arrows and no scene video; fixed
-geometry/opacity and expiring transport remain validation-only. The bridge rejects
-expiring packets in real output mode. The existing test panel uses different
+geometry/opacity and expiring transport remain validation-only from Python. The bridge
+rejects expiring packets in every real output mode except the cloud-checked
+[`--fixed-hud`](reference/overlay.md#fixed-hud-mode-work-order-item-l7-2026-11-16), which no
+Python client starts and the Frame's bridge does not yet contain. The existing test panel uses different
 marker geometry and cannot qualify HUD mapping or physical expiry; synchronous
 VR calls also prevent an absolute deadline guarantee. A later separate
 [marker-only harness](status.md#e70-offline-marker-only-harness) now generates the
