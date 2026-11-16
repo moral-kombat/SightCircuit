@@ -33,7 +33,7 @@ import threading
 import time
 
 from ..camera import contract
-from ..camera.export_reader import ExportReader, ExportRefused
+from ..camera.export_reader import ExportReader, ExportRefused, frame_of
 from ..errors import SightCircuitError
 from ..pipeline import PERCENTILE_METHOD, nearest_rank
 from ..runtime import guard
@@ -224,9 +224,10 @@ class Diagnostics(threading.Thread):
 class FrameReader(threading.Thread):
     """Reads the frames pipe with ``ExportReader``; a refusal sets ``stop`` and the pipe is drained until the helper is gone."""
 
-    def __init__(self, fd, limits, on_frame, stop, on_end=None):
+    def __init__(self, fd, limits, on_frame, stop, on_end=None, on_ready=None):
         super().__init__(name="camera-helper-frames", daemon=True)
-        self.fd, self.limits, self.on_frame, self.stop, self.on_end = fd, limits, on_frame, stop, on_end
+        self.fd, self.limits, self.on_frame, self.stop = fd, limits, on_frame, stop
+        self.on_end, self.on_ready = on_end, on_ready
         self.reader = ExportReader(fd, limits=limits)
         self.frames = 0
         self.error = None
@@ -234,13 +235,19 @@ class FrameReader(threading.Thread):
 
     def run(self):
         try:
-            for frame in self.reader.frames():
-                self.frames += 1
-                if self.first_frame_monotonic is None:
-                    self.first_frame_monotonic = time.monotonic()
-                self.on_frame(frame)
-            if self.on_end is not None:  # The stream is complete: its validated end header, before the helper is gone.
-                self.on_end(self.reader.end)
+            # Packet by packet, so ``ready`` and ``end`` are acted on when they are accepted: the reader sees the end
+            # of the stream only once every writer of the pipe is closed, which is after the helper has exited.
+            for packet in self.reader.packets():
+                if packet.kind == contract.KIND_FRAME:
+                    self.frames += 1
+                    if self.first_frame_monotonic is None:
+                        self.first_frame_monotonic = time.monotonic()
+                    self.on_frame(frame_of(packet, self.reader.ready))
+                elif packet.kind == contract.KIND_READY:
+                    if self.on_ready is not None:
+                        self.on_ready(packet.header)
+                elif self.on_end is not None:
+                    self.on_end(packet.header)
         except ExportRefused:
             self.stop.set()
         except Exception as error:  # The frame handler failed: the helper is stopped and the failure reported.
@@ -286,16 +293,18 @@ def _validate_launch(candidate, returncode):
 
 
 def run_export(binary, limits, cameras, *, on_frame, stop=None, extra_args=(), timeout=None, confirmed=False,
-               on_end=None):
+               on_end=None, on_ready=None):
     """Export frames from the helper at ``binary`` until its bound; return the source report.
 
     ``limits`` is ``{fps, max_seconds, max_frames}``, passed to the helper and
     required back in its ``ready`` packet; ``cameras`` the camera indices to
     export. ``on_frame(frame)`` receives every validated ``Frame`` on the
     reader thread and must not block for long; an exception from it stops the
-    helper and ends the run ``error``. ``on_end(header)``, when given, receives
-    the validated ``end`` header on the same thread once the stream is
-    complete, before the helper has exited; it is held to the same rule. ``stop``, when given, is a
+    helper and ends the run ``error``. ``on_ready(header)`` and
+    ``on_end(header)``, when given, receive the validated ``ready`` and ``end``
+    headers on the same thread as each packet is accepted, so ``on_end`` runs
+    while the helper may still be alive; they are held to the same rule (a
+    packet after ``end`` is still refused afterwards). ``stop``, when given, is a
     ``threading.Event`` the caller may set to end the helper early
     (``stopped``). ``confirmed`` says the operator typed the confirmation on
     this process's terminal, which the helper is told with
@@ -323,7 +332,7 @@ def run_export(binary, limits, cameras, *, on_frame, stop=None, extra_args=(), t
     stop = threading.Event() if stop is None else stop
     frames_read, frames_write = os.pipe()
     diagnostics_read, diagnostics_write = os.pipe()
-    reader = FrameReader(frames_read, limits, on_frame, stop, on_end)
+    reader = FrameReader(frames_read, limits, on_frame, stop, on_end, on_ready)
     diagnostics = Diagnostics(diagnostics_read)
     reader.start()
     diagnostics.start()
@@ -390,11 +399,8 @@ LEFT_CAMERA = 0  # ``contract.SOURCE_IDS[0]``, reported by the helper as the lef
 COMPLETED_END_REASONS = ("max_frames", "max_seconds")  # The run's own bound: the source finishes cleanly.
 PRESENCE_END_REASONS = ("headset_removed", "standby")  # The wearer is gone: ``presence_ended``, never retried.
 STOP_END_REASON = "stop_signal"  # The pipeline's stop (or a signal) reached the helper: a clean stop.
-ATTACH_SECONDS = 5.0  # How long ``supervise`` waits for the pipeline to call ``run`` before giving up unlaunched.
-# For the pipeline's ``join_timeout``: the helper's whole stop escalation and the thread joins, so the capture thread
-# is seen finished after a stop.
-SOURCE_JOIN_SECONDS = (HELPER_GRACE.arm + HELPER_GRACE.cooperative + HELPER_GRACE.terminate + HELPER_GRACE.kill +
-                       HELPER_GRACE.report + JOIN_SECONDS)
+ATTACH_SECONDS = 5.0  # How long each half waits for the other before giving up with nothing launched.
+PIPELINE_JOIN_SECONDS = 10.0  # ``drive``'s wait for the pipeline thread once the helper is gone.
 EXPOSURE_OFFSET = "exposure_minus_acquire_ms"
 EXPOSURE_OFFSET_DEFINITION = (
     "Each emitted frame's exposure_ns minus its monotonic_ns (the host clock at acquire), as the helper's headers "
@@ -419,6 +425,8 @@ def source_outcome(export, stop_requested):
     ``stopped`` and every other reason is an ``error`` with that reason. With
     no end packet, a stop the caller asked for is ``stopped``, a signal is
     ``cancelled`` and anything else is an ``error`` with the export's reason.
+    A presence end under an export that failed otherwise (a refusal after the
+    end, the deadline) is an ``error`` whose ``end_reason`` still names it.
     """
     stream = export.get("stream") or {}
     end = stream.get("end")
@@ -449,34 +457,51 @@ class CameraHelperSource:
     ``kind`` is ``arcturus_camera`` and ``source_id`` ``arcturus_camera_left``:
     ``CaptureContext`` pins both before the helper is launched, and the source
     accepts nothing else (``cameras`` other than ``(0,)`` is refused when the
-    source is built; a frame of another camera, or a ``ready`` naming other
-    cameras, ends the run as an error). It approves nothing: ``run_pipeline``
-    refuses it (``live_image_source_not_approved``) and no gate knows it.
+    source is built; a ``ready`` naming other cameras is refused when it is
+    accepted, before any frame, and a frame of another camera ends the run as
+    an error). It approves nothing: ``run_pipeline`` refuses it
+    (``live_image_source_not_approved``) and no gate knows it.
 
     Two threads drive it, because the supervision primitive takes signals and
     so needs the main thread, while a latest-only ``Pipeline`` calls
     ``run(emit, stop)`` on its capture thread:
 
     * ``run(emit, stop)`` (the pipeline's capture thread) attaches the
-      pipeline's ``emit`` and ``stop``, then waits for the export to finish and
-      raises the run's error, if any, where the pipeline expects a source's
-      (``camera_source_not_supervised`` when nothing supervises in time).
+      pipeline's ``emit`` and ``stop`` and returns when the export has finished
+      or ``stop`` is set, whichever is first, so the pipeline clears its sinks
+      at the stop and never waits for the helper's teardown. It raises a
+      failure already known by then (``camera_source_not_supervised`` when
+      nothing supervises in time).
     * ``supervise()`` (the main thread) waits for that attachment, then runs
       ``run_export`` with the pipeline's ``stop`` as the helper's stop signal
-      and returns ``report()``. Frames go from the reader thread straight to
-      ``emit``. ``drive(pipeline, stop)`` does both: the pipeline on a worker
-      thread, the supervision on the calling one.
+      and returns ``report()`` once the helper is gone. Frames go from the
+      reader thread straight to ``emit``; a frame that arrives after ``stop``
+      is counted (``frames_after_stop``) and not emitted.
+    * ``drive(pipeline, stop)`` does both, the pipeline on a worker thread and
+      the supervision on the calling one, and raises the run's error after
+      both have finished: the pipeline's, else the source's. With the two
+      halves used separately, the caller reads the status from ``supervise()``.
 
     How a run ends (``status``): the helper's own bound (``max_frames``,
     ``max_seconds``) is ``completed``; a stop the pipeline asked for is
     ``stopped``; ``headset_removed`` and ``standby`` are ``presence_ended``:
-    the source sets ``stop`` on the reader thread as soon as the end packet is
-    validated, so the pipeline takes no further frame, and it is never
-    retried, as nothing is (a source runs once; a second ``run`` or
-    ``supervise`` raises ``camera_source_already_run`` without launching).
-    Everything else is an ``error`` carrying the helper's reason (its end
-    reason, the reader's refusal, or the export's), raised from ``run`` as
-    ``SightCircuitError``. A signal taken by the primitive is ``cancelled``.
+    when the reader accepts that end packet, while the helper may still be
+    alive, the source drops the pipeline's pending frame (``drive``) and sets
+    ``stop``, so no further frame is taken and a result still in flight
+    reaches no sink. It is never retried, as nothing is (a source runs once; a
+    second ``run`` or ``supervise`` raises ``camera_source_already_run``
+    without launching), and ``report()['presence_ended']`` follows the end
+    reason alone, whatever else then goes wrong. Everything else is an
+    ``error`` carrying the helper's reason (its end reason, the reader's
+    refusal, or the export's), as ``SightCircuitError``. A signal taken by the
+    primitive is ``cancelled``.
+
+    Cleanup: ``cleanup_ok`` is the export's verdict and, after a presence end,
+    also the helper's own: the helper exits non-zero after ``headset_removed``
+    or ``standby`` exactly when its cleanup failed, so that run stays
+    ``presence_ended`` (and is not raised) with ``cleanup_ok`` false,
+    ``helper_exit_ok`` false and ``helper_exit_code`` in the report. A caller
+    treats a false ``cleanup_ok`` as a failed run whatever the status.
 
     Clocks: a frame's ``observed_ns`` stays the host monotonic time of its
     acquisition and ``exposure_ns`` stays in its metadata. Their difference is
@@ -496,20 +521,22 @@ class CameraHelperSource:
         self.confirmed, self.extra_args, self.timeout = bool(confirmed), tuple(extra_args), timeout
         self.attach_seconds = attach_seconds
         self.status, self.reason, self.end_reason, self.error = "not_started", None, None, None
-        self.cleanup_ok = None  # The export's verdict once it ran; True when nothing was launched.
-        self.frames_emitted = self.frames_refused = 0
+        self.cleanup_ok = None  # The export's verdict (and the helper's, after a presence end); True when nothing was launched.
+        self.helper_exit_code = self.helper_exit_ok = None
+        self.frames_emitted = self.frames_refused = self.frames_after_stop = 0
         self.offsets_ms = []  # One value per emitted frame; at most ``contract.LIMITS['max_frames']``.
         self.export = None
         self._lock = threading.Lock()
         self._run_called = self._supervise_called = False
         self._attached, self._finished = threading.Event(), threading.Event()
         self._abandoned = None  # ``drive``'s signal that the pipeline ended before it attached.
+        self._pipeline = None  # ``drive``'s pipeline, whose pending frame a presence end drops.
         self._emit = self._stop = self._failure = None
 
     # -- the pipeline's half -----------------------------------------------------------------------------------
 
     def run(self, emit, stop):
-        """Attach the pipeline, wait for the supervised export to finish, raise its error. Capture thread."""
+        """Attach the pipeline; return when the export has finished or ``stop`` is set. Capture thread."""
         with self._lock:
             if self._run_called:
                 raise SightCircuitError("camera_source_already_run", "A camera helper source runs once and is never restarted")
@@ -517,8 +544,8 @@ class CameraHelperSource:
         self._emit, self._stop = emit, stop
         self._attached.set()
         deadline = time.monotonic() + self.attach_seconds
-        while not self._finished.wait(0.05):
-            if not self._supervise_called and (stop.is_set() or time.monotonic() >= deadline):
+        while not self._finished.wait(0.02) and not stop.is_set():
+            if not self._supervise_called and time.monotonic() >= deadline:
                 self._finish("error", "camera_source_not_supervised", "Nothing called supervise() on the main thread",
                              cleanup_ok=True)
                 break
@@ -541,8 +568,8 @@ class CameraHelperSource:
             else:
                 self.status = "running"
                 self.export = run_export(self.binary, self.limits, (LEFT_CAMERA,), on_frame=self._on_frame,
-                                         on_end=self._on_end, stop=self._stop, extra_args=self.extra_args,
-                                         timeout=self.timeout, confirmed=self.confirmed)
+                                         on_end=self._on_end, on_ready=self._on_ready, stop=self._stop,
+                                         extra_args=self.extra_args, timeout=self.timeout, confirmed=self.confirmed)
                 self._conclude()
         except BaseException as error:
             self._finish("error", getattr(error, "reason", "camera_source_failed"), str(error)[:1024], cleanup_ok=False,
@@ -557,13 +584,16 @@ class CameraHelperSource:
     def drive(self, pipeline, stop):
         """Run ``pipeline`` (built on this source) on a worker thread and ``supervise`` here; return its statistics.
 
-        Call it on the main thread. The pipeline's exception, the source's
-        error among them, is raised after both halves have finished.
+        Call it on the main thread. After both halves have finished it raises
+        the pipeline's exception, else the source's failure (a reader refusal,
+        a helper error), whatever the pipeline's ``join_timeout``. A presence
+        end and a stop are not failures; read ``report()`` for ``cleanup_ok``.
         """
         if pipeline.source is not self or not pipeline.latest_only:
             raise ValueError("camera_source_pipeline_mismatch")
         outcome = {}
         self._abandoned = threading.Event()
+        self._pipeline = pipeline
 
         def work():
             try:
@@ -579,16 +609,18 @@ class CameraHelperSource:
             self.supervise()
         except BaseException:
             stop.set()
-            worker.join(SOURCE_JOIN_SECONDS)
+            worker.join(PIPELINE_JOIN_SECONDS)
             raise
-        worker.join(SOURCE_JOIN_SECONDS)  # A completed export lets the pipeline finish its last frame by itself.
+        worker.join(PIPELINE_JOIN_SECONDS)  # A completed export lets the pipeline finish its last frame by itself.
         if worker.is_alive():
             stop.set()
-            worker.join(SOURCE_JOIN_SECONDS)
-        if "error" in outcome:
-            raise outcome["error"]
+            worker.join(PIPELINE_JOIN_SECONDS)
         if worker.is_alive():
             raise SightCircuitError("camera_source_pipeline_still_running", "The pipeline did not finish after the helper")
+        if "error" in outcome:
+            raise outcome["error"]
+        if self._failure is not None:
+            raise self._failure
         return outcome["stats"]
 
     def _wait_attached(self):
@@ -600,13 +632,22 @@ class CameraHelperSource:
 
     # -- the reader thread -------------------------------------------------------------------------------------
 
+    def _refuse(self, error):
+        self._failure = error
+        raise error
+
+    def _on_ready(self, ready):
+        if ready["cameras"] != [LEFT_CAMERA]:  # Before any frame: the helper is not exporting what was asked for.
+            self._refuse(SightCircuitError("camera_selection_not_honoured", "The helper's ready names other cameras"))
+
     def _on_frame(self, frame):
-        if self._failure is not None:
-            raise self._failure
+        if frame.source != self.source_id or frame.metadata.get("camera_index") != LEFT_CAMERA:
+            self.frames_refused += 1
+            self._refuse(SightCircuitError("camera_frame_not_left", "The helper exported a frame of another camera"))
+        if self._stop.is_set():  # The run has stopped; the helper has not noticed yet.
+            self.frames_after_stop += 1
+            return
         try:
-            if frame.source != self.source_id or frame.metadata.get("camera_index") != LEFT_CAMERA:
-                self.frames_refused += 1
-                raise SightCircuitError("camera_frame_not_left", "The helper exported a frame of another camera")
             self._emit(frame)
         except BaseException as error:
             self._failure = error
@@ -615,28 +656,37 @@ class CameraHelperSource:
         self.offsets_ms.append((frame.metadata["exposure_ns"] - frame.observed_ns) / 1e6)
 
     def _on_end(self, end):
+        """The end packet as the reader accepts it; the helper may still be alive."""
+        self.end_reason = end["reason"]
         if end["reason"] in PRESENCE_END_REASONS:
-            self.status, self.reason, self.end_reason = "presence_ended", end["reason"], end["reason"]
-            self._stop.set()  # No frame is taken after the wearer is gone; the pipeline sees it within one poll.
+            self.status, self.reason = "presence_ended", end["reason"]
+            if self._pipeline is not None:
+                self._pipeline.discard_pending()  # The frame waiting to be processed is dropped now.
+            self._stop.set()  # No frame is taken after the wearer is gone, and a result in flight reaches no sink.
 
     # -- the outcome -------------------------------------------------------------------------------------------
 
     def _conclude(self):
         export = self.export
-        ready = (export.get("stream") or {}).get("ready")
         status, reason, end_reason = source_outcome(export, self._stop.is_set())
+        cleanup_ok = bool(export.get("cleanup_ok"))
+        self.helper_exit_code = export.get("helper_exit_code")
         error = None
-        if self._failure is not None:  # The pipeline's admission or the left-camera check refused a frame.
+        if self._failure is not None:  # The pipeline's admission, the ready check or the left-camera check refused.
             status, reason = "error", getattr(self._failure, "reason", None) or str(self._failure)[:256]
             error = str(self._failure)[:1024]
-        elif ready is not None and ready["cameras"] != [LEFT_CAMERA]:
-            status, reason, error = "error", "camera_selection_not_honoured", "The helper's ready names other cameras"
         elif status == "error":
             error = export.get("error") or f"The camera helper export ended {export.get('status')} ({reason})"
+        elif status == "presence_ended":
+            # The helper exits non-zero after a presence end exactly when its own cleanup failed.
+            self.helper_exit_ok = self.helper_exit_code == 0
+            if not self.helper_exit_ok:
+                cleanup_ok = False
+                error = f"The helper exited {self.helper_exit_code} after {end_reason}: its own cleanup is not confirmed"
         failure = self._failure
         if status == "error" and failure is None:
             failure = SightCircuitError(reason, error)
-        self._finish(status, reason, error, cleanup_ok=bool(export.get("cleanup_ok")), end_reason=end_reason, failure=failure)
+        self._finish(status, reason, error, cleanup_ok=cleanup_ok, end_reason=end_reason, failure=failure)
 
     def _finish(self, status, reason, error, *, cleanup_ok, end_reason=None, failure=None):
         self.status, self.reason, self.error, self.cleanup_ok = status, reason, error, cleanup_ok
@@ -653,9 +703,12 @@ class CameraHelperSource:
         report = {"report_kind": "camera_helper_source", "schema_version": 1, "kind": self.kind,
                   "source_id": self.source_id, "camera_index": LEFT_CAMERA, "protocol": contract.PROTOCOL,
                   "status": self.status, "reason": self.reason, "end_reason": self.end_reason, "error": self.error,
-                  "presence_ended": self.status == "presence_ended", "retried": False, "limits": dict(self.limits),
-                  "frames_emitted": self.frames_emitted, "frames_refused": self.frames_refused,
-                  "cleanup_ok": self.cleanup_ok, "images_saved": False, "pixels_in_report": False,
+                  # From the end reason alone: a presence end is never retried, whatever else went wrong after it.
+                  "presence_ended": self.end_reason in PRESENCE_END_REASONS, "retried": False,
+                  "limits": dict(self.limits), "frames_emitted": self.frames_emitted,
+                  "frames_refused": self.frames_refused, "frames_after_stop": self.frames_after_stop,
+                  "cleanup_ok": self.cleanup_ok, "helper_exit_code": self.helper_exit_code,
+                  "helper_exit_ok": self.helper_exit_ok, "images_saved": False, "pixels_in_report": False,
                   "observed_ns": "host monotonic clock at acquire (the frame header's monotonic_ns)",
                   "timings": {EXPOSURE_OFFSET: {"count": len(ordered), "p50": ms(nearest_rank(ordered, 50)),
                                                 "min": ms(ordered[0] if ordered else None),

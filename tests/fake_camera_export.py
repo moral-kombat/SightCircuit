@@ -18,11 +18,18 @@ on stderr, ``exit_failure`` ends normally but exits 1, ``headset_removed``
 ends early with that reason, ``stale_clock`` stamps every frame five
 seconds in the past, ``undecided`` writes a ready with pixel path
 ``undecided`` and an end of reason ``watchdog`` with no frame, ``end:<reason>`` ends after
-two frames with that contract end reason, ``right_camera`` and
+two frames with that contract end reason (``after_end:<reason>`` then writes one
+more frame packet), ``right_camera`` and
 ``both_cameras`` export camera 1 or both whatever ``--cameras`` asked for, and
 ``hello_noise`` adds diagnostic lines shaped like the helper's hello
 record (calibration digest and size, and an invented intrinsics entry) that no
-source report may repeat. ``--fake-clock virtual``
+source report may repeat. Four options shape how the stand-in leaves, so a
+test can tell the end packet from the process's exit: ``--fake-linger S`` stays
+alive up to S seconds after its last packet (a stop signal ends the wait),
+``--fake-close-stdout`` closes its stdout first, ``--fake-term-delay S`` takes S
+seconds to honour a stop signal, and ``--fake-exit N`` exits N whatever else
+happened; ``--fake-report-pid`` puts the process id in ``ready.build``.
+``--fake-clock virtual``
 is the time control: the pacing and the time bound are counted in frame
 periods (``1 / fps`` each) without sleeping, so a 90-second run at 5 frames a
 second writes its 450 frames and ends ``max_seconds`` in well under a second;
@@ -32,6 +39,7 @@ camera, never the SDK.
 """
 import argparse
 import json
+import os
 from pathlib import Path
 import signal
 import sys
@@ -108,6 +116,11 @@ def parse(argv):
     parser.add_argument("--parent-confirmed", action="store_true")
     parser.add_argument("--fake-scenario", default="valid")
     parser.add_argument("--fake-clock", choices=("real", "virtual"), default="real")
+    parser.add_argument("--fake-linger", type=float, default=0)
+    parser.add_argument("--fake-term-delay", type=float, default=0)
+    parser.add_argument("--fake-close-stdout", action="store_true")
+    parser.add_argument("--fake-exit", type=int, default=None)
+    parser.add_argument("--fake-report-pid", action="store_true")
     parser.add_argument("--width", type=int, default=fake_export.WIDTH)
     parser.add_argument("--height", type=int, default=fake_export.HEIGHT)
     parser.add_argument("--stride", type=int, default=None)
@@ -115,6 +128,27 @@ def parse(argv):
         return parser.parse_args(argv)
     except SystemExit:
         return None
+
+
+class Leaving:
+    """How the stand-in leaves: the slow stop (once), then the closed stdout, the linger and the exit code."""
+
+    def __init__(self, args, stopper):
+        self.args, self.stopper, self.delayed = args, stopper, False
+
+    def slow_stop(self):
+        if self.stopper.signal is not None and self.args.fake_term_delay and not self.delayed:
+            self.delayed = True
+            time.sleep(self.args.fake_term_delay)
+
+    def leave(self, code):
+        if self.args.fake_close_stdout:
+            sys.stdout.flush()
+            os.close(1)
+        if self.args.fake_linger:
+            self.stopper.wait(self.args.fake_linger)
+        self.slow_stop()
+        return code if self.args.fake_exit is None else self.args.fake_exit
 
 
 def main(argv=None):
@@ -126,15 +160,16 @@ def main(argv=None):
     # As the helper, stop signals are collected, never delivered to the default disposition; the deaf scenario ignores
     # them. The mask changes this process: run as a program only (the tests exec the installed file).
     stopper = Stopper(deaf=scenario == "hang_deaf")
+    leaving = Leaving(args, stopper)
     limits = {"fps": args.fps, "max_seconds": args.max_seconds, "max_frames": args.max_frames}
     cameras = tuple(int(item) for item in args.cameras.split(","))
     cameras = {"right_camera": (1,), "both_cameras": (0, 1)}.get(scenario, cameras)  # Not what was asked for.
-    end_after_two = scenario.split(":", 1)[1] if scenario.startswith("end:") else None
+    end_after_two = scenario.split(":", 1)[1] if scenario.startswith(("end:", "after_end:")) else None
     stride = args.stride or args.width * 3 + 8
     if scenario.startswith("invalid:"):
         emit(fake_export.INVALID[scenario.split(":", 1)[1]][0]())
         note("final", reason="fake_invalid_stream", scenario=scenario)
-        return 0
+        return leaving.leave(0)
     if scenario == "refuse" or not args.parent_confirmed:  # As the helper: no informed start, no export.
         note("final", reason="confirmation_required", exit_code=EXIT_REFUSED)
         return EXIT_REFUSED
@@ -149,7 +184,8 @@ def main(argv=None):
         note("hello", camera_count=2, offline_cal_source="fake", offline_cal_size=4321, offline_cal_sha256="c" * 64,
              intrinsics={"fx": 1234, "fy": 1235, "cx": 617, "cy": 618})
     echoed = dict(limits, max_frames=limits["max_frames"] + 1) if scenario == "wrong_limits" else limits
-    emit(fake_export.encode(fake_export.ready_header(limits=echoed, cameras=cameras)))
+    build = dict(fake_export.BUILD, fake_pid=os.getpid()) if args.fake_report_pid else dict(fake_export.BUILD)
+    emit(fake_export.encode(fake_export.ready_header(limits=echoed, cameras=cameras, build=build)))
     if scenario == "stderr_noise":
         sys.stderr.write("plain text the helper should never write\n")
         sys.stderr.write("x" * 9000 + "\n")
@@ -194,11 +230,14 @@ def main(argv=None):
         reason = "stop_signal"
     if reason != "stop_signal" and stopper.signal is not None:
         reason = "stop_signal"
+    leaving.slow_stop()
     emit(fake_export.encode(fake_export.end_header(exported, reason=reason)))
+    if scenario.startswith("after_end:"):  # A packet after the end: the reader refuses it.
+        emit(fake_export.frame_packet(exported + 1, camera_index=cameras[0]))
     note("final", reason=reason, exported=exported, exit_code=0)
     if reason == "stop_signal":
-        return EXIT_CANCELLED
-    return 1 if scenario == "exit_failure" else 0
+        return leaving.leave(EXIT_CANCELLED)
+    return leaving.leave(1 if scenario == "exit_failure" else 0)
 
 
 if __name__ == "__main__":

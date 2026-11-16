@@ -409,28 +409,33 @@ class CommandLineTests(unittest.TestCase):
             {name: high for name, (_, high) in contract.LIMITS.items()}), (0, 1))[3::2][:3], ["10", "90", "900"])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class StandInDetector:
-    """Finds one bottle in every frame without looking at a pixel; records what it was given."""
+    """Finds one bottle in every frame without looking at a pixel; records what it was given and when."""
     name, runtime, classes = "stand-in", "none", ("bottle",)
 
-    def __init__(self):
-        self.frames = []
+    def __init__(self, fail_on=None):
+        self.frames, self.at, self.fail_on = [], [], fail_on
 
     def detect(self, frame, threshold):
         self.frames.append(frame)
+        self.at.append(time.monotonic())
+        if self.fail_on == len(self.frames):
+            raise RuntimeError("stand-in detector failed")
         return DetectionResult((Detection("bottle", 0.9, (1, 2, 30, 40)),), 1.0)
 
 
 class RecordingSink:
+    """Keeps what was submitted and when, and when it was cleared (the label withdrawn)."""
+
     def __init__(self):
-        self.processed = []
+        self.processed, self.submitted_at, self.cleared_at = [], [], []
 
     def submit(self, processed):
         self.processed.append(processed)
+        self.submitted_at.append(time.monotonic())
+
+    def clear(self):
+        self.cleared_at.append(time.monotonic())
 
 
 class RecordingSlot(LatestSlot):
@@ -439,12 +444,17 @@ class RecordingSlot(LatestSlot):
 
     def __init__(self):
         super().__init__()
-        self.put_at = []
+        self.put_at, self.discarded_at = [], None
         RecordingSlot.made.append(self)
 
     def put(self, item):
         self.put_at.append(time.monotonic())
         super().put(item)
+
+    def discard(self):
+        if self.discarded_at is None:
+            self.discarded_at = time.monotonic()
+        super().discard()
 
 
 class RecordingStop(threading.Event):
@@ -472,16 +482,28 @@ def walk(value, path="report"):
             yield from walk(item, f"{path}[{index}]")
 
 
+def alive(pid):
+    """Whether process ``pid`` exists (a reaped helper does not)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
 @unittest.skipUnless(sys.platform.startswith("linux"), "Owned sessions and process groups")
 class CameraHelperSourceTests(unittest.TestCase):
     """``CameraHelperSource`` (work-order item L5) through ``Pipeline(latest_only=True, max_input_age_ms=1000)``.
 
     The stand-in is launched through the supervision primitive on the main
-    thread (``drive``) while the pipeline runs on a worker thread. The
-    detector and the conversion are stand-ins, so no pixel is converted and
-    the tests need the standard library only.
+    thread (``drive``) while the pipeline runs on a worker thread, with the
+    pipeline's default ``join_timeout``. The detector and the conversion are
+    stand-ins, so no pixel is converted and the tests need the standard
+    library only. ``self.end`` records what was true when the source accepted
+    the end packet, and ``self.pid`` is the helper's process id.
     """
     FULL = {"fps": 10, "max_seconds": 90, "max_frames": 900}
+    SLOW = {"fps": 2, "max_seconds": 3, "max_frames": 5}  # Two frames 500 ms apart in the ``end:`` scenarios.
 
     @classmethod
     def setUpClass(cls):
@@ -496,26 +518,52 @@ class CameraHelperSourceTests(unittest.TestCase):
         self.previous = {number: signal.getsignal(number) for number in RECORD_AND_POLL.numbers}
         for number, handler in self.previous.items():
             self.addCleanup(signal.signal, number, handler)
+        self.end, self.pid = {}, None
 
-    def source(self, scenario=None, limits=LIMITS, clock=None, **options):
-        extra = ((("--fake-scenario", scenario) if scenario else ()) + (("--fake-clock", clock) if clock else ()))
-        return camera_helper.CameraHelperSource(self.binary, limits, confirmed=True, extra_args=extra, **options)
+    def source(self, scenario=None, limits=LIMITS, fake=(), **options):
+        """A source on the stand-in; ``fake`` are further stand-in options, e.g. ``("--fake-linger", 3)``."""
+        extra = (("--fake-scenario", scenario) if scenario else ()) + ("--fake-report-pid",) + tuple(fake)
+        self.end, self.pid = {}, None
+        source = camera_helper.CameraHelperSource(self.binary, limits, confirmed=True, extra_args=extra, **options)
+        on_ready, on_end = source._on_ready, source._on_end
 
-    def pipeline(self, source, **options):
-        self.detector, self.sink = StandInDetector(), RecordingSink()
+        def ready(header):
+            self.pid = header["build"].get("fake_pid")
+            on_ready(header)
+
+        def end(header):
+            on_end(header)
+            self.end = {"at": time.monotonic(), "stop_set": source._stop.is_set(), "helper_alive": self.pid is not None and alive(self.pid),
+                        "export_returned": source.export is not None}
+        source._on_ready, source._on_end = ready, end
+        return source
+
+    def pipeline(self, source, detector=None, **options):
+        self.detector, self.sink = detector or StandInDetector(), RecordingSink()
         options.setdefault("max_fps", 10)
         return Pipeline(source, self.detector, [self.sink], latest_only=True, max_input_age_ms=1000,
-                        join_timeout=camera_helper.SOURCE_JOIN_SECONDS, convert=lambda frame: frame,
-                        annotator=lambda frame, result: None, **options)
+                        convert=lambda frame: frame, annotator=lambda frame, result: None, **options)
 
     def drive(self, source, stop=None, **options):
         """``(stats, error)``: the pipeline's statistics, and what ``drive`` raised (None for a clean run)."""
         pipeline = self.pipeline(source, **options)
+        self.assertEqual(pipeline.join_timeout, 1.0)  # Nothing below depends on a long capture-thread join.
         try:
             source.drive(pipeline, threading.Event() if stop is None else stop)
-        except (SightCircuitError, ValueError) as error:
+        except Exception as error:
             return pipeline.stats, error
+        finally:
+            self.returned_at = time.monotonic()
+            self.capture_thread_alive = pipeline.capture_thread_alive
         return pipeline.stats, None
+
+    def assert_helper_gone(self, source):
+        """The helper process no longer exists and the primitive confirmed its tree."""
+        supervision = source.report()["export"]["supervision"]
+        self.assertFalse(alive(supervision["worker_pid"]))
+        if self.pid is not None:
+            self.assertEqual(self.pid, supervision["worker_pid"])  # The trampoline became the helper.
+        self.assertTrue(supervision["worker_reaped"] and supervision["worker_tree_reaped"])
 
     # -- identity ---------------------------------------------------------------------------------------------------
 
@@ -540,17 +588,24 @@ class CameraHelperSourceTests(unittest.TestCase):
         self.assertEqual(right.source, "arcturus_camera_right")
         with self.assertRaisesRegex(ValueError, "source_or_session_changed"):
             context.admit(right)
+        # And so does the source's own frame check, should a right-camera frame ever pass the reader.
+        emitted = []
+        source._emit, source._stop = emitted.append, threading.Event()
+        with self.assertRaises(SightCircuitError) as caught:
+            source._on_frame(right)
+        self.assertEqual((caught.exception.reason, source.frames_refused, emitted), ("camera_frame_not_left", 1, []))
 
     def test_a_long_single_camera_stream_is_admitted(self):
         """The contract's full frame bound, 900 frames of the left camera, on the stand-in's virtual clock."""
-        source = self.source(limits=self.FULL, clock="virtual")
+        source = self.source(limits=self.FULL, fake=("--fake-clock", "virtual"))
         started = time.monotonic()
         stats, error = self.drive(source)
         self.assertLess(time.monotonic() - started, 60)
         self.assertIsNone(error)
         self.assertEqual((source.status, source.reason, source.end_reason, source.cleanup_ok),
                          ("completed", None, "max_frames", True))
-        self.assertEqual((source.frames_emitted, source.frames_refused, stats.frames_received), (900, 0, 900))
+        self.assertEqual((source.frames_emitted, source.frames_refused, source.frames_after_stop, stats.frames_received),
+                         (900, 0, 0, 900))
         self.assertGreaterEqual(stats.frames_processed, 1)
         self.assertEqual(stats.frames_received, stats.frames_processed + stats.pending_replaced + stats.stale_inputs_skipped)
         frames = [processed.frame for processed in self.sink.processed]
@@ -565,7 +620,8 @@ class CameraHelperSourceTests(unittest.TestCase):
                          {"arcturus_camera_left": 900, "arcturus_camera_right": 0})
         self.assertEqual(report["export"]["stream"]["ready"]["cameras"], [0])
         self.assertEqual(report["export"]["helper"]["arguments"][7:9], ["--cameras", "0"])
-        self.assertFalse(pipeline_alive(stats))
+        self.assertFalse(self.capture_thread_alive)
+        self.assert_helper_gone(source)
 
     def test_observed_ns_is_the_acquire_time_and_the_exposure_offset_is_only_a_timing(self):
         source = self.source()
@@ -588,29 +644,27 @@ class CameraHelperSourceTests(unittest.TestCase):
         empty = self.source().report()
         self.assertEqual(empty["timings"]["exposure_minus_acquire_ms"]["count"], 0)
         self.assertIsNone(empty["timings"]["exposure_minus_acquire_ms"]["p50"])
-        self.assertEqual((empty["status"], empty["export"]), ("not_started", None))
+        self.assertEqual((empty["status"], empty["export"], empty["presence_ended"]), ("not_started", None, False))
 
     # -- refusals ---------------------------------------------------------------------------------------------------
 
-    def test_a_right_camera_frame_is_refused(self):
-        for scenario, emitted in (("right_camera", 0), ("both_cameras", 1)):
+    def test_a_ready_naming_another_camera_is_refused_before_any_frame(self):
+        """The stand-in exports the right camera, or both, whatever was asked: refused at ``ready``, nothing emitted."""
+        for scenario, cameras in (("right_camera", [1]), ("both_cameras", [0, 1])):
             with self.subTest(scenario=scenario):
-                source = self.source(scenario)
-                stats, error = self.drive(source, max_fps=1)
+                source = self.source(scenario, limits={"fps": 10, "max_seconds": 20, "max_frames": 50})
+                started = time.monotonic()
+                stats, error = self.drive(source)
+                self.assertLess(time.monotonic() - started, 5)  # The helper was stopped, not left to its bound.
                 self.assertIsInstance(error, SightCircuitError)
-                self.assertEqual(error.reason, "camera_frame_not_left")
+                self.assertEqual(error.reason, "camera_selection_not_honoured")
                 self.assertEqual((source.status, source.reason, source.frames_emitted, source.frames_refused),
-                                 ("error", "camera_frame_not_left", emitted, 1))
-                self.assertEqual(stats.frames_received, emitted)
-                self.assertEqual({frame.source for frame in self.detector.frames} - {"arcturus_camera_left"}, set())
+                                 ("error", "camera_selection_not_honoured", 0, 0))
+                self.assertEqual((stats.frames_received, stats.frames_processed, self.detector.frames), (0, 0, []))
+                self.assertEqual(self.sink.processed, [])
+                self.assertEqual(source.report()["export"]["stream"]["ready"]["cameras"], cameras)
                 self.assertTrue(source.cleanup_ok)
-                self.assertEqual(source.report()["export"]["status"], "error")  # The helper was stopped by the handler.
-        # A ready that names both cameras is refused even when no right-camera frame followed it.
-        source = self.source("both_cameras", limits=dict(LIMITS, max_frames=1))
-        stats, error = self.drive(source)
-        self.assertEqual((error.reason, source.status, source.frames_emitted, source.frames_refused),
-                         ("camera_selection_not_honoured", "error", 1, 0))
-        self.assertEqual(source.report()["export"]["stream"]["ready"]["cameras"], [0, 1])
+                self.assert_helper_gone(source)
 
     def test_run_pipeline_still_refuses_the_source(self):
         """No gate is opened: the live runner's image gate refuses the kind before anything is launched."""
@@ -626,7 +680,7 @@ class CameraHelperSourceTests(unittest.TestCase):
         self.assertEqual(source.status, "not_started")
         self.assertFalse(any(gates.claims().values()))
 
-    def test_supervise_without_a_pipeline_launches_nothing(self):
+    def test_either_half_alone_launches_nothing(self):
         source = self.source(attach_seconds=0.05)
         with mock.patch.object(camera_helper, "run_export", side_effect=AssertionError("launched")):
             report = source.supervise()
@@ -660,11 +714,13 @@ class CameraHelperSourceTests(unittest.TestCase):
                 self.assertEqual((report["status"], report["end_reason"], report["presence_ended"], report["retried"]),
                                  (status, end_reason, status == "presence_ended", False))
                 self.assertEqual(report["export"]["stream"]["end"]["reason"], end_reason)
+                self.assertEqual(self.end["stop_set"], status == "presence_ended")  # Only a presence end stops the run.
                 if status == "error":
                     self.assertIsInstance(error, SightCircuitError)
                     self.assertEqual(error.reason, end_reason)
                 else:
                     self.assertIsNone(error)
+                self.assert_helper_gone(source)
         self.assertEqual(camera_helper.COMPLETED_END_REASONS, ("max_frames", "max_seconds"))
         self.assertEqual(camera_helper.PRESENCE_END_REASONS, ("headset_removed", "standby"))
 
@@ -679,9 +735,11 @@ class CameraHelperSourceTests(unittest.TestCase):
         self.assertEqual(stats.frames_processed, 1)
         report = source.report()
         self.assertTrue(report["cleanup_ok"])
-        self.assertEqual(report["export"]["status"], "stopped")
+        self.assertEqual((report["export"]["status"], report["helper_exit_code"], report["helper_exit_ok"]),
+                         ("stopped", 130, None))
         self.assertTrue(report["export"]["supervision"]["worker_termination_requested"])
         self.assertFalse(report["export"]["supervision"]["worker_forced_termination"])
+        self.assert_helper_gone(source)
         # A stop set before the run launches nothing.
         source, stop = self.source(), threading.Event()
         stop.set()
@@ -690,6 +748,61 @@ class CameraHelperSourceTests(unittest.TestCase):
         self.assertIsNone(error)
         self.assertEqual((source.status, source.reason, source.cleanup_ok, stats.frames_received),
                          ("stopped", "stop_requested", True, 0))
+
+    def test_frames_that_arrive_after_the_stop_are_counted_and_not_emitted(self):
+        """A 900-frame burst against a pipeline that stops after one frame: every frame read is either emitted
+        before the stop or counted after it, and the pipeline received exactly the emitted ones."""
+        source = self.source(limits=self.FULL, fake=("--fake-clock", "virtual"))
+        stats, error = self.drive(source, max_frames=1)
+        self.assertIsNone(error)
+        report = source.report()
+        self.assertEqual(stats.frames_processed, 1)
+        self.assertEqual(report["frames_emitted"], stats.frames_received)
+        self.assertEqual(report["frames_emitted"] + report["frames_after_stop"],
+                         report["export"]["stream"]["frames_delivered"])
+        self.assertIn(report["status"], ("stopped", "completed"))  # The burst may finish before the stop arrives.
+        # Directly: with the stop set, a frame is counted and never reaches the pipeline.
+        source = self.source()
+        emitted, frame = [], list(ExportReader(io.BytesIO(fake_export.valid_stream(1, cameras=(0,)))).frames())[0]
+        source._emit, source._stop = emitted.append, threading.Event()
+        source._on_frame(frame)
+        source._stop.set()
+        source._on_frame(frame)
+        self.assertEqual((len(emitted), source.frames_emitted, source.frames_after_stop), (1, 1, 1))
+        self.assertEqual(source.report()["timings"]["exposure_minus_acquire_ms"]["count"], 1)
+
+    def test_a_stop_clears_the_sinks_without_waiting_for_a_slow_helper(self):
+        """The pipeline's 0.6 s deadline against a helper that takes 2 s to honour SIGTERM: the label is withdrawn
+        at the stop, not when the helper is finally gone."""
+        source = self.source("hang", limits={"fps": 10, "max_seconds": 20, "max_frames": 50},
+                             fake=("--fake-term-delay", 2))
+        stop = RecordingStop()
+        started = time.monotonic()
+        stats, error = self.drive(source, stop=stop, seconds=0.6)
+        self.assertIsNone(error)
+        self.assertGreaterEqual(len(self.sink.processed), 1)
+        self.assertEqual(len(self.sink.cleared_at), 1)
+        cleared = self.sink.cleared_at[0]
+        self.assertLess(cleared - stop.set_at, 0.5)
+        self.assertLess(cleared - started, 1.5)
+        self.assertGreater(self.returned_at - cleared, 1.2)  # The helper outlived the cleared sink by its slow stop.
+        self.assertGreater(self.returned_at - started, 2.0)
+        self.assertFalse(self.capture_thread_alive)
+        self.assertEqual((source.status, source.end_reason, source.cleanup_ok), ("stopped", "stop_signal", True))
+        self.assertFalse(source.report()["export"]["supervision"]["worker_forced_termination"])
+        self.assert_helper_gone(source)
+
+    def test_a_source_error_is_raised_by_drive_whatever_the_pipelines_join_timeout(self):
+        """A refused stream from a helper that takes 2 s to die, with the pipeline's default one-second join."""
+        source = self.source("invalid:bad_magic", limits=CATALOGUE_LIMITS, fake=("--fake-linger", 5, "--fake-term-delay", 2))
+        started = time.monotonic()
+        stats, error = self.drive(source)
+        self.assertGreater(time.monotonic() - started, 2.0)
+        self.assertIsInstance(error, SightCircuitError)
+        self.assertEqual((error.reason, source.status, source.reason), ("bad_magic", "error", "bad_magic"))
+        self.assertFalse(self.capture_thread_alive)
+        self.assertTrue(source.cleanup_ok)
+        self.assert_helper_gone(source)
 
     def test_everything_else_is_a_source_error_with_the_helpers_reason(self):
         cases = (("invalid:bad_magic", CATALOGUE_LIMITS, "bad_magic"), ("invalid:version_1_helper", CATALOGUE_LIMITS,
@@ -704,9 +817,41 @@ class CameraHelperSourceTests(unittest.TestCase):
                 self.assertIsInstance(error, SightCircuitError)
                 self.assertEqual((error.reason, source.status, source.reason), (reason, "error", reason))
                 self.assertFalse(source.report()["presence_ended"])
+                self.assert_helper_gone(source)
         source = self.source("hang", limits={"fps": 10, "max_seconds": 1, "max_frames": 2}, timeout=1.5)
         stats, error = self.drive(source)
         self.assertEqual((error.reason, source.status), ("helper_deadline", "error"))
+        self.assert_helper_gone(source)
+
+    def test_a_consumer_failure_while_the_helper_exports_stops_the_helper(self):
+        """The detector raises on its second frame while the helper would go on for 20 s."""
+        source = self.source(limits={"fps": 10, "max_seconds": 20, "max_frames": 200})
+        started = time.monotonic()
+        stats, error = self.drive(source, detector=StandInDetector(fail_on=2))
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertIsInstance(error, RuntimeError)  # The pipeline's own error, not the source's.
+        self.assertEqual(str(error), "stand-in detector failed")
+        self.assertEqual((source.status, source.reason, source.end_reason), ("stopped", "stop_requested", "stop_signal"))
+        self.assertEqual((len(self.sink.processed), len(self.sink.cleared_at)), (1, 1))
+        self.assertTrue(source.cleanup_ok)
+        self.assert_helper_gone(source)
+
+    def test_an_emit_that_raises_is_the_runs_error_and_stops_the_helper(self):
+        """The pipeline's admission refuses the third frame as it is published, on the reader thread."""
+        def validator(frame):
+            if frame.sequence >= 3 and threading.current_thread().name == "camera-helper-frames":
+                raise ValueError("admission_refused_for_the_test")
+        source = self.source(limits={"fps": 10, "max_seconds": 20, "max_frames": 200})
+        started = time.monotonic()
+        stats, error = self.drive(source, context_validator=validator)
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertIsInstance(error, ValueError)
+        self.assertEqual(str(error), "admission_refused_for_the_test")
+        self.assertEqual((source.status, source.reason, source.frames_emitted), ("error", "admission_refused_for_the_test", 2))
+        self.assertEqual(source.report()["export"]["reason"], "frame_handler_failed")
+        self.assertLessEqual({processed.frame.sequence for processed in self.sink.processed}, {1, 2})
+        self.assertTrue(source.cleanup_ok)
+        self.assert_helper_gone(source)
 
     def test_the_outcome_table(self):
         def export(status, end=None, refusal=None, reason=None):
@@ -725,6 +870,8 @@ class CameraHelperSourceTests(unittest.TestCase):
         self.assertEqual(outcome(export("cancelled", "stop_signal"), True), ("cancelled", "signal", "stop_signal"))
         self.assertEqual(outcome(export("cancelled"), True), ("cancelled", "signal", None))
         self.assertEqual(outcome(export("timed_out", reason="helper_deadline"), True), ("error", "helper_deadline", None))
+        self.assertEqual(outcome(export("timed_out", "standby", reason="helper_deadline"), True),
+                         ("error", "helper_deadline", "standby"))
         self.assertEqual(outcome(export("refused", "headset_removed", {"reason": "packet_after_end"}, "packet_after_end"),
                                  True), ("error", "packet_after_end", "headset_removed"))
         self.assertEqual(outcome(export("error", "max_frames", reason="helper_exit_code"), False),
@@ -732,49 +879,97 @@ class CameraHelperSourceTests(unittest.TestCase):
         self.assertEqual(outcome({"status": "error", "reason": "helper_not_found"}, False),
                          ("error", "helper_not_found", None))
 
-    def test_a_presence_end_stops_within_one_poll_leaves_no_frame_in_the_slot_and_is_never_retried(self):
-        """Two frames 500 ms apart, then ``headset_removed``. The pipeline starts one frame every five seconds, so
-        the second frame is pending when the end arrives; left alone it would be processed later. It never is."""
-        RecordingSlot.made.clear()
-        source, stop = self.source("end:headset_removed", limits={"fps": 2, "max_seconds": 3, "max_frames": 5}), RecordingStop()
-        seen = {}
-        on_end = source._on_end
+    # -- presence -----------------------------------------------------------------------------------------------------
 
-        def watched(end):
-            on_end(end)
-            seen.update(stop_set=stop.is_set(), export_returned=source.export is not None, at=time.monotonic())
-        source._on_end = watched
+    def presence_run(self, *fake, scenario="end:headset_removed"):
+        """Two frames 500 ms apart, then the presence end, against a pipeline that starts one frame every five
+        seconds: the second frame is pending when the end packet arrives. Returns ``(source, stats, error, slot, stop)``."""
+        RecordingSlot.made.clear()
+        source, stop = self.source(scenario, limits=self.SLOW, fake=fake), RecordingStop()
         with mock.patch.object(pipeline_module, "LatestSlot", RecordingSlot), \
                 mock.patch.object(camera_helper, "run_export", wraps=camera_helper.run_export) as launched:
-            started = time.monotonic()
+            self.started = time.monotonic()
             stats, error = self.drive(source, stop=stop, max_fps=0.2)
-            self.assertLess(time.monotonic() - started, 4)
-            self.assertIsNone(error)
-            self.assertEqual((source.status, source.reason, source.end_reason), ("presence_ended", "headset_removed",
-                                                                                 "headset_removed"))
-            # The stop was set on the reader thread, with the end packet, before the helper had even exited.
-            self.assertEqual((seen["stop_set"], seen["export_returned"]), (True, False))
-            self.assertLessEqual(stop.set_at, seen["at"])
+            self.launched = launched
             slot, = RecordingSlot.made
-            self.assertEqual(len(slot.put_at), 2)
-            self.assertLess(stop.set_at - slot.put_at[-1], 0.5)  # Far inside the five seconds the pending frame had to wait.
-            self.assertEqual((stats.frames_received, stats.frames_processed, len(self.detector.frames)), (2, 1, 1))
-            self.assertEqual([processed.frame.sequence for processed in self.sink.processed], [1])
-            self.assertIsNone(slot.item)  # The pending frame is dropped, not left behind.
-            self.assertTrue(slot.discarded)
-            slot.put(self.detector.frames[0])
-            self.assertIsNone(slot.take(timeout=0))  # And nothing can be queued after the run.
             # Never retried: the source runs once, and a second attempt launches nothing.
-            self.assertEqual(launched.call_count, 1)
             for again in (source.supervise, lambda: source.run(lambda frame: None, threading.Event()),
-                          lambda: source.drive(self.pipeline(source), threading.Event())):
+                          lambda: source.drive(Pipeline(source, StandInDetector(), latest_only=True, max_input_age_ms=1000),
+                                               threading.Event())):
                 with self.assertRaises(SightCircuitError) as caught:
                     again()
                 self.assertEqual(caught.exception.reason, "camera_source_already_run")
             self.assertEqual(launched.call_count, 1)
+        return source, stats, error, slot, stop
+
+    def assert_stopped_at_the_end_packet(self, stats, slot, stop):
+        """The stop and the discard happened when the end packet was accepted, with the helper still alive."""
+        self.assertEqual(self.end["stop_set"], True)
+        self.assertEqual((self.end["helper_alive"], self.end["export_returned"]), (True, False))
+        self.assertLessEqual(stop.set_at, self.end["at"])
+        self.assertLessEqual(slot.discarded_at, self.end["at"])
+        self.assertEqual(len(slot.put_at), 2)
+        self.assertLess(stop.set_at - slot.put_at[-1], 0.5)  # The end packet follows the second frame at once.
+        self.assertEqual((stats.frames_received, stats.frames_processed, len(self.detector.frames)), (2, 1, 1))
+        self.assertEqual([processed.frame.sequence for processed in self.sink.processed], [1])
+        self.assertIsNone(slot.item)  # The pending frame is dropped, not left behind.
+        self.assertTrue(slot.discarded)
+        slot.put(self.detector.frames[0])
+        self.assertIsNone(slot.take(timeout=0))  # And nothing can be queued after the run.
+        self.assertEqual(len(self.sink.cleared_at), 1)
+        self.assertLess(self.sink.cleared_at[0] - stop.set_at, 0.5)  # The label is withdrawn with the stop.
+
+    def test_a_presence_end_acts_on_the_end_packet_while_the_helper_lives_on(self):
+        """After its end packet the stand-in stays alive (it would for 5 s) and takes 1.5 s to honour SIGTERM: the
+        stop, the dropped frame and the cleared sink all come with the packet, not with the exit."""
+        source, stats, error, slot, stop = self.presence_run("--fake-linger", 5, "--fake-term-delay", 1.5)
+        self.assertIsNone(error)
+        self.assertEqual((source.status, source.reason, source.end_reason), ("presence_ended", "headset_removed",
+                                                                             "headset_removed"))
+        self.assert_stopped_at_the_end_packet(stats, slot, stop)
+        self.assertGreater(self.returned_at - stop.set_at, 1.2)  # The helper went on living that long after the stop.
+        self.assertGreater(self.returned_at - self.sink.cleared_at[0], 1.0)
         report = source.report()
-        self.assertEqual((report["status"], report["presence_ended"], report["retried"], report["cleanup_ok"]),
-                         ("presence_ended", True, False, True))
+        self.assertEqual((report["status"], report["presence_ended"], report["retried"], report["cleanup_ok"],
+                          report["helper_exit_code"], report["helper_exit_ok"]),
+                         ("presence_ended", True, False, True, 0, True))
+        self.assert_helper_gone(source)
+
+    def test_a_presence_end_is_seen_when_the_helper_closes_its_stdout_and_exits_later(self):
+        source, stats, error, slot, stop = self.presence_run("--fake-close-stdout", "--fake-linger", 5, "--fake-term-delay", 1.5,
+                                                             scenario="end:standby")
+        self.assertIsNone(error)
+        self.assertEqual((source.status, source.reason, source.end_reason), ("presence_ended", "standby", "standby"))
+        self.assert_stopped_at_the_end_packet(stats, slot, stop)
+        self.assertGreater(self.returned_at - stop.set_at, 1.2)
+        self.assertTrue(source.cleanup_ok)
+        self.assert_helper_gone(source)
+
+    def test_a_presence_end_with_a_nonzero_exit_reports_the_helpers_failed_cleanup(self):
+        """The helper exits 1 after a presence end exactly when its own cleanup failed: still ``presence_ended``,
+        never raised and never retried, with ``cleanup_ok`` false and the exit code in the report."""
+        source, stats, error, slot, stop = self.presence_run("--fake-exit", 1)
+        self.assertIsNone(error)
+        self.assert_stopped_at_the_end_packet(stats, slot, stop)
+        report = source.report()
+        self.assertEqual((report["status"], report["reason"], report["presence_ended"], report["retried"]),
+                         ("presence_ended", "headset_removed", True, False))
+        self.assertEqual((report["cleanup_ok"], report["helper_exit_code"], report["helper_exit_ok"]), (False, 1, False))
+        self.assertIn("exited 1 after headset_removed", report["error"])
+        self.assertEqual(report["export"]["helper_exit_code"], 1)
+        self.assertTrue(report["export"]["cleanup_ok"])  # The primitive's own verdict: the tree is gone.
+        self.assert_helper_gone(source)
+
+    def test_a_failure_after_a_presence_end_keeps_the_presence_fact(self):
+        """A packet after the end is a refusal, so the run is an error; that the wearer left stays in the report."""
+        source, stats, error, slot, stop = self.presence_run(scenario="after_end:headset_removed")
+        self.assertIsInstance(error, SightCircuitError)
+        self.assertEqual((error.reason, source.status, source.reason), ("packet_after_end", "error", "packet_after_end"))
+        self.assert_stopped_at_the_end_packet(stats, slot, stop)
+        report = source.report()
+        self.assertEqual((report["end_reason"], report["presence_ended"], report["retried"]),
+                         ("headset_removed", True, False))
+        self.assert_helper_gone(source)
 
     # -- the consent rule ---------------------------------------------------------------------------------------------
 
@@ -813,5 +1008,5 @@ class CameraHelperSourceTests(unittest.TestCase):
         self.assertNotIn("lines", reports["source"]["export"]["diagnostics"])
 
 
-def pipeline_alive(stats):
-    return stats.finished is None
+if __name__ == "__main__":
+    unittest.main()

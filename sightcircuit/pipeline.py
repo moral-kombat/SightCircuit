@@ -259,6 +259,7 @@ class Pipeline:
         self.capture_context = None
         self.last_sequence = None
         self._shown_until_ns = None
+        self._slot = None  # The latest-only run's slot, for ``discard_pending``.
 
     def run(self, stop):
         self.stats.started = time.monotonic()
@@ -283,6 +284,17 @@ class Pipeline:
             self._close_sinks()
             self.stats.finished = time.monotonic()
         return self.stats
+
+    def discard_pending(self):
+        """Drop the frame waiting in a latest-only run's slot and every later one; the run then ends. Any thread.
+
+        For a source that learns its input is no longer valid (the camera
+        source's presence end): nothing waiting is processed. A frame already
+        taken is not recalled; set ``stop`` as well and its result reaches no sink.
+        """
+        slot = self._slot
+        if slot is not None:
+            slot.discard()
 
     def _close_sinks(self):
         """Withdraw presented output and release every sink, recording failures."""
@@ -446,7 +458,7 @@ class Pipeline:
             stop.set()
 
     def _run_latest(self, stop):
-        slot = LatestSlot()
+        slot = self._slot = LatestSlot()
         failure = []
 
         def capture():
