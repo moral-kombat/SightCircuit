@@ -44,11 +44,11 @@ class Gate:
 
 LIVE_IMAGE_INPUT = Gate(
     "live_image_input", "production_live_input_enabled",
-    "Non-synthetic images from any source other than the SDK camera (the SteamVR mirror) feeding the live "
-    "pipeline or the HUD path", ("G4", "G5", "G6"))
+    "Non-synthetic images from any source feeding the generic live pipeline (run_pipeline), and from any "
+    "source other than the SDK camera (the SteamVR mirror) feeding the HUD path", ("G4", "G5", "G6"))
 LIVE_CAMERA_INPUT = Gate(
     "live_camera_input", "production_camera_input_enabled",
-    "Arcturus SDK camera frames feeding the live pipeline or the HUD path", ("G7", "G8", "G10"))
+    "Arcturus SDK camera frames feeding the HUD path", ("G7", "G8", "G10"))
 HARDWARE_MAPPING = Gate(
     "hardware_mapping", "mapping_qualified",
     "Any HUD mask, calibration or mapping that is not a synthetic fixture", ("G4",))

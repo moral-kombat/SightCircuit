@@ -28,6 +28,10 @@ def build_parser():
                        help="read-only: print the differences from PATH as JSON; exit 1 on any")
     parser.add_argument("--allow-dirty", action="store_true",
                         help="with --write: pin a dirty tree, recorded as dirty: true (it never verifies)")
+    parser.add_argument("--camera-hud", action="store_true",
+                        help="with --write: carry the camera HUD's group (the SDK helper built here, its sources and "
+                             "scripts), which a one-run scope record requires; a missing helper is then a problem. "
+                             "Without it the group is carried only when the helper exists")
     parser.add_argument("--root", type=Path, default=manifest.ROOT, help=argparse.SUPPRESS)
     return parser
 
@@ -37,12 +41,15 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.allow_dirty and args.write is None:
         parser.error("--allow-dirty applies only to --write")
+    if args.camera_hud and args.write is None:
+        parser.error("--camera-hud applies only to --write; --verify checks the groups the manifest carries")
     if args.verify is not None:
         report = manifest.verify_manifest(args.verify, args.root)
         print(json.dumps(report, sort_keys=True, indent=2, allow_nan=False))
         return report["exit_code"]
     try:
-        result = manifest.write_manifest(args.write, args.root, allow_dirty=args.allow_dirty)
+        result = manifest.write_manifest(args.write, args.root, allow_dirty=args.allow_dirty,
+                                         camera_hud=True if args.camera_hud else None)
     except (OSError, manifest.ManifestError) as error:
         print(f"Checkpoint manifest not written: {error}", file=sys.stderr)
         return 1

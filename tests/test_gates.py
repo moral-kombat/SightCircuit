@@ -46,9 +46,12 @@ class GateTableTests(unittest.TestCase):
                                           "production_camera_input_enabled": False, "mapping_qualified": False,
                                           "production_hud_enabled": False})
         self.assertEqual(gates.claims(gates.LIVE_CAMERA_INPUT), {"production_camera_input_enabled": False})
-        self.assertIn("Arcturus SDK camera frames", gates.LIVE_CAMERA_INPUT.closes)
-        self.assertIn("other than the SDK camera", gates.LIVE_IMAGE_INPUT.closes)
-        self.assertIn("mirror", gates.LIVE_IMAGE_INPUT.closes)
+        # The two descriptions are true of the code as it stands: run_pipeline refuses every non-synthetic source,
+        # the camera's included, through LIVE_IMAGE_INPUT; the camera's way to the HUD is LIVE_CAMERA_INPUT's.
+        self.assertEqual(gates.LIVE_IMAGE_INPUT.closes,
+                         "Non-synthetic images from any source feeding the generic live pipeline (run_pipeline), and "
+                         "from any source other than the SDK camera (the SteamVR mirror) feeding the HUD path")
+        self.assertEqual(gates.LIVE_CAMERA_INPUT.closes, "Arcturus SDK camera frames feeding the HUD path")
         for gate in gates.GATES:  # A gate is a frozen record with no state to flip.
             with self.subTest(gate=gate.name), self.assertRaises(Exception):
                 gate.claim = "open"
@@ -72,6 +75,8 @@ class GateTableTests(unittest.TestCase):
                              (gates.LIVE_HUD_OUTPUT, "G8, G9 and G10"), (gates.HARDWARE_MAPPING, "requires G4")):
             with self.subTest(gate=gate.name):
                 self.assertIn(phrase, " ".join(section.split()))
+        for phrase in ("the generic live pipeline (`run_pipeline`", "SDK camera frames feeding the HUD path"):
+            self.assertIn(phrase, " ".join(section.split()))
 
     def test_require_permits_only_the_literal_true(self):
         gates.LIVE_IMAGE_INPUT.require(True, "unused")

@@ -74,9 +74,18 @@ class ScopeCase(checkpoint.CheckoutCase):
         path.write_bytes(manifest.encode(record))
         return path
 
-    def run_scope(self, path, *, source=scope.CAMERA_LEFT, seconds=20, runner="camera_hud", **options):
-        return scope.RunScope(path, options.pop("checkpoint_manifest", self.path), runner=runner, source=source,
-                              seconds=seconds, **options)
+    def run_scope(self, path, *, source=scope.CAMERA_LEFT, seconds=20, runner="camera_hud", step=None, **options):
+        """A run's request. Without ``step`` it names the record's own step when the record states a known one
+        (so a case isolates the check it is about), else the first step of ``source``."""
+        if step is None:
+            try:
+                step = json.loads(Path(path).read_text())["step"]
+            except (OSError, ValueError, KeyError, TypeError):
+                step = None
+            if type(step) is not str or step not in scope.STEPS:
+                step = {scope.SYNTHETIC: "L-D3"}.get(source, "L-D4") if type(source) is str else "L-D4"
+        return scope.RunScope(path, options.pop("checkpoint_manifest", self.path), runner=runner, step=step,
+                              source=source, seconds=seconds, **options)
 
     @contextlib.contextmanager
     def launches(self, stop=None):
@@ -222,38 +231,80 @@ class WriterTests(ScopeCase):
 
 
 class GrantTests(ScopeCase):
-    def test_a_verifying_record_permits_each_of_its_uses_once_and_spends_the_run_id(self):
+    def test_a_verifying_record_permits_each_use_to_one_holder_and_spends_the_run_id(self):
         path, record = self.staged("L-D4")
         run = self.run_scope(path)
-        self.assertEqual((run.status, self.ledger()), ("not_consulted", []))
-        self.assertIs(run.permit(scope.HUD_OUTPUT), True)
+        client, stage, other = object(), object(), object()
+        self.assertEqual((run.status, self.ledger(), run.remaining_seconds()), ("not_consulted", [], None))
+        self.assertIs(run.permit(scope.HUD_OUTPUT, client), True)
         self.assertEqual(self.ledger(), [f"{record['run_id']}.json"])
         entry = json.loads((self.root / scope.LEDGER / f"{record['run_id']}.json").read_text())
         self.assertEqual((entry["run_id"], entry["step"], entry["process_id"]), (record["run_id"], "L-D4", os.getpid()))
-        self.assertIs(run.permit(scope.CAMERA_INPUT), True)
-        for use in (scope.HUD_OUTPUT, scope.CAMERA_INPUT, "anything", None):
-            self.assertIs(run.permit(use), False)  # Once each, and nothing else.
+        self.assertIs(run.permit(scope.CAMERA_INPUT, stage), True)
+        # The holder may ask again (the start after the check); nobody else may, and nothing else is a use.
+        self.assertIs(run.permit(scope.HUD_OUTPUT, client), True)
+        self.assertIs(run.permit(scope.CAMERA_INPUT, stage), True)
+        for use, holder in ((scope.HUD_OUTPUT, other), (scope.HUD_OUTPUT, stage), (scope.CAMERA_INPUT, client),
+                            (scope.CAMERA_INPUT, None), ("anything", client), (None, client)):
+            self.assertIs(run.permit(use, holder), False)
+        self.assertEqual(self.ledger(), [f"{record['run_id']}.json"])  # Asking again consumed nothing.
+        self.assertEqual(run.pins, {manifest.BRIDGE: scope._file_digest(self.bridge),
+                                    manifest.CAMERA_HELPER: scope._file_digest(self.helper)})
+        self.assertLessEqual(run.remaining_seconds(), 20)
         report = run.report()
         self.assertEqual((report["status"], report["refusal"], report["consumed"], report["step"], report["run_id"],
-                          report["approval"], report["requested_source"]),
-                         ("granted", None, True, "L-D4", record["run_id"], "owner-2026-11-16-a1", "arcturus_camera_left"))
+                          report["approval"], report["requested_source"], report["requested_step"]),
+                         ("granted", None, True, "L-D4", record["run_id"], "owner-2026-11-16-a1", "arcturus_camera_left",
+                          "L-D4"))
         self.assertEqual(gates.claims(), ALL_CLOSED)  # A granted scope is not an open gate.
         self.assertEqual(self.git("status", "--porcelain"), "")  # The ledger is ignored: the tree stays clean.
 
     def test_the_synthetic_step_permits_output_and_never_camera_input(self):
         path, _ = self.staged("L-D3")
         run = self.run_scope(path, source=scope.SYNTHETIC, seconds=100)
-        self.assertIs(run.permit(scope.CAMERA_INPUT), False)
+        holder = object()
+        self.assertIs(run.permit(scope.CAMERA_INPUT, holder), False)
         self.assertEqual(run.status, "granted")
-        self.assertIs(run.permit(scope.HUD_OUTPUT), True)
-        self.assertIs(run.permit(scope.CAMERA_INPUT), False)
+        self.assertIs(run.permit(scope.HUD_OUTPUT, holder), True)
+        self.assertIs(run.permit(scope.CAMERA_INPUT, holder), False)
 
-    def test_a_granted_scope_stops_permitting_at_its_deadline(self):
+    def test_a_granted_scope_is_checked_again_each_time_its_holder_asks(self):
         path, record = self.staged()
-        run = self.run_scope(path)
-        self.assertIs(run.permit(scope.HUD_OUTPUT), True)
-        with mock.patch.object(scope.time, "time", return_value=scope._utc(record["deadline_utc"]) + 1):
-            self.assertIs(run.permit(scope.CAMERA_INPUT), False)
+        deadline = scope._utc(record["deadline_utc"])
+        run, holder = self.run_scope(path), object()
+        self.assertIs(run.permit(scope.HUD_OUTPUT, holder), True)
+        # The clock: an hour past the deadline, and a moment before it with the run's seconds still to go.
+        for now in (deadline + 3600, deadline, deadline - 1):
+            with mock.patch.object(scope.time, "time", return_value=now):
+                self.assertIs(run.permit(scope.HUD_OUTPUT, holder), False)
+                self.assertIs(run.permit(scope.CAMERA_INPUT, holder), False)
+        self.assertIs(run.permit(scope.HUD_OUTPUT, holder), True)
+        # The binary each use launches: rewritten after the grant, it is no longer what the manifest recorded.
+        original = self.bridge.read_bytes()
+        self.bridge.write_bytes(b"bridge rewritten after the check")
+        self.assertIs(run.permit(scope.HUD_OUTPUT, holder), False)
+        self.assertIs(run.permit(scope.CAMERA_INPUT, holder), True)  # The helper is untouched.
+        self.bridge.write_bytes(original)
+        self.assertIs(run.permit(scope.HUD_OUTPUT, holder), True)
+        self.helper.write_bytes(b"helper rewritten after the check")
+        self.assertIs(run.permit(scope.CAMERA_INPUT, holder), False)
+        self.bridge.unlink()
+        self.assertIs(run.permit(scope.HUD_OUTPUT, holder), False)
+        self.assertEqual(len(self.ledger()), 1)
+
+    def test_a_revoked_scope_permits_nothing_and_its_run_id_stays_spent(self):
+        path, record = self.staged()
+        run, holder = self.run_scope(path), object()
+        self.assertIs(run.permit(scope.HUD_OUTPUT, holder), True)
+        run.revoke()
+        self.assertEqual((run.status, run.refusal, run.consumed), ("revoked", "scope_revoked", True))
+        for use in (scope.HUD_OUTPUT, scope.CAMERA_INPUT):
+            self.assertIs(run.permit(use, holder), False)
+        self.assert_refused(self.run_scope(path), "scope_run_id_used")
+        unused = self.run_scope(self.staged()[0])
+        unused.revoke()  # Revoked before it was ever consulted: it never verifies and spends nothing.
+        self.assertIs(unused.permit(scope.HUD_OUTPUT, holder), False)
+        self.assertEqual((unused.status, unused.consumed, self.ledger()), ("revoked", False, [f"{record['run_id']}.json"]))
 
 
 class RefusalTests(ScopeCase):
@@ -336,16 +387,79 @@ class RefusalTests(ScopeCase):
                 self.assert_refused(self.run_scope(self.staged()[0], source=source), "scope_source_not_permitted")
         self.assertEqual(self.ledger(), [])
 
-    def test_a_record_for_another_steps_source(self):
+    def test_a_record_for_another_step_or_another_steps_source(self):
+        # The run names its step, and the record must be for that step: an L-D5 record (90 s) never serves an
+        # L-D4-shaped run, though both read the left camera, nor an L-D4 record an L-D5 run.
+        self.assert_refused(self.run_scope(self.staged("L-D5")[0], step="L-D4", seconds=30), "scope_step_mismatch")
+        self.assert_refused(self.run_scope(self.staged("L-D4")[0], step="L-D5", seconds=30), "scope_step_mismatch")
         # The synthetic step's record never serves a camera run, nor a camera step's record the synthetic run.
-        self.assert_refused(self.run_scope(self.staged("L-D3")[0], source=scope.CAMERA_LEFT), "scope_source_mismatch")
-        self.assert_refused(self.run_scope(self.staged("L-D5")[0], source=scope.SYNTHETIC), "scope_source_mismatch")
-        # A record whose step and source disagree is refused whatever the run asks for.
+        self.assert_refused(self.run_scope(self.staged("L-D3")[0], step="L-D4"), "scope_step_mismatch")
+        self.assert_refused(self.run_scope(self.staged("L-D5")[0], step="L-D3", source=scope.SYNTHETIC),
+                            "scope_step_mismatch")
+        # A request whose step and source do not belong together is refused before any record is read.
         for step, source in (("L-D3", scope.CAMERA_LEFT), ("L-D4", scope.SYNTHETIC), ("L-D5", scope.SYNTHETIC)):
+            with self.subTest(requested=step):
+                run = self.run_scope(self.out / "never-read.json", step=step, source=source)
+                self.assert_refused(run, "scope_step_source_mismatch")
+        for step in ("L-D1", "L-D2", "", None, 4, ["L-D4"]):
+            with self.subTest(requested=step):
+                run = scope.RunScope(self.staged()[0], self.path, runner="camera_hud", step=step,
+                                     source=scope.CAMERA_LEFT, seconds=20)
+                self.assert_refused(run, "scope_step_unknown")
+        # A record whose own step and source disagree is refused whatever the run asks for.
+        for step, source in (("L-D3", scope.CAMERA_LEFT), ("L-D4", scope.SYNTHETIC), ("L-D5", scope.SYNTHETIC)):
+            with self.subTest(recorded=step):
+                run = self.run_scope(self.forged(step, source=source), step=step, source=scope.STEPS[step][0])
+                self.assert_refused(run, "scope_step_source_mismatch")
+        self.assert_refused(self.run_scope(self.forged(step="L-D1"), step="L-D4"), "scope_step_unknown")
+        self.assertEqual(self.ledger(), [])
+
+    def test_a_record_from_the_future_and_a_deadline_too_far_ahead(self):
+        # Staged while the clock read 200 days ahead; the clock was then corrected.
+        ahead = int(time.time()) + 200 * 86400
+        path = self.forged(created_utc=scope._stamp(ahead), deadline_utc=scope._stamp(ahead + 1800))
+        self.assert_refused(self.run_scope(path), "scope_record_from_the_future")
+        with mock.patch.object(scope.time, "time", return_value=ahead + 10):  # Where it was staged, it verifies.
+            self.assertIs(self.run_scope(path).permit(scope.HUD_OUTPUT, self), True)
+        (self.root / scope.LEDGER).rename(self.out / "ledger-aside")
+        now = int(time.time())
+        within = self.forged(created_utc=scope._stamp(now + scope.CLOCK_TOLERANCE_SECONDS - 5),
+                             deadline_utc=scope._stamp(now + 1800))
+        self.assertIs(self.run_scope(within).permit(scope.HUD_OUTPUT, self), True)  # Inside the clock tolerance.
+        beyond = self.forged(created_utc=scope._stamp(now + scope.CLOCK_TOLERANCE_SECONDS + 30),
+                             deadline_utc=scope._stamp(now + 1800))
+        self.assert_refused(self.run_scope(beyond), "scope_record_from_the_future")
+        # A deadline further ahead than the longest validity: the clock went back after staging.
+        path, record = self.staged(valid_minutes=scope.MAX_VALID_MINUTES)
+        with mock.patch.object(scope.time, "time", return_value=scope._utc(record["created_utc"]) - 3600):
+            self.assert_refused(self.run_scope(path), "scope_record_from_the_future")
+        path = self.forged(created_utc=scope._stamp(now - 100), deadline_utc=scope._stamp(now - 100 + 240 * 60))
+        with mock.patch.object(scope.time, "time", return_value=now - 100 - 30):
+            self.assert_refused(self.run_scope(path), "scope_deadline_too_far")
+
+    def test_a_manifest_without_the_camera_group_is_refused_for_every_step(self):
+        self.helper.unlink()  # A machine without the SDK helper: the manifest is written without the group.
+        self.path = self.out / "no-camera-manifest.json"
+        result = self.write()
+        self.assertEqual((result["problems"], result["groups"]), ([], sorted(manifest.BASE_GROUPS)))
+        self.assertVerifies()
+        for step in scope.STEPS:
+            with self.subTest(step=step), self.assertRaises(scope.ScopeError) as caught:
+                self.staged(step)
+            self.assertEqual(caught.exception.reason, "scope_manifest_lacks_camera_group")
+        # A record that names that manifest's digest all the same is refused at the check, for every step.
+        self.helper.write_bytes(b"camera helper built on this machine")
+        self.helper.chmod(0o755)
+        self.assertVerifies()  # Still verified with the groups it carries, though the helper now exists.
+        with_camera = self.out / "with-camera.json"
+        self.run_command("--write", str(with_camera), "--camera-hud")
+        digest = scope._file_digest(self.path)
+        for step, (source, _) in scope.STEPS.items():
+            self.path, original = with_camera, self.path
+            forged = self.forged(step, manifest_sha256=digest)
+            self.path = original
             with self.subTest(step=step):
-                self.assert_refused(self.run_scope(self.forged(step, source=source), source=source),
-                                    "scope_step_source_mismatch")
-        self.assert_refused(self.run_scope(self.forged(step="L-D1")), "scope_step_unknown")
+                self.assert_refused(self.run_scope(forged, source=source), "scope_manifest_lacks_camera_group")
         self.assertEqual(self.ledger(), [])
 
     def test_another_geometry(self):
@@ -395,9 +509,10 @@ class RefusalTests(ScopeCase):
             with self.subTest(case=index):
                 path.write_text(json.dumps(case))
                 self.assert_refused(self.run_scope(path), "scope_record_invalid")
-        for text in ("", "{", "true" * 2000):
+        doubled = json.dumps(record)[:-1] + ', "max_seconds": 5, "step": "L-D4", "step": "L-D5"}'  # A key twice.
+        for text in ("", "{", "true" * 2000, doubled, json.dumps(record)[:-1] + ', "approval": "a"}'):
             path.write_text(text)
-            self.assert_refused(self.run_scope(path), "scope_record_invalid")
+            self.assert_refused(self.run_scope(path, step="L-D4"), "scope_record_invalid")
         self.assertEqual(self.ledger(), [])
 
     def test_an_error_inside_the_verification_is_a_refusal(self):
@@ -411,6 +526,8 @@ class OutputSiteTests(ScopeCase):
     """The output site: only the literal True of a verifying record's scope permits, and before any launch."""
 
     def client(self, run=None, binary=None, **options):
+        seconds = getattr(run, "seconds", None)
+        options.setdefault("max_output_seconds", seconds if type(seconds) in (int, float) and seconds > 0 else 5)
         return ObservedFrameClient(binary or self.bridge, validation_only=False, scope=run, **options)
 
     def test_real_output_is_permitted_only_by_a_verifying_scope_and_the_id_is_spent_before_the_launch(self):
@@ -433,6 +550,65 @@ class OutputSiteTests(ScopeCase):
                 other.start()
             self.assertEqual(seen, [])
         self.assertEqual(gates.claims(), ALL_CLOSED)
+
+    def test_a_start_after_the_deadline_or_with_a_rewritten_bridge_is_refused_though_the_check_passed(self):
+        for name in ("an hour past the deadline", "the bridge rewritten", "the scope withdrawn"):
+            path, record = self.staged("L-D3")
+            client = self.client(self.run_scope(path, source=scope.SYNTHETIC))
+            original = self.bridge.read_bytes()
+            with self.subTest(case=name), self.launches() as seen:
+                client.check_start()  # Permitted, and the run id is spent.
+                self.assertEqual(client.scope.status, "granted")
+                if name == "an hour past the deadline":
+                    clock = mock.patch.object(scope.time, "time", return_value=scope._utc(record["deadline_utc"]) + 3600)
+                    with clock, self.assertRaisesRegex(ValueError, "^fixed_hud_output_not_approved$"):
+                        client.start()
+                elif name == "the bridge rewritten":
+                    self.bridge.write_bytes(b"#!/bin/sh\nexit 0\n")
+                    with self.assertRaisesRegex(ValueError, "^fixed_hud_output_not_approved$"):
+                        client.start()
+                    self.bridge.write_bytes(original)
+                else:
+                    client.withdraw()  # What a refused or failed run does before its bridge started.
+                    self.assertEqual(client.scope.status, "revoked")
+                    for start in (client.check_start, client.start):
+                        with self.assertRaisesRegex(ValueError, "^fixed_hud_output_not_approved$"):
+                            start()
+                self.assertEqual((seen, client.process), ([], None))
+
+    def test_the_duration_is_the_clients_own_bound_and_a_client_without_one_is_refused(self):
+        path, _ = self.staged("L-D3")
+        for bound in (None, 21, 20.5, 1e9):
+            run = self.run_scope(path, source=scope.SYNTHETIC, seconds=20)
+            client = ObservedFrameClient(self.bridge, validation_only=False, scope=run, max_output_seconds=bound)
+            with self.subTest(bound=bound), self.launches() as seen:
+                self.assertIs(observed_frames.output_preconditions(client), False)
+                with self.assertRaisesRegex(ValueError, "^fixed_hud_output_not_approved$"):
+                    client.start()
+                self.assertEqual((seen, run.status, self.ledger()), ([], "not_consulted", []))  # Unspent.
+        for bound in (0, -1, float("inf"), float("nan"), "20", True):
+            with self.subTest(bound=bound), self.assertRaisesRegex(ValueError, "observed_frame_output_bound_invalid"):
+                ObservedFrameClient(self.bridge, validation_only=False, max_output_seconds=bound)
+        client = self.client(self.run_scope(path, source=scope.SYNTHETIC, seconds=20), max_output_seconds=20)
+        self.assertIs(observed_frames.output_preconditions(client), True)
+        # A prerequisite that does not answer the literal True refuses, with the record unspent.
+        for answer in (False, None, 1, "yes"):
+            client.prerequisites = (lambda answer=answer: answer,)
+            self.assertIs(observed_frames.fixed_hud_output_permitted(client), False)
+        client.prerequisites = (mock.Mock(side_effect=RuntimeError("boom")),)
+        self.assertIs(observed_frames.fixed_hud_output_permitted(client), False)
+        self.assertEqual((client.scope.status, self.ledger()), ("not_consulted", []))
+
+    def test_the_mode_is_fixed_at_construction(self):
+        path, _ = self.staged("L-D4")
+        client = ObservedFrameClient(self.bridge, scope=self.run_scope(path), max_output_seconds=5)
+        for mode in (False, True, None):
+            with self.assertRaisesRegex(AttributeError, "observed_frame_client_mode_is_fixed"):
+                client.validation_only = mode
+        self.assertEqual((client.validation_only, client.bridge_mode()), (True, "--validate-stdin"))
+        self.assertIs(observed_frames.output_preconditions(client), False)  # A validation client is never permitted.
+        self.assertIs(observed_frames.fixed_hud_output_permitted(client), False)
+        self.assertEqual(client.scope.status, "not_consulted")
 
     def test_real_output_refuses_a_bridge_the_manifest_does_not_pin(self):
         elsewhere = self.out / "sightcircuit-overlay-bridge"
@@ -460,14 +636,16 @@ class OutputSiteTests(ScopeCase):
         granted = self.run_scope(path, source=scope.SYNTHETIC)
 
         class Agreeable(scope.RunScope):
-            def permit(self, use):
+            def permit(self, use, holder=None):
                 return True
         truthy = mock.Mock()
         truthy.permit.return_value = True
-        stand_ins = (None, True, 1, "yes", str(path), {"record": str(path)}, truthy, SimpleNamespace(permit=lambda use: True),
-                     Agreeable(path, self.path, runner="camera_hud", source=scope.SYNTHETIC, seconds=20),
+        truthy.seconds = 20
+        stand_ins = (None, True, 1, "yes", str(path), {"record": str(path)}, truthy,
+                     SimpleNamespace(permit=lambda use, holder=None: True, seconds=20),
+                     Agreeable(path, self.path, runner="camera_hud", step="L-D3", source=scope.SYNTHETIC, seconds=20),
                      self.run_scope(self.out / "absent.json", source=scope.SYNTHETIC),
-                     self.run_scope(path, source=scope.CAMERA_LEFT))
+                     self.run_scope(path, step="L-D4", source=scope.CAMERA_LEFT))
         for stand_in in stand_ins:
             client = self.client(stand_in)
             with self.subTest(scope=type(stand_in).__name__), self.launches() as seen:
@@ -480,7 +658,7 @@ class OutputSiteTests(ScopeCase):
         self.assertEqual((granted.status, self.ledger()), ("not_consulted", []))
 
     def test_the_output_gate_has_one_require_call_and_one_permission_function(self):
-        self.assertEqual(require_calls("sightcircuit/observed_frames.py"), {"LIVE_HUD_OUTPUT": ["self._output_permitted"]})
+        self.assertEqual(require_calls("sightcircuit/observed_frames.py"), {"LIVE_HUD_OUTPUT": ["fixed_hud_output_permitted"]})
         self.assertEqual(users_of("fixed_hud_output_permitted("), ["sightcircuit/observed_frames.py"])
         self.assertEqual(users_of(".permit("), ["sightcircuit/hud/camera_stage.py", "sightcircuit/observed_frames.py"])
         self.assertEqual(users_of("RunScope("), ["sightcircuit/commands/camera_hud.py"])  # Only the command (L9).
@@ -494,10 +672,13 @@ class CameraSiteTests(ScopeCase):
         return CameraHelperSource(binary or self.helper, LIMITS, confirmed=True)
 
     def client(self, run=None, binary=None, **options):
+        seconds = getattr(run, "seconds", None)
+        options.setdefault("max_output_seconds", seconds if type(seconds) in (int, float) and seconds > 0 else 5)
         return ObservedFrameClient(binary or self.bridge, validation_only=False, scope=run, **options)
 
-    def stage(self, client):
-        return camera_stage.CameraHudStage(self.source(), synthetic.FixtureDetector(), client)
+    def stage(self, client, **options):
+        options.setdefault("seconds", LIMITS["max_seconds"])
+        return camera_stage.CameraHudStage(self.source(), synthetic.FixtureDetector(), client, **options)
 
     def test_a_truthy_answer_that_is_not_true_is_refused_at_both_sites(self):
         path, _ = self.staged("L-D4")
@@ -517,25 +698,145 @@ class CameraSiteTests(ScopeCase):
                 exported.assert_not_called()
         self.assertEqual(self.ledger(), [])
 
-    def test_no_environment_variable_permits_either_use(self):
-        path, _ = self.staged("L-D4")
-        names = ("SIGHTCIRCUIT_SCOPE_RECORD", "SIGHTCIRCUIT_SCOPE", "SIGHTCIRCUIT_ALLOW_FIXED_HUD",
-                 "SIGHTCIRCUIT_ALLOW_CAMERA_DISPLAY", "SIGHTCIRCUIT_CHECKPOINT_MANIFEST", "SIGHTCIRCUIT_RUN_ID",
-                 "SIGHTCIRCUIT_DIAGNOSTIC_TIER", "SIGHTCIRCUIT_GATES_OPEN")
-        values = dict.fromkeys(names, "1")
-        values.update(SIGHTCIRCUIT_SCOPE_RECORD=str(path), SIGHTCIRCUIT_CHECKPOINT_MANIFEST=str(self.path))
+    def test_a_valid_record_named_only_by_environment_variables_permits_nothing(self):
+        # A record that would verify is on disk, the manifest and the ledger are where they belong, and every
+        # variable a wrong implementation might read names them. The client carries no RunScope: nothing is
+        # permitted, nothing is launched, and the record is still unspent afterwards.
+        path, record = self.staged("L-D4")
+        values = {}
+        for prefix in ("SIGHTCIRCUIT", "SIGHTCIRCUIT_CAMERA_HUD", "CAMERA_HUD"):
+            values.update({f"{prefix}_SCOPE_RECORD": str(path), f"{prefix}_SCOPE": str(path),
+                           f"{prefix}_RECORD": str(path), f"{prefix}_MANIFEST": str(self.path),
+                           f"{prefix}_CHECKPOINT_MANIFEST": str(self.path), f"{prefix}_RUN_ID": record["run_id"],
+                           f"{prefix}_LEDGER": str(self.root / scope.LEDGER), f"{prefix}_STEP": "L-D4",
+                           f"{prefix}_SOURCE": scope.CAMERA_LEFT, f"{prefix}_APPROVAL": record["approval"],
+                           f"{prefix}_ALLOW_FIXED_HUD": "1", f"{prefix}_ALLOW_CAMERA_DISPLAY": "1",
+                           f"{prefix}_DIAGNOSTIC_TIER": "1", f"{prefix}_GATES_OPEN": "1"})
         with mock.patch.dict(os.environ, values):
-            client = self.client(env={**os.environ})
+            client = self.client(env={**os.environ}, max_output_seconds=5)
             stage = self.stage(client)
             with self.launches() as seen, mock.patch.object(camera_helper, "run_export") as exported:
                 self.assertIs(observed_frames.fixed_hud_output_permitted(client), False)
                 self.assertIs(camera_stage.camera_display_input_permitted(stage), False)
                 with self.assertRaisesRegex(ValueError, "^fixed_hud_output_not_approved$"):
                     stage.run()
+                with self.assertRaisesRegex(ValueError, "^fixed_hud_output_not_approved$"):
+                    client.start()
                 self.assertEqual(seen, [])
                 exported.assert_not_called()
             self.assertEqual(gates.claims(), ALL_CLOSED)
-        self.assertEqual(self.ledger(), [])
+            self.assertEqual(self.ledger(), [])
+            # The control: the same record, held as a RunScope by a client, does permit, with the variables set
+            # or not. So the refusal above is the missing scope and nothing else, and the record was unspent.
+            permitted = self.client(self.run_scope(path, seconds=5))
+            self.assertIs(observed_frames.fixed_hud_output_permitted(permitted), True)
+        self.assertEqual(self.ledger(), [f"{record['run_id']}.json"])
+
+    def test_the_scopes_duration_bounds_the_stage_and_the_helper(self):
+        # The reviewer's case: an L-D4 record (30 s), a scope asked for 5 s, a helper allowed 90 s and 900 frames,
+        # a stage with no bound of its own. Refused at the preconditions, the record unspent, nothing launched.
+        wide = {"fps": 10, "max_seconds": 90, "max_frames": 900}
+        cases = (("no stage bound, a wide helper", dict(seconds=None), wide),
+                 ("a stage bound over the scope's", dict(seconds=6), LIMITS),
+                 ("a helper bound over the scope's", dict(seconds=5), {"fps": 5, "max_seconds": 6, "max_frames": 8}),
+                 ("more frames than the seconds hold", dict(seconds=5), {"fps": 5, "max_seconds": 5, "max_frames": 26}),
+                 ("no stage bound", dict(seconds=None), LIMITS))
+        path, record = self.staged("L-D4")
+        for name, options, limits in cases:
+            run = self.run_scope(path, seconds=5)
+            client = self.client(run)
+            stage = camera_stage.CameraHudStage(CameraHelperSource(self.helper, limits, confirmed=True),
+                                                synthetic.FixtureDetector(), client, **options)
+            with self.subTest(case=name), self.launches() as seen, \
+                    mock.patch.object(stage.source, "drive", side_effect=AssertionError("driven")), \
+                    mock.patch.object(camera_helper, "run_export", side_effect=AssertionError("exported")):
+                self.assertIs(camera_stage.camera_display_input_preconditions(stage), False)
+                with self.assertRaisesRegex(ValueError, "^fixed_hud_output_not_approved$"):
+                    stage.run()
+                self.assertEqual((seen, self.ledger(), run.consumed), ([], [], False))
+                self.assertEqual(run.status, "revoked")  # The refused run gave its scope back.
+        # Within the scope's seconds everywhere, the same record permits.
+        run = self.run_scope(path, seconds=5)
+        stage = self.stage(self.client(run), seconds=5)
+        self.assertIs(camera_stage.camera_display_input_preconditions(stage), True)
+        with mock.patch.object(stage.source, "drive", side_effect=RuntimeError("stop")), self.launches() as seen:
+            stage.run()
+        self.assertEqual((seen, self.ledger(), run.consumed), ([], [f"{record['run_id']}.json"], True))
+        self.assertEqual(run.status, "revoked")  # It failed before the bridge started: nothing can start later.
+        with self.launches() as seen, self.assertRaisesRegex(ValueError, "^fixed_hud_output_not_approved$"):
+            stage.client.start()
+        self.assertEqual(seen, [])
+
+    def test_the_clients_own_bound_ends_real_output_whatever_its_caller_does(self):
+        from tests import fake_vrclient
+        from sightcircuit.overlay import DEFAULT_BRIDGE
+        if not (DEFAULT_BRIDGE.is_file() and fake_vrclient.available()):
+            self.skipTest("Needs scripts/build_overlay_bridge.sh, its SDK checkout and g++")
+        import shutil
+        import tempfile
+        shutil.copy2(DEFAULT_BRIDGE, self.bridge)  # The fixture's pinned bridge becomes a real one, then is re-pinned.
+        self.path = self.out / "real-bridge-manifest.json"
+        self.write()
+        path, _ = self.staged("L-D3", max_seconds=2)
+        with tempfile.TemporaryDirectory() as directory:
+            env, log = fake_vrclient.runtime(Path(directory) / "vr")
+            client = self.client(self.run_scope(path, source=scope.SYNTHETIC, seconds=2), env={**os.environ, **env})
+            started = time.monotonic()
+            client.start()
+            rgba = bytes(HUD_CONFIG.width_px * HUD_CONFIG.height_px * 4)
+            sent = 0
+            while not client.done.wait(0.1) and time.monotonic() - started < 15:  # A caller that never stops.
+                now = time.monotonic_ns()
+                sent += client.submit_observed(sent + 1, now, now + 1_000_000_000, HUD_CONFIG.width_px,
+                                               HUD_CONFIG.height_px, rgba)
+            elapsed = time.monotonic() - started
+            report = client.close()
+            calls = [call["call"] for call in fake_vrclient.calls(log)]
+        self.assertTrue(client.output_bound_reached)
+        self.assertGreaterEqual(elapsed, 2.0)
+        self.assertLess(elapsed, 4.0)
+        self.assertGreater(sent, 5)
+        self.assertEqual((report["output_bound_reached"], report["max_output_seconds"], report["cleanup_confirmed"],
+                          report["native_report"]["mode"]), (True, 2, True, "--fixed-hud"))
+        self.assertEqual(calls[-3:], ["HideOverlay", "ClearOverlayTexture", "DestroyOverlay"])
+        self.assertIs(client.submit_observed(10_000, 1, 2, HUD_CONFIG.width_px, HUD_CONFIG.height_px, rgba), False)
+
+    def test_a_wrong_helper_is_refused_with_the_record_unspent_and_the_launcher_compares_the_digest(self):
+        path, record = self.staged("L-D4")
+        elsewhere = self.out / "sightcircuit-camera-helper"
+        elsewhere.write_bytes(self.helper.read_bytes())
+        elsewhere.chmod(0o755)
+        for binary in (elsewhere, Path(sys.executable), self.bridge, self.out / "absent"):
+            run = self.run_scope(path, seconds=5)
+            stage = camera_stage.CameraHudStage(self.source(binary), synthetic.FixtureDetector(), self.client(run), seconds=5)
+            with self.subTest(helper=binary.name), self.launches() as seen:
+                with self.assertRaisesRegex(ValueError, "^fixed_hud_output_not_approved$"):
+                    stage.run()
+                self.assertEqual((seen, self.ledger(), run.consumed), ([], [], False))
+        # One rule for both paths: ``~`` expands for the pinned check as it does for the helper's own path check.
+        with mock.patch.dict(os.environ, {"HOME": str(self.root)}):
+            relative = "~/" + manifest.CAMERA_HELPER
+            self.assertIs(scope.pinned_binary(relative, manifest.CAMERA_HELPER), True)
+            self.assertEqual(camera_helper.helper_path(relative), str(self.helper.resolve()))
+        # The helper rewritten between the permission and the launch: the launcher hashes it and launches nothing.
+        run = self.run_scope(path, seconds=5)
+        stage = self.stage(self.client(run), seconds=5)
+        expected = scope._file_digest(self.helper)
+
+        def rewrite_then_export(pipeline, stop):
+            self.assertEqual(stage.source.expected_sha256, expected)
+            self.helper.write_bytes(b"#!/bin/sh\nexit 0\n")
+            return camera_helper.run_export(stage.source.binary, LIMITS, (0,), on_frame=lambda frame: None,
+                                            confirmed=True, expected_sha256=stage.source.expected_sha256)
+        with mock.patch.object(stage.source, "drive", side_effect=rewrite_then_export) as driven, self.launches() as seen:
+            stage.run()
+        driven.assert_called_once()
+        self.assertEqual(seen, [])  # Neither the helper nor the bridge was launched.
+        self.helper.write_bytes(b"camera helper built on this machine")
+        report = camera_helper.run_export(self.helper, LIMITS, (0,), on_frame=lambda frame: None, confirmed=True,
+                                          expected_sha256="0" * 64)
+        self.assertEqual((report["status"], report["reason"], report["frames_read"]), ("error", "helper_digest_mismatch", 0))
+        self.assertEqual(self.ledger(), [f"{record['run_id']}.json"])
 
     def test_camera_input_to_the_display_needs_the_camera_record_the_left_camera_and_this_runner(self):
         path, record = self.staged("L-D4")
@@ -557,55 +858,54 @@ class CameraSiteTests(ScopeCase):
         self.assertEqual(seen, [])
         self.assertEqual((report["status"], report["reason"]), ("error", "camera_hud_run_failed"))
         self.assertEqual({name: report[name] for name in gates.claims()}, ALL_CLOSED)
-        self.assertIs(camera_stage.camera_display_input_permitted(stage), False)  # Granted once.
+        self.assertEqual(client.scope.status, "revoked")  # It failed before the bridge started.
+        self.assertIs(camera_stage.camera_display_input_permitted(stage), False)
 
     def test_camera_input_is_refused_for_the_synthetic_record_other_sources_and_other_scopes(self):
         synthetic_path, _ = self.staged("L-D3")
-        # The synthetic step's record: real output is permitted, camera input is not, and nothing is launched.
-        client = self.client(self.run_scope(synthetic_path, source=scope.SYNTHETIC))
+        # The synthetic step's record on a camera stage: refused before anything is consumed, by the output site,
+        # which asks the camera site's preconditions first. Nothing is launched and the record is unspent.
+        run = self.run_scope(synthetic_path, source=scope.SYNTHETIC)
+        client = self.client(run)
         stage = self.stage(client)
         with mock.patch.object(camera_helper, "run_export") as exported, self.launches() as seen, \
                 mock.patch.object(gates.Gate, "require", autospec=True, side_effect=gates.Gate.require) as required:
-            with self.assertRaisesRegex(ValueError, "^camera_display_input_not_approved$"):
+            with self.assertRaisesRegex(ValueError, "^fixed_hud_output_not_approved$"):
                 stage.run()
         self.assertEqual([(call.args[0], call.args[1]) for call in required.call_args_list],
-                         [(gates.LIVE_HUD_OUTPUT, True), (gates.LIVE_CAMERA_INPUT, False)])
+                         [(gates.LIVE_HUD_OUTPUT, False)])
         exported.assert_not_called()
-        self.assertEqual(seen, [])
+        self.assertEqual((seen, self.ledger(), run.consumed), ([], [], False))
         self.assertEqual((stage.status, stage.source.status, client.process), ("not_run", "not_started", None))
+        # The camera site alone, asked directly with a granted synthetic scope, refuses too.
+        granted = self.run_scope(synthetic_path, source=scope.SYNTHETIC)
+        self.assertIs(granted.permit(scope.HUD_OUTPUT, client), True)
+        self.assertIs(camera_stage.camera_display_input_permitted(
+            SimpleNamespace(client=SimpleNamespace(scope=granted), source=self.source(), seconds=5)), False)
         # A granted camera scope still refuses a source that is not the left camera's helper source.
         for label, make in (("both", lambda source: setattr(source, "source_id", "arcturus_camera:0+1")),
                             ("right", lambda source: setattr(source, "source_id", "arcturus_camera:1")),
                             ("mirror", lambda source: setattr(source, "source_id", "mirror:observed"))):
             run = self.run_scope(self.staged("L-D4")[0])
-            self.assertIs(run.permit(scope.HUD_OUTPUT), True)
+            self.assertIs(run.permit(scope.HUD_OUTPUT, client), True)
             source = self.source()
             make(source)
+            stand_in = SimpleNamespace(client=SimpleNamespace(scope=run), source=source, seconds=5)
             with self.subTest(source=label):
-                self.assertIs(camera_stage.camera_display_input_permitted(
-                    SimpleNamespace(client=SimpleNamespace(scope=run), source=source)), False)
-                self.assertIs(run.permit(scope.CAMERA_INPUT), True)  # It was never asked: the site refused first.
-        # ... and a helper that is not the one the manifest pins: another path, the fake build's, the bridge.
-        elsewhere = self.out / "sightcircuit-camera-helper"
-        elsewhere.write_bytes(self.helper.read_bytes())
-        elsewhere.chmod(0o755)
-        for binary in (elsewhere, Path(sys.executable), self.bridge):
-            run = self.run_scope(self.staged("L-D4")[0])
-            self.assertIs(run.permit(scope.HUD_OUTPUT), True)
-            with self.subTest(helper=binary.name):
-                self.assertIs(camera_stage.camera_display_input_permitted(
-                    SimpleNamespace(client=SimpleNamespace(scope=run), source=self.source(binary))), False)
-                self.assertIs(run.permit(scope.CAMERA_INPUT), True)
+                self.assertIs(camera_stage.camera_display_input_permitted(stand_in), False)
+                stand_in.source = self.source()
+                self.assertIs(camera_stage.camera_display_input_permitted(stand_in), True)  # The site refused first.
         run = self.run_scope(self.staged("L-D4")[0])
-        self.assertIs(run.permit(scope.HUD_OUTPUT), True)
+        self.assertIs(run.permit(scope.HUD_OUTPUT, client), True)
         declared = synthetic.SyntheticSource()
         declared.source_id = self.source().source_id
         for source in (declared, SimpleNamespace(source_id=self.source().source_id, kind="synthetic"), None):
             self.assertIs(camera_stage.camera_display_input_permitted(
-                SimpleNamespace(client=SimpleNamespace(scope=run), source=source)), False)
-        for stand_in in (None, True, mock.Mock(), SimpleNamespace(source=scope.CAMERA_LEFT, permit=lambda use: True)):
+                SimpleNamespace(client=SimpleNamespace(scope=run), source=source, seconds=5)), False)
+        for stand_in in (None, True, mock.Mock(),
+                         SimpleNamespace(source=scope.CAMERA_LEFT, seconds=20, permit=lambda use, holder=None: True)):
             self.assertIs(camera_stage.camera_display_input_permitted(
-                SimpleNamespace(client=SimpleNamespace(scope=stand_in), source=self.source())), False)
+                SimpleNamespace(client=SimpleNamespace(scope=stand_in), source=self.source(), seconds=5)), False)
         for cameras in ((0, 1), (1,)):
             with self.assertRaises(SightCircuitError) as caught:  # Both cameras never reach a stage at all.
                 CameraHelperSource(Path("unused"), LIMITS, cameras=cameras)

@@ -575,11 +575,13 @@ as a numbered evidence entry, distinct from cloud checks and CI results.
 
 [`sightcircuit/gates.py`](../sightcircuit/gates.py) is the code's single gate
 table, and since work-order item L10 (its reviewed edit 1) it has four gates.
-Hardware mapping requires G4. Live image input from any source other than the
-SDK camera, which is the mirror, is lifted by G4, G5 and G6. Camera input, SDK
-camera frames feeding the live pipeline or the HUD path, is a gate of its own,
-lifted by G7, G8 and G10, so the mirror stays closed whatever happens to the
-camera route. Real HUD output is lifted by G8, G9 and G10. All four remain
+Hardware mapping requires G4. Live image input is lifted by G4, G5 and G6: it
+closes non-synthetic images from any source feeding the generic live pipeline
+(`run_pipeline`, which refuses the camera source too), and from any source
+other than the SDK camera, which is the mirror, feeding the HUD path. Camera
+input, SDK camera frames feeding the HUD path, is a gate of its own, lifted by
+G7, G8 and G10, so the mirror stays closed whatever happens to the camera
+route. Real HUD output is lifted by G8, G9 and G10. All four remain
 closed and every claim they report is false; a test pins that each G-number
 the table names is a row above. The numbers in G7 to G10 are the owner's
 accepted thresholds of 2026-11-16 (decision 9). Lifting a gate requires a

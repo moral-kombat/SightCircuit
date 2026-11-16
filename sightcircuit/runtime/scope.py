@@ -13,17 +13,24 @@ small JSON file that ties one run to that approval. It is bound to:
   the paths the manifest hashes, ``pinned_binary``);
 * a run id, which the ledger makes single-use;
 * an absolute UTC deadline, by which the whole run must have ended;
-* the duration bound, at most the step's own;
+* the duration bound, at most the step's own, which the permission sites tie
+  to what the run does: the client ends real output itself once the run's
+  seconds are over, and a camera run's stage and helper bounds must lie
+  within them;
 * the source: ``arcturus_camera_left``, or ``synthetic`` for the expiry and
   soak step, which never opens the camera;
 * the HUD configuration, ``fixed-edge-hud-v1`` and its digest;
-* the step id and the runner, ``camera_hud``;
+* the step id, which the run must name and match, and the runner,
+  ``camera_hud`` (a name the caller declares: it keeps a record written for
+  another runner from being accepted by a caller that names itself
+  truthfully, and it cannot identify the calling program);
 * a reference to the owner's approval: an identifier, never free text.
 
 What this is, exactly: a procedural control against mistakes, not a
 cryptographic one. Nothing here is signed. Anyone who can run the writer on
 the Frame can write a record, and anyone who can edit files there can forge
-one or delete the ledger. The owner's approval, given in the Frame manager's
+one, and removing the ledger directory makes a spent record usable again
+until its deadline. The owner's approval, given in the Frame manager's
 session, is the authority; the record ties one run to it and makes the common
 mistakes fail closed: the wrong commit, a rebuilt binary, a second run, a run
 after the sitting, the wrong source, a longer run, another program.
@@ -32,7 +39,14 @@ after the sitting, the wrong source, a longer run, another program.
 and what the run is about to do. It permits a use only after the record
 verified in full against what is on disk, and it consumes the run id (an
 exclusive file in the ledger) as the last step of that verification, before
-the caller launches anything. Its answer is the literal ``True`` or the
+the caller launches anything. Verification runs read-only queries and hashes
+files: ``git`` for the commit and the tree's state and, where no package
+database is readable, the manifest's read-only ``pacman -Q``; it starts
+nothing else. A use is granted to one holder (the client, the stage), and
+each time that holder asks again, at the start itself, the deadline and the
+launched binary's digest are checked again without consuming anything. What
+remains between that check and the launch is the launch itself; the helper's
+digest is compared once more by the launcher. Its answer is the literal ``True`` or the
 literal ``False``; the two permission sites
 (``observed_frames.fixed_hud_output_permitted`` and
 ``hud.camera_stage.camera_display_input_permitted``) hand it to their gate's
@@ -64,7 +78,9 @@ HUD_OUTPUT, CAMERA_INPUT = "hud_output", "camera_input"  # The two uses, one per
 # soak step: 75 s of rows plus three stops; L-D4 the first displayed labels; L-D5 the 60-second acceptance.
 STEPS = {"L-D3": (SYNTHETIC, 120), "L-D4": (CAMERA_LEFT, 30), "L-D5": (CAMERA_LEFT, 90)}
 USES = {SYNTHETIC: (HUD_OUTPUT,), CAMERA_LEFT: (HUD_OUTPUT, CAMERA_INPUT)}
+USE_BINARIES = {HUD_OUTPUT: manifest.BRIDGE, CAMERA_INPUT: manifest.CAMERA_HELPER}  # What each use launches.
 MAX_VALID_MINUTES = 240  # A record is written for one sitting.
+CLOCK_TOLERANCE_SECONDS = 60  # How far ahead of this clock a record's creation time may lie.
 MAX_RECORD_BYTES = 4096
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 RUN_ID = re.compile(r"[0-9a-f]{32}")
@@ -106,6 +122,14 @@ def _file_digest(path):
     except OSError:
         return None
     return None if len(data) > manifest.MAX_MANIFEST_BYTES else hashlib.sha256(data).hexdigest()
+
+
+def _file_digest_of(path):
+    """SHA-256 of a regular file of any size, or None."""
+    try:
+        return manifest.assets.checksum(path) if Path(path).is_file() else None
+    except OSError:
+        return None
 
 
 def _revision(root):
@@ -166,10 +190,33 @@ def read_record(path):
     if len(data) > MAX_RECORD_BYTES:
         return None, "scope_record_invalid"
     try:
-        record = json.loads(data)
+        record = json.loads(data, object_pairs_hook=_unique_keys)
     except (ValueError, RecursionError):
         return None, "scope_record_invalid"
     return (record, None) if type(record) is dict else (None, "scope_record_invalid")
+
+
+def _unique_keys(pairs):
+    """A JSON object as a dict; a key written twice is refused, so no reader can see another value than this one."""
+    record = dict(pairs)
+    if len(record) != len(pairs):
+        raise ValueError("duplicate key")
+    return record
+
+
+def read_pins(path):
+    """``(groups, {checkout-relative path: digest})`` of the manifest at ``path``: what it carries and what it
+    recorded for the bridge and the camera helper; ``(None, {})`` when it cannot be read."""
+    try:
+        with Path(path).open("rb") as source:
+            data = json.loads(source.read(manifest.MAX_MANIFEST_BYTES + 1))
+        pins = {manifest.BRIDGE: data["bridge"][manifest.BRIDGE]}
+        camera = data.get(manifest.CAMERA_GROUP)
+        if isinstance(camera, dict):
+            pins[manifest.CAMERA_HELPER] = camera.get(manifest.CAMERA_HELPER)
+        return list(data.get("groups") or ()), pins
+    except (OSError, ValueError, KeyError, TypeError, RecursionError):
+        return None, {}
 
 
 def _consume(root, record):
@@ -205,8 +252,9 @@ def pinned_binary(path, pinned):
     they are about to launch, so a record cannot cover a binary the manifest
     never saw. Symbolic links are resolved on both sides.
     """
-    try:
-        return os.path.realpath(os.fspath(path)) == os.path.realpath(Path(ROOT) / pinned)
+    try:  # ``~`` expands, as ``camera_helper.helper_path`` expands it: one rule for both.
+        return (os.path.realpath(os.path.expanduser(os.fspath(path))) == os.path.realpath(Path(ROOT) / pinned)
+                and os.path.isfile(Path(ROOT) / pinned))
     except (TypeError, ValueError, OSError):
         return False
 
@@ -216,44 +264,64 @@ class RunScope:
 
     ``record`` and ``checkpoint_manifest`` are paths the operator names;
     naming them permits nothing, the record's content does. ``runner`` is the
-    calling runner's name, ``source`` what the run reads (``CAMERA_LEFT`` or
-    ``SYNTHETIC``), ``seconds`` its bound and ``hud_config`` the tile it
-    draws. ``permit(use)`` answers the literal ``True`` or ``False``.
+    calling runner's name, ``step`` the device step it is running, ``source``
+    what the run reads (``CAMERA_LEFT`` or ``SYNTHETIC``), ``seconds`` its
+    bound and ``hud_config`` the tile it draws. ``permit(use, holder)``
+    answers the literal ``True`` or ``False``.
 
     The first ``permit`` verifies everything, in this order, and stops at the
     first refusal (``refusal`` names it):
 
-    1. the request itself: a known runner and source, a positive duration;
-    2. the record: present, readable, well formed (``check_record``);
-    3. the request against the record: the same runner, source and
+    1. the request itself: a known runner, step and source that belong
+       together, a positive finite duration;
+    2. the record: present, readable, without a repeated key, well formed
+       (``check_record``);
+    3. the request against the record: the same step, runner, source and
        configuration, a duration within the record's;
-    4. the deadline: now plus the run's duration is not after it;
+    4. the clock: the record was not created in the future (beyond
+       ``CLOCK_TOLERANCE_SECONDS``), its deadline is not further ahead than
+       ``MAX_VALID_MINUTES``, and now plus the run's duration is not after it;
     5. the revision: the checkout's commit is the record's;
-    6. the manifest: the file's digest is the record's, and
+    6. the manifest: the file's digest is the record's, it carries the camera
+       HUD's group with the helper's digest (for every step), and
        ``manifest.verify_manifest`` reports ``verified`` (a clean tree and
        every pinned file, binary, model and package as recorded);
     7. the run id: unused, and marked used in the ledger now.
 
-    Only then is the scope granted, for the record's source's uses, each
-    once: real HUD output, and for the left camera also camera input to the
-    display path. A scope verifies once; a refused scope stays refused, and
-    its run id, if step 7 was reached, stays spent.
+    Only then is the scope granted, for the record's source's uses: real HUD
+    output, and for the left camera also camera input to the display. Each
+    use goes to the first holder that asks for it and to no other. When that
+    holder asks again (the client's ``start`` after its ``check_start``) the
+    answer is ``True`` only if the scope is still good: not revoked, the
+    run's remaining seconds still end before the deadline, and the binary
+    that use launches still has the digest the manifest recorded. Nothing is
+    consumed again. ``revoke()`` ends the scope for good: a run that was
+    refused or failed before its bridge started calls it, so a kept grant
+    cannot start anything later. A scope verifies once; a refused scope stays
+    refused, and its run id, if step 7 was reached, stays spent.
     """
 
-    def __init__(self, record, checkpoint_manifest, *, runner, source, seconds, hud_config=HUD_CONFIG):
+    def __init__(self, record, checkpoint_manifest, *, runner, step, source, seconds, hud_config=HUD_CONFIG):
         self.record_path, self.manifest_path = record, checkpoint_manifest
-        self.runner, self.source, self.seconds, self.hud_config = runner, source, seconds, hud_config
+        self.runner, self.step, self.source, self.seconds = runner, step, source, seconds
+        self.hud_config = hud_config
         self.record = None
         self.status, self.refusal = "not_consulted", None
         self.consumed = False
         self.deadline = None
-        self._remaining = ()
+        self.granted_monotonic = None  # When the scope was granted: the run's seconds count from here.
+        self.pins = {}  # Checkout-relative path -> the digest the manifest recorded, for the bridge and the helper.
+        self._holders = {}  # use -> the id of the object it was granted to.
 
     def _verify(self):
         if type(self.runner) is not str or self.runner != RUNNER:
             return "scope_runner_not_permitted"
         if type(self.source) is not str or self.source not in USES:
             return "scope_source_not_permitted"
+        if type(self.step) is not str or self.step not in STEPS:
+            return "scope_step_unknown"
+        if STEPS[self.step][0] != self.source:
+            return "scope_step_source_mismatch"
         if type(self.seconds) not in (int, float) or not 0 < self.seconds < float("inf"):
             return "scope_duration_invalid"
         record, refusal = read_record(self.record_path)
@@ -261,6 +329,8 @@ class RunScope:
         if refusal is not None:
             return refusal
         self.record = record
+        if record["step"] != self.step:
+            return "scope_step_mismatch"
         if record["source"] != self.source:
             return "scope_source_mismatch"
         if self.hud_config != HUD_CONFIG:
@@ -269,25 +339,51 @@ class RunScope:
             return "scope_duration_over_record"
         self.deadline = _utc(record["deadline_utc"])
         now = time.time()
+        if _utc(record["created_utc"]) > now + CLOCK_TOLERANCE_SECONDS:
+            return "scope_record_from_the_future"
         if now >= self.deadline:
             return "scope_record_expired"
+        if self.deadline - now > MAX_VALID_MINUTES * 60:
+            return "scope_deadline_too_far"
         if now + self.seconds > self.deadline:
             return "scope_run_would_pass_deadline"
         if _revision(ROOT) != record["revision"]:
             return "scope_revision_mismatch"
         if _file_digest(self.manifest_path) != record["manifest_sha256"]:
             return "scope_manifest_digest_mismatch"
+        groups, pins = read_pins(self.manifest_path)
+        if (groups is None or manifest.CAMERA_GROUP not in groups
+                or not all(type(pins.get(path)) is str for path in (manifest.BRIDGE, manifest.CAMERA_HELPER))):
+            return "scope_manifest_lacks_camera_group"
         verification = manifest.verify_manifest(self.manifest_path, ROOT)
         if verification["status"] != "verified" or verification["commit"] != record["revision"]:
             return "scope_manifest_not_verified"
+        self.pins = pins
         refusal = _consume(ROOT, record)
         # Spent when the ledger took the entry, even if writing its text then failed.
         self.consumed = refusal is None or (
             refusal == "scope_ledger_unavailable" and (Path(ROOT) / LEDGER / f"{record['run_id']}.json").exists())
         return refusal
 
-    def permit(self, use):
-        """Literal ``True`` if this run may make ``use`` now, else literal ``False``; each use is granted once."""
+    def remaining_seconds(self):
+        """The run's seconds not yet used, counted from the grant; None before it."""
+        if self.granted_monotonic is None:
+            return None
+        return max(0.0, self.seconds - (time.monotonic() - self.granted_monotonic))
+
+    def _still_good(self, use):
+        """What can have changed since the grant, checked without consuming: the clock and the launched binary."""
+        if time.time() + self.remaining_seconds() > self.deadline:
+            return False
+        pinned = USE_BINARIES[use]
+        return _file_digest_of(Path(ROOT) / pinned) == self.pins.get(pinned)
+
+    def permit(self, use, holder=None):
+        """Literal ``True`` if ``holder`` may make ``use`` now, else literal ``False``.
+
+        The first holder to ask for a use gets it; the same holder asking
+        again is answered after ``_still_good``; any other holder is refused.
+        """
         if self.status == "not_consulted":
             try:
                 self.refusal = self._verify()
@@ -295,17 +391,27 @@ class RunScope:
                 self.refusal = "scope_verification_failed"
             self.status = "refused" if self.refusal is not None else "granted"
             if self.status == "granted":
-                self._remaining = USES[self.source]
-        if self.status != "granted" or use not in self._remaining or time.time() >= self.deadline:
+                self.granted_monotonic = time.monotonic()
+        try:
+            if self.status != "granted" or use not in USES[self.source]:
+                return False
+            if self._holders.setdefault(use, id(holder)) != id(holder):
+                return False
+            return self._still_good(use) is True
+        except Exception:
             return False
-        self._remaining = tuple(item for item in self._remaining if item != use)
-        return True
+
+    def revoke(self):
+        """End the scope for good; its run id stays spent. Any later ``permit`` answers ``False``."""
+        if self.status in ("not_consulted", "granted"):
+            self.status, self.refusal = "revoked", self.refusal or "scope_revoked"
 
     def report(self):
         """Identifiers only: what the record said, whether it was granted, and why not."""
         record = self.record or {}
         return {"status": self.status, "refusal": self.refusal, "consumed": self.consumed,
                 "requested_runner": self.runner if type(self.runner) is str and APPROVAL.fullmatch(self.runner) else None,
+                "requested_step": self.step if type(self.step) is str and self.step in STEPS else None,
                 "requested_source": self.source if type(self.source) is str and self.source in USES else None,
                 **{name: record.get(name) for name in ("step", "source", "run_id", "revision", "manifest_sha256",
                                                        "deadline_utc", "max_seconds", "approval")}}
@@ -338,6 +444,10 @@ def write_record(path, *, step, approval, checkpoint_manifest, valid_minutes, ma
     path = Path(path)
     if path.suffix != ".json" or os.path.lexists(path) or not path.parent.is_dir():
         raise ScopeError("scope_record_path_invalid", f"{path} must be a new .json path in an existing directory")
+    groups, pins = read_pins(checkpoint_manifest)
+    if groups is not None and (manifest.CAMERA_GROUP not in groups or type(pins.get(manifest.CAMERA_HELPER)) is not str):
+        raise ScopeError("scope_manifest_lacks_camera_group",
+                         "The manifest does not carry the camera HUD's group; write it with --camera-hud after the builds")
     verification = manifest.verify_manifest(checkpoint_manifest, ROOT)
     if verification["status"] != "verified":
         raise ScopeError("scope_manifest_not_verified", "The checkpoint manifest does not verify against this checkout")
