@@ -164,8 +164,11 @@ them) and adds `helper_end_after_last_frame_ms`, the time from the run's last
 processed frame to the helper's end record. The two limits an entry is
 compared with are parameters, `--late-frame-limit-ms` and
 `--removal-end-limit-ms`, with today's 2000 and 3000 as defaults. The window
-shows the measured values and judges nothing; the numbers G7 should carry for
-a click made before removal are the owner's to decide.
+shows the measured values and judges nothing. For a click made before removal
+the owner accepted G7's numbers on 2026-11-19: the run ends by itself at most
+10 s after the click and at most 3.0 s after the last frame the helper
+received (`--removal-end-limit-ms 10000`; `--late-frame-limit-ms 7000` is the
+matching bound on a late frame).
 
 ## How the run is launched on the Frame
 
