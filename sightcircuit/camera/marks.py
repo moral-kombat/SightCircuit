@@ -10,7 +10,10 @@ Enter on the terminal during the run, read only when the operator asked for
 key marks (a session without a ``key_fd`` never touches the terminal): the
 bytes typed are counted for line ends and discarded, never stored; each press
 takes the next label of the operator's ``--mark-labels`` list, then
-``KEY_LABEL``.
+``KEY_LABEL``. A third way is for a program that guides the run
+(``camera_guide``'s window): ``MarkSession.mark`` records a label from code,
+with source ``window``, at the time the caller gives (a click's) or now; it
+is bounded as key marks are and may be called from any thread.
 
 Timebase. ``Clock`` samples the host's monotonic clock and the realtime clock
 (UTC nanoseconds since the Unix epoch) once, at the run's start; every other
@@ -23,7 +26,7 @@ with the same host monotonic clock at acquisition.
 1-second windows with the target, coverage over the in-view spans, the 3x3
 cell of the target's box centre per mark interval, and what followed a
 ``remove`` mark. Intervals and spans are bounded by a cue's scheduled time
-(a key mark's actual time), so a nominal N-second span between two cues is N
+(a key or window mark's actual time), so a nominal N-second span between two cues is N
 windows whatever the wake-up jitter. The cell is taken on the image as exported: nothing here
 knows the camera's mounting orientation (``ORIENTATION_STATEMENT``), which a
 cued run is meant to reveal. Standard library only; no pixel, no calibration
@@ -42,11 +45,11 @@ POSITION_LABELS = ("left", "centre", "right", "up", "down")
 IN_VIEW_LABELS = ("in_view", "near", "far", *POSITION_LABELS)  # A mark that says the target is in view from here.
 OUT_OF_VIEW_LABELS = ("out_of_view", "remove")  # A mark that ends an in-view span.
 REMOVE_LABEL = "remove"
-SOURCES = SOURCE_CUE, SOURCE_KEY = ("cue", "key")
+SOURCES = SOURCE_CUE, SOURCE_KEY, SOURCE_WINDOW = ("cue", "key", "window")
 MAX_CUES = 32
 MAX_MARK_LABELS = 32
-# Recorded marks of both kinds. Every scheduled cue has its place: key marks take what the cues leave (at least
-# ``MAX_MARKS - MAX_CUES``), and further key presses are counted, not recorded.
+# Recorded marks of every kind. Every scheduled cue has its place: key and window marks together take what the cues
+# leave (at least ``MAX_MARKS - MAX_CUES``), and further ones are counted, not recorded.
 MAX_MARKS = 64
 BOUNDARIES = BOUNDARY_SCHEDULED, BOUNDARY_ACTUAL = ("scheduled", "actual")
 CUE_PATTERN = re.compile(r"(\d{1,2}(?:\.\d{1,3})?):([a-z_]+)")
@@ -60,7 +63,8 @@ ROWS = ("up", "centre", "down")
 CELLS = tuple(column if row == "centre" else row if column == "centre" else f"{row}_{column}"
               for row in ROWS for column in COLUMNS)
 # L-D1's removal acceptance: no frame processed with an acquire time over 2.0 s after the mark, the helper's end at
-# most 3.0 s after it, for a reason that is the presence stop.
+# most 3.0 s after it, for a reason that is the presence stop. These are ``summarize``'s defaults; a caller whose
+# mark is made before the headset comes off (a window's click) passes the limits its acceptance names.
 LATE_FRAME_LIMIT_MS = 2000
 REMOVAL_END_LIMIT_MS = 3000
 PRESENCE_END_REASONS = ("headset_removed", "standby")
@@ -157,6 +161,7 @@ class MarkSession:
         self.recorded = []
         self.cues_fired = 0
         self.key_presses = self.key_recorded = self.dropped = 0
+        self.window_marks = 0  # ``mark`` calls, recorded or not.
         self.key_capacity = MAX_MARKS - len(self.cues)
         self.key_error = None
         self.threads = []
@@ -192,7 +197,7 @@ class MarkSession:
 
     def _record(self, source, label, monotonic_ns, scheduled=None):
         with self.lock:
-            if source == SOURCE_KEY:  # A cue always has its place; key marks never take one.
+            if source != SOURCE_CUE:  # A cue always has its place; key and window marks never take one.
                 if self.key_recorded >= self.key_capacity:
                     self.dropped += 1
                     return False
@@ -256,6 +261,24 @@ class MarkSession:
         except (OSError, ValueError) as error:
             self.key_error = type(error).__name__
 
+    def mark(self, label, monotonic_ns=None):
+        """Record ``label`` from code (a guiding window's click) with source ``window``; True when recorded.
+
+        ``label`` is from the vocabulary (else ``ValueError``); ``monotonic_ns``
+        is when it was made on the host monotonic clock, now when not given.
+        Bounded as key marks are (one shared capacity; the overflow is
+        counted in ``marks_dropped``); nothing is announced. Any thread may
+        call it; a call after ``stop`` records nothing.
+        """
+        check_label(label)
+        if monotonic_ns is not None and type(monotonic_ns) is not int:
+            raise ValueError("a mark's time is integer nanoseconds of the host monotonic clock")
+        if self.stop_event.is_set():
+            return False
+        with self.lock:
+            self.window_marks += 1
+        return self._record(SOURCE_WINDOW, label, time.monotonic_ns() if monotonic_ns is None else monotonic_ns)
+
     def marks(self):
         """The recorded marks in time order, renumbered from 1."""
         with self.lock:
@@ -268,7 +291,7 @@ class MarkSession:
                 "cues_not_reached": [{"offset_ms": offset, "label": label} for offset, label in self.cues[self.cues_fired:]],
                 "mark_labels_requested": list(self.labels), "key_marks_enabled": self.key_fd is not None,
                 "key_presses": self.key_presses, "key_listener_error": self.key_error, "marks_dropped": self.dropped,
-                "maximum_marks": MAX_MARKS, "key_marks_capacity": self.key_capacity,
+                "maximum_marks": MAX_MARKS, "key_marks_capacity": self.key_capacity, "window_marks": self.window_marks,
                 "recorded": self.marks()}
 
 
@@ -352,7 +375,7 @@ def _windows(frames, start_ns, end_ns, with_target):
 
 
 def boundary_ns(mark):
-    """Where a mark bounds an interval: a cue's scheduled time, a key mark's actual time."""
+    """Where a mark bounds an interval: a cue's scheduled time, a key or window mark's actual time."""
     return mark.get("scheduled_monotonic_ns", mark["monotonic_ns"])
 
 
@@ -360,7 +383,8 @@ def _between(frames, start_ns, end_ns):
     return [frame for frame in frames if start_ns <= frame["observed_ns"] < end_ns]
 
 
-def summarize(frames, marks, *, origin_ns, run_end_ns, helper_end=None, with_target=False):
+def summarize(frames, marks, *, origin_ns, run_end_ns, helper_end=None, with_target=False,
+              late_frame_limit_ms=LATE_FRAME_LIMIT_MS, removal_end_limit_ms=REMOVAL_END_LIMIT_MS):
     """Counts-only summaries of one run.
 
     ``frames`` are the per-frame records (``observed_ns``, and ``target`` from
@@ -378,10 +402,14 @@ def summarize(frames, marks, *, origin_ns, run_end_ns, helper_end=None, with_tar
     next ``OUT_OF_VIEW_LABELS`` mark or the run's end, the whole windows from
     the span's start and how many held the target. ``removal``: per ``remove``
     mark, the frames processed with an acquire time over
-    ``LATE_FRAME_LIMIT_MS`` after it and the time to the helper's end record,
-    both from the mark's actual time (when the cue was shown or the key pressed).
-    Intervals and spans are bounded by ``boundary_ns``: a cue's scheduled time,
-    a key mark's actual time. The tallies do not separate cameras: the caller
+    ``late_frame_limit_ms`` after it and the time to the helper's end record
+    (compared with ``removal_end_limit_ms``), both from the mark's actual time
+    (when the cue was shown, the key pressed or the window clicked), and the
+    time from the run's last processed frame to that end record
+    (``helper_end_after_last_frame_ms``: what a mark made before the headset
+    comes off cannot give). The two limits are the caller's; the defaults are
+    L-D1's. Intervals and spans are bounded by ``boundary_ns``: a cue's
+    scheduled time, a key or window mark's actual time. The tallies do not separate cameras: the caller
     gives the frames of one camera when a target is named.
     """
     frames = sorted(frames, key=lambda frame: frame["observed_ns"])
@@ -436,16 +464,20 @@ def summarize(frames, marks, *, origin_ns, run_end_ns, helper_end=None, with_tar
         start = mark["monotonic_ns"]
         after = [frame["observed_ns"] - start for frame in frames if frame["observed_ns"] > start]
         entry = {"mark_index": mark["index"], "source": mark["source"], "frames_processed_after_mark": len(after),
-                 "late_frame_limit_ms": LATE_FRAME_LIMIT_MS,
-                 "frames_acquired_over_limit": sum(1 for delta in after if delta > LATE_FRAME_LIMIT_MS * 1_000_000),
+                 "late_frame_limit_ms": late_frame_limit_ms,
+                 "frames_acquired_over_limit": sum(1 for delta in after if delta > late_frame_limit_ms * 1_000_000),
                  "last_frame_acquire_after_mark_ms": round(max(after) / 1e6, 3) if after else None,
-                 "end_limit_ms": REMOVAL_END_LIMIT_MS, "helper_end_after_mark_ms": None, "helper_end_reason": None,
-                 "helper_end_is_presence_stop": None, "helper_end_within_limit": None}
+                 "end_limit_ms": removal_end_limit_ms, "helper_end_after_mark_ms": None, "helper_end_reason": None,
+                 "helper_end_is_presence_stop": None, "helper_end_within_limit": None,
+                 "helper_end_after_last_frame_ms": None}
         if helper_end is not None:
             elapsed_ms = round((helper_end["monotonic_ns"] - start) / 1e6, 3)
             entry.update(helper_end_after_mark_ms=elapsed_ms, helper_end_reason=helper_end["reason"],
                          helper_end_is_presence_stop=helper_end["reason"] in PRESENCE_END_REASONS,
-                         helper_end_within_limit=0 <= elapsed_ms <= REMOVAL_END_LIMIT_MS)
+                         helper_end_within_limit=0 <= elapsed_ms <= removal_end_limit_ms)
+            if frames:
+                entry["helper_end_after_last_frame_ms"] = round(
+                    (helper_end["monotonic_ns"] - frames[-1]["observed_ns"]) / 1e6, 3)
         removal.append(entry)
     return {"window_seconds": WINDOW_NS // 1_000_000_000, "windows": windows, "intervals": intervals,
             "coverage": coverage, "removal": removal}

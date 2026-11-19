@@ -22,6 +22,7 @@
     "test_fixed_hud_runtime": 90,
     "test_camera_hud_stage": 180,
     "test_camera_hud_command": 240,
+    "test_camera_guide": 90,
     "test_observed_frame_client": 45
   }
 }

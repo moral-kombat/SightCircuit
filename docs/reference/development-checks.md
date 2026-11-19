@@ -124,7 +124,11 @@ The runner is the suite's entry point and does two more things there:
   container (one build of the helper's fake backend and two of the fake
   OpenVR runtime, the validate mode, the bounded and the signalled runs on
   the fake runtime, and a run behind a bridge that takes six seconds to
-  start), with about three times the margin.
+  start), with about three times the margin. Added 2026-11-19:
+  `test_camera_guide` 90 s, from 27 s measured on the x86 cloud container
+  over five runs (one build of the helper's fake backend, the guided window
+  clicked through offscreen against the stand-in helper and, in `--validate`,
+  against the fake backend), with about three times the margin.
 - Before the tests run it normalises SIGINT for the suite's children. A test
   process started with SIGINT ignored (a background job of a shell without job
   control) passes that ignore to every subprocess the tests signal, so the

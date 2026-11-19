@@ -189,7 +189,7 @@ rest is a design; no diagnostic command exists.
 Implemented on 2026-11-07 (P1, P2): one hashed lock per requirement set,
 installed by the setup scripts; the bodies of the active commands (ten at P2,
 the box-annotation window `annotate_boxes` since C3b and the guard's
-enforcement matrix `agent_enforcement_check` since B10, the fallback measurement `fallback_measure` since F3b, the camera recognition `camera_recognize` since S7 and the gated camera HUD `camera_hud` since L9, so fifteen) in `sightcircuit/commands/`, each `scripts/<name>.py` a thin wrapper that is the
+enforcement matrix `agent_enforcement_check` since B10, the fallback measurement `fallback_measure` since F3b, the camera recognition `camera_recognize` since S7 and the gated camera HUD `camera_hud` since L9, so fifteen; the guided recognition window `camera_guide` since 2026-11-19, so sixteen) in `sightcircuit/commands/`, each `scripts/<name>.py` a thin wrapper that is the
 body module when imported and runs it when executed, and a `sightcircuit-<name>`
 console entry point per command. The two commands that re-spawn a worker do so
 by their own file path, the validators keep resolving by dotted name under

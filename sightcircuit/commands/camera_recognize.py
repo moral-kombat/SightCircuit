@@ -194,7 +194,8 @@ class Processor(threading.Thread):
 
 def recognize(binary, limits, cameras, *, threshold=POC_THRESHOLD, detector=DEFAULT_DETECTOR, detector_factory=None,
               extra_args=(), stop=None, timeout=None, confirmed=False, cues=(), mark_labels=(), key_fd=None,
-              target_label=None, terminal=None):
+              target_label=None, terminal=None, confirmation=OPERATOR_TERMINAL, on_session=None, on_ready=None,
+              late_frame_limit_ms=marks.LATE_FRAME_LIMIT_MS, removal_end_limit_ms=marks.REMOVAL_END_LIMIT_MS):
     """One bounded run: load the detector, export frames through the helper, detect on the latest; return the report.
 
     ``detector`` names a ``DETECTORS`` entry; an injected ``detector_factory``
@@ -216,6 +217,15 @@ def recognize(binary, limits, cameras, *, threshold=POC_THRESHOLD, detector=DEFA
     coverage tallies never pool two cameras) and must be one of the loaded
     detector's classes, else the run ends ``error``/``target_label_unknown``
     before the helper is launched; the report names it only once validated.
+
+    For a caller that guides the run from a window (``camera_guide``; this
+    command passes none of these): ``confirmation`` is the name the report
+    records for a confirmed start (``operator_window`` for a click);
+    ``on_session(session)`` receives the run's ``marks.MarkSession`` before
+    the helper is launched, so the caller can record marks from code
+    (``session.mark``); ``on_ready()`` is called, without the header, when
+    the helper's ``ready`` is accepted; the two limits are
+    ``marks.summarize``'s, recorded in each removal entry.
     """
     cues, mark_labels = marks.check_cues(cues), marks.check_mark_labels(mark_labels)
     if target_label is not None and len(tuple(cameras)) != 1:
@@ -223,7 +233,7 @@ def recognize(binary, limits, cameras, *, threshold=POC_THRESHOLD, detector=DEFA
     clock = marks.Clock()
     report = new_report("recognize")
     report.update(timebase=clock.report(), run_started=clock.stamp(clock.monotonic_ns), target_label=None)
-    report["confirmation"] = OPERATOR_TERMINAL if confirmed else None
+    report["confirmation"] = confirmation if confirmed else None
     report.update(seconds_requested=limits.get("max_seconds"), max_frames_requested=limits.get("max_frames"),
                   fps_requested=limits.get("fps"), cameras_requested=list(cameras), threshold=threshold,
                   detector_requested=detector if detector_factory is None else None, phase="loading_detector")
@@ -245,23 +255,28 @@ def recognize(binary, limits, cameras, *, threshold=POC_THRESHOLD, detector=DEFA
     def on_frame(frame):
         session.first_frame(frame.observed_ns)
         slot.put(frame)
+    if on_session is not None:
+        on_session(session)
     processor.start()
     report["phase"] = "exporting"
     started = time.monotonic()
     try:
         session.start()
         captured = camera_helper.run_export(binary, limits, cameras, on_frame=on_frame, stop=stop, extra_args=extra_args,
-                                            timeout=timeout, confirmed=confirmed)
+                                            timeout=timeout, confirmed=confirmed,
+                                            on_ready=None if on_ready is None else lambda _header: on_ready())
     finally:
         returned_ns = time.monotonic_ns()
         session.stop()
         slot.close()
         processor.join(PROCESSOR_JOIN_SECONDS)
     report["elapsed_seconds"] = round(time.monotonic() - started, 3)
-    return finish(report, captured, processor, slot, clock=clock, session=session, returned_ns=returned_ns)
+    return finish(report, captured, processor, slot, clock=clock, session=session, returned_ns=returned_ns,
+                  late_frame_limit_ms=late_frame_limit_ms, removal_end_limit_ms=removal_end_limit_ms)
 
 
-def measurements(captured, processor, clock, session, returned_ns):
+def measurements(captured, processor, clock, session, returned_ns, *, late_frame_limit_ms=marks.LATE_FRAME_LIMIT_MS,
+                 removal_end_limit_ms=marks.REMOVAL_END_LIMIT_MS):
     """The report's L15 fields: the run's times, the marks and the counts-only summaries (``marks.summarize``)."""
     stream = captured.get("stream") or {}
     end_ns = stream.get("end_received_monotonic_ns")
@@ -274,7 +289,8 @@ def measurements(captured, processor, clock, session, returned_ns):
               "helper_end": helper_end, "export_returned": clock.stamp(returned_ns), "marks": session.report(),
               "summary": marks.summarize(processor.records, recorded, origin_ns=session.origin_ns,
                                          run_end_ns=returned_ns if end_ns is None else end_ns, helper_end=helper_end,
-                                         with_target=with_target)}
+                                         with_target=with_target, late_frame_limit_ms=late_frame_limit_ms,
+                                         removal_end_limit_ms=removal_end_limit_ms)}
     if with_target:
         fields["target"] = {"label": processor.target_label, "threshold": processor.threshold,
                             "frames_with_target": sum(1 for record in processor.records if record["target"]["present"]),
@@ -283,11 +299,13 @@ def measurements(captured, processor, clock, session, returned_ns):
     return fields
 
 
-def finish(report, captured, processor, slot, *, clock=None, session=None, returned_ns=None):
+def finish(report, captured, processor, slot, *, clock=None, session=None, returned_ns=None,
+           late_frame_limit_ms=marks.LATE_FRAME_LIMIT_MS, removal_end_limit_ms=marks.REMOVAL_END_LIMIT_MS):
     """Fold the source report and the processor's results into the command's report; set status and exit code."""
     timings = processor.report()
     if clock is not None and session is not None:
-        report.update(measurements(captured, processor, clock, session, returned_ns))
+        report.update(measurements(captured, processor, clock, session, returned_ns,
+                                   late_frame_limit_ms=late_frame_limit_ms, removal_end_limit_ms=removal_end_limit_ms))
         report["timebase"] = clock.report()
     report.update(capture=captured, frames_received=captured["frames_read"], frames_processed=len(processor.records),
                   stale_inputs_skipped=processor.stale, pending_frames_replaced=slot.replaced,

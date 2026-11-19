@@ -80,10 +80,11 @@ class BoundaryTests(unittest.TestCase):
 
     def test_it_is_the_fifteenth_command_with_a_wrapper_an_entry_point_and_a_manifest_pin(self):
         import tomllib
-        self.assertEqual((len(COMMANDS), COMMANDS[-1], COMMANDS[-2]), (15, "camera_hud", "camera_recognize"))
+        # Sixteen commands since ``camera_guide`` (2026-11-19) took the place after it; this one is still the fifteenth.
+        self.assertEqual((len(COMMANDS), COMMANDS[14], COMMANDS[13]), (16, "camera_hud", "camera_recognize"))
         entry_points = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["scripts"]
         self.assertEqual(entry_points["sightcircuit-camera-hud"], "sightcircuit.commands.camera_hud:main")
-        self.assertEqual(len(entry_points), 15)
+        self.assertEqual(len(entry_points), 16)
         self.assertTrue((ROOT / "scripts/camera_hud.py").is_file())
         # Its own manifest group: the wrapper beside the helper it launches; the body is in ``modules``.
         self.assertIn("scripts/camera_hud.py", manifest.CAMERA_HUD_FILES)

@@ -126,8 +126,12 @@ command imports the other; this command's behaviour is unchanged. The
 library functions beneath it, `camera_recognize.recognize(confirmed=...)` and
 `camera_helper.run_export(confirmed=...)`, trust their caller's word that the
 operator confirmed: they exist for the tests (which pass `confirmed=True`
-against the stand-in) and for a future caller that performs its own informed
-start; no shipped command calls them without the typed answer.
+against the stand-in) and for a caller that performs its own informed
+start. One command does: [`camera_guide`](camera-guide.md), the guided
+window (2026-11-19), shows the same notice above a Start button and calls
+`recognize()` after the wearer's click, recorded as `confirmation:
+operator_window`. No other shipped command calls them without the typed
+answer, and this command's own start is still the typed `yes`.
 
 `--cameras` takes `0`, `1` or `0,1` (camera index 0 is reported as the left
 camera and 1 as the right; the assignment is the helper's, made from the
@@ -229,7 +233,7 @@ cell agree.
 
 **Summaries** (`summary`, counts only, derived from the frame records and
 the marks; frames are placed by acquire time). An interval or span is bounded
-by a cue's scheduled time and a key mark's actual time (`boundary`:
+by a cue's scheduled time and a key or window mark's actual time (`boundary`:
 `scheduled` or `actual`), so the span between cues at 3 and 20 seconds is 17
 windows whatever the scheduler's wake-up jitter; the removal figures use each
 mark's actual time:
@@ -239,7 +243,7 @@ mark's actual time:
 | `windows` | 1-second windows from the first frame's acquire time to the last processed frame: `frames` processed in each and, with a target, `target_frames` |
 | `intervals` | Per mark, from its `boundary` to the next mark's or the run's end (the helper's end record, else the export's return): `frames`, and with a target `target_frames`, the frames per cell (`cells`, all nine names), per `columns` and per `rows`; the whole 1-second `windows` from the mark, those with a frame and those with the target, and the `remainder_ms` left over |
 | `coverage` | With a target. A span opens at `in_view`, `near`, `far` or a position mark and closes at the next `out_of_view` or `remove`, or the run's end. Per span and in total: the whole 1-second windows from the span's start, `windows_with_target`, `windows_without_frames` (they count against coverage) and `fraction` |
-| `removal` | Per `remove` mark: `frames_processed_after_mark`, `frames_acquired_over_limit` (acquire time more than 2,000 ms after the mark), `last_frame_acquire_after_mark_ms`, `helper_end_after_mark_ms` and `helper_end_reason` from the helper's end record, `helper_end_is_presence_stop` (`headset_removed` or `standby`) and `helper_end_within_limit` (3,000 ms); the end fields are `null` when no end record was read |
+| `removal` | Per `remove` mark: `frames_processed_after_mark`, `frames_acquired_over_limit` (acquire time more than 2,000 ms after the mark), `last_frame_acquire_after_mark_ms`, `helper_end_after_mark_ms` and `helper_end_reason` from the helper's end record, `helper_end_is_presence_stop` (`headset_removed` or `standby`) and `helper_end_within_limit` (3,000 ms); `helper_end_after_last_frame_ms`, from the run's last processed frame to the end record (added 2026-11-19 for a `remove` mark made before the headset comes off); the two limits are repeated per entry (`late_frame_limit_ms`, `end_limit_ms`) and are this command's 2,000 and 3,000, which only the [guided window](camera-guide.md) can be given otherwise; the end fields are `null` when no end record was read |
 
 A run for the removal and the coverage, then one for the cued positions
 (examples of the options, not an approved device step):
@@ -282,7 +286,7 @@ standard library only. Expect `status: validated` and exit 0.
 | `confirmation` | `operator_terminal` once the typed answer was given on this command's terminal; `null` when the run was refused before launch |
 | `schema_version` | 2 since item L15 (the times, marks, target and summaries; no earlier field changed) |
 | `timebase`, `run_started`, `first_frame`, `helper_end`, `export_returned` | The declared clocks with the anchor, and `{monotonic_ns, utc_ns}` of the run's start, the first frame's acquire, the helper's end record as read (with its `reason`; `null` without one) and the export's return; see [times](#times-marks-and-the-target-summary) |
-| `marks` | The vocabulary, the cues and key labels requested, `cues_not_reached`, `key_marks_enabled`, `key_presses`, `key_marks_capacity`, `marks_dropped` and `recorded`: per mark `index`, `source` (`cue` or `key`), `label`, `monotonic_ns`, `utc_ns`, `offset_ms` from the first frame's acquire (`null` before it), and for a cue the scheduled offset and times and `late_ms` |
+| `marks` | The vocabulary, the cues and key labels requested, `cues_not_reached`, `key_marks_enabled`, `key_presses`, `key_marks_capacity`, `marks_dropped` and `recorded`: per mark `index`, `source` (`cue`, `key`, or `window` for a mark the [guided window](camera-guide.md) records at a click; `window_marks` counts those, and this command makes none), `label`, `monotonic_ns`, `utc_ns`, `offset_ms` from the first frame's acquire (`null` before it), and for a cue the scheduled offset and times and `late_ms` |
 | `target_label`, `target`, `summary` | The class named with `--target-label` (`null` without); its threshold, frame count, cell thresholds and the orientation statement; the counts-only [summaries](#times-marks-and-the-target-summary) |
 | `detections` | One record per processed frame: `sequence`, `frame_set_sequence` (the acquired set; both cameras of a set share it), `source_id` (`arcturus_camera_left` or `_right`), `camera_index`, `frame_id`, `observed_ns` (the helper's host monotonic clock at acquisition), `observed_utc_ns` (derived), `helper_realtime_ns`, with a target `target` (`present`, `count`, `confidence`, `box_xyxy`, `column`, `row`, `cell`, `centre_fraction`), `input_age_ms`, `processing_ms`, `inference_ms`, `labels`, up to 20 `detections` (`label`, `confidence`, `box_xyxy` in `detector_input_pixels`), `detection_count`, `native_size`, `detector_input_size`; Camera Data |
 | `last_result` | The last record of `detections` |
