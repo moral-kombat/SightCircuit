@@ -10,53 +10,70 @@ pointer on the Frame's desktop. It adds no capability and raises no bound.
 
 The screens, one thing on each. (1) The starting state: what the wearer sees
 now, "Colour, stable" or "Something else"; the second answer ends there with
-nothing launched. (2) The notice: the helper's export notice as the contract
-has it, without its closing instruction to type the answer
+nothing launched. (2) What will happen: the script's steps, before anything
+starts. (3) The notice: the helper's export notice as the contract has it,
+without its closing instruction to type the answer
 (``confirmation.export_notice_body``), the run's bounds, the target, where the
-report will be saved, and Start and Cancel. A click on Start is the informed
-start of this one run; the report records ``confirmation``
-``operator_window``. It is not an approval and opens no gate. (3) The guided
-run: one instruction at a time with a drawn picture, a progress bar while a
-step is recorded, the time left, and Stop. (4) After the run, for the removal
-script, whether the headset came off and is back on; then the passthrough
-watch, 30 seconds with a countdown, answered "Passthrough unchanged" or
-"Something changed". (5) The result in plain words, the report's path and
-Close.
+report will be saved, and Start and Cancel. Start can be clicked only once the
+notice has been up for a few seconds, counted down on the screen. A click on
+Start is the informed start of this one run; the report records
+``confirmation`` ``operator_window``. It is not an approval and opens no gate.
+(4) The guided run: one instruction at a time with a drawn picture, a progress
+bar while a step is recorded, the time left, and Stop. (5) After a run in
+which the wearer clicked that the headset was coming off, whether it did and
+is back on; then the passthrough watch, 30 seconds with a countdown, answered
+"Passthrough unchanged" or "Something changed", the second asked once more to
+confirm. (6) The result in plain words, the report's path and Close.
+
+A pointer interface that cannot be worked by accident. No key starts,
+answers or stops anything. Every button is dead for a guard interval after
+it appears, so a double click or a click already on its way lands on
+nothing; consecutive screens put their buttons in different places; and the
+two consequential waits (before Start, before Close) are shown as counts.
 
 Nothing camera-derived is shown while the reader is active. The run is in a
-second process of this command (``--worker``, never given by hand): it calls
-``recognize()`` on its main thread, as the supervision primitive requires,
-and launches the helper as ``camera_recognize`` does (the named binary,
-``--parent-confirmed`` after the click, the same owned session and deadline).
+second process of this command (``--worker``): it calls ``recognize()`` on
+its main thread, as the supervision primitive requires, and launches the
+helper as ``camera_recognize`` does (the named binary, ``--parent-confirmed``
+after the click, the same owned session and deadline). The worker runs only
+for the window that launched it: it must be handed a token on a descriptor
+it inherits from that window, by its own parent, before it reads anything
+else; run by hand it refuses and launches nothing. That is a procedural
+control against mistakes, as the scope record is, not a cryptographic one.
 The window's process loads no detector and reads no frame. During the run
 the worker tells it one thing, that the helper's ``ready`` was accepted,
 with no value attached; what the run screen shows is
-``sightcircuit.camera.guide.Guide.view``: the script, the clicks and the
-clock. The report reaches the window only after the helper has ended.
+``sightcircuit.camera.guide.Guide.view``: the script, the click and the
+clock. The report reaches the window only after the helper has ended, and
+when the report does not confirm a clean shutdown the window says only that.
 No image is ever shown, saved or written: the pictures are shapes drawn by
 this file. The window never opens the overlay bridge or SteamVR.
 
-Two scripts (``--script``). ``removal``: the target held at about half a
-metre and at about a metre (marks ``near`` and ``far``, each at the wearer's
-click, then about five seconds recorded), then the click made just before the
-headset comes off (``remove``); the run ends by itself when the helper
-reports ``headset_removed`` or ``standby``, or on its bound. ``positions``:
-centre, left, right, up, down for about four seconds each, then out of view,
-each mark made when its instruction appears, with no click after Start. Marks
-are ``marks.VOCABULARY``'s, recorded with source ``window``; the summaries are
-``marks.summarize``'s. Because ``remove`` is clicked before the headset comes
-off, each removal entry also has the time from the run's last frame to the
-helper's end record; the two limits the entry is compared with are
-``--late-frame-limit-ms`` and ``--removal-end-limit-ms`` (the current values
-by default). The window shows the measured values and decides nothing.
+Two scripts (``--script``), each shown to the wearer before Start.
+``removal`` needs one click in the run: the target is held at about half a
+metre when Start is clicked (mark ``near`` as soon as the reader is ready,
+about four seconds), then moved to about a metre when the screen says so
+(``far``, made when the instruction appears: about two seconds to move and
+four recorded), then the click made just before the headset comes off
+(``remove``); the run ends by itself when the helper reports
+``headset_removed`` or ``standby``, or on its bound. ``positions``: centre,
+left, right, up, down for about four seconds each, then out of view, with no
+click after Start. Marks are ``marks.VOCABULARY``'s, recorded with source
+``window``; the summaries are ``marks.summarize``'s. Because ``remove`` is
+clicked before the headset comes off, each removal entry also has the time
+from the run's last frame to the helper's end record; the two limits the
+entry is compared with are ``--late-frame-limit-ms`` and
+``--removal-end-limit-ms`` (the current values by default). The window shows
+the measured values and decides nothing.
 
 The report is ``camera_recognize``'s with a ``guide`` block: the script, the
-steps with their marks, the steps not reached, and the wearer's observations
-from closed choices only (no free text anywhere). ``--report`` is required,
-is checked before the window opens (a new ``.json`` path in an existing
-directory) and is never overwritten. Stop, closing the window or a signal
-ends the helper and still leaves the report. One launch is one run: a second
-run is a second launch, a second notice and a second Start.
+steps with their marks, the steps not reached, whether the watch was held,
+and the wearer's observations from closed choices only (no free text
+anywhere). ``--report`` is required, is checked before the window opens (a
+new ``.json`` path in an existing directory that can be written to) and is
+never overwritten. Stop, closing the window or a signal (SIGINT, SIGTERM or
+SIGHUP) ends the helper and still leaves the report. One launch is one run:
+a second run is a second launch, a second notice and a second Start.
 
 Camera Data and gates are as ``camera_recognize`` states them: the report
 holds counts, closed labels, boxes, timings and format metadata, never a
@@ -64,9 +81,7 @@ pixel; every gate stays closed and none is lifted (``gates.claims()`` is in
 the report). A run on the Frame is a device step that needs the owner's
 approval; the Frame manager launches the window for the wearer after it. The
 window is a procedure, not an approval. ``--validate`` runs the whole window
-flow offscreen against the helper's fake build with a scripted detector:
-both scripts, Cancel, a declined start, Stop, the window closed mid-run, a
-presence end and a run that reaches its bound.
+flow offscreen against the helper's fake build with a scripted detector.
 """
 import argparse
 from dataclasses import dataclass, field
@@ -74,7 +89,10 @@ import json
 import os
 from pathlib import Path
 import queue
+import secrets
+import select
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -99,25 +117,41 @@ MAX_SECONDS, MAX_FRAMES, MAX_FPS = camera_recognize.MAX_SECONDS, camera_recogniz
 DEFAULT_FPS = camera_recognize.DEFAULT_FPS
 DEFAULT_TARGET = "bottle"
 LEFT_CAMERA = camera_helper.LEFT_CAMERA
-TICK_MS = 50  # The window's clock: how often the run screen and the countdown are brought up to date.
+TICK_MS = 50  # The window's clock: how often the run screen and the countdowns are brought up to date.
+GUARD_SECONDS = guidance.GUARD_MS / 1000  # A button is dead for this long after it appears.
+START_DWELL_SECONDS = 5.0  # The notice is on the screen this long before Start can be clicked.
+CLOSE_DWELL_SECONDS = 3.0  # The result is on the screen this long before Close can be clicked.
 # After Stop, or past the run's own deadline, how long the window waits for the worker's report before it sends the
 # worker SIGTERM, and then before it gives up and reports that. The worker is never killed: its helper is its own.
 WORKER_PATIENCE_SECONDS = 25.0
 RUN_MARGIN_SECONDS = camera_helper.LAUNCH_MARGIN_SECONDS + 20  # Beyond max_seconds: the launch, the detector, the joins.
-WORKER_FLAG = "--worker"
+# From the Start click, when a helper whose worker died is gone by its own bound and the reader's watchdog.
+HELPER_GONE_MARGIN_SECONDS = camera_helper.LAUNCH_MARGIN_SECONDS
+EARLY_STOP_GRACE_SECONDS = 3.0  # A stop during the launch waits this long for the helper's ready, so it ends cleanly.
+WORKER_FLAG, WORKER_FD_FLAG = "--worker", "--worker-fd"
+HANDSHAKE_SECONDS = 5.0
+SIGNALS = tuple(getattr(signal, name) for name in ("SIGINT", "SIGTERM", "SIGHUP") if hasattr(signal, name))
 FAKE_HELPER = "artifacts/camera-helper-fake/sightcircuit-camera-helper-fake"  # scripts/build_camera_helper.sh --fake
 DESCRIBE_TIMEOUT_SECONDS = 10
 VALIDATION_KIND = "camera_guide_validation"
+MIN_UNIT = 10  # The smallest body text, in pixels.
+MIN_SIZE = (640, 480)
 START_QUESTION = "What do you see in the headset right now?"
 START_NOTE = ("Clicking Start starts this one run. It is a start, not an approval: the run was approved before this "
               "window was opened.")
-TEXT_START, TEXT_CANCEL, TEXT_STOP, TEXT_CLOSE = "Start", "Cancel", "Stop", "Close"
+TEXT_START, TEXT_CANCEL, TEXT_STOP, TEXT_CLOSE, TEXT_NEXT = "Start", "Cancel", "Stop", "Close", "Next"
 TEXT_COLOUR_STABLE, TEXT_SOMETHING_ELSE = "Colour, stable", "Something else"
 TEXT_UNCHANGED, TEXT_CHANGED = "Passthrough unchanged", "Something changed"
-TEXT_BACK_ON, TEXT_NOT_REMOVED = "I took the headset off and it is back on", "I did not take it off"
+TEXT_CONFIRM, TEXT_GO_BACK = "Confirm", "Go back"
+TEXT_BACK_ON, TEXT_NOT_REMOVED = "Yes, off and back on", "No, I kept it on"
+BACK_QUESTION = "Did you take the headset off? If it is off, put it back on first"
 WATCH_QUESTION = "Look around. Is the view through the headset the same as before the run?"
-PHASES = PHASE_STATE, PHASE_NOTICE, PHASE_RUN, PHASE_BACK, PHASE_WATCH, PHASE_RESULT = (
-    "starting_state", "notice", "run", "headset_back", "watch", "result")
+CONFIRM_QUESTION = "You said the passthrough picture changed."
+INTERRUPTED_TEXT = "The run was interrupted. Please wait until the camera reader is certain to have ended"
+PHASES = (PHASE_STATE, PHASE_PLAN, PHASE_NOTICE, PHASE_RUN, PHASE_INTERRUPTED, PHASE_BACK, PHASE_WATCH,
+          PHASE_CONFIRM, PHASE_RESULT) = (
+    "starting_state", "plan", "notice", "run", "interrupted", "headset_back", "watch", "confirm_changed", "result")
+BANDS = BAND_LOWER, BAND_UPPER = ("lower", "upper")  # Where a screen's buttons sit; consecutive screens alternate.
 
 
 @dataclass
@@ -134,8 +168,12 @@ class Config:
     helper_args: tuple = ()
     late_frame_limit_ms: int = marks.LATE_FRAME_LIMIT_MS
     removal_end_limit_ms: int = marks.REMOVAL_END_LIMIT_MS
-    scale: float = 1.0  # Below 1 only in the checks: shorter steps.
-    watch_seconds: float = guidance.WATCH_SECONDS  # Shorter only in the checks.
+    # Shorter only in the checks, which run the whole flow in seconds; the command line sets none of these.
+    scale: float = 1.0
+    watch_seconds: float = guidance.WATCH_SECONDS
+    guard_seconds: float = GUARD_SECONDS
+    start_dwell_seconds: float = START_DWELL_SECONDS
+    close_dwell_seconds: float = CLOSE_DWELL_SECONDS
     validation: bool = False  # The worker uses the scripted detector; never set from the command line of a run.
     worker_env: dict = field(default_factory=dict)
 
@@ -148,10 +186,20 @@ class Config:
 
 
 def check_report_path(path):
-    """The report's path as it will be written, or ``ValueError``: a new ``.json`` file in an existing directory."""
+    """The report's path as it will be written, or ``ValueError``.
+
+    A new ``.json`` file in an existing directory in which a file can be
+    made: a probe file is created there and removed, so a run is never held
+    for a report that could not be saved.
+    """
     target = Path(path).expanduser()
     if target.suffix.lower() != ".json" or not target.parent.is_dir() or target.exists() or target.is_symlink():
         raise ValueError("--report needs a new .json path in an existing directory")
+    try:
+        with tempfile.NamedTemporaryFile(dir=target.parent, prefix=".camera-guide-probe-"):
+            pass
+    except OSError:
+        raise ValueError("--report needs a directory this command can write to") from None
     return target
 
 
@@ -173,6 +221,11 @@ def unstarted_report(config, reason):
                   max_frames_requested=config.limits["max_frames"], fps_requested=config.limits["fps"],
                   cameras_requested=[config.camera], status="error", reason=reason, phase="closed")
     return report
+
+
+def interrupted_report(config, reason):
+    """The report the window writes for a started run whose worker gave none: the helper's end is not confirmed."""
+    return dict(unstarted_report(config, reason), confirmation=OPERATOR_WINDOW, cleanup_ok=False)
 
 
 # ---- the worker: the run itself, in its own process ---------------------------------------------------------------
@@ -204,27 +257,72 @@ class _Discard:
         pass
 
 
-def worker_main(stdin=None, stdout=None):
+class _StoppedBeforeLaunch(Exception):
+    """The stop came before the helper was launched: nothing is launched."""
+
+
+def worker_handshake(descriptor):
+    """The token the launching window wrote for this worker, or None: the worker then runs nothing.
+
+    The descriptor must be a pipe this process inherited, carrying one JSON
+    line ``{"token", "window_pid"}`` and then its end, where ``window_pid``
+    is this process's parent. A worker started by hand has no such
+    descriptor. Read before anything is read from stdin.
+    """
+    try:
+        if type(descriptor) is not int or descriptor < 3 or not stat.S_ISFIFO(os.fstat(descriptor).st_mode):
+            return None
+        data, deadline = b"", time.monotonic() + HANDSHAKE_SECONDS
+        while len(data) < 4096:
+            if not select.select([descriptor], [], [], max(0.0, deadline - time.monotonic()))[0]:
+                return None  # The writer never finished: not a window's handover.
+            chunk = os.read(descriptor, 4096)
+            if not chunk:
+                break
+            data += chunk
+        os.close(descriptor)
+        record = json.loads(data)
+        token = record["token"]
+        if record["window_pid"] != os.getppid() or type(token) is not str or len(token) != 32:
+            return None
+        int(token, 16)
+        return token
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def worker_main(descriptor, stdin=None, stdout=None):
     """``--worker``: one ``recognize()`` run for the window that launched this process.
 
-    The first line on stdin is the run (``Config.spec``); later lines are
-    ``{"mark": LABEL, "monotonic_ns": N}`` (a click, recorded at its time) or
-    ``{"stop": true}``; the end of stdin is a stop too, so a window that died
-    takes its run with it. On stdout: ``{"event": "ready"}`` when the helper's
-    ``ready`` is accepted, with nothing else in it, and after ``recognize()``
-    has returned (the helper has ended) ``{"event": "report", "report": ...}``.
-    Nothing derived from a frame is written before that last line.
+    Refused, with nothing read from stdin and nothing launched, unless
+    ``worker_handshake`` finds the window's token; every line written
+    afterwards carries it. The first line on stdin is the run
+    (``Config.spec``); later lines are ``{"mark": LABEL, "monotonic_ns": N}``
+    (a click or a step, recorded at its time) or ``{"stop": true}``; the end
+    of stdin is a stop too, so a window that died takes its run with it. On
+    stdout: ``{"event": "ready"}`` when the helper's ``ready`` is accepted,
+    with nothing else in it, and after ``recognize()`` has returned (the
+    helper has ended) ``{"event": "report", "report": ...}``. Nothing derived
+    from a frame is written before that last line. A stop that arrives
+    before the helper is launched launches nothing; one that arrives during
+    the launch waits up to ``EARLY_STOP_GRACE_SECONDS`` for the helper's
+    ``ready``, so that the helper is stopped once it can stop cleanly.
     """
     stdin = sys.stdin if stdin is None else stdin
     stdout = sys.stdout if stdout is None else stdout
     lock = threading.Lock()
+    report = camera_recognize.new_report("recognize")
+    report.update(confirmation=None, status="error", reason="guide_worker_not_launched_by_window", phase="closed")
+    token = worker_handshake(descriptor)
 
     def emit(record):
         with lock:
-            stdout.write(json.dumps(record) + "\n")
+            stdout.write(json.dumps(dict(record, token=token)) + "\n")
             stdout.flush()
-    report = camera_recognize.new_report("recognize")
-    report.update(confirmation=None, status="error", reason="guide_worker_arguments_invalid", phase="closed")
+    if token is None:  # Run by hand: no window, no notice, no click. Nothing is read and nothing is launched.
+        emit({"event": "report", "report": report})
+        return 1
+    report["reason"] = "guide_worker_arguments_invalid"
     try:
         spec = json.loads(stdin.readline())
         limits = camera_helper.check_limits(spec["limits"])
@@ -235,7 +333,7 @@ def worker_main(stdin=None, stdout=None):
     except (ValueError, KeyError, TypeError):
         emit({"event": "report", "report": report})
         return 1
-    stop = threading.Event()
+    stop, stop_requested, ready_seen = threading.Event(), threading.Event(), threading.Event()
     state = {"session": None, "label": None, "marks_refused": 0}
 
     def listen():
@@ -256,17 +354,35 @@ def worker_main(stdin=None, stdout=None):
                 except ValueError:
                     state["marks_refused"] += 1
         finally:
-            stop.set()  # A stop line, or the window is gone.
-    threading.Thread(target=listen, name="camera-guide-worker-input", daemon=True).start()
+            stop_requested.set()  # A stop line, or the window is gone.
+
+    def relay():
+        """Pass a requested stop on to the helper once it can honour it: after its ready, or the grace."""
+        stop_requested.wait()
+        ready_seen.wait(EARLY_STOP_GRACE_SECONDS)
+        stop.set()
+
+    def on_session(session):
+        if stop_requested.is_set():
+            raise _StoppedBeforeLaunch()
+        state["session"] = session
+
+    def on_ready():
+        ready_seen.set()
+        emit({"event": "ready"})
+    for target_function, name in ((listen, "input"), (relay, "stop")):
+        threading.Thread(target=target_function, name=f"camera-guide-worker-{name}", daemon=True).start()
     factory = (lambda: ValidationDetector(target, lambda: state["label"])) if spec.get("validation") is True else None
     with guard.sigterm_cancels():
         try:
             report = camera_recognize.recognize(
                 helper, limits, cameras, threshold=spec["threshold"], detector=spec["detector"],
                 detector_factory=factory, extra_args=tuple(spec["helper_args"]), stop=stop, confirmed=True,
-                confirmation=OPERATOR_WINDOW, target_label=target, terminal=_Discard(),
-                on_session=lambda session: state.update(session=session), on_ready=lambda: emit({"event": "ready"}),
-                late_frame_limit_ms=spec["late_frame_limit_ms"], removal_end_limit_ms=spec["removal_end_limit_ms"])
+                confirmation=OPERATOR_WINDOW, target_label=target, terminal=_Discard(), on_session=on_session,
+                on_ready=on_ready, late_frame_limit_ms=spec["late_frame_limit_ms"],
+                removal_end_limit_ms=spec["removal_end_limit_ms"])
+        except _StoppedBeforeLaunch:
+            report.update(confirmation=OPERATOR_WINDOW, status="stopped", reason="stopped_before_launch", cleanup_ok=True)
         except guard.CANCELLATION as error:
             report.update(confirmation=OPERATOR_WINDOW)
             guard.cancelled(report, error)
@@ -281,24 +397,37 @@ def worker_main(stdin=None, stdout=None):
 class Worker:
     """The window's handle on the run's process: start it, send it marks and a stop, receive its two events.
 
-    Events reach ``on_event`` on the reader thread as ``("ready",
-    monotonic_ns)``, the time the line was read, and ``("report", report)``;
-    a worker that ends without a report gives ``("report", None)``. Only
-    those two are passed on: any other line the worker writes is counted
+    ``start`` hands the worker a fresh token on a pipe it inherits (see
+    ``worker_handshake``). Events reach ``on_event`` on the reader thread as
+    ``("ready", monotonic_ns)``, the time the line was read, and
+    ``("report", report)``; a worker that ends without a report gives
+    ``("report", None)``. Only those two are passed on, and only when they
+    carry the token: any other line the worker writes is counted
     (``unexpected_lines``) and dropped, so nothing else can reach the window.
     """
 
-    def __init__(self, spec, on_event, *, env=None, command=None):
+    def __init__(self, spec, on_event, *, env=None, command=None, token=None):
         self.spec, self.on_event = spec, on_event
         self.env = dict(os.environ, **(env or {}))
         self.command = [sys.executable, str(Path(__file__).resolve()), WORKER_FLAG] if command is None else command
+        self.token = secrets.token_hex(16) if token is None else token
         self.process = self.thread = None
         self.unexpected_lines = 0
         self.lock = threading.Lock()
 
     def start(self):
-        self.process = subprocess.Popen(self.command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
-                                        bufsize=1, env=self.env)
+        read_fd, write_fd = os.pipe()
+        try:
+            self.process = subprocess.Popen([*self.command, WORKER_FD_FLAG, str(read_fd)], stdin=subprocess.PIPE,
+                                            stdout=subprocess.PIPE, text=True, bufsize=1, env=self.env,
+                                            pass_fds=(read_fd,))
+        except OSError:
+            os.close(write_fd)
+            raise
+        finally:
+            os.close(read_fd)
+        os.write(write_fd, json.dumps({"token": self.token, "window_pid": os.getpid()}).encode() + b"\n")
+        os.close(write_fd)
         self._send(self.spec)
         self.thread = threading.Thread(target=self._read, name="camera-guide-worker-output", daemon=True)
         self.thread.start()
@@ -318,7 +447,8 @@ class Worker:
                 record = json.loads(line)
             except ValueError:
                 record = None
-            event = record.get("event") if isinstance(record, dict) else None
+            mine = isinstance(record, dict) and record.get("token") == self.token
+            event = record.get("event") if mine else None
             if event == "ready" and not delivered:
                 self.on_event(("ready", time.monotonic_ns()))
             elif event == "report" and not delivered and isinstance(record.get("report"), dict):
@@ -359,6 +489,11 @@ class Worker:
 
 # ---- the window ----------------------------------------------------------------------------------------------------
 
+def unit_for(width, height):
+    """The body text's pixel size for a window: large for a headset, and small enough that button texts stay whole."""
+    return max(MIN_UNIT, int(min(height / 30, width / 46)))
+
+
 def create_window(config, *, worker_factory=None, clock=time.monotonic_ns, size=None):
     """The guide's window for ``config``. ``worker_factory(spec, on_event)`` makes the run's process handle."""
     from PySide6 import QtCore, QtGui, QtWidgets
@@ -366,31 +501,27 @@ def create_window(config, *, worker_factory=None, clock=time.monotonic_ns, size=
     if worker_factory is None:
         def worker_factory(spec, on_event):
             return Worker(spec, on_event, env=config.worker_env)
-    screen = QtGui.QGuiApplication.primaryScreen()
-    height = size[1] if size is not None else (screen.availableGeometry().height() if screen is not None else 1080)
-    unit = max(16, int(height / 30))  # The body text's pixel size: large type for a headset.
 
     class Picture(QtWidgets.QWidget):
         """A drawn picture for a step. Shapes only: no image is loaded, received or kept."""
 
         def __init__(self):
             super().__init__()
-            self.kind = "wait"
-            self.setMinimumHeight(unit * 6)
+            self.kind, self.motion, self.unit = "wait", 0.0, MIN_UNIT
 
-        def show_kind(self, kind):
-            if kind != self.kind:
-                self.kind = kind
+        def show_kind(self, kind, motion=0.0):
+            if (kind, motion) != (self.kind, self.motion):
+                self.kind, self.motion = kind, motion
                 self.update()
 
         def paintEvent(self, _event):
+            unit = self.unit
             painter = QtGui.QPainter(self)
             painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
             side = min(self.width() * 0.6, self.height() * 0.95)
             box = QtCore.QRectF((self.width() - side * 1.6) / 2, (self.height() - side) / 2, side * 1.6, side)
             white, accent, dim = QtGui.QColor("#f4f6f8"), QtGui.QColor("#ffd23f"), QtGui.QColor("#5b6b7c")
-            pen = QtGui.QPen(white, max(3, unit // 8))
-            painter.setPen(pen)
+            painter.setPen(QtGui.QPen(white, max(3, unit // 8)))
             centre = box.center()
             radius = side * 0.11
             if self.kind in ("centre", "left", "right", "up", "down", "out_of_view"):
@@ -416,13 +547,15 @@ def create_window(config, *, worker_factory=None, clock=time.monotonic_ns, size=
                 reach = box.width() * (0.3 if self.kind == "near" else 0.72)  # Half the distance, about half the gap.
                 bottle = QtCore.QRectF(head.x() + side * 0.2 + reach, centre.y() - side * 0.2, side * 0.11, side * 0.36)
                 painter.setPen(QtGui.QPen(dim, max(3, unit // 8), Qt.PenStyle.DashLine))
-                painter.drawLine(QtCore.QPointF(head.x() + side * 0.24, centre.y()), QtCore.QPointF(bottle.left(), centre.y()))
+                painter.drawLine(QtCore.QPointF(head.x() + side * 0.24, centre.y()),
+                                 QtCore.QPointF(bottle.left(), centre.y()))
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(accent)
                 painter.drawRoundedRect(bottle, unit / 4, unit / 4)
                 painter.setPen(white)
                 painter.drawText(QtCore.QRectF(box.left(), box.bottom() - unit * 1.6, box.width(), unit * 1.6),
-                                 Qt.AlignmentFlag.AlignCenter, "about half a metre" if self.kind == "near" else "about a metre")
+                                 Qt.AlignmentFlag.AlignCenter,
+                                 "about half a metre" if self.kind == "near" else "about a metre")
             elif self.kind == "headset_off":
                 painter.drawEllipse(centre, side * 0.22, side * 0.22)
                 visor = QtCore.QRectF(centre.x() - side * 0.3, centre.y() - side * 0.5, side * 0.6, side * 0.18)
@@ -430,17 +563,20 @@ def create_window(config, *, worker_factory=None, clock=time.monotonic_ns, size=
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.drawRoundedRect(visor, unit / 3, unit / 3)
                 painter.setPen(QtGui.QPen(dim, max(3, unit // 6)))
-                painter.drawLine(QtCore.QPointF(centre.x(), centre.y() - side * 0.05), QtCore.QPointF(centre.x(), centre.y() - side * 0.28))
+                painter.drawLine(QtCore.QPointF(centre.x(), centre.y() - side * 0.05),
+                                 QtCore.QPointF(centre.x(), centre.y() - side * 0.28))
             elif self.kind == "done":
                 painter.setPen(QtGui.QPen(accent, max(4, unit // 4)))
                 painter.drawPolyline([QtCore.QPointF(centre.x() - side * 0.25, centre.y()),
                                       QtCore.QPointF(centre.x() - side * 0.05, centre.y() + side * 0.2),
                                       QtCore.QPointF(centre.x() + side * 0.3, centre.y() - side * 0.22)])
-            else:  # wait
+            else:  # wait: three dots, the bright one moving with the clock.
                 painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(dim)
-                for offset in (-1, 0, 1):
-                    painter.drawEllipse(QtCore.QPointF(centre.x() + offset * side * 0.25, centre.y()), radius * 0.6, radius * 0.6)
+                lit = int(self.motion * 3) % 3
+                for index, offset in enumerate((-1, 0, 1)):
+                    painter.setBrush(accent if index == lit else dim)
+                    painter.drawEllipse(QtCore.QPointF(centre.x() + offset * side * 0.25, centre.y()),
+                                        radius * 0.6, radius * 0.6)
             painter.end()
 
     def label(text="", name="body", wrap=True, align=Qt.AlignmentFlag.AlignCenter):
@@ -463,28 +599,16 @@ def create_window(config, *, worker_factory=None, clock=time.monotonic_ns, size=
     def button(text, name="plain"):
         widget = PointerButton(text)
         widget.setObjectName(name)
-        widget.setMinimumHeight(int(unit * 3.2))
         widget.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         widget.setAutoDefault(False)
-        return widget
-
-    def page(*rows):
-        widget = QtWidgets.QWidget()
-        layout = QtWidgets.QVBoxLayout(widget)
-        layout.setContentsMargins(unit * 2, unit, unit * 2, unit)
-        layout.setSpacing(unit)
-        for row in rows:
-            if isinstance(row, QtWidgets.QLayout):
-                layout.addLayout(row)
-            elif isinstance(row, tuple):
-                layout.addWidget(row[0], row[1])
-            else:
-                layout.addWidget(row)
+        widget.setEnabled(False)  # Until its screen has been up for the guard interval.
+        policy = widget.sizePolicy()
+        policy.setRetainSizeWhenHidden(True)  # A hidden button keeps its room: nothing jumps under the pointer.
+        widget.setSizePolicy(policy)
         return widget
 
     def side_by_side(*widgets):
         layout = QtWidgets.QHBoxLayout()
-        layout.setSpacing(unit * 2)
         for widget in widgets:
             layout.addWidget(widget)
         return layout
@@ -497,19 +621,189 @@ def create_window(config, *, worker_factory=None, clock=time.monotonic_ns, size=
         area.setWidget(widget)
         return area
 
+    class Page(QtWidgets.QWidget):
+        """One screen: its content, then two bands for its buttons, of which it uses one each time it is shown."""
+
+        def __init__(self, rows, buttons):
+            super().__init__()
+            self.buttons = tuple(buttons)
+            self.content = QtWidgets.QVBoxLayout(self)
+            for row in rows:
+                if isinstance(row, QtWidgets.QLayout):
+                    self.content.addLayout(row)
+                elif isinstance(row, tuple):
+                    self.content.addWidget(row[0], row[1])
+                else:
+                    self.content.addWidget(row)
+            self.row = QtWidgets.QWidget()
+            self.row_layout = QtWidgets.QHBoxLayout(self.row)
+            self.row_layout.setContentsMargins(0, 0, 0, 0)
+            for widget in self.buttons:
+                self.row_layout.addWidget(widget)
+            self.slots = {}
+            for band in (BAND_UPPER, BAND_LOWER):
+                slot = QtWidgets.QWidget()
+                slot.setObjectName("slot")
+                QtWidgets.QVBoxLayout(slot).setContentsMargins(0, 0, 0, 0)
+                self.slots[band] = slot
+                self.content.addWidget(slot)
+            self.band = None
+
+        def place(self, band):
+            """Put the buttons in ``band``; the other band stays empty, with the same height."""
+            self.band = band
+            self.slots[band].layout().addWidget(self.row)
+
     class Window(QtWidgets.QWidget):
         def __init__(self):
             super().__init__()
             self.config = config
             self.setWindowTitle("SightCircuit camera guide")
+            self.setMinimumSize(*MIN_SIZE)
+            self.unit = None
+            self.phase = None
+            self.band = BAND_UPPER  # The first screen takes the other one.
+            self.page_shown_ns = clock()
+            self.guide = None  # The run's script state, once Start is clicked.
+            self.worker = None
+            self.workers_started = 0
+            self.started_ns = None  # The Start click.
+            self.report = None  # The worker's report: set only after the helper has ended.
+            self.final = None  # The saved report, with the guide block.
+            self.report_error = None
+            self.ended_by = guidance.ENDED_NOT_STARTED
+            self.unstarted_reason = guidance.DECLINED
+            self.watch_state = guidance.WATCH_NOT_STARTED
+            self.observations = {"starting_state": None, "passthrough_after": None, "headset": None,
+                                 "watch_seconds_elapsed": None, "watch_completed": False}
+            self.events = queue.Queue()  # From the worker's reader thread; taken on the window's own clock.
+            self.close_requested = False
+            self.signal_number = None
+            self.stop_sent_ns = self.terminate_sent_ns = self.run_deadline_ns = self.watch_started_ns = None
+            self.helper_gone_ns = None
+            self.run_screen_log = []  # Every distinct content the run screen showed, for the checks.
+            self.stack = QtWidgets.QStackedLayout(self)
+            self.stack.setContentsMargins(0, 0, 0, 0)
+            self.pages = {}
+            self._build()
+            if size is not None:
+                self.resize(*size)
+            self.apply_scale()
+            self.show_phase(PHASE_STATE)
+            self.timer = QtCore.QTimer(self)
+            self.timer.setInterval(TICK_MS)
+            self.timer.timeout.connect(self.tick)
+            self.timer.start()
+
+        # -- screens --
+
+        def _page(self, phase, rows, buttons):
+            self.pages[phase] = Page(rows, buttons)
+            self.stack.addWidget(self.pages[phase])
+
+        def _build(self):
+            left_top = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+            # The starting state.
+            self.stable_button, self.other_button = button(TEXT_COLOUR_STABLE, "go"), button(TEXT_SOMETHING_ELSE)
+            self.stable_button.clicked.connect(self.guarded(lambda: self.answer_state(guidance.START_COLOUR_STABLE)))
+            self.other_button.clicked.connect(self.guarded(lambda: self.answer_state(guidance.START_SOMETHING_ELSE)))
+            self._page(PHASE_STATE, [label("Before we start", "title"), (label(START_QUESTION, "big"), 1)],
+                       [self.stable_button, self.other_button])
+            # What will happen.
+            self.plan_label = label("\n\n".join(guidance.plan_lines(config.script, config.target)), "body", align=left_top)
+            self.next_button = button(TEXT_NEXT, "go")
+            self.next_button.clicked.connect(self.guarded(lambda: self.show_phase(PHASE_NOTICE)))
+            self._page(PHASE_PLAN, [label("What will happen", "title"), (scrolling(self.plan_label), 1)],
+                       [self.next_button])
+            # The notice.
+            self.notice_label = label(export_notice_body(), "small", align=left_top)
+            self.bounds_label = label(guidance.bounds_line(config.limits, config.camera), "small")
+            self.target_label = label(f"Looking for: {config.target}. Guide: {config.script}.", "small")
+            self.path_label = label(f"The report will be saved to: {config.report_path}", "small")
+            self.start_note = label(START_NOTE, "small")
+            self.reminder_label = label(guidance.start_reminder(config.script, config.target), "body")
+            self.dwell_label = label("", "body")
+            self.start_button, self.cancel_button = button(TEXT_START, "go"), button(TEXT_CANCEL)
+            self.start_button.clicked.connect(self.guarded(self.start_run))
+            self.cancel_button.clicked.connect(self.guarded(lambda: self.decline(guidance.ENDED_CANCEL)))
+            self._page(PHASE_NOTICE, [label("Please read", "title"), (scrolling(self.notice_label), 1), self.bounds_label,
+                                      self.target_label, self.path_label, self.start_note, self.reminder_label,
+                                      self.dwell_label], [self.start_button, self.cancel_button])
+            # The run.
+            self.step_label = label("", "small", wrap=False, align=Qt.AlignmentFlag.AlignLeft)
+            self.time_label = label("", "small", wrap=False, align=Qt.AlignmentFlag.AlignRight)
+            self.picture = Picture()
+            self.instruction_label = label("", "big")
+            self.detail_label = label("", "small")
+            self.progress = QtWidgets.QProgressBar()
+            self.progress.setRange(0, 1000)
+            self.progress.setTextVisible(False)
+            policy = self.progress.sizePolicy()
+            policy.setRetainSizeWhenHidden(True)
+            self.progress.setSizePolicy(policy)
+            self.step_button = button("", "go")
+            self.step_button.clicked.connect(self.guarded(self.step_clicked))
+            self.stop_button = button(TEXT_STOP, "stop")
+            self.stop_button.clicked.connect(self.guarded(lambda: self.stop_run(guidance.ENDED_STOP)))
+            self._page(PHASE_RUN, [side_by_side(self.step_label, self.time_label), (self.picture, 1),
+                                   self.instruction_label, self.detail_label, self.progress],
+                       [self.step_button, self.stop_button])
+            # A run whose helper is not known to have ended.
+            self.interrupted_count = label("", "count")
+            self._page(PHASE_INTERRUPTED, [label("Please wait", "title"), label(INTERRUPTED_TEXT, "big"),
+                                           (self.interrupted_count, 1)], [])
+            # The headset question.
+            self.back_button, self.not_removed_button = button(TEXT_BACK_ON, "go"), button(TEXT_NOT_REMOVED)
+            self.back_button.clicked.connect(self.guarded(lambda: self.answer_headset(guidance.HEADSET_REMOVED_AND_BACK)))
+            self.not_removed_button.clicked.connect(
+                self.guarded(lambda: self.answer_headset(guidance.HEADSET_NOT_REMOVED)))
+            self._page(PHASE_BACK, [label("The run has ended", "title"), (label(BACK_QUESTION, "big"), 1)],
+                       [self.back_button, self.not_removed_button])
+            # The watch.
+            self.count_label = label("", "count")
+            self.changed_button, self.unchanged_button = button(TEXT_CHANGED, "stop"), button(TEXT_UNCHANGED, "go")
+            self.changed_button.clicked.connect(self.guarded(lambda: self.show_phase(PHASE_CONFIRM)))
+            self.unchanged_button.clicked.connect(
+                self.guarded(lambda: self.answer_passthrough(guidance.PASSTHROUGH_UNCHANGED)))
+            self.watch_hint = label("", "small")
+            self._page(PHASE_WATCH, [label("Watch the passthrough", "title"), label(WATCH_QUESTION, "big"),
+                                     (self.count_label, 1), self.watch_hint], [self.changed_button, self.unchanged_button])
+            # "Something changed" is asked once more: under the passthrough rule that answer stops the camera track.
+            self.confirm_button, self.go_back_button = button(TEXT_CONFIRM, "stop"), button(TEXT_GO_BACK)
+            self.confirm_button.clicked.connect(self.guarded(lambda: self.answer_passthrough(guidance.PASSTHROUGH_CHANGED)))
+            self.go_back_button.clicked.connect(self.guarded(lambda: self.show_phase(PHASE_WATCH)))
+            self._page(PHASE_CONFIRM, [label("Please confirm", "title"), (label(CONFIRM_QUESTION, "big"), 1)],
+                       [self.go_back_button, self.confirm_button])
+            # The result.
+            self.result_label = label("", "body", align=left_top)
+            self.saved_label = label("", "small")
+            self.close_label = label("", "small")
+            self.close_button = button(TEXT_CLOSE)
+            self.close_button.clicked.connect(self.guarded(self.close))
+            self._page(PHASE_RESULT, [label("Result", "title"), (scrolling(self.result_label), 1), self.saved_label,
+                                      self.close_label], [self.close_button])
+
+        def apply_scale(self):
+            """Size the type from the window's own size; called again when the window is resized."""
+            unit = unit_for(self.width(), self.height())
+            if unit == self.unit:
+                return
+            self.unit = self.picture.unit = unit
+            self.picture.setMinimumHeight(unit * 5)
+            for shown in self.pages.values():
+                shown.content.setContentsMargins(unit * 2, unit, unit * 2, unit)
+                shown.content.setSpacing(unit // 2)
+                shown.row_layout.setSpacing(unit * 2)
             self.setStyleSheet(
                 f"QWidget {{ background: #10151b; color: #f4f6f8; font-size: {unit}px; }}"
                 f"QLabel#title {{ font-size: {int(unit * 1.5)}px; font-weight: bold; }}"
                 f"QLabel#big {{ font-size: {int(unit * 1.4)}px; font-weight: bold; }}"
                 f"QLabel#count {{ font-size: {unit * 5}px; font-weight: bold; color: #ffd23f; }}"
                 f"QLabel#small {{ font-size: {int(unit * 0.8)}px; }}"
+                f"QWidget#slot {{ min-height: {int(unit * 3.4)}px; max-height: {int(unit * 3.4)}px; }}"
                 f"QPushButton {{ font-size: {int(unit * 1.3)}px; font-weight: bold; border-radius: {unit // 2}px; "
-                f"padding: {unit // 2}px {unit}px; background: #2d3a4a; border: 3px solid #5b6b7c; }}"
+                f"min-height: {int(unit * 2.6)}px; padding: 0px {unit // 2}px; background: #2d3a4a; "
+                "border: 3px solid #5b6b7c; }"
                 "QPushButton#go { background: #1f7a44; border-color: #3fbf77; }"
                 "QPushButton#stop { background: #a3271f; border-color: #e0635b; }"
                 "QPushButton:disabled, QPushButton#go:disabled, QPushButton#stop:disabled "
@@ -518,114 +812,60 @@ def create_window(config, *, worker_factory=None, clock=time.monotonic_ns, size=
                 "background: #1b232d; } QProgressBar::chunk { background: #ffd23f; }"
                 f"QScrollBar:vertical {{ width: {unit * 2}px; background: #1b232d; }}"
                 f"QScrollBar::handle:vertical {{ background: #5b6b7c; min-height: {unit * 3}px; }}")
-            self.phase = PHASE_STATE
-            self.guide = None  # The run's script state, once Start is clicked.
-            self.worker = None
-            self.workers_started = 0
-            self.report = None  # The worker's report: set only after the helper has ended.
-            self.final = None  # The saved report, with the guide block.
-            self.report_error = None
-            self.ended_by = guidance.ENDED_NOT_STARTED
-            self.unstarted_reason = guidance.DECLINED
-            self.observations = {"starting_state": None, "passthrough_after": None, "headset": None,
-                                 "watch_seconds_elapsed": None, "watch_completed": False}
-            self.events = queue.Queue()  # From the worker's reader thread; taken on the window's own clock.
-            self.close_requested = False
-            self.signal_number = None
-            self.stop_sent_ns = self.terminate_sent_ns = self.run_deadline_ns = self.watch_started_ns = None
-            self.run_screen_log = []  # Every distinct content the run screen showed, for the checks.
-            self.stack = QtWidgets.QStackedLayout(self)
-            self.stack.setContentsMargins(0, 0, 0, 0)
-            self._build_state()
-            self._build_notice()
-            self._build_run()
-            self._build_back()
-            self._build_watch()
-            self._build_result()
-            self.timer = QtCore.QTimer(self)
-            self.timer.setInterval(TICK_MS)
-            self.timer.timeout.connect(self.tick)
-            self.timer.start()
 
-        # -- screens --
-
-        def _build_state(self):
-            self.stable_button, self.other_button = button(TEXT_COLOUR_STABLE, "go"), button(TEXT_SOMETHING_ELSE)
-            self.stable_button.clicked.connect(lambda: self.answer_state(guidance.START_COLOUR_STABLE))
-            self.other_button.clicked.connect(lambda: self.answer_state(guidance.START_SOMETHING_ELSE))
-            self.state_page = page(label("Before we start", "title"), (label(START_QUESTION, "big"), 1),
-                                   side_by_side(self.stable_button, self.other_button))
-            self.stack.addWidget(self.state_page)
-
-        def _build_notice(self):
-            self.notice_label = label(export_notice_body(), "small", align=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-            self.bounds_label = label(guidance.bounds_line(config.limits, config.camera), "small")
-            self.target_label = label(f"Looking for: {config.target}. Guide: {config.script}.", "small")
-            self.path_label = label(f"The report will be saved to: {config.report_path}", "small")
-            self.start_note = label(START_NOTE, "small")
-            self.start_button, self.cancel_button = button(TEXT_START, "go"), button(TEXT_CANCEL)
-            self.start_button.clicked.connect(self.start_run)
-            self.cancel_button.clicked.connect(lambda: self.decline(guidance.ENDED_CANCEL))
-            self.notice_page = page(label("Please read", "title"), (scrolling(self.notice_label), 1), self.bounds_label,
-                                    self.target_label, self.path_label, self.start_note,
-                                    side_by_side(self.start_button, self.cancel_button))
-            self.stack.addWidget(self.notice_page)
-
-        def _build_run(self):
-            self.step_label = label("", "small", wrap=False, align=Qt.AlignmentFlag.AlignLeft)
-            self.time_label = label("", "small", wrap=False, align=Qt.AlignmentFlag.AlignRight)
-            self.picture = Picture()
-            self.instruction_label = label("", "big")
-            self.progress = QtWidgets.QProgressBar()
-            self.progress.setRange(0, 1000)
-            self.progress.setTextVisible(False)
-            self.step_button = button("", "go")
-            self.step_button.clicked.connect(self.step_clicked)
-            self.stop_button = button(TEXT_STOP, "stop")
-            self.stop_button.clicked.connect(lambda: self.stop_run(guidance.ENDED_STOP))
-            # The bar and the step's button keep their room when hidden, so nothing jumps under the pointer.
-            for widget in (self.progress, self.step_button):
-                policy = widget.sizePolicy()
-                policy.setRetainSizeWhenHidden(True)
-                widget.setSizePolicy(policy)
-            self.run_page = page(side_by_side(self.step_label, self.time_label), (self.picture, 1), self.instruction_label,
-                                 self.progress, side_by_side(self.step_button, self.stop_button))
-            self.stack.addWidget(self.run_page)
-
-        def _build_back(self):
-            self.back_button, self.not_removed_button = button(TEXT_BACK_ON, "go"), button(TEXT_NOT_REMOVED)
-            self.back_button.clicked.connect(lambda: self.answer_headset(guidance.HEADSET_REMOVED_AND_BACK))
-            self.not_removed_button.clicked.connect(lambda: self.answer_headset(guidance.HEADSET_NOT_REMOVED))
-            self.back_page = page(label("The run has ended", "title"),
-                                  (label("Put the headset back on if it is off. Then choose one", "big"), 1),
-                                  self.back_button, self.not_removed_button)
-            self.stack.addWidget(self.back_page)
-
-        def _build_watch(self):
-            self.count_label = label("", "count")
-            self.changed_button, self.unchanged_button = button(TEXT_CHANGED, "stop"), button(TEXT_UNCHANGED, "go")
-            self.changed_button.clicked.connect(lambda: self.answer_passthrough(guidance.PASSTHROUGH_CHANGED))
-            self.unchanged_button.clicked.connect(lambda: self.answer_passthrough(guidance.PASSTHROUGH_UNCHANGED))
-            self.watch_hint = label("", "small")
-            self.watch_page = page(label("Watch the passthrough", "title"), label(WATCH_QUESTION, "big"),
-                                   (self.count_label, 1), self.watch_hint,
-                                   side_by_side(self.changed_button, self.unchanged_button))
-            self.stack.addWidget(self.watch_page)
-
-        def _build_result(self):
-            self.result_label = label("", "body", align=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-            self.saved_label = label("", "small")
-            self.close_button = button(TEXT_CLOSE)
-            self.close_button.clicked.connect(self.close)
-            self.result_page = page(label("Result", "title"), (scrolling(self.result_label), 1), self.saved_label,
-                                    self.close_button)
-            self.stack.addWidget(self.result_page)
+        def resizeEvent(self, event):
+            super().resizeEvent(event)
+            self.apply_scale()
 
         def show_phase(self, phase):
+            """Show a screen: its buttons go where the last screen's were not, and are dead for the guard interval."""
             self.phase = phase
-            self.stack.setCurrentWidget({PHASE_STATE: self.state_page, PHASE_NOTICE: self.notice_page,
-                                         PHASE_RUN: self.run_page, PHASE_BACK: self.back_page,
-                                         PHASE_WATCH: self.watch_page, PHASE_RESULT: self.result_page}[phase])
+            self.band = BAND_LOWER if self.band == BAND_UPPER else BAND_UPPER
+            shown = self.pages[phase]
+            shown.place(self.band)
+            self.page_shown_ns = clock()
+            for widget in shown.buttons:
+                widget.setEnabled(False)
+            self.stack.setCurrentWidget(shown)
+            self.refresh(self.page_shown_ns)
+
+        def shown_for(self, now_ns):
+            return (now_ns - self.page_shown_ns) / 1e9
+
+        def guard_passed(self, now_ns):
+            return self.shown_for(now_ns) >= config.guard_seconds
+
+        def guarded(self, action):
+            """``action`` for a button: nothing happens for a click inside the screen's guard interval."""
+            def run():
+                if self.guard_passed(clock()):
+                    action()
+            return run
+
+        def refresh(self, now_ns):
+            """Bring the shown screen's buttons and counts up to ``now_ns``."""
+            live = self.guard_passed(now_ns)
+            if self.phase == PHASE_RUN:
+                self.render_run(now_ns)
+                return
+            if self.phase == PHASE_NOTICE:
+                left = config.start_dwell_seconds - self.shown_for(now_ns)
+                self.start_button.setEnabled(live and left <= 0)
+                self.cancel_button.setEnabled(live)
+                self.dwell_label.setText("You can start now" if left <= 0 else
+                                         f"You can start in {int(-(-left // 1))} s")
+            elif self.phase == PHASE_WATCH:
+                self.render_watch(now_ns, live)
+            elif self.phase == PHASE_RESULT:
+                left = config.close_dwell_seconds - self.shown_for(now_ns)
+                self.close_button.setEnabled(live and left <= 0)
+                self.close_label.setText("" if left <= 0 else f"You can close in {int(-(-left // 1))} s")
+            elif self.phase == PHASE_INTERRUPTED:
+                left = max(0.0, (self.helper_gone_ns - now_ns) / 1e9)
+                self.interrupted_count.setText(str(int(-(-left // 1))))
+            else:
+                for widget in self.pages[self.phase].buttons:
+                    widget.setEnabled(live)
 
         # -- before the run --
 
@@ -634,48 +874,55 @@ def create_window(config, *, worker_factory=None, clock=time.monotonic_ns, size=
                 return
             self.observations["starting_state"] = answer
             if answer == guidance.START_COLOUR_STABLE:
-                self.show_phase(PHASE_NOTICE)
+                self.show_phase(PHASE_PLAN)
             else:  # Not the state a run may start from: nothing is launched.
                 self.unstarted_reason = guidance.STARTING_STATE_NOT_STABLE
                 self.finish()
 
         def decline(self, ended_by):
-            if self.phase in (PHASE_STATE, PHASE_NOTICE):
+            if self.phase in (PHASE_STATE, PHASE_PLAN, PHASE_NOTICE):
                 self.ended_by = ended_by
                 self.finish()
 
         def start_run(self):
             """The Start button: the informed start of this one run. The only place a worker is made."""
-            if self.phase != PHASE_NOTICE or self.worker is not None:
+            now_ns = clock()
+            if (self.phase != PHASE_NOTICE or self.worker is not None
+                    or self.shown_for(now_ns) < config.start_dwell_seconds):
                 return
-            self.guide = guidance.Guide(config.script, config.limits["max_seconds"], target=config.target,
-                                        scale=config.scale)
+            self.started_ns = now_ns
+            self.guide = guidance.Guide(config.script, config.limits["max_seconds"], started_ns=now_ns,
+                                        target=config.target, scale=config.scale,
+                                        guard_ms=config.guard_seconds * 1000)
             self.ended_by = guidance.ENDED_HELPER
-            self.run_deadline_ns = clock() + int((config.limits["max_seconds"] + RUN_MARGIN_SECONDS) * 1e9)
+            self.run_deadline_ns = now_ns + int((config.limits["max_seconds"] + RUN_MARGIN_SECONDS) * 1e9)
+            self.helper_gone_ns = now_ns + int((config.limits["max_seconds"] + HELPER_GONE_MARGIN_SECONDS) * 1e9)
             self.show_phase(PHASE_RUN)
-            self.render_run(clock())
             self.worker = worker_factory(config.spec(), self.events.put)
             self.workers_started += 1
             try:
                 self.worker.start()
             except OSError as error:
                 self.events.put(("report", dict(unstarted_report(config, "guide_worker_not_started"),
-                                                error=str(error)[:1024])))
+                                                confirmation=OPERATOR_WINDOW, error=str(error)[:1024])))
 
         # -- the run --
 
         def render_run(self, now_ns):
-            """Show ``Guide.view``: the script, the clicks and the clock. Nothing else is an input here."""
+            """Show ``Guide.view``: the script, the click and the clock. Nothing else is an input here."""
             view = self.guide.view(now_ns)
+            live = self.guard_passed(now_ns)
             self.step_label.setText(f"Step {view.step_number} of {view.step_count}")
-            self.time_label.setText("" if view.remaining_seconds is None else f"Time left: {view.remaining_seconds} s")
-            self.picture.show_kind(view.picture)
+            self.time_label.setText(f"Time left: {view.remaining_seconds} s")
+            self.picture.show_kind(view.picture, view.motion)
             self.instruction_label.setText(view.instruction)
+            self.detail_label.setText(view.detail)
             self.progress.setVisible(view.progress is not None)
             self.progress.setValue(0 if view.progress is None else round(view.progress * 1000))
             self.step_button.setVisible(bool(view.button))
             self.step_button.setText(view.button)
-            self.stop_button.setEnabled(view.state != guidance.STOPPING)
+            self.step_button.setEnabled(live and view.button_enabled)
+            self.stop_button.setEnabled(live and view.state != guidance.STOPPING)
             shown = (view.state, self.step_label.text(), self.instruction_label.text(), self.step_button.text(), view.picture)
             if not self.run_screen_log or self.run_screen_log[-1] != shown:
                 self.run_screen_log.append(shown)
@@ -707,7 +954,7 @@ def create_window(config, *, worker_factory=None, clock=time.monotonic_ns, size=
                 if self.phase == PHASE_RUN:
                     self.stop_run(guidance.ENDED_SIGNAL)
                 else:
-                    if self.phase in (PHASE_STATE, PHASE_NOTICE):
+                    if self.phase in (PHASE_STATE, PHASE_PLAN, PHASE_NOTICE):
                         self.ended_by = guidance.ENDED_SIGNAL
                     self.close()
                     return
@@ -723,10 +970,12 @@ def create_window(config, *, worker_factory=None, clock=time.monotonic_ns, size=
                     return
             if self.phase == PHASE_RUN:
                 self.send_marks(self.guide.advance(now_ns))
-                self.render_run(now_ns)
                 self.watch_worker(now_ns)
-            elif self.phase == PHASE_WATCH:
-                self.render_watch(now_ns)
+            if self.phase == PHASE_INTERRUPTED and now_ns >= self.helper_gone_ns:
+                self.start_watch()
+                return
+            if self.final is None or self.phase == PHASE_RESULT:
+                self.refresh(now_ns)
 
         def watch_worker(self, now_ns):
             """A worker that gives no report: ask it to stop, then SIGTERM, then report that it did not answer."""
@@ -737,20 +986,27 @@ def create_window(config, *, worker_factory=None, clock=time.monotonic_ns, size=
                 self.terminate_sent_ns = now_ns
                 self.worker.terminate()
             elif self.terminate_sent_ns is not None and now_ns > self.terminate_sent_ns + patience:
-                self.run_ended(dict(unstarted_report(config, "guide_worker_unresponsive"),
-                                    confirmation=OPERATOR_WINDOW, cleanup_ok=False))
+                self.run_ended(interrupted_report(config, "guide_worker_unresponsive"))
 
         def run_ended(self, report):
-            """The worker's report has arrived: the helper has ended. From here results may be shown."""
-            if report is None:
-                report = dict(unstarted_report(config, "guide_worker_ended_without_report"),
-                              confirmation=OPERATOR_WINDOW, cleanup_ok=False)
+            """The worker's report has arrived, or the worker is gone. Results may be shown only for a clean end."""
+            if report is None:  # The worker died: its helper may be alive until its own bound.
+                report = interrupted_report(config, "guide_worker_ended_without_report")
             self.report = report
             self.worker.close()
             if self.close_requested:
                 self.finish()
                 self.close()
-            elif config.script == guidance.SCRIPT_REMOVAL:
+            elif not guidance.clean_shutdown(report):  # The helper is not proven ended: wait out its bound first.
+                self.observations["headset"] = guidance.HEADSET_NOT_ASKED
+                if clock() >= self.helper_gone_ns:
+                    self.start_watch()
+                else:
+                    self.show_phase(PHASE_INTERRUPTED)
+            elif not guidance.watch_needed(report):  # Nothing was read: say so at once, in plain words.
+                self.watch_state = guidance.WATCH_NO_FRAME_READ
+                self.finish()
+            elif self.guide.reached(marks.REMOVE_LABEL):
                 self.show_phase(PHASE_BACK)
             else:
                 self.observations["headset"] = guidance.HEADSET_NOT_ASKED
@@ -765,22 +1021,24 @@ def create_window(config, *, worker_factory=None, clock=time.monotonic_ns, size=
 
         def start_watch(self):
             self.watch_started_ns = clock()
+            self.watch_state = guidance.WATCH_HELD
             self.show_phase(PHASE_WATCH)
-            self.render_watch(self.watch_started_ns)
 
         def watch_elapsed(self, now_ns):
             return max(0.0, (now_ns - self.watch_started_ns) / 1e9)
 
-        def render_watch(self, now_ns):
+        def render_watch(self, now_ns, live):
             left = config.watch_seconds - self.watch_elapsed(now_ns)
             done = left <= 0
             self.count_label.setText("0" if done else str(int(-(-left // 1))))
-            self.unchanged_button.setEnabled(done)
+            self.changed_button.setEnabled(live)
+            self.unchanged_button.setEnabled(live and done)
             self.watch_hint.setText("The watch is over. Choose one" if done else
                                     f"Keep watching. \"{TEXT_UNCHANGED}\" can be chosen when the count reaches 0")
 
         def answer_passthrough(self, answer):
-            if self.phase != PHASE_WATCH:
+            expected = PHASE_CONFIRM if answer == guidance.PASSTHROUGH_CHANGED else PHASE_WATCH
+            if self.phase != expected:
                 return
             elapsed = self.watch_elapsed(clock())
             if answer == guidance.PASSTHROUGH_UNCHANGED and elapsed < config.watch_seconds:
@@ -793,24 +1051,23 @@ def create_window(config, *, worker_factory=None, clock=time.monotonic_ns, size=
             """Compose and save the report, once, and show the result screen."""
             if self.final is not None:
                 return
-            if self.phase == PHASE_WATCH and self.observations["watch_seconds_elapsed"] is None:
+            if self.watch_started_ns is not None and self.observations["watch_seconds_elapsed"] is None:
                 self.observations["watch_seconds_elapsed"] = round(self.watch_elapsed(clock()), 3)
             if self.report is not None:
                 report = self.report
             elif self.worker is not None:  # The loop ended under a run (the session went away): end the helper too.
                 self.worker.stop()
-                report = dict(unstarted_report(config, "guide_window_ended_during_run"), confirmation=OPERATOR_WINDOW,
-                              cleanup_ok=False)
+                report = interrupted_report(config, "guide_window_ended_during_run")
             else:
                 report = unstarted_report(config, self.unstarted_reason)
             anchor = (report.get("timebase") or {}).get("anchor")
             report["guide"] = guidance.guide_block(
                 self.guide, script=config.script, started=self.workers_started > 0, ended_by=self.ended_by,
-                observations=self.observations, validation_only=config.validation,
+                observations=self.observations, validation_only=config.validation, watch=self.watch_state,
                 limits_ms={"late_frame_limit_ms": config.late_frame_limit_ms,
                            "removal_end_limit_ms": config.removal_end_limit_ms},
                 clock=None if anchor is None else marks.Clock(anchor["monotonic_ns"], anchor["utc_ns"]),
-                recorded_marks=(report.get("marks") or {}).get("recorded") or ())
+                recorded_marks=(report.get("marks") or {}).get("recorded") or (), started_ns=self.started_ns)
             report["guide"]["worker_lines_dropped"] = 0 if self.worker is None else getattr(self.worker, "unexpected_lines", 0)
             report["camera_data"].update(report_saved_by_operator=True, report_path=str(config.report_path))
             try:
@@ -831,16 +1088,13 @@ def create_window(config, *, worker_factory=None, clock=time.monotonic_ns, size=
                 self.stop_run(guidance.ENDED_WINDOW_CLOSED)
                 event.ignore()
                 return
-            if self.phase in (PHASE_STATE, PHASE_NOTICE) and self.ended_by == guidance.ENDED_NOT_STARTED:
+            if self.phase in (PHASE_STATE, PHASE_PLAN, PHASE_NOTICE) and self.ended_by == guidance.ENDED_NOT_STARTED:
                 self.ended_by = guidance.ENDED_WINDOW_CLOSED
             self.finish()
             self.timer.stop()
             event.accept()
 
-    window = Window()
-    if size is not None:
-        window.resize(*size)
-    return window
+    return Window()
 
 
 # ---- the validate mode --------------------------------------------------------------------------------------------
@@ -856,8 +1110,10 @@ def describe_helper(binary):
     return next((line for line in lines if isinstance(line, dict) and line.get("event") == "describe"), None)
 
 
-VALIDATION_SCALE = 0.06  # A five-second step is 0.3 s, a four-second one 0.24 s.
-VALIDATION_WATCH_SECONDS = 0.3
+VALIDATION_SCALE = 0.06  # A four-second step is 0.24 s.
+VALIDATION_WATCH_SECONDS = 0.5
+VALIDATION_GUARD_SECONDS = 0.3
+VALIDATION_DWELL_SECONDS = 0.5
 VALIDATION_WAIT_SECONDS = 40.0
 VALIDATION_HELPER_ARGS = ("--pixel-path", "cpu_linear", "--fake-scenario")
 VALIDATION_SIZE = (1280, 800)
@@ -896,17 +1152,22 @@ class Flow:
     def reach(self, phase, seconds=VALIDATION_WAIT_SECONDS):
         return self.wait(lambda: self.window.phase == phase, seconds)
 
+    def start(self):
+        """From the first screen to a started run: the starting state, what will happen, the notice, Start."""
+        return all(self.click_when_offered(text) for text in (TEXT_COLOUR_STABLE, TEXT_NEXT, TEXT_START))
+
     def finish_after_run(self, headset=None, passthrough=TEXT_UNCHANGED):
         """From the run's end to the result screen: the headset answer, the watch and its answer, then Close."""
-        if headset is not None and not (self.reach(PHASE_BACK) and self.click(headset)):
+        if headset is not None and not (self.reach(PHASE_BACK) and self.click_when_offered(headset)):
             return False
-        if not (self.reach(PHASE_WATCH) and self.click_when_offered(passthrough) and self.reach(PHASE_RESULT)):
+        if not (self.reach(PHASE_WATCH) and self.click_when_offered(passthrough)):
             return False
-        return self.close()
+        if passthrough == TEXT_CHANGED and not self.click_when_offered(TEXT_CONFIRM):
+            return False
+        return self.reach(PHASE_RESULT) and self.close()
 
     def close(self):
-        self.click(TEXT_CLOSE) or self.window.close()
-        return self.wait(lambda: not self.window.isVisible())
+        return self.click_when_offered(TEXT_CLOSE) and self.wait(lambda: not self.window.isVisible())
 
     def run_screen_texts(self):
         return {text for entry in self.window.run_screen_log for text in entry[2:4] if text}
@@ -916,8 +1177,9 @@ def validation_config(directory, name, script, helper, scenario, seconds, runtim
     # The frame bound is left at the command's largest so that a run ends on its time bound or as its scenario says.
     return Config(script=script, helper=str(helper), report_path=Path(directory) / f"{name}.json",
                   limits=run_limits(script, seconds, MAX_FRAMES), helper_args=(*VALIDATION_HELPER_ARGS, scenario),
-                  scale=scale, watch_seconds=VALIDATION_WATCH_SECONDS, validation=True,
-                  worker_env={"XDG_RUNTIME_DIR": str(runtime_directory)})
+                  scale=scale, watch_seconds=VALIDATION_WATCH_SECONDS, guard_seconds=VALIDATION_GUARD_SECONDS,
+                  start_dwell_seconds=VALIDATION_DWELL_SECONDS, close_dwell_seconds=VALIDATION_DWELL_SECONDS,
+                  validation=True, worker_env={"XDG_RUNTIME_DIR": str(runtime_directory)})
 
 
 def saved(config):
@@ -932,14 +1194,16 @@ def validate(helper=None):
     """The whole window flow with nothing real in it: the fake helper, a scripted detector, an offscreen window.
 
     The helper must say ``backend: fake`` in its ``--describe`` record before
-    any window is made, so this mode can never open a camera. Seven flows,
-    each clicked through with Qt's test tools and each leaving its report:
-    both scripts, a run that reaches its bound, a presence end, Stop, the
-    window closed mid-run, Cancel and a declined start; then the report path
-    that is refused before a window exists. Returns the validation report.
+    any window is made, so this mode can never open a camera. Each flow is
+    clicked through with Qt's test tools and leaves its report: both
+    scripts, a run that reaches its bound, a presence end, Stop, the window
+    closed mid-run, a launch that fails, Cancel, a declined start and a run
+    too short for its script; then the report path that is refused before a
+    window exists and the worker that refuses to run by hand. Returns the
+    validation report.
     """
     helper = Path(guard.ROOT) / FAKE_HELPER if helper is None else Path(helper)
-    report = {"report_kind": VALIDATION_KIND, "schema_version": 1, "status": "validation_failed", "reason": None,
+    report = {"report_kind": VALIDATION_KIND, "schema_version": 2, "status": "validation_failed", "reason": None,
               **gates.claims(), "validation_only": True, "images_saved": False,
               "pixels_in_report": False, "camera_opened": False, "display_started": False, "helper": None,
               "flows": {}, "exit_code": 1}
@@ -962,13 +1226,12 @@ def validate(helper=None):
         runtime_directory = Path(directory) / "runtime"
         runtime_directory.mkdir(mode=0o700)
 
-        def make(name, script, scenario="export_nv12", seconds=3, **options):
+        def make(name, script, scenario="export_nv12", seconds=4, **options):
             return validation_config(directory, name, script, helper, scenario, seconds, runtime_directory, **options)
 
         def begin(config, **options):
             flow = Flow(config, **options)
-            started = flow.click(TEXT_COLOUR_STABLE) and flow.reach(PHASE_NOTICE) and flow.click(TEXT_START)
-            return flow, started
+            return flow, flow.start()
 
         def base(flow, config, ok):
             final = saved(config) or {}
@@ -976,7 +1239,7 @@ def validate(helper=None):
             return {"ok": bool(ok), "status": final.get("status"), "reason": final.get("reason"),
                     "confirmation": final.get("confirmation"), "ended_by": block.get("ended_by"),
                     "workers_started": flow.window.workers_started, "report_saved": bool(final),
-                    "frames_processed": final.get("frames_processed"),
+                    "frames_processed": final.get("frames_processed"), "watch": block.get("watch"),
                     "marks": [mark["label"] for mark in (final.get("marks") or {}).get("recorded", [])
                               if mark["source"] == marks.SOURCE_WINDOW],
                     "steps_not_reached": [entry["label"] for entry in block.get("steps_not_reached", [])],
@@ -994,13 +1257,14 @@ def validate(helper=None):
         entry["ok"] = (entry["ok"] and entry["status"] == "recognized" and entry["confirmation"] == OPERATOR_WINDOW
                        and entry["marks"] == [step.label for step in guidance.POSITION_STEPS]
                        and entry["run_screen_only_scripted"] and entry["helper_cleanup_ok"] is True
+                       and entry["watch"] == guidance.WATCH_HELD
                        and entry["observations"]["passthrough_after"] == guidance.PASSTHROUGH_UNCHANGED)
         flows["positions_to_the_bound"] = entry
 
-        # 2. The removal script, clicked through; the fake's frames stop and the helper ends headset_removed.
-        config = make("removal", guidance.SCRIPT_REMOVAL, "export_removal", 6, scale=VALIDATION_SCALE / 2)
+        # 2. The removal script with its one click; the fake's frames stop and the helper ends headset_removed.
+        config = make("removal", guidance.SCRIPT_REMOVAL, "export_removal", 8, scale=VALIDATION_SCALE / 2)
         flow, started = begin(config)
-        clicked = started and all(flow.click_when_offered(step.button) for step in guidance.REMOVAL_STEPS)
+        clicked = started and flow.click_when_offered(guidance.REMOVAL_STEPS[-1].button)
         done = clicked and flow.finish_after_run(headset=TEXT_BACK_ON)
         entry, final = base(flow, config, done)
         removal = ((final.get("summary") or {}).get("removal") or [{}])[0]
@@ -1013,14 +1277,15 @@ def validate(helper=None):
                        and entry["observations"]["headset"] == guidance.HEADSET_REMOVED_AND_BACK)
         flows["removal_presence_end"] = entry
 
-        # 3. Stop during the run; the watch is then answered "Something changed".
-        config = make("stopped", guidance.SCRIPT_REMOVAL, seconds=20)
+        # 3. Stop once frames are being read; the watch is answered "Something changed", which is confirmed.
+        config = make("stopped", guidance.SCRIPT_POSITIONS, seconds=20)
         flow, started = begin(config)
-        stopped = started and flow.click_when_offered(guidance.REMOVAL_STEPS[0].button) and flow.click(TEXT_STOP)
-        done = stopped and flow.finish_after_run(headset=TEXT_NOT_REMOVED, passthrough=TEXT_CHANGED)
+        stopped = (started and flow.wait(lambda: len(flow.window.guide.made) >= 2)
+                   and flow.click_when_offered(TEXT_STOP))
+        done = stopped and flow.finish_after_run(passthrough=TEXT_CHANGED)
         entry, final = base(flow, config, done)
         entry["ok"] = (entry["ok"] and entry["status"] == "stopped" and entry["ended_by"] == guidance.ENDED_STOP
-                       and entry["marks"] == ["near"] and entry["steps_not_reached"] == ["far", "remove"]
+                       and entry["marks"][:2] == ["centre", "left"] and bool(entry["steps_not_reached"])
                        and entry["helper_cleanup_ok"] is True
                        and entry["observations"]["passthrough_after"] == guidance.PASSTHROUGH_CHANGED)
         flows["stop_during_the_run"] = entry
@@ -1035,20 +1300,33 @@ def validate(helper=None):
                        and entry["helper_cleanup_ok"] is True and entry["observations"]["passthrough_after"] is None)
         flows["window_closed_during_the_run"] = entry
 
-        # 5. Cancel under the notice, and 6. "Something else" as the starting state: nothing is launched.
-        for name, clicks, reason in (("cancel", (TEXT_COLOUR_STABLE, TEXT_CANCEL), guidance.DECLINED),
+        # 5. A launch that fails (the service cannot be reached): no headset question, no watch, plain words at once.
+        config = make("launch_failed", guidance.SCRIPT_REMOVAL, "provider_unreachable")
+        flow, started = begin(config)
+        done = started and flow.reach(PHASE_RESULT)
+        words = flow.window.result_label.text().splitlines() if done else []
+        done = done and flow.close()
+        entry, final = base(flow, config, done)
+        entry.update(words_say_no_frame=guidance.LINE_NO_FRAME in words and guidance.TELL_THE_MANAGER in words)
+        entry["ok"] = (entry["ok"] and entry["status"] == "helper_ended_early" and entry["frames_processed"] == 0
+                       and entry["watch"] == guidance.WATCH_NO_FRAME_READ and entry["words_say_no_frame"]
+                       and entry["observations"]["passthrough_after"] is None and entry["observations"]["headset"] is None)
+        flows["launch_failed"] = entry
+
+        # 6. Cancel under the notice, and 7. "Something else" as the starting state: nothing is launched.
+        for name, clicks, reason in (("cancel", (TEXT_COLOUR_STABLE, TEXT_NEXT, TEXT_CANCEL), guidance.DECLINED),
                                      ("declined_start", (TEXT_SOMETHING_ELSE,), guidance.STARTING_STATE_NOT_STABLE)):
             config = make(name, guidance.SCRIPT_REMOVAL)
             flow = Flow(config)
-            done = all(flow.click(text) for text in clicks) and flow.reach(PHASE_RESULT) and flow.close()
+            done = all(flow.click_when_offered(text) for text in clicks) and flow.reach(PHASE_RESULT) and flow.close()
             entry, final = base(flow, config, done)
             entry["ok"] = (entry["ok"] and entry["workers_started"] == 0 and entry["confirmation"] is None
                            and (entry["status"], entry["reason"]) == ("error", reason)
                            and "capture" not in final and not flow.window.run_screen_log)
             flows[name] = entry
 
-        # 7. A run too short for its script: the window says so and the report lists the steps not reached.
-        config = make("out_of_time", guidance.SCRIPT_POSITIONS, seconds=2, scale=0.3)  # 1.2 s a step: one fits.
+        # 8. A run too short for its script: the window says so and the report lists the steps not reached.
+        config = make("out_of_time", guidance.SCRIPT_POSITIONS, seconds=4, scale=0.6)  # 2.4 s a step: one fits.
         flow, started = begin(config)
         done = started and flow.finish_after_run()
         entry, final = base(flow, config, done)
@@ -1065,6 +1343,19 @@ def validate(helper=None):
             except ValueError:
                 refused.append(path.name)
         flows["report_path_checked_first"] = {"ok": refused == ["positions.json", "a.json", "a.txt"], "refused": refused}
+
+        # The worker run by hand, as a shell would: it reads nothing, launches nothing and says why.
+        by_hand = subprocess.run([sys.executable, str(Path(__file__).resolve()), WORKER_FLAG],
+                                 input=json.dumps(make("by_hand", guidance.SCRIPT_REMOVAL).spec()) + "\n",
+                                 capture_output=True, text=True, timeout=60)
+        try:
+            answer = json.loads(by_hand.stdout)["report"]
+        except (ValueError, KeyError):
+            answer = {}
+        flows["worker_refuses_a_hand_launch"] = {
+            "ok": (by_hand.returncode == 1 and answer.get("reason") == "guide_worker_not_launched_by_window"
+                   and answer.get("confirmation") is None and "capture" not in answer),
+            "reason": answer.get("reason"), "exit_code": by_hand.returncode}
     failed = sorted(name for name, entry in flows.items() if not entry["ok"])
     report.update(flows_failed=failed, status="validation_failed" if failed else "validated",
                   reason="flows_failed" if failed else None, exit_code=1 if failed else 0)
@@ -1082,7 +1373,8 @@ def run_window(config, *, windowed=False):
 
     def note_signal(number, _frame):  # Taken up on the window's next tick: the helper is ended, the report kept.
         window.signal_number = number
-    previous = {number: signal.signal(number, note_signal) for number in (signal.SIGINT, signal.SIGTERM)}
+    # SIGHUP too: a dropped SSH session or a closed terminal must not take the window without its report.
+    previous = {number: signal.signal(number, note_signal) for number in SIGNALS}
     try:
         window.show() if windowed else window.showMaximized()
         application.exec()
@@ -1100,8 +1392,10 @@ def build_parser():
     parser.add_argument("--validate", action="store_true",
                         help="The whole window flow offscreen against the helper's fake build; nothing real, nothing shown")
     parser.add_argument(WORKER_FLAG, action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(WORKER_FD_FLAG, type=int, help=argparse.SUPPRESS)
     parser.add_argument("--script", choices=tuple(guidance.SCRIPTS),
-                        help="removal: two distances, then the headset comes off; positions: five places, no clicks")
+                        help="removal: two distances, then the headset comes off (one click); positions: five places, "
+                             "no click")
     parser.add_argument("--helper", type=Path, help="The sightcircuit-camera-helper binary, given explicitly; never searched "
                                                     "(--validate: a fake-backend build; default the one under artifacts/)")
     parser.add_argument("--report", type=Path,
@@ -1110,7 +1404,7 @@ def build_parser():
     parser.add_argument("--target-label", default=DEFAULT_TARGET, metavar="CLASS",
                         help=f"The detector class the wearer holds up; default {DEFAULT_TARGET}")
     parser.add_argument("--seconds", type=int, choices=range(1, MAX_SECONDS + 1), metavar=f"1..{MAX_SECONDS}",
-                        help="The run's time bound; default 30 for removal, 25 for positions")
+                        help=f"The run's time bound; default {MAX_SECONDS}")
     parser.add_argument("--max-frames", type=int, choices=range(1, MAX_FRAMES + 1), metavar=f"1..{MAX_FRAMES}",
                         help="The run's frame bound; default seconds times frames a second")
     parser.add_argument("--fps", type=int, choices=range(1, MAX_FPS + 1), default=DEFAULT_FPS, metavar=f"1..{MAX_FPS}")
@@ -1132,7 +1426,7 @@ def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.worker:
-        return worker_main()
+        return worker_main(args.worker_fd)
     run_arguments = (args.allow_camera_input or args.script or args.report or args.seconds or args.max_frames
                      or args.helper_arg or args.windowed)
     if args.validate:
@@ -1183,6 +1477,7 @@ def main(argv=None):
             None, script=config.script, started=False, ended_by=guidance.ENDED_NOT_STARTED,
             observations={"starting_state": None, "passthrough_after": None, "headset": None,
                           "watch_seconds_elapsed": None, "watch_completed": False},
+            watch=guidance.WATCH_NOT_STARTED,
             limits_ms={"late_frame_limit_ms": config.late_frame_limit_ms,
                        "removal_end_limit_ms": config.removal_end_limit_ms})
     else:

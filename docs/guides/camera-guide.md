@@ -47,52 +47,107 @@ metadata, never a pixel, and is written only to the path named with
 
 ## What the wearer sees
 
-Large type and large buttons, one thing on each screen. Only the pointer
-works: no key starts, answers or stops anything.
+Large type and large buttons, one thing on each screen. The type is sized
+from the window's own size.
 
 1. **Before we start.** "What do you see in the headset right now?" with
    "Colour, stable" and "Something else". "Something else" ends there:
    nothing is launched, and the result screen says to tell the Frame manager.
-2. **Please read.** The helper's export notice as the contract has it,
+2. **What will happen.** The script's steps in a few lines, and **Next**.
+3. **Please read.** The helper's export notice as the contract has it,
    without its closing instruction to type the answer; the run's bounds; the
-   target; where the report will be saved; then **Start** and **Cancel**.
-   Clicking Start is the informed start of this one run. The report records
+   target; where the report will be saved; what to be holding; then **Start**
+   and **Cancel**. Start can be clicked only after the notice has been up for
+   5 seconds, counted down on the screen ("You can start in 3 s"). Clicking
+   Start is the informed start of this one run. The report records
    `confirmation: operator_window`. The typed `yes` stays for the terminal
    commands.
-3. **The run.** One instruction at a time with a drawn picture, a progress
+4. **The run.** One instruction at a time with a drawn picture, a progress
    bar while a step is recorded, the step number, the time left, and
-   **Stop**. Until the camera reader is ready the screen says "Starting.
-   Please wait".
-4. **After the run.** For the removal script: "Put the headset back on if it
-   is off. Then choose one", with "I took the headset off and it is back on"
-   and "I did not take it off". Then the passthrough watch: a 30-second
-   countdown with "Something changed", which can be clicked at any moment,
-   and "Passthrough unchanged", which can be clicked when the count reaches 0.
-5. **Result.** The run in plain words (for example "bottle seen in 9 of 11
-   seconds while it was held in view"), the report's path and **Close**.
+   **Stop**. Until the camera reader is ready the screen says "Starting the
+   camera reader. Please wait", counts the seconds and moves, and after 10
+   seconds says to click Stop and tell the Frame manager if nothing changes.
+5. **After the run.** If the wearer clicked that the headset was coming off:
+   "Did you take the headset off? If it is off, put it back on first", with
+   "Yes, off and back on" and "No, I kept it on". Then the passthrough
+   watch: a 30-second countdown with "Something changed", which can be
+   clicked during the watch, and "Passthrough unchanged", which can be
+   clicked when the count reaches 0. "Something changed" is asked once more
+   ("You said the passthrough picture changed", **Confirm** or **Go back**),
+   because under the passthrough rule that answer stops the camera track.
+6. **Result.** The run in plain words (for example "bottle seen in 9 of 11
+   seconds while it was held in view"), the report's path and **Close**,
+   which can be clicked after the result has been up for 3 seconds.
 
-Stop, closing the window or a signal during the run ends the helper cleanly
+Stop, closing the window or a signal during the run (SIGINT, SIGTERM, or the
+SIGHUP of a dropped SSH session or a closed terminal) ends the helper cleanly
 and still leaves the report. One launch is one run: a second run is a second
 launch, a second notice and a second Start.
 
+### A pointer interface that cannot be worked by accident
+
+- No key starts, answers or stops anything.
+- Every button is dead for 1.2 seconds after it appears, on every screen and
+  for the one button that appears during the run. A double click, or a
+  second click already on its way, lands on nothing.
+- Consecutive screens put their buttons in different places: each screen has
+  two bands for buttons and uses the one the screen before it did not. So no
+  button sits where the last screen's button was.
+- The two waits that matter (before Start, before Close) are shown as counts.
+
+### When a run does not go as scripted
+
+- **The launch fails.** If the run read no camera frame and did not end on a
+  presence stop, there is no headset question and no watch: the result says
+  at once what happened, "No camera frame was read" and "Tell the Frame
+  manager", and the report is saved (`guide.watch: no_frame_read`). The
+  helper's `ready` is not used for this, because it can arrive before the
+  helper has connected to the camera service.
+- **The reader ends on a presence stop before the remove click.** The run is
+  watched, and the result says "The camera reader ended early
+  (headset_removed), before the click to take the headset off"; it does not
+  say the headset came off.
+- **The report does not confirm a clean shutdown, or the worker dies.** The
+  helper is not proven ended. The window says the run was interrupted, waits
+  until the helper's own bound has certainly passed (the run's seconds plus
+  ten, from the Start click), then holds the watch. The result says only
+  "The run ended without a clean shutdown" or "The run was interrupted" and
+  "Tell the Frame manager": nothing derived from a frame is put into words.
+- **Stop while the helper is starting.** A stop that arrives before the
+  helper is launched launches nothing. One that arrives during the launch is
+  passed on once the helper is ready (or after 3 seconds), so the helper
+  stops cleanly.
+
 ## The two scripts
 
-`--script removal`, at most 30 seconds:
+Both are shown to the wearer before Start, and both take the command's whole
+30 seconds. The time left on the screen is counted from the Start click,
+which is before the helper begins its own bound, so the window never shows
+more time than the helper has. The script's steps are counted from the
+helper's `ready`.
+
+`--script removal` needs **one click** during the run:
 
 | Step | The wearer is told | Mark | Recorded |
 | --- | --- | --- | --- |
-| 1 | Hold the bottle about half a metre in front of you, then click Ready | `near`, at the click | about 5 s, with the bar |
-| 2 | Now about a metre away, then click Ready | `far`, at the click | about 5 s, with the bar |
+| before Start | Hold the bottle about half a metre in front of you, and keep holding it when you click Start | | |
+| 1 | Keep holding the bottle about half a metre in front of you | `near`, as soon as the reader is ready | about 4 s, with the bar |
+| 2 | Now move it to about a metre away, and hold it there | `far`, when the instruction appears | about 2 s to move and 4 s held, with the bar |
 | 3 | Click, then take the headset off. Put it back on when you like | `remove`, at the click | until the run ends |
 
-After the third click the screen says "You can take the headset off now". The
-run ends by itself when the helper reports `headset_removed` or `standby`, or
-on its bound.
+The one button appears 10 seconds after the reader is ready, which leaves 20
+seconds of the run less what the launch took. After the click the screen says
+"You can take the headset off now". The run ends by itself when the helper
+reports `headset_removed` or `standby`, or on its bound. If fewer than 5
+seconds are left, the button is taken down at that moment and the screen says
+there is not enough time: a click whose mark could not be recorded is never
+accepted. The `far` interval includes the two seconds in which the bottle is
+being moved.
 
-`--script positions`, at most 25 seconds, no click after Start: centre, left,
-right, up and down for about 4 seconds each, each with a dot on the screen
-showing where to hold the bottle and its mark made when the instruction
-appears, then `out_of_view` for about 3 seconds.
+`--script positions` needs no click after Start: centre, left, right, up and
+down for about 4 seconds each, each with a dot on the screen showing where to
+hold the bottle and its mark made when the instruction appears, then
+`out_of_view` for about 3 seconds.
 
 Marks are from the [closed vocabulary](camera-recognize.md#times-marks-and-the-target-summary)
 and are recorded with source `window`; the summaries are the recognition
@@ -126,7 +181,8 @@ so that it appears on the Frame's desktop:
 
 The second run is a second command, with `--script positions` and another
 report path. `--report` is required and is checked before the window opens: a
-new `.json` path in an existing directory. An existing file, a missing
+new `.json` path in an existing directory the command can write to (it makes
+and removes a probe file there). An existing file, a missing or read-only
 directory or another suffix is refused with nothing shown, and nothing is
 ever overwritten. The helper path is checked the same way and by the same
 rules as the recognition command's. `--target-label` (default `bottle`),
@@ -144,19 +200,23 @@ The wearer puts the headset on, finds the window on the desktop and works it
 with the controller's pointer. The Frame manager does not click for the
 wearer. The accepted passthrough rule applies as in every device step: any
 change in the passthrough image during the run or the watch stops the SDK
-track, and "Something changed" is how the wearer says so.
+track, and "Something changed", confirmed, is how the wearer says so.
 
 ## The report
 
 `camera_recognize`'s [report](camera-recognize.md#the-report), with
-`confirmation: operator_window` and a `guide` block:
+`confirmation: operator_window` and a `guide` block (its own
+`schema_version` is 2):
 
 - `script`, `confirmation`, `started_by_start_button`, and `ended_by`
   (`helper`, `stop_button`, `window_closed`, `cancel_button`, `signal` or
   `not_started`);
+- `start_click_monotonic_ns` and `reader_ready_monotonic_ns`;
 - `steps`: per step its label, how it begins, whether it was reached, the
   time of its mark and the index of that mark among the recorded marks;
   `steps_not_reached`; `out_of_time`;
+- `watch`: `held`, `no_frame_read` (a launch that failed) or
+  `run_not_started`;
 - `observations`, closed choices only: `starting_state` (`colour_stable` or
   `something_else`), `headset` (`removed_and_back`, `not_removed` or
   `not_asked`), `passthrough_after` (`unchanged` or `changed`), the seconds
@@ -175,19 +235,38 @@ The run is in a second process of the command, which calls `recognize()` on
 its main thread as the supervision primitive requires. The window's process
 loads no detector and reads no frame. During the run the worker tells it one
 thing: that the helper's `ready` was accepted, with no value attached. That
-moment starts the script's clock, so the first step is not spent on a helper
-that is still connecting. Any other line from the worker is dropped and
-counted. What the run screen shows is `Guide.view`
-(`sightcircuit/camera/guide.py`), a function of the script, the clicks, that
-ready time and the clock. The report crosses to the window only after
-`recognize()` has returned, which is after the helper has ended. If the
-window's process dies, the worker sees its input close and stops the helper.
+moment starts the script's steps. Any other line from the worker, and any
+line without the worker's token, is dropped and counted. What the run screen
+shows is `Guide.view` (`sightcircuit/camera/guide.py`), a function of the
+script, the Start click's time, that ready time, the one click and the clock.
+The report crosses to the window only after `recognize()` has returned, which
+is after the helper has ended. If the window's process dies, the worker sees
+its input close and stops the helper.
+
+`ready` is not the first frame. The helper's fake build, run with a forced
+pixel path, says `ready` before it connects to its service; when `ready`
+comes before frames flow, the first step's seconds begin before there is
+anything to detect on. Whether that happens on the Frame, and by how much, is
+for the device run to show: the report has the Start click, the ready time
+and every frame's time.
+
+**The worker runs only for its window.** `camera_guide --worker` is the
+second process and is never given by hand. Before it reads anything else it
+must find, on a pipe it inherited, a one-shot token written by its own parent
+process; without that it reads nothing, launches nothing and reports
+`guide_worker_not_launched_by_window`. So a shell cannot reach a confirmed
+export through it without the window, the notice and the click. This is a
+procedural control against mistakes, as the one-run scope record is, not a
+cryptographic one: a program written to imitate the window could satisfy it.
 
 ## Cloud checks
 
 `tests/test_camera_guide.py` covers the script logic and the notice derived
-from the contract (standard library), the worker against the stand-in helper,
-the window offscreen with Qt's test tools, and `--validate`:
+from the contract (standard library), the worker's handshake and its
+refusals, the worker against the stand-in helper, the window offscreen with
+Qt's test tools (clicks sent to the top-level window at a point, including
+double clicks and second clicks 100 to 900 ms later on every transition, and
+button texts at 4:3, 5:4 and portrait sizes), and `--validate`:
 
 ```bash
 bash scripts/build_camera_helper.sh --fake
@@ -196,7 +275,9 @@ bash scripts/build_camera_helper.sh --fake
 
 `--validate` clicks through the whole window offscreen against the helper's
 fake backend with a scripted detector: both scripts, a run that reaches its
-bound, a presence end, Stop, the window closed mid-run, Cancel, a declined
-start and a run too short for its script. It refuses any helper that does not
-describe itself as the fake before a window is made, so it can never open a
-camera. These are cloud and CI results; none is a Frame result.
+bound, a presence end, Stop, the window closed mid-run, a launch that fails,
+Cancel, a declined start, a run too short for its script, the refused report
+paths and the worker refusing a launch by hand. Its guard and dwell times
+are shortened so that it runs in about half a minute. It refuses any helper
+that does not describe itself as the fake before a window is made, so it can
+never open a camera. These are cloud and CI results; none is a Frame result.
