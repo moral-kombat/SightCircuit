@@ -9,6 +9,7 @@ import io
 import os
 from pathlib import Path
 import sys
+import threading
 import time
 import unittest
 
@@ -301,6 +302,120 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual((summary["windows"], summary["intervals"], summary["removal"]), ([], [], []))
         self.assertEqual(summary["coverage"], {"spans": [], "windows": 0, "windows_with_target": 0,
                                                "windows_without_frames": 0, "fraction": None})
+
+    def test_a_window_mark_bounds_its_interval_at_its_actual_time(self):
+        # A window mark is made when the wearer clicks: there is no scheduled time, so the click's time is the boundary.
+        frames = [frame(at_ms, (50, 50)) for at_ms in range(0, 4000, 200)]
+        recorded = [mark(1, "near", 1037, source="window"), mark(2, "far", 2512, source="window")]
+        self.assertEqual([marks.boundary_ns(entry) for entry in recorded], [ORIGIN + 1037 * MS, ORIGIN + 2512 * MS])
+        summary = marks.summarize(frames, recorded, origin_ns=ORIGIN, run_end_ns=ORIGIN + 4000 * MS, with_target=True)
+        near, far = summary["intervals"]
+        self.assertEqual((near["source"], near["boundary"], near["duration_ms"]), ("window", "actual", 1475.0))
+        self.assertEqual((near["frames"], far["frames"]), (7, 7))  # 1200..2400 and 2600..3800, every 200 ms.
+        self.assertEqual(summary["coverage"]["spans"][0]["labels"], ["near", "far"])
+
+    def test_the_removal_limits_are_parameters_with_the_current_values_as_defaults(self):
+        frames = [frame(at_ms) for at_ms in (0, 500, 1000, 1500, 2600, 3900)]
+        recorded = [mark(1, "remove", 1000, source="window")]
+        end = {"monotonic_ns": ORIGIN + 6000 * MS, "reason": "headset_removed"}
+        options = {"origin_ns": ORIGIN, "run_end_ns": end["monotonic_ns"], "helper_end": end}
+        (default,) = marks.summarize(frames, recorded, **options)["removal"]
+        self.assertEqual((default["late_frame_limit_ms"], default["end_limit_ms"]),
+                         (marks.LATE_FRAME_LIMIT_MS, marks.REMOVAL_END_LIMIT_MS))
+        self.assertEqual((default["late_frame_limit_ms"], default["end_limit_ms"]), (2000, 3000))
+        self.assertEqual((default["frames_acquired_over_limit"], default["helper_end_within_limit"]), (1, False))
+        (wider,) = marks.summarize(frames, recorded, late_frame_limit_ms=3500, removal_end_limit_ms=6000,
+                                   **options)["removal"]
+        self.assertEqual((wider["late_frame_limit_ms"], wider["end_limit_ms"]), (3500, 6000))
+        self.assertEqual((wider["frames_acquired_over_limit"], wider["helper_end_within_limit"]), (0, True))
+        # What was measured is the same whatever it is compared with.
+        measured = ("frames_processed_after_mark", "last_frame_acquire_after_mark_ms", "helper_end_after_mark_ms",
+                    "helper_end_reason", "helper_end_is_presence_stop", "helper_end_after_last_frame_ms")
+        self.assertEqual([default[name] for name in measured], [wider[name] for name in measured])
+        self.assertEqual([default[name] for name in measured], [3, 2900.0, 5000.0, "headset_removed", True, 2100.0])
+
+    def test_the_time_from_the_last_frame_to_the_helpers_end_needs_a_frame_and_an_end_record(self):
+        recorded = [mark(1, "remove", 1000, source="window")]
+        end = {"monotonic_ns": ORIGIN + 3000 * MS, "reason": "standby"}
+        (no_end,) = marks.summarize([frame(500)], recorded, origin_ns=ORIGIN, run_end_ns=ORIGIN + 3000 * MS)["removal"]
+        (no_frame,) = marks.summarize([], recorded, origin_ns=None, run_end_ns=end["monotonic_ns"],
+                                      helper_end=end)["removal"]
+        (before,) = marks.summarize([frame(500)], recorded, origin_ns=ORIGIN, run_end_ns=end["monotonic_ns"],
+                                    helper_end=end)["removal"]
+        self.assertEqual((no_end["helper_end_after_last_frame_ms"], no_frame["helper_end_after_last_frame_ms"]),
+                         (None, None))
+        # The last frame was acquired before the click: nothing after the mark, and still 2.5 s to the end record.
+        self.assertEqual((before["frames_processed_after_mark"], before["helper_end_after_last_frame_ms"]), (0, 2500.0))
+
+
+class WindowMarkTests(unittest.TestCase):
+    """``MarkSession.mark``: a mark recorded from code (a guiding window's click), beside cues and keys."""
+
+    def session(self, **options):
+        session = marks.MarkSession(marks.Clock(), **options)
+        self.addCleanup(session.stop)
+        return session
+
+    def test_the_sources_are_cue_key_and_window(self):
+        self.assertEqual(marks.SOURCES, ("cue", "key", "window"))
+        self.assertEqual((marks.SOURCE_CUE, marks.SOURCE_KEY, marks.SOURCE_WINDOW), marks.SOURCES)
+
+    def test_a_window_mark_is_recorded_at_the_time_given_with_its_own_source_and_no_announcement(self):
+        output = io.StringIO()
+        session = self.session(output=output)
+        session.start()
+        self.assertEqual(session.threads, [])  # No cue and no key source: a window mark starts no thread.
+        session.first_frame(ORIGIN)
+        self.assertTrue(session.mark("near", ORIGIN + 1500 * MS))
+        before = time.monotonic_ns()
+        self.assertTrue(session.mark("far"))
+        after = time.monotonic_ns()
+        near, far = session.marks()
+        self.assertEqual({name: near[name] for name in ("index", "source", "label", "monotonic_ns", "offset_ms")},
+                         {"index": 1, "source": "window", "label": "near", "monotonic_ns": ORIGIN + 1500 * MS,
+                          "offset_ms": 1500.0})
+        self.assertEqual(near["utc_ns"], session.clock.utc(ORIGIN + 1500 * MS))
+        self.assertNotIn("scheduled_monotonic_ns", near)  # Its actual time is its boundary.
+        self.assertEqual(marks.boundary_ns(near), near["monotonic_ns"])
+        self.assertTrue(before <= far["monotonic_ns"] <= after)
+        self.assertEqual(output.getvalue(), "")
+        report = session.report()
+        self.assertEqual((report["window_marks"], report["key_presses"], report["key_marks_enabled"]), (2, 0, False))
+
+    def test_only_vocabulary_labels_and_integer_times_are_recorded(self):
+        session = self.session()
+        for label in ("bottle", "mark", "", None, 3, "Near"):
+            with self.subTest(label=label), self.assertRaises(ValueError):
+                session.mark(label)
+        for when in (1.5, "1", True):
+            with self.subTest(when=when), self.assertRaises(ValueError):
+                session.mark("near", when)
+        self.assertEqual((session.marks(), session.report()["window_marks"]), ([], 0))
+
+    def test_window_marks_are_bounded_as_key_marks_are_and_every_cue_keeps_its_place(self):
+        cues = [(index * 1000, "left") for index in range(4)]
+        session = self.session(cues=cues)
+        self.assertEqual(session.key_capacity, marks.MAX_MARKS - 4)
+        results = [session.mark("near", ORIGIN + index) for index in range(marks.MAX_MARKS)]
+        self.assertEqual((results.count(True), results.count(False)), (marks.MAX_MARKS - 4, 4))
+        report = session.report()
+        self.assertEqual((len(report["recorded"]), report["marks_dropped"], report["window_marks"]),
+                         (marks.MAX_MARKS - 4, 4, marks.MAX_MARKS))
+
+    def test_any_thread_may_mark_and_a_stopped_session_records_nothing(self):
+        session = self.session()
+        threads = [threading.Thread(target=lambda: [session.mark("centre") for _ in range(4)]) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(5)
+        recorded = session.marks()
+        self.assertEqual([entry["index"] for entry in recorded], list(range(1, 33)))
+        self.assertEqual({entry["source"] for entry in recorded}, {"window"})
+        self.assertEqual([entry["monotonic_ns"] for entry in recorded], sorted(entry["monotonic_ns"] for entry in recorded))
+        session.stop()
+        self.assertFalse(session.mark("far"))
+        self.assertEqual(len(session.marks()), 32)
 
 
 class MarkSessionTests(unittest.TestCase):

@@ -1,5 +1,9 @@
 """The informed start of the camera commands: the notices on the operator's terminal and the typed answer.
 
+``camera_guide`` shows the same export notice in its window, without the
+closing instruction to type (``export_notice_body``), above a Start button;
+its click is recorded as ``operator_window``.
+
 Shared by ``camera_recognize`` and ``camera_hud`` so that neither command
 imports the other. Owner decision 2026-11-09 (and decision 8 of 2026-11-16:
 one typed start per launch): the command prints the notices on its terminal,
@@ -18,6 +22,10 @@ from . import contract
 
 CONFIRMATION_ANSWER = "yes"
 OPERATOR_TERMINAL = "operator_terminal"  # A report's ``confirmation`` once the operator typed the answer here.
+# A report's ``confirmation`` once the wearer clicked Start in ``camera_guide``'s window, under the same notice
+# (owner decision 2026-11-19, "Yes, tap to start"). The typed answer stays for the terminal commands.
+OPERATOR_WINDOW = "operator_window"
+TYPED_CLOSING = f" Type {CONFIRMATION_ANSWER} to continue."  # How ``contract.EXPORT_NOTICE`` ends.
 # What a display run adds to the helper's export notice (owner decision 14, 2026-11-16: camera-derived labels
 # and arrows may be shown to the wearer during attended, bounded runs).
 DISPLAY_NOTICE = (
@@ -34,6 +42,18 @@ SYNTHETIC_NOTICE = (
     "on this terminal and written to a file only if you named --report. Stop with Ctrl-C at any passthrough "
     "change, any green input, or when the wearer asks. Typing yes starts this one run; it is not an approval "
     "and creates no scope record.")
+
+
+def export_notice_body():
+    """``contract.EXPORT_NOTICE`` without its closing instruction to type the answer, for a window with a Start button.
+
+    Derived from the constant, never a second copy: a notice that no longer
+    ends with ``TYPED_CLOSING`` is a ``ValueError``, so the window cannot show
+    a text that has drifted from the contract's.
+    """
+    if not contract.EXPORT_NOTICE.endswith(TYPED_CLOSING):
+        raise ValueError("the export notice no longer ends with its typed-answer instruction")
+    return contract.EXPORT_NOTICE[:-len(TYPED_CLOSING)]
 
 
 def confirm(notices, bounds, *, stdin=None, output=None):

@@ -25,4 +25,5 @@ COMMANDS = (
     "fallback_measure",
     "camera_recognize",
     "camera_hud",
+    "camera_guide",
 )

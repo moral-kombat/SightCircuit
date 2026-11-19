@@ -44,6 +44,7 @@ sightcircuit-agent-enforcement-check = "sightcircuit.commands.agent_enforcement_
 sightcircuit-fallback-measure = "sightcircuit.commands.fallback_measure:main"
 sightcircuit-camera-recognize = "sightcircuit.commands.camera_recognize:main"
 sightcircuit-camera-hud = "sightcircuit.commands.camera_hud:main"
+sightcircuit-camera-guide = "sightcircuit.commands.camera_guide:main"
 
 [tool.setuptools.packages.find]
 include = ["sightcircuit*"]
