@@ -15,9 +15,14 @@ the owner's explicit approval first, as every
 [lane L device step](../live-capture.md#camera-display-work-order-adopted-2026-11-16)
 does.
 
-**Nothing here has run on the Frame.** The command has been checked in the
-cloud only: offscreen, against the camera stand-in and the helper's fake
-backend. No time or count on this page is a Frame measurement.
+**One run on the Frame so far.** Run 1 of L-D1 went through this window on
+2026-11-19 ([E100](../evidence/e100.md)): the wearer found, started and
+finished it unaided with the `removal` script, the bottle was detected in
+none of 150 frames, and the run ended on its bound, not on a presence stop.
+Everything else here, the `positions` and `scan` scripts and the region
+options included, has been checked in the cloud only: offscreen, against the
+camera stand-in and the helper's fake backend. No time or count on this page
+is a Frame measurement unless it says so.
 
 [Camera recognition](camera-recognize.md) · [Scope](../poc-scope.md) ·
 [Gates](../../sightcircuit/gates.py) · [Current work](../live-capture.md#current-work-order)
@@ -137,9 +142,9 @@ launch, a second notice and a second Start.
   passed on once the helper is ready (or after 3 seconds), so the helper
   stops cleanly.
 
-## The two scripts
+## The three scripts
 
-Both are shown to the wearer before Start, and both take the command's whole
+Each is shown to the wearer before Start, and each takes the command's whole
 30 seconds. The time left on the screen is counted from the Start click,
 which is before the helper begins its own bound, so the window never shows
 more time than the helper has. The script's steps are counted from the
@@ -168,6 +173,12 @@ being moved.
 down for about 4 seconds each, each with a dot on the screen showing where to
 hold the bottle and its mark made when the instruction appears, then
 `out_of_view` for about 3 seconds.
+
+`--script scan` needs no click after Start either, and is one instruction
+for the whole run: "Hold the bottle upright, straight ahead of you, about
+half a metre away. Keep it still", marked `near` as soon as the reader is
+ready, with the bar running for 28 seconds. What it is for is in
+[the scan](#the-scan-where-in-the-image-and-which-way-up) below.
 
 Marks are from the [closed vocabulary](camera-recognize.md#times-marks-and-the-target-summary)
 and are recorded with source `window`; the summaries are the recognition
@@ -213,6 +224,159 @@ marked `mark_after_presence_signal`, counts as neither a presence stop nor
 within the limit, and the result says "SteamVR had already reported the
 headset off ... before your click to take it off". Nothing about the
 watch is shown during the run. No time here is a Frame measurement.
+
+## A region of view, and the detector
+
+Work-order item L14, after [L-D1's first run](../live-capture.md#camera-display-work-order-adopted-2026-11-16)
+found the bottle in none of 150 frames: the camera frame is 2464 pixels
+square and very wide, the run resized all of it to 960, and a hand-held
+bottle is then too small for the detector. The owner decided on 2026-11-20
+that the detector looks at the middle of the wearer's view, enlarged, and
+that the second detector is tried.
+
+- `--region X0,Y0,X1,Y1` makes the detector look at that rectangle of the
+  frame only, given as fractions with the origin at the top left
+  (`0.25,0.25,0.75,0.75` is the centre half). The rectangle is taken out of
+  the native frame before the resize, so the object is larger in what the
+  detector sees; nothing outside it is copied.
+- `--rotation 0|90|180|270` turns what the detector sees by that many degrees
+  clockwise.
+- `--detector yolox-nano` chooses the second detector (`mobilenet-ssd` is the
+  default).
+
+They are [`camera_recognize`'s options](camera-recognize.md#a-region-of-view)
+and apply to the `removal` and `positions` scripts. Every box, cell, side and
+coverage count stays over the whole frame: boxes are mapped back, and each
+frame record names its space (`whole_frame_processing_pixels`). The report's
+`view` block records the region, the rotation and the detector used. A
+malformed region is refused on the command line, before any window. Without
+`--region` and `--rotation` nothing is cropped and the report is what it was.
+
+Neither the region nor the rotation is a finding. Where "straight ahead"
+falls in the left camera's image, and which way up that image is, have not
+been measured, and no calibration data is read to find out. That is what the
+scan is for.
+
+### The scan: where in the image, and which way up
+
+One bounded 30-second run, the wearer holding the bottle still and straight
+ahead at about half a metre:
+
+```bash
+.venv-replay/bin/python scripts/camera_guide.py --allow-camera-input \
+  --helper /path/outside/the/checkout/sightcircuit-camera-helper \
+  --script scan --report artifacts/camera/guide-scan-01.json
+```
+
+Each processed frame is seen through the next entry of a fixed schedule, and
+the schedule starts again when it ends. An entry is one of six windows at one
+of four rotations, 24 entries in all:
+
+| Window | Fractions `x0,y0,x1,y1` | Why |
+| --- | --- | --- |
+| `whole` | `0,0,1,1` | The run as it was |
+| `centre_half` | `0.25,0.25,0.75,0.75` | The owner's choice: the middle, enlarged twice |
+| `upper_left`, `upper_right`, `lower_left`, `lower_right` | `0,0,0.6,0.6` and so on | 0.6 of the frame each, overlapping by 0.2: an object up to a fifth of the frame lies whole in at least one, wherever it is |
+
+Consecutive frames never share a rotation and every six frames visit every
+window, so a hand that drifts during the run does not favour one entry. At 5
+frames a second the schedule takes 4.8 seconds; a 150-frame run goes through
+it just over six times, which gives each entry 6 or 7 frames, each rotation
+37 or 38 and each window 25.
+
+Every detector named with `--scan-detectors` (default both,
+`mobilenet-ssd,yolox-nano`) looks at each frame's one prepared image, so the
+frame budget is not divided between them. `--detector`, which must be one of
+them, fills the report's usual fields (the per-frame `detections`, `target`,
+`summary` and the `inference_ms` statistics). `--scan-detectors yolox-nano
+--detector yolox-nano` runs one. `--region` and `--rotation` are refused with
+this script.
+
+A scan needs bounds it can serve: at least 10 seconds and 48 frames (two
+passes of the schedule). Less is refused on the command line, before any
+window. The bar on the run screen runs for the run's time bound less two
+seconds, so it and the run end together.
+
+The report gains `scan`:
+
+- `schedule`: the 24 entries as run (`index`, `name`, `region`, `rotation`,
+  and where that region lay, `crop_native_xyxy` and `resized_size`). A frame
+  record carries only `view.index`, the entry it was seen through;
+- per detector: `frames`, `target_frames` and their `share`, that detector's
+  inference p50, p95 and maximum, and four tallies, `entries` (per schedule
+  entry), `by_rotation`, `by_axis` and `by_region`. Each tally row has the
+  frames tried, the frames with the target, their share, the best and the
+  median confidence, and the median target box and its centre as a fraction
+  of the frame, over the whole frame. Groups differ in size (38, 38, 37 and
+  37 frames per rotation in a 150-frame run), so rows are compared by share;
+- `best_entry`: the entry with the largest share of its frames holding the
+  target, among entries tried at least 3 times, or `null`. Three is under
+  half of an entry's 6 or 7 frames, and it stops one lucky frame (1 of 1)
+  from outranking 5 of 6. It is an aid to reading, not a verdict;
+- `failed` per detector and `detectors_failed`: see below.
+
+The run detector's result for a frame is the record's own `target`; the
+other detector's is under the record's `scan`. Neither is repeated.
+
+**The scan gives the axis, and may not give which way up.** A detector finds
+a bottle at a turn and, somewhat less often, at the opposite turn: a bottle
+looks much the same from both ends. In the independent review's cloud check an
+image stored a quarter turn off was found at 90 degrees in 6 of 12 frames
+and at 270 in 4 of 12. So read `by_axis` first (`0_180` against `90_270`):
+that is what one scan can settle. Treat the leading rotation inside the axis
+as a lean, not a finding, unless its share is far ahead. Which way up is
+settled by a run that marks up and down: the `positions` script with
+`--region` and either rotation of the axis found, where the `up` and `down`
+intervals' `rows` and `columns` tallies say which side of the image is the
+wearer's up. That needs counts only.
+
+After the axis, the median box says where straight ahead falls in the image,
+and `by_region` and `entries` say which window a follow-up run should use as
+its `--region`. Per-entry counts are small (6 or 7 frames), and a detector
+can name a bottle that is not there, so a result carried by one entry is
+weak.
+
+**No coverage figure.** A scan's 150 frames are 24 different views, so the
+share of 1-second windows that held the bottle would not be row G7's
+coverage, and the report does not offer one: `summary.coverage` is `null`
+with `summary.coverage_omitted: scan_pools_views`, the intervals and windows
+carry no target counts, and the result screen has no "seen in X of Y
+seconds" line. The scan's own tallies are the reading.
+
+**If one detector fails.** A detector that raises, or returns something that
+is not a result, is not used again in that run. The other carries on to the
+bound and keeps its tallies; the failed one's tallies cover the frames before
+it stopped. The report says which (`scan.detectors_failed`, and per detector
+`failed` with a closed `reason`, `detector_raised` or
+`invalid_detection_result`, and the `frame_index`; never the exception's
+text), and the result screen says "yolox-nano failed after 7 frames
+(detector_raised). Tell the Frame manager." If the run's own detector is the
+one that failed, its records are marked `run_detector_failed` and its usual
+fields are empty from there on. If every scan detector fails, the run ends
+`error`, `processing_failed`, as any run with a failing detector does; outside
+a scan a failing detector still ends the run at once.
+
+The window shows what it always shows during the run: the instruction, the
+bar and the time left. After the helper has ended, the result screen gives,
+per detector, its count ("yolox-nano: bottle in 31 of 150 frames"), the two
+leading rotations by share ("by turn of the image: 90 degrees 29 of 38, 270
+degrees 22 of 37", with "(a tie)" when the shares are equal) and the two
+leading regions, then one line saying that a turn and its opposite look
+alike to the detectors.
+
+**Cloud figures, not Frame measurements.** On a 4-core 2.3 GHz Xeon in the
+cloud, with synthetic 2464-pixel frames from the camera stand-in at 5 frames
+a second: processing p95 was 37 ms for the whole frame and 32 ms for the
+centre half with `mobilenet-ssd`, 20 and 18 ms with `yolox-nano`, and 59 to
+71 ms for the scan with both detectors (maximum 136 ms). A scan report from
+that machine was about 0.23 MB for 127 frames, against 0.12 MB without the
+scan. The one Frame figure here is E100's: a processing p95 of 94 ms with
+`mobilenet-ssd` on the whole frame. `yolox-nano` has not been timed on the
+Frame's camera path, so the scan's time per frame there is not known; if
+frames are replaced in the latest slot, the schedule follows the frames that
+were processed and the report's `pending_frames_replaced` and timings say
+so. Whether either detector finds the bottle through any window on the Frame
+is what the run is for.
 
 ## How the run is launched on the Frame
 
@@ -261,7 +425,8 @@ track, and "Something changed", confirmed, is how the wearer says so.
 
 `camera_recognize`'s [report](camera-recognize.md#the-report), with
 `confirmation: operator_window` and a `guide` block (its own
-`schema_version` is 2):
+`schema_version` is 3 since the scan script; the recognition report's own is 4
+since the presence stop, 3 since the region of view):
 
 - `script`, `confirmation`, `started_by_start_button`, and `ended_by`
   (`helper`, `stop_button`, `window_closed`, `cancel_button`, `signal` or
@@ -333,8 +498,8 @@ bash scripts/build_camera_helper.sh --fake
 ```
 
 `--validate` clicks through the whole window offscreen against the helper's
-fake backend with a scripted detector: both scripts, a run that reaches its
-bound, a presence end, Stop, the window closed mid-run, a launch that fails,
+fake backend with a scripted detector: the removal and positions scripts and
+the scan, a run that reaches its bound, a presence end, Stop, the window closed mid-run, a launch that fails,
 Cancel, a declined start, a run too short for its script, the refused report
 paths and the worker refusing a launch by hand. Its guard and dwell times
 are shortened so that it runs in about half a minute. It refuses any helper

@@ -252,6 +252,24 @@ class WorkerPresenceTests(guide_tests.StandInHelper):
                          (True, False, True, True))
         self.assertIsNotNone(watch["launched"])
 
+    def test_the_scan_script_with_the_watcher_ends_on_the_signal_with_its_tallies(self):
+        config = self.config("scan", seconds=20, presence_watcher=str(self.watcher),
+                             scan_detectors=("mobilenet-ssd", "yolox-nano"))
+        spec = config.spec()
+        self.assertEqual((spec["presence_watcher"], spec["scan_detectors"] is not None), (str(self.watcher), True))
+        worker, events = self.worker(config, "1500:enter_standby_event")
+        events.wait("ready")
+        report = events.wait("report")
+        self.assertEqual((report["status"], report["reason"], report["cleanup_ok"], report["schema_version"]),
+                         ("presence_ended", "standby", True, 4))
+        frames = report["frames_processed"]
+        self.assertGreater(frames, 0)
+        self.assertEqual({entry["frames"] for entry in report["scan"]["detectors"].values()}, {frames})
+        self.assertEqual((report["view"]["mode"], report["presence_watch"]["ended_run"]), ("scan", True))
+        lines = guidance.result_lines(report)
+        self.assertIn("SteamVR reported the headset off (standby)", lines[0])
+        self.assertTrue(guidance.watch_needed(report))
+
     def test_a_watcher_that_cannot_be_armed_starts_no_reader(self):
         config = self.config("removal", seconds=20, presence_watcher=str(self.watcher))
         worker, events = self.worker(config, "error=vrserver_not_running")

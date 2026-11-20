@@ -227,6 +227,13 @@ Once the signal has ended the run no further mark is accepted
 (`marks.marks_refused_after_end`), so a `remove` made after it cannot be
 measured against an end that came before it.
 
+**With a region of view or a scan.** The watch is independent of what the
+detector looks at: `--region`, `--rotation` and the guided window's `scan`
+script run under it unchanged. A scan the signal ends keeps the tallies of
+the frames it processed, a region run's removal entry reads the signal as
+any other, and a scan detector that fails leaves the watch armed for the
+detector that carries on; however the run ends, the watcher is closed.
+
 **Fail closed.** A run that names the watcher does not read the camera
 without it, because a removal stop that silently is not there is the failure
 E100 found:
@@ -434,6 +441,48 @@ A run for the removal and the coverage, then one for the cued positions
   --cue 27:out_of_view --report artifacts/camera/run-02.json
 ```
 
+### A region of view
+
+Work-order item L14. The Frame's camera frame is 2464 pixels square and very
+wide; resized whole to the 960-pixel processing size, a hand-held object can
+be too small for the detector.
+
+- `--region X0,Y0,X1,Y1`: the detector looks at this rectangle of the frame
+  only. The four numbers are fractions of the frame with the origin at the
+  top left, `0 <= x0 < x1 <= 1` and `0 <= y0 < y1 <= 1`, each side at least
+  0.05; `0.25,0.25,0.75,0.75` is the centre half. The rectangle is sliced out
+  of the native frame before anything is resized or converted, then resized
+  to at most 960 pixels (never enlarged).
+- `--rotation 0|90|180|270`: what the detector sees is turned by this many
+  degrees clockwise.
+
+Boxes are mapped back, so every box in the report is in one space that
+covers the whole frame: `whole_frame_processing_pixels`, the frame scaled so
+that its longest side is at most 960. That is the same space the boxes have
+without a region, where the detector's input is the whole frame at that size
+(`detector_input_pixels`); the cell, side and coverage arithmetic above is
+therefore unchanged in meaning. A mapped box is clamped to the frame and is
+at least one pixel wide and tall. With a region each frame record carries
+`box_coordinate_space: whole_frame_processing_pixels`, `box_space_size`,
+`detector_input_size` (what the detector really saw) and `view.index`, and
+the report states the region once, in `view` (`mode: region`, the region,
+the rotation, `crop_native_xyxy` and `resized_size`, the detector requested
+and the orientation statement).
+
+A malformed region or rotation is refused on the command line, before the
+confirmation is asked and so before the camera is touched. Without the two
+options, or with the whole frame unturned spelled out, nothing is cropped
+and the report has no `view` block: apart from `schema_version`, it is what
+it was.
+
+Neither value is a finding. Nothing here knows where "straight ahead" falls
+in the image or which way up it is, and no calibration data is read. The
+[guided window's scan](camera-guide.md#the-scan-where-in-the-image-and-which-way-up)
+is the one bounded run that tries the candidates. The shared code is
+`sightcircuit/camera/region.py`.
+
+[`camera_hud`](camera-hud.md) does not take these options yet.
+
 ### Validate the reader without any helper
 
 ```bash
@@ -456,12 +505,14 @@ standard library only. Expect `status: validated` and exit 0.
 | `frames_received`, `frames_processed`, `stale_inputs_skipped`, `pending_frames_replaced` | Frames the reader delivered; frames the detector saw; frames older than `maximum_input_observation_age_ms` (1000) at processing; frames replaced in the latest slot |
 | `labels_seen` | Every label detected in the run |
 | `confirmation` | `operator_terminal` once the typed answer was given on this command's terminal; `null` when the run was refused before launch |
-| `schema_version` | 3 since the presence stop (2026-11-20: `presence_watch`, the removal entries' presence fields, the statuses `presence_ended` and `presence_watch_lost`); 2 since item L15 (the times, marks, target and summaries). No earlier field changed |
+| `schema_version` | 4 since the presence stop (item L16, 2026-11-20): `presence_watch` is always present, each removal entry carries the presence fields, `marks.marks_refused_after_end` exists and the statuses `presence_ended` and `presence_watch_lost` may occur. 3 since item L14: with a region or a scan a record's `box_coordinate_space` may be `whole_frame_processing_pixels`, where `detector_input_size` is what the detector saw and `box_space_size` is the box space, and the report may carry `view` and `scan`; a run without them has the fields of 2 (item L15: the times, marks, target and summaries) unchanged |
 | `presence_watch`, `helper_launched` | [The presence stop](#the-presence-stop---presence-watcher): whether SteamVR's headset-off signal was armed, each presence event with its times, what ended the run; `helper_launched: false` only when the watch kept the helper from being launched |
 | `timebase`, `run_started`, `first_frame`, `helper_end`, `export_returned` | The declared clocks with the anchor, and `{monotonic_ns, utc_ns}` of the run's start, the first frame's acquire, the helper's end record as read (with its `reason`; `null` without one) and the export's return; see [times](#times-marks-and-the-target-summary) |
 | `marks` | The vocabulary, the cues and key labels requested, `cues_not_reached`, `key_marks_enabled`, `key_presses`, `key_marks_capacity`, `marks_dropped` and `recorded`: per mark `index`, `source` (`cue`, `key`, or `window` for a mark the [guided window](camera-guide.md) records at a click; `window_marks` counts those, and this command makes none), `label`, `monotonic_ns`, `utc_ns`, `offset_ms` from the first frame's acquire (`null` before it), and for a cue the scheduled offset and times and `late_ms` |
 | `target_label`, `target`, `summary` | The class named with `--target-label` (`null` without); its threshold, frame count, cell thresholds and the orientation statement; the counts-only [summaries](#times-marks-and-the-target-summary) |
 | `detections` | One record per processed frame: `sequence`, `frame_set_sequence` (the acquired set; both cameras of a set share it), `source_id` (`arcturus_camera_left` or `_right`), `camera_index`, `frame_id`, `observed_ns` (the helper's host monotonic clock at acquisition), `observed_utc_ns` (derived), `helper_realtime_ns`, with a target `target` (`present`, `count`, `confidence`, `box_xyxy`, `column`, `row`, `cell`, `centre_fraction`), `input_age_ms`, `processing_ms`, `inference_ms`, `labels`, up to 20 `detections` (`label`, `confidence`, `box_xyxy` in `detector_input_pixels`), `detection_count`, `native_size`, `detector_input_size`; Camera Data |
+| `view` | Only with `--region` or `--rotation` (or the guided window's scan): `mode` (`region` or `scan`), `box_coordinate_space` (`whole_frame_processing_pixels`), the `region`, `rotation`, `crop_native_xyxy` and `resized_size`, the `detector` requested and the orientation statement; each frame record then has `box_space_size` and `view.index`. See [a region of view](#a-region-of-view) |
+| `scan` | Only from the guided window's scan: the schedule and each detector's tallies; `summary.coverage` is then `null` (`coverage_omitted`). See [the scan](camera-guide.md#the-scan-where-in-the-image-and-which-way-up) |
 | `last_result` | The last record of `detections` |
 | `inference_ms`, `processing_ms`, `input_age_ms` | Count, sample size, nearest-rank p50 and p95 and the maximum, as the pipeline statistics report them |
 | `inference_p95_budget_ms`, `inference_p95_within_budget` | `LIVE_INFERENCE_P95_BUDGET_MS` (200) and whether this run's p95 met it; which machine ran it is the report's business, so a cloud figure is never a Frame figure |
@@ -511,7 +562,12 @@ checkout and launched exactly as the real helper would be);
 `tests/test_camera_recognize.py` adds the end-to-end runs with a stand-in
 detector in the replay job, including cued and key-marked runs on the fake
 producer and a check that no field added by item L15 can hold pixels, free
-text or calibration values. Nothing in CI builds against or links the SDK, and
+text or calibration values. `tests/test_camera_region.py` covers the region
+of view (item L14): the arguments, the inverse mapping for every rotation on
+frames the test draws, a region at the frame's edge, the scan schedule and
+its tallies; the recognition tests add the runs through a region and a scan,
+the refusal of a bad region before the confirmation, and the unchanged
+default. Nothing in CI builds against or links the SDK, and
 nothing here ran on the Frame.
 
 The presence stop: `tests/test_presence_watch.py` holds the line rules, the

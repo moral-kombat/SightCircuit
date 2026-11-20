@@ -586,7 +586,7 @@ class RecognitionPresenceTests(WatchCase):
                          ("presence_ended", "standby", 1, True))
         self.assertLess(self.elapsed, END_BOUND_SECONDS)
         self.assertLess(report["frames_received"], RUN["max_frames"])
-        self.assertEqual(report["schema_version"], 3)
+        self.assertEqual(report["schema_version"], 4)
         watch = report["presence_watch"]
         self.assertEqual((watch["requested"], watch["armed"], watch["ended_run"], watch["run_end_reason"], watch["lost"]),
                          (True, True, True, "standby", None))
@@ -904,6 +904,118 @@ class RecognitionPresenceTests(WatchCase):
                             self.assertIn(leaf, allowed)
                     else:
                         self.assertIn(type(leaf), (int, float, bool, type(None)))
+
+    # -- with the region of view and the scan (item L14) ------------------------------------------------------------
+
+    def scan_with_watch(self, scenario, models, *, limits=RUN, **options):
+        from tests.test_camera_recognize import HD
+        self.environment(scenario)
+        started = time.monotonic()
+        report = command.recognize(self.helper, limits, (0,), confirmed=True, target_label="bottle",
+                                   extra_args=(*HD, "--fake-report-pid"), terminal=mock.Mock(),
+                                   scan_detectors=("mobilenet-ssd", "yolox-nano"),
+                                   scan_detector_factory=lambda name: models[name], presence_watcher=self.watcher,
+                                   **options)
+        self.elapsed = time.monotonic() - started
+        json.dumps(report)
+        self.assert_no_watcher_left()
+        return report
+
+    def test_a_scan_the_signal_ends_keeps_its_tallies(self):
+        from sightcircuit.camera import region
+        from tests.test_camera_recognize import ScriptedDetector
+        models = {"mobilenet-ssd": ScriptedDetector([(0.5, 0.5)] * 200), "yolox-nano": ScriptedDetector([])}
+        report = self.scan_with_watch("1500:enter_standby_event", models, cues=[(0, "near")])
+        self.assertEqual((report["status"], report["reason"], report["cleanup_ok"], report["schema_version"]),
+                         ("presence_ended", "standby", True, 4))
+        self.assertLess(self.elapsed, END_BOUND_SECONDS)
+        frames = report["frames_processed"]
+        self.assertTrue(5 <= frames < RUN["max_frames"], frames)
+        scan = report["scan"]
+        self.assertEqual((scan["detectors"]["mobilenet-ssd"]["frames"], scan["detectors"]["mobilenet-ssd"]["target_frames"],
+                          scan["detectors"]["yolox-nano"]["frames"], scan["detectors"]["yolox-nano"]["target_frames"],
+                          scan["detectors_failed"]), (frames, frames, frames, 0, []))
+        self.assertEqual(sum(entry["frames"] for entry in scan["detectors"]["mobilenet-ssd"]["entries"]), frames)
+        self.assertEqual(len(scan["schedule"]), len(region.scan_schedule()))
+        self.assertEqual([record["view"]["index"] for record in report["detections"]],
+                         [index % len(region.scan_schedule()) for index in range(frames)])
+        self.assertEqual((report["view"]["mode"], report["summary"]["coverage_omitted"]), ("scan", "scan_pools_views"))
+        watch = report["presence_watch"]
+        self.assertEqual((watch["armed"], watch["ended_run"], watch["run_end_reason"]), (True, True, "standby"))
+        self.assertEqual(report["helper_end"]["reason"], "stop_signal")
+
+    def test_a_region_run_with_a_removal_reads_the_signal_in_its_entry(self):
+        from sightcircuit.camera import region
+        from tests.test_camera_recognize import HD, ScriptedDetector
+        self.environment("700:enter_standby_event")
+        detector = ScriptedDetector([(0.5, 0.5)] * 200)
+        report = command.recognize(self.helper, RUN, (0,), detector_factory=lambda: detector, confirmed=True,
+                                   target_label="bottle", extra_args=HD, terminal=mock.Mock(),
+                                   cues=[(0, "near"), (100, "remove")], region=region.Region(0.4, 0.4, 1.0, 1.0),
+                                   presence_watcher=self.watcher)
+        self.assert_no_watcher_left()
+        self.assertEqual((report["status"], report["reason"], report["cleanup_ok"]), ("presence_ended", "standby", True))
+        self.assertEqual((report["view"]["mode"], report["view"]["region"]), ("region", [0.4, 0.4, 1.0, 1.0]))
+        self.assertEqual({record["box_coordinate_space"] for record in report["detections"]},
+                         {"whole_frame_processing_pixels"})
+        self.assertGreater(report["target"]["frames_with_target"], 0)
+        self.assertEqual(len(report["summary"]["removal"]), 1)
+        removal = report["summary"]["removal"][0]
+        self.assertEqual((removal["presence_watch_armed"], removal["presence_signal"], removal["run_ended_by"],
+                          removal["run_end_reason"], removal["helper_end_reason"], removal["helper_end_is_presence_stop"],
+                          removal["mark_after_presence_signal"], removal["helper_end_within_limit"]),
+                         (True, "enter_standby_event", "presence_watch", "standby", "stop_signal", True, False, True))
+        self.assertGreater(removal["presence_signal_after_mark_ms"], 0)
+        self.assertGreater(removal["frames_processed_after_mark"], 0)
+        # The coverage of the in-view span is still counted over the whole frame, up to the remove mark.
+        self.assertEqual(report["summary"]["coverage"]["spans"][0]["ended_by"], "remove")
+
+    def test_a_scan_detector_that_fails_under_an_armed_watch_still_closes_the_watcher(self):
+        from tests.test_camera_recognize import ScriptedDetector
+
+        class Raising(ScriptedDetector):
+            def __init__(self, script, fail_on):
+                super().__init__(script)
+                self.fail_on = fail_on
+
+            def detect(self, bgr, threshold):
+                if self.calls + 1 == self.fail_on:
+                    self.calls += 1
+                    raise RuntimeError("private detail that must not reach the report")
+                return super().detect(bgr, threshold)
+        limits = {"fps": 10, "max_seconds": 6, "max_frames": 30}
+        # One fails: the other carries on to the bound, the watch stays armed to the end and is then closed.
+        models = {"mobilenet-ssd": ScriptedDetector([(0.5, 0.5)] * 60), "yolox-nano": Raising([(0.5, 0.5)] * 60, 4)}
+        report = self.scan_with_watch(None, models, limits=limits)
+        self.assertEqual((report["status"], report["exit_code"], report["cleanup_ok"]), ("recognized", 0, True))
+        self.assertEqual(report["scan"]["detectors_failed"], ["yolox-nano"])
+        watch = report["presence_watch"]
+        self.assertEqual((watch["armed"], watch["ended_run"], watch["lost"], watch["end"]["reason"], watch["exit_code"],
+                          watch["cleanup_ok"]), (True, False, None, "stop_signal", 0, True))
+        # One fails and then the signal comes: the run ends on it, with the failure still named.
+        models = {"mobilenet-ssd": ScriptedDetector([(0.5, 0.5)] * 200), "yolox-nano": Raising([(0.5, 0.5)] * 200, 3)}
+        report = self.scan_with_watch("1500:enter_standby_event", models)
+        self.assertEqual((report["status"], report["reason"], report["cleanup_ok"]), ("presence_ended", "standby", True))
+        self.assertEqual(report["scan"]["detectors"]["yolox-nano"]["failed"], {"reason": "detector_raised", "frame_index": 2})
+        # Both fail: the run ends as a failing detector ends any run, and the watcher is closed, not left listening.
+        models = {"mobilenet-ssd": Raising([(0.5, 0.5)] * 60, 2), "yolox-nano": Raising([(0.5, 0.5)] * 60, 4)}
+        report = self.scan_with_watch(None, models, limits=limits)
+        self.assertEqual((report["status"], report["reason"], report["exit_code"]), ("error", "processing_failed", 1))
+        watch = report["presence_watch"]
+        self.assertEqual((watch["requested"], watch["armed"], watch["ended_run"], watch["lost_ended_run"],
+                          watch["forced_kill"], watch["cleanup_ok"]), (True, True, False, False, False, True))
+        self.assertNotIn("private detail", json.dumps(report))
+        # A scan detector that cannot load: nothing is launched, and the report still says the watcher was named.
+        def unavailable(name):
+            raise RuntimeError("no model")
+        self.environment(None)
+        self.pid_file.unlink(missing_ok=True)
+        report = command.recognize(self.helper, limits, (0,), confirmed=True, target_label="bottle",
+                                   scan_detectors=("mobilenet-ssd", "yolox-nano"), scan_detector_factory=unavailable,
+                                   presence_watcher=self.watcher)
+        self.assertEqual(report["status"], "error")
+        self.assertEqual((report["presence_watch"]["requested"], report["presence_watch"]["launched"]), (True, None))
+        self.assertIsNone(self.watcher_pid())
 
     def test_the_command_passes_the_watcher_on_and_validate_refuses_it(self):
         seen = {}

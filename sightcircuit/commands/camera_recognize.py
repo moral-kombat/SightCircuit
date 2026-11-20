@@ -38,6 +38,20 @@ taken on the image as exported: nothing here knows the camera's mounting
 orientation. Without these options and without a key press the run is what it
 was.
 
+A region of view (work-order item L14, after E100: the frame is 2464 pixels
+square and very wide, so a hand-held object is small in it). ``--region
+X0,Y0,X1,Y1`` (fractions of the frame, origin top left) and ``--rotation``
+(0, 90, 180 or 270 degrees clockwise) make the detector look at that
+rectangle only, taken out of the native frame before the resize and turned
+(``sightcircuit.camera.region``). Every box, cell and coverage count is still
+over the whole frame: boxes are mapped back and each record names its space
+(``whole_frame_processing_pixels``, the frame scaled to at most 960, which is
+the detector's input space when no region is set). The report's ``view``
+block states the region, the rotation and the detector used. Nothing here
+knows where "straight ahead" falls in the image or which way up it is: both
+are the operator's arguments. Without the two options nothing is cropped
+and the report is unchanged.
+
 Camera Data. Under the SDK agreement (sections 1 and 3.2) the detections,
 labels, scores and boxes this command derives from camera frames are Camera
 Data, and so is every per-frame record in the report. The report says so.
@@ -86,13 +100,14 @@ if not __package__:  # Run as a file: import the package beside this one.
 
 from sightcircuit import gates
 from sightcircuit.camera import contract, fake_export, marks, presence
+from sightcircuit.camera import region as regions
 # The informed start, shared with ``camera_hud`` (work-order item L9); the names stay this module's.
 from sightcircuit.camera.confirmation import CONFIRMATION_ANSWER, OPERATOR_TERMINAL, confirm_on_terminal  # noqa: F401
 from sightcircuit.camera.export_reader import ExportReader, ExportRefused
 from sightcircuit.convert import to_bgr
 from sightcircuit.detection import (DEFAULT_DETECTOR, DETECTORS, LIVE_INFERENCE_P95_BUDGET_MS, POC_THRESHOLD,
                                     class_names, create_detector, describe, require_result)
-from sightcircuit.frame import DETECTOR_PIXELS
+from sightcircuit.frame import DETECTOR_PIXELS, DetectionResult
 from sightcircuit.hud.contract import MAX_DISPLAY_AGE_MS
 from sightcircuit.latest import LatestSlot
 from sightcircuit.pipeline import TimingSample
@@ -100,8 +115,12 @@ from sightcircuit.runtime import guard
 from sightcircuit.sources import camera_helper
 
 REPORT_KIND = "camera_recognition"
-# 2 adds the timebase, wall-clock times, marks, the target and the summaries (item L15); 3 the presence watch.
-SCHEMA_VERSION = 3
+# 2 adds the timebase, wall-clock times, marks, the target and the summaries (item L15). 3 (item L14): with a region
+# or a scan a record's ``box_coordinate_space`` may be ``whole_frame_processing_pixels`` (then ``detector_input_size``
+# is not the box space; ``box_space_size`` is) and the report may carry ``view`` and ``scan``.
+# 4 (item L16, the presence stop): ``presence_watch`` is always present, each removal entry carries the presence
+# fields, ``marks.marks_refused_after_end`` exists and the statuses ``presence_ended`` and ``presence_watch_lost`` may occur.
+SCHEMA_VERSION = 4
 # The command's bounds (work-order item S7), inside the helper's own (``contract.LIMITS``: 90 s, 900 frames).
 MAX_SECONDS, MAX_FRAMES = 30, 300
 MAX_FPS = contract.LIMITS["fps"][1]
@@ -137,13 +156,23 @@ def new_report(mode):
             "presence_watch": presence.not_requested()}
 
 
-def frame_record(frame, result, image, input_age_ms, processing_ms, *, clock=None, target_label=None, threshold=0.0):
+def frame_record(frame, result, image, input_age_ms, processing_ms, *, clock=None, target_label=None, threshold=0.0,
+                 view=None):
     """One per-frame result: identity, timings, labels and up to ``MAX_LISTED_DETECTIONS`` boxes in detector pixels.
 
     With a ``clock`` the acquire time also appears as UTC (``observed_utc_ns``,
     derived) beside the helper's own realtime stamp; with a ``target_label``
     the record carries ``target``, the best box of that label and its cell.
+    With a ``view`` (``{index, mapping, also, failed}``: the frame was seen
+    through a region) ``result`` is already mapped to the whole frame, the
+    record says so (``box_coordinate_space``, ``box_space_size``) and gives
+    the index of its region (the region and where it lay are stated once,
+    in the report's ``view`` or the scan's schedule), and the target's cell
+    is taken over the whole frame. ``also`` holds the other scan detectors'
+    mapped results; ``failed`` says the run's own detector no longer looks
+    (its fields are then empty and the record says ``run_detector_failed``).
     """
+    space = (image.shape[1], image.shape[0]) if view is None else view["mapping"].space
     record = {"sequence": frame.sequence, "frame_set_sequence": frame.metadata.get("frame_set_sequence"),
               "source_id": frame.source, "camera_index": frame.metadata.get("camera_index"),
               "frame_id": frame.metadata.get("frame_id"), "observed_ns": frame.observed_ns,
@@ -154,23 +183,48 @@ def frame_record(frame, result, image, input_age_ms, processing_ms, *, clock=Non
               "detector_input_size": [image.shape[1], image.shape[0]], "box_coordinate_space": DETECTOR_PIXELS}
     if clock is not None:
         record.update(observed_utc_ns=clock.utc(frame.observed_ns), helper_realtime_ns=frame.metadata.get("realtime_ns"))
+    if view is not None:
+        record.update(box_coordinate_space=regions.FRAME_PIXELS, box_space_size=list(space),
+                      view={"index": view["index"]})
+        if view["failed"]:
+            record["run_detector_failed"] = True
     if target_label is not None:
-        record["target"] = marks.target_of(result.detections, target_label, threshold, image.shape[1], image.shape[0])
+        record["target"] = marks.target_of(result.detections, target_label, threshold, *space)
+    if view is not None and view["also"] is not None:
+        record["scan"] = {name: {"target": marks.target_of(other.detections, target_label, threshold, *space),
+                                 "detection_count": len(other.detections), "inference_ms": round(other.inference_ms, 3)}
+                          for name, other in view["also"].items()}
     return record
 
 
 class Processor(threading.Thread):
-    """Takes the latest frame from the slot and runs the detector; stops once the slot is closed and empty."""
+    """Takes the latest frame from the slot and runs the detector; stops once the slot is closed and empty.
 
-    def __init__(self, slot, detector, threshold, max_age_ms=MAX_DISPLAY_AGE_MS, *, clock=None, target_label=None):
+    ``views`` is ``None`` (the whole frame, as the run always was) or a
+    tuple of ``region.Region``: processed frame ``n`` is seen through
+    ``views[n % len(views)]``, one entry for a fixed region and the schedule
+    for a scan. ``scan_detectors`` (name to model, the run's detector among
+    them) all look at each frame's one prepared image; the record's own
+    fields stay the run's detector's. A scan detector that raises or
+    returns a malformed result is recorded in ``scan_failures`` (a closed
+    reason and the frame index) and not used again, and the others carry on
+    to the bound; when none is left the run fails as any run does. Outside
+    a scan a failing detector ends the run, as before.
+    """
+
+    def __init__(self, slot, detector, threshold, max_age_ms=MAX_DISPLAY_AGE_MS, *, clock=None, target_label=None,
+                 views=None, scan_detectors=None, detector_name=None):
         super().__init__(name="camera-recognize-processor", daemon=True)
         self.slot, self.detector, self.threshold, self.max_age_ms = slot, detector, threshold, max_age_ms
         self.clock, self.target_label = clock, target_label
+        self.views, self.scan_detectors, self.detector_name = views, scan_detectors, detector_name
         self.timings = {name: TimingSample() for name in TIMINGS}
         self.records = []
         self.labels = set()
         self.stale = 0
         self.error = None
+        self.geometry = {}  # View index to where that region lay (``Mapping.report()``), from its first frame.
+        self.scan_failures = {}  # Detector name to ``{reason, frame_index}``.
 
     def run(self):
         try:
@@ -193,15 +247,49 @@ class Processor(threading.Thread):
         if input_age_ms > self.max_age_ms:
             self.stale += 1
             return
-        image = to_bgr(frame)
-        result = require_result(self.detector.detect(image, self.threshold))
+        view = None
+        if self.views is None:
+            image = to_bgr(frame)
+            result = require_result(self.detector.detect(image, self.threshold))
+        else:
+            index = len(self.records) % len(self.views)
+            image, mapping = regions.prepare(frame, self.views[index])
+            self.geometry.setdefault(index, mapping.report())
+            if self.scan_detectors is None:
+                result, also = mapping.result(require_result(self.detector.detect(image, self.threshold))), None
+            else:
+                looked = {name: self.scan_look(name, model, image, mapping)
+                          for name, model in self.scan_detectors.items() if name not in self.scan_failures}
+                looked = {name: found for name, found in looked.items() if found is not None}
+                if not looked:
+                    raise RuntimeError("every scan detector failed")
+                result = looked.pop(self.detector_name, None)
+                also = looked
+            view = {"index": index, "mapping": mapping, "also": also, "failed": result is None}
+            if result is None:  # The run's own detector has failed: its fields are empty from here on.
+                result = DetectionResult((), 0.0)
         processing_ms = (time.monotonic() - started) * 1000
         for name, value in (("input_age_ms", input_age_ms), ("processing_ms", processing_ms),
                             ("inference_ms", result.inference_ms)):
-            self.timings[name].add(value)
+            if name != "inference_ms" or view is None or not view["failed"]:
+                self.timings[name].add(value)
         self.labels.update(result.labels)
         self.records.append(frame_record(frame, result, image, input_age_ms, processing_ms, clock=self.clock,
-                                         target_label=self.target_label, threshold=self.threshold))
+                                         target_label=self.target_label, threshold=self.threshold, view=view))
+
+    def scan_look(self, name, model, image, mapping):
+        """One scan detector's mapped result for this frame, or ``None`` once it has failed (recorded, not raised)."""
+        try:
+            raw = model.detect(image, self.threshold)
+        except Exception:
+            reason = regions.FAILURE_RAISED
+        else:
+            try:
+                return mapping.result(require_result(raw))
+            except Exception:
+                reason = regions.FAILURE_INVALID_RESULT
+        self.scan_failures[name] = {"reason": reason, "frame_index": len(self.records)}
+        return None
 
     def report(self):
         return {name: sample.report() for name, sample in self.timings.items()}
@@ -211,7 +299,7 @@ def recognize(binary, limits, cameras, *, threshold=POC_THRESHOLD, detector=DEFA
               extra_args=(), stop=None, timeout=None, confirmed=False, cues=(), mark_labels=(), key_fd=None,
               target_label=None, terminal=None, confirmation=OPERATOR_TERMINAL, on_session=None, on_ready=None,
               late_frame_limit_ms=marks.LATE_FRAME_LIMIT_MS, removal_end_limit_ms=marks.REMOVAL_END_LIMIT_MS,
-              presence_watcher=None, abort=None):
+              region=None, scan_detectors=None, scan_detector_factory=None, presence_watcher=None, abort=None):
     """One bounded run: load the detector, export frames through the helper, detect on the latest; return the report.
 
     ``detector`` names a ``DETECTORS`` entry; an injected ``detector_factory``
@@ -243,6 +331,18 @@ def recognize(binary, limits, cameras, *, threshold=POC_THRESHOLD, detector=DEFA
     the helper's ``ready`` is accepted; the two limits are
     ``marks.summarize``'s, recorded in each removal entry.
 
+    ``region`` is a ``region.Region`` (item L14): every frame is seen through
+    it and the boxes are mapped back to the whole frame; ``None``, or the
+    whole frame unturned, is the run as it was, with nothing added to the
+    report. ``scan_detectors`` names the detectors of a scan (``detector``
+    among them; a target label is required): frame ``n`` is seen through
+    entry ``n`` of ``region.scan_schedule()``, every scan detector looks at
+    it, and the report gains ``scan`` (``region.scan_summary``). A region
+    and a scan together, or anything malformed, is a ``ValueError`` before
+    anything is loaded. ``scan_detector_factory(name)`` replaces
+    ``create_detector`` for the scan's models (the checks' stand-ins), the
+    run's own included unless a ``detector_factory`` gives that one.
+
     ``presence_watcher`` names the ``sightcircuit-presence-watcher`` binary
     (the helper's path rules). When given, the watch is armed before the
     helper is launched and the run does not read the camera without it:
@@ -258,6 +358,21 @@ def recognize(binary, limits, cameras, *, threshold=POC_THRESHOLD, detector=DEFA
     cues, mark_labels = marks.check_cues(cues), marks.check_mark_labels(mark_labels)
     if target_label is not None and len(tuple(cameras)) != 1:
         raise ValueError("a target label needs a single camera")
+    if region is not None and not isinstance(region, regions.Region):
+        raise ValueError("region must be a Region")
+    views = schedule = None
+    if scan_detectors is not None:
+        scan_detectors = tuple(scan_detectors)
+        if region is not None:
+            raise ValueError("a scan chooses its own regions")
+        if target_label is None:
+            raise ValueError("a scan needs a target label")
+        if (not scan_detectors or len(set(scan_detectors)) != len(scan_detectors) or detector not in scan_detectors
+                or (scan_detector_factory is None and any(name not in DETECTORS for name in scan_detectors))):
+            raise ValueError("scan detectors are distinct registered detectors, the run's detector among them")
+        views = schedule = regions.scan_schedule()
+    elif region is not None and not region.whole:
+        views = (region,)
     clock = marks.Clock()
     report = new_report("recognize")
     report.update(timebase=clock.report(), run_started=clock.stamp(clock.monotonic_ns), target_label=None)
@@ -267,19 +382,46 @@ def recognize(binary, limits, cameras, *, threshold=POC_THRESHOLD, detector=DEFA
     report.update(seconds_requested=limits.get("max_seconds"), max_frames_requested=limits.get("max_frames"),
                   fps_requested=limits.get("fps"), cameras_requested=list(cameras), threshold=threshold,
                   detector_requested=detector if detector_factory is None else None, phase="loading_detector")
+    injected = detector_factory is not None or (schedule is not None and scan_detector_factory is not None)
     try:
-        model = detector_factory() if detector_factory is not None else create_detector(detector)
+        model = (detector_factory() if detector_factory is not None else
+                 scan_detector_factory(detector) if injected else create_detector(detector))
     except Exception as error:
         report.update(status="error", reason="detector_unavailable", error=str(error)[:1024], phase="closed")
         return report
-    if detector_factory is None:
+    if not injected:
         report["detector"] = describe(model)
     if target_label is not None and target_label not in model.classes:
         report.update(status="error", reason="target_label_unknown", phase="closed")
         return report
+    scan_models = None
+    if schedule is not None:
+        try:
+            scan_models = {name: model if name == detector else
+                           (create_detector if scan_detector_factory is None else scan_detector_factory)(name)
+                           for name in scan_detectors}
+        except Exception as error:
+            report.update(status="error", reason="detector_unavailable", error=str(error)[:1024], phase="closed")
+            return report
+        if any(target_label not in other.classes for other in scan_models.values()):
+            report.update(status="error", reason="target_label_unknown", phase="closed")
+            return report
     report["target_label"] = target_label
+    if views is not None:
+        report["view"] = {"mode": "region" if schedule is None else "scan", "box_coordinate_space": regions.FRAME_PIXELS,
+                          "processing_side": regions.MAX_PROCESSING_SIDE,
+                          "detector": None if detector_factory is not None else detector,  # As detector_requested.
+                          "orientation_statement": regions.ORIENTATION_STATEMENT}
+        if schedule is None:
+            report["view"].update(region.report())
+        else:
+            report["view"].update(scan_detectors=list(scan_detectors), schedule_length=len(schedule))
+            if scan_detector_factory is None:
+                report["view"]["detectors"] = {name: describe(other) for name, other in scan_models.items()
+                                               if name != detector or not injected}
     slot = LatestSlot()
-    processor = Processor(slot, model, threshold, clock=clock, target_label=target_label)
+    processor = Processor(slot, model, threshold, clock=clock, target_label=target_label, views=views,
+                          scan_detectors=scan_models, detector_name=detector)
     session = marks.MarkSession(clock, cues, mark_labels, key_fd, sys.stderr if terminal is None else terminal)
     stop = threading.Event() if stop is None else stop
     watch = None if presence_watcher is None else presence.PresenceWatch(
@@ -329,8 +471,14 @@ def recognize(binary, limits, cameras, *, threshold=POC_THRESHOLD, detector=DEFA
         if watch is not None:
             watch.close()  # Whatever happened, a signal included: no watcher outlives the run.
     report["elapsed_seconds"] = round(time.monotonic() - started, 3)
+    if schedule is not None:
+        report["scan"] = regions.scan_summary(processor.records, schedule, scan_detectors, detector,
+                                              geometry=processor.geometry, failures=processor.scan_failures)
+    elif views is not None:
+        report["view"].update(processor.geometry.get(0) or {"crop_native_xyxy": None, "resized_size": None})
     return finish(report, captured, processor, slot, clock=clock, session=session, returned_ns=returned_ns,
-                  late_frame_limit_ms=late_frame_limit_ms, removal_end_limit_ms=removal_end_limit_ms, watch=watch)
+                  late_frame_limit_ms=late_frame_limit_ms, removal_end_limit_ms=removal_end_limit_ms,
+                  pooled_views=schedule is not None, watch=watch)
 
 
 def finish_unlaunched(report, watch, clock):
@@ -351,8 +499,14 @@ def finish_unlaunched(report, watch, clock):
 
 
 def measurements(captured, processor, clock, session, returned_ns, *, late_frame_limit_ms=marks.LATE_FRAME_LIMIT_MS,
-                 removal_end_limit_ms=marks.REMOVAL_END_LIMIT_MS, presence_summary=None):
-    """The report's L15 fields: the run's times, the marks and the counts-only summaries (``marks.summarize``)."""
+                 removal_end_limit_ms=marks.REMOVAL_END_LIMIT_MS, pooled_views=False, presence_summary=None):
+    """The report's L15 fields: the run's times, the marks and the counts-only summaries (``marks.summarize``).
+
+    ``pooled_views`` (a scan): the frames are 24 different views, so the
+    summaries carry no target counts and no coverage, which would read as
+    row G7's coverage and is not; ``summary.coverage_omitted`` says why,
+    and the scan's own tallies are in the report's ``scan``.
+    """
     stream = captured.get("stream") or {}
     end_ns = stream.get("end_received_monotonic_ns")
     helper_end = None
@@ -360,12 +514,15 @@ def measurements(captured, processor, clock, session, returned_ns, *, late_frame
         helper_end = dict(clock.stamp(end_ns), reason=stream["end"]["reason"])
     recorded = session.marks()
     with_target = processor.target_label is not None
+    summarized = with_target and not pooled_views
     fields = {"first_frame": None if session.origin_ns is None else clock.stamp(session.origin_ns),
               "helper_end": helper_end, "export_returned": clock.stamp(returned_ns), "marks": session.report(),
               "summary": marks.summarize(processor.records, recorded, origin_ns=session.origin_ns,
                                          run_end_ns=returned_ns if end_ns is None else end_ns, helper_end=helper_end,
-                                         with_target=with_target, late_frame_limit_ms=late_frame_limit_ms,
+                                         with_target=summarized, late_frame_limit_ms=late_frame_limit_ms,
                                          removal_end_limit_ms=removal_end_limit_ms, presence=presence_summary)}
+    if pooled_views:
+        fields["summary"]["coverage_omitted"] = regions.COVERAGE_OMITTED
     if with_target:
         fields["target"] = {"label": processor.target_label, "threshold": processor.threshold,
                             "frames_with_target": sum(1 for record in processor.records if record["target"]["present"]),
@@ -375,7 +532,8 @@ def measurements(captured, processor, clock, session, returned_ns, *, late_frame
 
 
 def finish(report, captured, processor, slot, *, clock=None, session=None, returned_ns=None,
-           late_frame_limit_ms=marks.LATE_FRAME_LIMIT_MS, removal_end_limit_ms=marks.REMOVAL_END_LIMIT_MS, watch=None):
+           late_frame_limit_ms=marks.LATE_FRAME_LIMIT_MS, removal_end_limit_ms=marks.REMOVAL_END_LIMIT_MS,
+           pooled_views=False, watch=None):
     """Fold the source report and the processor's results into the command's report; set status and exit code.
 
     With a presence ``watch``: the block is its report, the removal entries
@@ -392,6 +550,7 @@ def finish(report, captured, processor, slot, *, clock=None, session=None, retur
     if clock is not None and session is not None:
         report.update(measurements(captured, processor, clock, session, returned_ns,
                                    late_frame_limit_ms=late_frame_limit_ms, removal_end_limit_ms=removal_end_limit_ms,
+                                   pooled_views=pooled_views,
                                    presence_summary=None if watch is None else watch.summary(run_stopped)))
         report["timebase"] = clock.report()
     if watch is not None:
@@ -518,6 +677,11 @@ def main(argv=None):
     parser.add_argument("--mark-labels", default="", metavar="LABEL,LABEL",
                         help="Labels, from the same list, that successive Enter presses during the run record; "
                              f"further presses record {marks.KEY_LABEL}; implies --key-marks")
+    parser.add_argument("--region", metavar="X0,Y0,X1,Y1",
+                        help="Look only at this rectangle of the frame, given as fractions (origin top left), cropped "
+                             "before the resize; boxes are reported over the whole frame. Default: the whole frame")
+    parser.add_argument("--rotation", type=int, choices=regions.ROTATIONS, default=0,
+                        help="Turn what the detector sees by this many degrees clockwise; boxes are mapped back")
     parser.add_argument("--target-label", metavar="CLASS",
                         help="A class of the chosen detector to summarize: windows, coverage, cells (counts only); "
                              "needs a single camera")
@@ -530,7 +694,7 @@ def main(argv=None):
         parser.error("--threshold must be between zero and one")
     if args.validate:
         if (args.allow_camera_input or args.helper or args.seconds or args.max_frames or args.cue or args.mark_labels or
-                args.key_marks or args.target_label or args.presence_watcher):
+                args.key_marks or args.target_label or args.region or args.rotation or args.presence_watcher):
             parser.error("--validate takes no run arguments")
         report = validate()
     else:
@@ -548,6 +712,11 @@ def main(argv=None):
             parser.error(f"--target-label must be a class of {args.detector}: {', '.join(class_names(args.detector))}")
         if args.target_label is not None and len(args.cameras) != 1:
             parser.error("--target-label needs a single camera (--cameras 0 or 1), so no tally pools the two")
+        try:  # Refused here, before the confirmation and so before the camera is touched.
+            region = regions.Region(*(regions.WHOLE if args.region is None else regions.parse_region(args.region)),
+                                    rotation=args.rotation)
+        except ValueError as error:
+            parser.error(f"--region: {error}")
         report = new_report("recognize")
         report.update(confirmation=None, seconds_requested=args.seconds, max_frames_requested=args.max_frames,
                       fps_requested=args.fps, cameras_requested=list(args.cameras))
@@ -563,7 +732,8 @@ def main(argv=None):
                                        detector=args.detector, extra_args=args.helper_arg, confirmed=True,
                                        cues=cues, mark_labels=mark_labels,
                                        key_fd=marks.terminal_fd() if args.key_marks or mark_labels else None,
-                                       target_label=args.target_label, presence_watcher=args.presence_watcher)
+                                       target_label=args.target_label, region=None if region.whole else region,
+                                       presence_watcher=args.presence_watcher)
             except guard.CANCELLATION as error:
                 guard.cancelled(report, error)
                 presence.apply_failure(report, error, args.presence_watcher is not None)
