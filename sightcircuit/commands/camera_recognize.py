@@ -94,7 +94,7 @@ from sightcircuit.camera.export_reader import ExportReader, ExportRefused
 from sightcircuit.convert import to_bgr
 from sightcircuit.detection import (DEFAULT_DETECTOR, DETECTORS, LIVE_INFERENCE_P95_BUDGET_MS, POC_THRESHOLD,
                                     class_names, create_detector, describe, require_result)
-from sightcircuit.frame import DETECTOR_PIXELS
+from sightcircuit.frame import DETECTOR_PIXELS, DetectionResult
 from sightcircuit.hud.contract import MAX_DISPLAY_AGE_MS
 from sightcircuit.latest import LatestSlot
 from sightcircuit.pipeline import TimingSample
@@ -102,7 +102,10 @@ from sightcircuit.runtime import guard
 from sightcircuit.sources import camera_helper
 
 REPORT_KIND = "camera_recognition"
-SCHEMA_VERSION = 2  # 2 adds the timebase, wall-clock times, marks, the target and the summaries (item L15).
+# 2 adds the timebase, wall-clock times, marks, the target and the summaries (item L15). 3 (item L14): with a region
+# or a scan a record's ``box_coordinate_space`` may be ``whole_frame_processing_pixels`` (then ``detector_input_size``
+# is not the box space; ``box_space_size`` is) and the report may carry ``view`` and ``scan``.
+SCHEMA_VERSION = 3
 # The command's bounds (work-order item S7), inside the helper's own (``contract.LIMITS``: 90 s, 900 frames).
 MAX_SECONDS, MAX_FRAMES = 30, 300
 MAX_FPS = contract.LIMITS["fps"][1]
@@ -144,11 +147,14 @@ def frame_record(frame, result, image, input_age_ms, processing_ms, *, clock=Non
     With a ``clock`` the acquire time also appears as UTC (``observed_utc_ns``,
     derived) beside the helper's own realtime stamp; with a ``target_label``
     the record carries ``target``, the best box of that label and its cell.
-    With a ``view`` (``{index, region, mapping, also}``: the frame was seen
+    With a ``view`` (``{index, mapping, also, failed}``: the frame was seen
     through a region) ``result`` is already mapped to the whole frame, the
-    record says so (``box_coordinate_space``, ``box_space_size``), names the
-    region and where it lay in native pixels, and the target's cell is taken
-    over the whole frame; ``also`` holds each scan detector's mapped result.
+    record says so (``box_coordinate_space``, ``box_space_size``) and gives
+    the index of its region (the region and where it lay are stated once,
+    in the report's ``view`` or the scan's schedule), and the target's cell
+    is taken over the whole frame. ``also`` holds the other scan detectors'
+    mapped results; ``failed`` says the run's own detector no longer looks
+    (its fields are then empty and the record says ``run_detector_failed``).
     """
     space = (image.shape[1], image.shape[0]) if view is None else view["mapping"].space
     record = {"sequence": frame.sequence, "frame_set_sequence": frame.metadata.get("frame_set_sequence"),
@@ -163,7 +169,9 @@ def frame_record(frame, result, image, input_age_ms, processing_ms, *, clock=Non
         record.update(observed_utc_ns=clock.utc(frame.observed_ns), helper_realtime_ns=frame.metadata.get("realtime_ns"))
     if view is not None:
         record.update(box_coordinate_space=regions.FRAME_PIXELS, box_space_size=list(space),
-                      view={"index": view["index"], **view["region"].report(), **view["mapping"].report()})
+                      view={"index": view["index"]})
+        if view["failed"]:
+            record["run_detector_failed"] = True
     if target_label is not None:
         record["target"] = marks.target_of(result.detections, target_label, threshold, *space)
     if view is not None and view["also"] is not None:
@@ -181,7 +189,11 @@ class Processor(threading.Thread):
     ``views[n % len(views)]``, one entry for a fixed region and the schedule
     for a scan. ``scan_detectors`` (name to model, the run's detector among
     them) all look at each frame's one prepared image; the record's own
-    fields stay the run's detector's.
+    fields stay the run's detector's. A scan detector that raises or
+    returns a malformed result is recorded in ``scan_failures`` (a closed
+    reason and the frame index) and not used again, and the others carry on
+    to the bound; when none is left the run fails as any run does. Outside
+    a scan a failing detector ends the run, as before.
     """
 
     def __init__(self, slot, detector, threshold, max_age_ms=MAX_DISPLAY_AGE_MS, *, clock=None, target_label=None,
@@ -195,6 +207,8 @@ class Processor(threading.Thread):
         self.labels = set()
         self.stale = 0
         self.error = None
+        self.geometry = {}  # View index to where that region lay (``Mapping.report()``), from its first frame.
+        self.scan_failures = {}  # Detector name to ``{reason, frame_index}``.
 
     def run(self):
         try:
@@ -224,20 +238,42 @@ class Processor(threading.Thread):
         else:
             index = len(self.records) % len(self.views)
             image, mapping = regions.prepare(frame, self.views[index])
-            result = mapping.result(require_result(self.detector.detect(image, self.threshold)))
-            also = None
-            if self.scan_detectors is not None:
-                also = {name: result if name == self.detector_name else
-                        mapping.result(require_result(model.detect(image, self.threshold)))
-                        for name, model in self.scan_detectors.items()}
-            view = {"index": index, "region": self.views[index], "mapping": mapping, "also": also}
+            self.geometry.setdefault(index, mapping.report())
+            if self.scan_detectors is None:
+                result, also = mapping.result(require_result(self.detector.detect(image, self.threshold))), None
+            else:
+                looked = {name: self.scan_look(name, model, image, mapping)
+                          for name, model in self.scan_detectors.items() if name not in self.scan_failures}
+                looked = {name: found for name, found in looked.items() if found is not None}
+                if not looked:
+                    raise RuntimeError("every scan detector failed")
+                result = looked.pop(self.detector_name, None)
+                also = looked
+            view = {"index": index, "mapping": mapping, "also": also, "failed": result is None}
+            if result is None:  # The run's own detector has failed: its fields are empty from here on.
+                result = DetectionResult((), 0.0)
         processing_ms = (time.monotonic() - started) * 1000
         for name, value in (("input_age_ms", input_age_ms), ("processing_ms", processing_ms),
                             ("inference_ms", result.inference_ms)):
-            self.timings[name].add(value)
+            if name != "inference_ms" or view is None or not view["failed"]:
+                self.timings[name].add(value)
         self.labels.update(result.labels)
         self.records.append(frame_record(frame, result, image, input_age_ms, processing_ms, clock=self.clock,
                                          target_label=self.target_label, threshold=self.threshold, view=view))
+
+    def scan_look(self, name, model, image, mapping):
+        """One scan detector's mapped result for this frame, or ``None`` once it has failed (recorded, not raised)."""
+        try:
+            raw = model.detect(image, self.threshold)
+        except Exception:
+            reason = regions.FAILURE_RAISED
+        else:
+            try:
+                return mapping.result(require_result(raw))
+            except Exception:
+                reason = regions.FAILURE_INVALID_RESULT
+        self.scan_failures[name] = {"reason": reason, "frame_index": len(self.records)}
+        return None
 
     def report(self):
         return {name: sample.report() for name, sample in self.timings.items()}
@@ -378,14 +414,24 @@ def recognize(binary, limits, cameras, *, threshold=POC_THRESHOLD, detector=DEFA
         processor.join(PROCESSOR_JOIN_SECONDS)
     report["elapsed_seconds"] = round(time.monotonic() - started, 3)
     if schedule is not None:
-        report["scan"] = regions.scan_summary(processor.records, schedule, scan_detectors)
+        report["scan"] = regions.scan_summary(processor.records, schedule, scan_detectors, detector,
+                                              geometry=processor.geometry, failures=processor.scan_failures)
+    elif views is not None:
+        report["view"].update(processor.geometry.get(0) or {"crop_native_xyxy": None, "resized_size": None})
     return finish(report, captured, processor, slot, clock=clock, session=session, returned_ns=returned_ns,
-                  late_frame_limit_ms=late_frame_limit_ms, removal_end_limit_ms=removal_end_limit_ms)
+                  late_frame_limit_ms=late_frame_limit_ms, removal_end_limit_ms=removal_end_limit_ms,
+                  pooled_views=schedule is not None)
 
 
 def measurements(captured, processor, clock, session, returned_ns, *, late_frame_limit_ms=marks.LATE_FRAME_LIMIT_MS,
-                 removal_end_limit_ms=marks.REMOVAL_END_LIMIT_MS):
-    """The report's L15 fields: the run's times, the marks and the counts-only summaries (``marks.summarize``)."""
+                 removal_end_limit_ms=marks.REMOVAL_END_LIMIT_MS, pooled_views=False):
+    """The report's L15 fields: the run's times, the marks and the counts-only summaries (``marks.summarize``).
+
+    ``pooled_views`` (a scan): the frames are 24 different views, so the
+    summaries carry no target counts and no coverage, which would read as
+    row G7's coverage and is not; ``summary.coverage_omitted`` says why,
+    and the scan's own tallies are in the report's ``scan``.
+    """
     stream = captured.get("stream") or {}
     end_ns = stream.get("end_received_monotonic_ns")
     helper_end = None
@@ -393,12 +439,15 @@ def measurements(captured, processor, clock, session, returned_ns, *, late_frame
         helper_end = dict(clock.stamp(end_ns), reason=stream["end"]["reason"])
     recorded = session.marks()
     with_target = processor.target_label is not None
+    summarized = with_target and not pooled_views
     fields = {"first_frame": None if session.origin_ns is None else clock.stamp(session.origin_ns),
               "helper_end": helper_end, "export_returned": clock.stamp(returned_ns), "marks": session.report(),
               "summary": marks.summarize(processor.records, recorded, origin_ns=session.origin_ns,
                                          run_end_ns=returned_ns if end_ns is None else end_ns, helper_end=helper_end,
-                                         with_target=with_target, late_frame_limit_ms=late_frame_limit_ms,
+                                         with_target=summarized, late_frame_limit_ms=late_frame_limit_ms,
                                          removal_end_limit_ms=removal_end_limit_ms)}
+    if pooled_views:
+        fields["summary"]["coverage_omitted"] = regions.COVERAGE_OMITTED
     if with_target:
         fields["target"] = {"label": processor.target_label, "threshold": processor.threshold,
                             "frames_with_target": sum(1 for record in processor.records if record["target"]["present"]),
@@ -408,12 +457,14 @@ def measurements(captured, processor, clock, session, returned_ns, *, late_frame
 
 
 def finish(report, captured, processor, slot, *, clock=None, session=None, returned_ns=None,
-           late_frame_limit_ms=marks.LATE_FRAME_LIMIT_MS, removal_end_limit_ms=marks.REMOVAL_END_LIMIT_MS):
+           late_frame_limit_ms=marks.LATE_FRAME_LIMIT_MS, removal_end_limit_ms=marks.REMOVAL_END_LIMIT_MS,
+           pooled_views=False):
     """Fold the source report and the processor's results into the command's report; set status and exit code."""
     timings = processor.report()
     if clock is not None and session is not None:
         report.update(measurements(captured, processor, clock, session, returned_ns,
-                                   late_frame_limit_ms=late_frame_limit_ms, removal_end_limit_ms=removal_end_limit_ms))
+                                   late_frame_limit_ms=late_frame_limit_ms, removal_end_limit_ms=removal_end_limit_ms,
+                                   pooled_views=pooled_views))
         report["timebase"] = clock.report()
     report.update(capture=captured, frames_received=captured["frames_read"], frames_processed=len(processor.records),
                   stale_inputs_skipped=processor.stale, pending_frames_replaced=slot.replaced,

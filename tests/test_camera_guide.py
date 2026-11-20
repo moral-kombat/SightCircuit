@@ -130,9 +130,13 @@ class BoundaryTests(unittest.TestCase):
 
     def test_each_script_fits_the_time_it_asks_for_and_uses_only_the_vocabulary(self):
         self.assertEqual(tuple(guidance.SCRIPTS), ("removal", "positions", "scan"))
-        # The scan (item L14) is one instruction for the whole run, with no click: the bar runs for 28 of the 30 s.
+        # The scan (item L14) is one instruction for the whole run, with no click: the bar runs for 28 of the 30 s,
+        # and for the run's own bound less two seconds when the bound is shorter.
         self.assertEqual([(step.label, step.advance, step.record_ms, step.needs_ms, step.button)
                           for step in guidance.SCAN_STEPS], [("near", "clock", 28000, 5000, "")])
+        self.assertEqual([guidance.scan_steps(seconds)[0].record_ms for seconds in (30, 20, 10, 2)],
+                         [28000, 18000, 8000, 1000])
+        self.assertEqual((guidance.SCAN_MIN_SECONDS, guidance.SCAN_MIN_FRAMES), (10, 48))
         self.assertEqual(command.run_limits("scan"), {"fps": 5, "max_seconds": 30, "max_frames": 150})
         self.assertEqual([step.label for step in guidance.REMOVAL_STEPS], ["near", "far", "remove"])
         self.assertEqual([step.label for step in guidance.POSITION_STEPS],
@@ -375,6 +379,15 @@ class GuideTests(unittest.TestCase):
         self.assertEqual((run.view(T0 + 28600 * MS).state, run.view(T0 + 28600 * MS).instruction),
                          ("finished", guidance.TEXT_FINISHED))
         self.assertEqual((run.not_reached(), run.out_of_time, [entry["label"] for entry in run.made]), ([], False, ["near"]))
+        short = guide("scan", seconds=12)  # The bar follows the run's bound: ten of twelve seconds.
+        short.ready(T0)
+        short.advance(T0)
+        self.assertEqual((short.view(T0 + 5 * SECOND).progress, short.view(T0 + 5 * SECOND).remaining_seconds,
+                          short.steps_report()[0]["record_ms"]), (0.5, 7, 10000))
+        short.advance(T0 + 9900 * MS)
+        self.assertEqual(short.view(T0 + 9900 * MS).state, "recording")
+        short.advance(T0 + 10100 * MS)
+        self.assertEqual(short.view(T0 + 10100 * MS).state, "finished")
         late = guide("scan")  # A launch that left under five seconds: the step does not begin.
         late.ready(T0 + 26 * SECOND)
         self.assertEqual(late.advance(T0 + 26 * SECOND), [])
@@ -563,7 +576,7 @@ class ResultTests(unittest.TestCase):
                                      limits_ms={"late_frame_limit_ms": 2000, "removal_end_limit_ms": 3000}, watch="held",
                                      clock=marks.Clock(T0, 77), recorded_marks=recorded, started_ns=T0 - 900 * MS)
         self.assertEqual((block["schema_version"], block["script"], block["confirmation"], block["started_by_start_button"],
-                          block["ended_by"], block["watch"]), (2, "removal", "operator_window", True, "stop_button", "held"))
+                          block["ended_by"], block["watch"]), (3, "removal", "operator_window", True, "stop_button", "held"))
         self.assertEqual(block["steps"], [
             {"step": 1, "label": "near", "advance": "clock", "record_ms": 4000, "reached": True,
              "monotonic_ns": T0, "mark_index": 1, "utc_ns": 77},
@@ -596,42 +609,87 @@ class ResultTests(unittest.TestCase):
 class ScanResultTests(unittest.TestCase):
     """The scan's result in plain words: counts and closed names from the finished report, nothing else."""
 
-    def scanned(self, hits):
+    def scanned(self, hits, frames=48, failures=None, run_detector="mobilenet-ssd"):
         from sightcircuit.camera import region
         schedule = region.scan_schedule()
         records = []
-        for number in range(48):
+        for number in range(frames):
             entry = schedule[number % 24]
-            results = {}
-            for name, when in hits.items():
-                found = when(entry)
-                results[name] = {"target": marks.target_of(
-                    (Detection("bottle", 0.9, (700, 600, 800, 800)),) if found else (), "bottle", 0.5, 960, 960),
-                    "detection_count": int(found), "inference_ms": 20.0}
-            records.append({"view": {"index": number % 24}, "scan": results})
+
+            def target(name):
+                found = hits[name](entry, number)
+                return marks.target_of((Detection("bottle", 0.9, (700, 600, 800, 800)),) if found else (), "bottle", 0.5,
+                                       960, 960)
+            stopped = {name: failure["frame_index"] for name, failure in (failures or {}).items()}
+            record = {"view": {"index": number % 24}, "inference_ms": 20.0,
+                      "scan": {name: {"target": target(name), "detection_count": 0, "inference_ms": 20.0}
+                               for name in hits if name != run_detector and number < stopped.get(name, frames)}}
+            if number >= stopped.get(run_detector, frames):
+                record.update(run_detector_failed=True, target=marks.target_of((), "bottle", 0.5, 960, 960))
+            else:
+                record["target"] = target(run_detector)
+            records.append(record)
         report = finished_report([window_mark(1, "near", T0)])
-        report.update(scan=region.scan_summary(records, schedule, tuple(hits)), frames_processed=48, frames_received=48)
+        report["summary"] = marks.summarize(list(FRAMES), [window_mark(1, "near", T0)], origin_ns=T0,
+                                            run_end_ns=T0 + 30 * SECOND, with_target=False)
+        report["summary"]["coverage_omitted"] = region.COVERAGE_OMITTED
+        report.update(scan=region.scan_summary(records, schedule, tuple(hits), run_detector, failures=failures),
+                      frames_processed=frames, frames_received=frames)
         return report
 
-    def test_the_words_give_each_detectors_counts_and_where_it_found_the_target_most(self):
-        report = self.scanned({"mobilenet-ssd": lambda entry: False,
-                               "yolox-nano": lambda entry: entry.rotation == 90 and entry.name in ("lower_right", "whole")})
+    def test_the_words_rank_by_share_and_give_the_runner_up(self):
+        # Found at 90 degrees in two windows and, less often, at 270: the opposite turn, as a bottle is.
+        report = self.scanned({
+            "mobilenet-ssd": lambda entry, number: False,
+            "yolox-nano": lambda entry, number: (entry.rotation == 90 and entry.name in ("lower_right", "whole"))
+            or (entry.rotation == 270 and entry.name == "lower_right" and number < 24)})
         lines = guidance.result_lines(report)
         self.assertIn("mobilenet-ssd: bottle in 0 of 48 frames.", lines)
-        self.assertIn("yolox-nano: bottle in 4 of 48 frames.", lines)
-        self.assertIn("yolox-nano: most often with the image turned 90 degrees (4 of 12 frames), and in the region whole "
-                      "(2 of 8).", lines)
+        self.assertIn("yolox-nano: bottle in 5 of 48 frames.", lines)
+        self.assertIn("yolox-nano, by turn of the image: 90 degrees 4 of 12, 270 degrees 1 of 12.", lines)
+        self.assertIn("yolox-nano, by region: lower_right 3 of 8, whole 2 of 8.", lines)
+        self.assertIn("A turn and its opposite look alike to the detectors: this gives the axis, not which way up.", lines)
         self.assertIn("Regions and turns are the camera image's as exported, which may not be yours.", lines)
-        self.assertEqual(sum(line.startswith("mobilenet-ssd:") for line in lines), 1)  # Nothing found: one line only.
+        self.assertEqual(sum(line.startswith("mobilenet-ssd") for line in lines), 1)  # Nothing found: one line only.
+        # A scan's frames are 24 views: no line reads as G7's coverage or as an in-view interval's count.
+        self.assertFalse([line for line in lines if "while it was held in view" in line or line.startswith("near:")])
         for line in lines:
             self.assertLess(len(line), 160)
 
+    def test_a_tie_is_called_a_tie_and_unequal_groups_are_compared_by_share(self):
+        tie = self.scanned({"yolox-nano": lambda entry, number: entry.rotation in (0, 180)}, run_detector="yolox-nano")
+        lines = guidance.result_lines(tie)
+        self.assertIn("yolox-nano, by turn of the image: 0 degrees 12 of 12, 180 degrees 12 of 12 (a tie).", lines)
+        # 150 frames: 38, 38, 37 and 37 frames per rotation. 180 degrees holds the target in all 37 of its frames and
+        # 0 degrees in 37 of its 38: the same count, and 180 leads on share.
+        skipped = {"n": None}
+
+        def found(entry, number):
+            if entry.rotation == 0 and skipped["n"] in (None, number):
+                skipped["n"] = number
+                return False
+            return entry.rotation in (0, 180)
+        uneven = self.scanned({"yolox-nano": found}, frames=150, run_detector="yolox-nano")
+        rows = {row["key"]: (row["frames"], row["target_frames"]) for row in uneven["scan"]["detectors"]["yolox-nano"]["by_rotation"]}
+        self.assertEqual((rows[0], rows[180]), ((38, 37), (37, 37)))
+        self.assertIn("yolox-nano, by turn of the image: 180 degrees 37 of 37, 0 degrees 37 of 38.",
+                      guidance.result_lines(uneven))
+
+    def test_a_detector_that_failed_is_named_plainly(self):
+        report = self.scanned({"mobilenet-ssd": lambda entry, number: entry.rotation == 90,
+                               "yolox-nano": lambda entry, number: True},
+                              failures={"yolox-nano": {"reason": "detector_raised", "frame_index": 7}})
+        lines = guidance.result_lines(report)
+        self.assertIn("yolox-nano failed after 7 frames (detector_raised). Tell the Frame manager.", lines)
+        self.assertIn("yolox-nano: bottle in 7 of 7 frames.", lines)
+        self.assertIn("mobilenet-ssd: bottle in 12 of 48 frames.", lines)
+
     def test_a_scan_without_a_clean_shutdown_puts_nothing_frame_derived_into_words(self):
-        report = self.scanned({"yolox-nano": lambda entry: True})
+        report = self.scanned({"yolox-nano": lambda entry, number: True}, run_detector="yolox-nano")
         report["cleanup_ok"] = False
         self.assertEqual(guidance.result_lines(report), [guidance.LINE_UNCLEAN, guidance.TELL_THE_MANAGER])
         plain = finished_report([window_mark(1, "near", T0)])  # A run that was no scan says nothing about one.
-        self.assertFalse([line for line in guidance.result_lines(plain) if "turned" in line or "Regions" in line])
+        self.assertFalse([line for line in guidance.result_lines(plain) if "turn" in line or "Regions" in line])
 
 
 class StandInHelper(unittest.TestCase):
@@ -956,6 +1014,9 @@ class WorkerTests(StandInHelper):
         self.assertGreaterEqual(frames, 20)
         self.assertEqual([record["view"]["index"] for record in report["detections"]], [n % 24 for n in range(frames)])
         scan = report["scan"]
+        self.assertEqual([record["view"] for record in report["detections"]], [{"index": n % 24} for n in range(frames)])
+        self.assertEqual((report["summary"]["coverage"], report["summary"]["coverage_omitted"], scan["detectors_failed"]),
+                         (None, "scan_pools_views", []))
         self.assertEqual({name: block["frames"] for name, block in scan["detectors"].items()},
                          {"mobilenet-ssd": frames, "yolox-nano": frames})
         self.assertGreater(scan["detectors"]["yolox-nano"]["target_frames"], 0)
@@ -1872,6 +1933,8 @@ class CommandLineTests(unittest.TestCase):
                           [*scan, "--scan-detectors", "mobilenet-ssd,other"],
                           [*scan, "--scan-detectors", "mobilenet-ssd,mobilenet-ssd"], [*scan, "--scan-detectors", ""],
                           [*scan, "--target-label", "sofa"],  # A class of one scan detector only.
+                          [*scan, "--seconds", "9"], [*scan, "--max-frames", "47"],  # Bounds a scan cannot serve.
+                          [*scan, "--seconds", "10", "--fps", "4"],
                           ["--validate", "--region", "0,0,1,1"], ["--validate", "--scan-detectors", "yolox-nano"]):
             with self.subTest(arguments=[str(item) for item in arguments][-3:]):
                 code, report, _ = run_main(arguments)
@@ -1906,6 +1969,10 @@ class CommandLineTests(unittest.TestCase):
                          [([0.25, 0.25, 0.75, 0.75], 90, None), ([0.0, 0.0, 1.0, 1.0], 180, None), (None, 0, None),
                           (None, 0, ["mobilenet-ssd", "yolox-nano"]), (None, 0, ["yolox-nano"])])
         self.assertEqual(seen[3].limits, {"fps": 5, "max_seconds": 30, "max_frames": 150})
+        with mock.patch.dict(os.environ, {"QT_QPA_PLATFORM": "offscreen"}), \
+                mock.patch.dict(sys.modules, {"PySide6": sys.modules.get("PySide6") or types.ModuleType("PySide6")}):
+            run_main([*self.arguments(**{"--script": "scan"}), "--seconds", "10"])  # The least a scan can be given.
+        self.assertEqual(seen[-1].limits, {"fps": 5, "max_seconds": 10, "max_frames": 50})
 
     def test_the_report_path_is_checked_first_and_before_any_window(self):
         existing = Path(self.directory.name) / "existing.json"
@@ -2038,6 +2105,7 @@ class ValidateTests(unittest.TestCase):
         self.assertEqual((scan["status"], scan["marks"], scan["schedule_length"], scan["view_mode"], scan["scan_detectors"],
                           scan["every_frame_tallied"], scan["boxes_over_the_whole_frame"], scan["run_screen_only_scripted"]),
                          ("recognized", ["near"], 24, "scan", ["mobilenet-ssd", "yolox-nano"], True, True, True))
+        self.assertEqual((scan["coverage_omitted"], scan["detectors_failed"]), (True, []))
         self.assertEqual({name: entry["ok"] for name, entry in flows.items()}, dict.fromkeys(flows, True))
         self.assertEqual([flows[name]["workers_started"] for name in ("cancel", "declined_start")], [0, 0])
         self.assertEqual((flows["removal_presence_end"]["helper_end_reason"], flows["removal_presence_end"]["marks"]),

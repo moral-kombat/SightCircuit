@@ -246,14 +246,19 @@ class PrepareTests(unittest.TestCase):
             region.prepare(Frame(b"\0" * 64 * 48 * 2, "YUYV", 64, 48, 128, "other", 1, 0), region.Region(rotation=90))
 
 
-def scan_record(index, hits):
-    """A per-frame record as the recognition command writes it: ``hits`` is name to (confidence, box) or None."""
+def scan_record(index, hits, run_detector="a", failed=False):
+    """A per-frame record as the recognition command writes it: ``hits`` is name to (confidence, box), None or absent."""
     def target(hit):
         if hit is None:
             return marks.target_of((), "bottle", 0.5, SPACE, SPACE)
         return marks.target_of((Detection("bottle", hit[0], hit[1]),), "bottle", 0.5, SPACE, SPACE)
-    return {"view": {"index": index}, "scan": {name: {"target": target(hit), "detection_count": int(hit is not None),
-                                                      "inference_ms": 10.0 + index} for name, hit in hits.items()}}
+    record = {"view": {"index": index}, "target": target(None if failed else hits.get(run_detector)),
+              "inference_ms": 0.0 if failed else 10.0 + index,
+              "scan": {name: {"target": target(hit), "detection_count": int(hit is not None), "inference_ms": 10.0 + index}
+                       for name, hit in hits.items() if name != run_detector}}
+    if failed:
+        record["run_detector_failed"] = True
+    return record
 
 
 class ScanTests(unittest.TestCase):
@@ -296,55 +301,98 @@ class ScanTests(unittest.TestCase):
                          for name in region.SCAN_REGION_NAMES}
             self.assertGreaterEqual(min(by_rotation.values()), frames // 4 - 2)
             self.assertGreaterEqual(min(by_window.values()), frames // 6 - 1)
+        self.assertEqual(sorted(by_rotation.values()), [74, 75, 75, 76])  # Groups differ in size: compare by share.
 
-    def test_the_summary_tallies_each_detector_by_entry_rotation_and_region(self):
+    def test_the_summary_tallies_each_detector_by_entry_rotation_axis_and_region(self):
         schedule = region.scan_schedule()
         box = (700, 600, 800, 800)
         records = []
-        for frame in range(48):  # Two cycles. "a" finds the bottle only at 90 degrees in the lower-right window;
-            index = frame % 24  # "b" finds it at 90 degrees in any window, a little more surely the second time.
+        for frame in range(72):  # Three cycles. "a" finds the bottle only at 90 degrees in the lower-right window;
+            index = frame % 24  # "b" finds it at 90 degrees in any window, a little more surely after the first.
             entry = schedule[index]
             at_90 = entry.rotation == 90
             records.append(scan_record(index, {
                 "a": (0.7 + frame / 1000, box) if at_90 and entry.name == "lower_right" else None,
                 "b": (0.6 if frame < 24 else 0.9, (box[0] + frame, box[1], box[2] + frame, box[3])) if at_90 else None}))
-        summary = region.scan_summary(records, schedule, ("a", "b"))
-        self.assertEqual((summary["schedule_length"], summary["frames"], summary["box_coordinate_space"]),
-                         (24, 48, "whole_frame_processing_pixels"))
-        self.assertEqual(summary["schedule"][0], {"index": 0, "region": [0.0, 0.0, 1.0, 1.0], "rotation": 0, "name": "whole"})
+        geometry = {0: {"crop_native_xyxy": [0, 0, 2464, 2464], "resized_size": [960, 960]}}
+        summary = region.scan_summary(records, schedule, ("a", "b"), "a", geometry=geometry)
+        self.assertEqual((summary["schedule_length"], summary["frames"], summary["box_coordinate_space"],
+                          summary["run_detector"], summary["detectors_failed"], summary["best_entry_min_frames"]),
+                         (24, 72, "whole_frame_processing_pixels", "a", [], 3))
+        self.assertEqual(summary["axis_statement"], region.AXIS_STATEMENT)
+        # Where a region lay is stated once, per schedule entry, not in every record.
+        self.assertEqual(summary["schedule"][0], {"index": 0, "region": [0.0, 0.0, 1.0, 1.0], "rotation": 0, "name": "whole",
+                                                  "crop_native_xyxy": [0, 0, 2464, 2464], "resized_size": [960, 960]})
+        self.assertEqual(summary["schedule"][1], dict(index=1, **schedule[1].report()))
         self.assertEqual([entry["index"] for entry in summary["schedule"]], list(range(24)))
         a, b = summary["detectors"]["a"], summary["detectors"]["b"]
         target = next(index for index, entry in enumerate(schedule) if (entry.name, entry.rotation) == ("lower_right", 90))
-        self.assertEqual((a["frames"], a["target_frames"], a["best_entry"]), (48, 2, target))
+        self.assertEqual((a["frames"], a["target_frames"], a["share"], a["best_entry"], a["failed"]),
+                         (72, 3, round(3 / 72, 4), target, None))
         self.assertEqual(a["entries"][target], {
-            "index": target, "frames": 2, "target_frames": 2, "best_confidence": 0.7 + (target + 24) / 1000,
-            "median_confidence": round(0.7 + (target + 12) / 1000, 4), "median_box_xyxy": list(box),
+            "index": target, "frames": 3, "target_frames": 3, "share": 1.0, "best_confidence": 0.7 + (target + 48) / 1000,
+            "median_confidence": round(0.7 + (target + 24) / 1000, 4), "median_box_xyxy": list(box),
             "median_centre_fraction": [round(750 / 960, 4), round(700 / 960, 4)]})
         self.assertEqual([entry for entry in a["entries"] if entry["index"] != target and entry["target_frames"]], [])
-        self.assertEqual({entry["key"]: (entry["frames"], entry["target_frames"]) for entry in a["by_rotation"]},
-                         {0: (12, 0), 90: (12, 2), 180: (12, 0), 270: (12, 0)})
+        self.assertEqual({entry["key"]: (entry["frames"], entry["target_frames"], entry["share"]) for entry in a["by_rotation"]},
+                         {0: (18, 0, 0.0), 90: (18, 3, round(3 / 18, 4)), 180: (18, 0, 0.0), 270: (18, 0, 0.0)})
+        self.assertEqual({entry["key"]: (entry["frames"], entry["target_frames"]) for entry in a["by_axis"]},
+                         {"0_180": (36, 0), "90_270": (36, 3)})
         self.assertEqual({entry["key"]: (entry["frames"], entry["target_frames"]) for entry in a["by_region"]},
-                         {name: (8, 2 if name == "lower_right" else 0) for name in region.SCAN_REGION_NAMES})
+                         {name: (12, 3 if name == "lower_right" else 0) for name in region.SCAN_REGION_NAMES})
         self.assertEqual((b["target_frames"], {entry["key"]: entry["target_frames"] for entry in b["by_rotation"]}),
-                         (12, {0: 0, 90: 12, 180: 0, 270: 0}))
+                         (18, {0: 0, 90: 18, 180: 0, 270: 0}))
         self.assertEqual({entry["key"]: (entry["frames"], entry["target_frames"]) for entry in b["by_region"]},
-                         {name: (8, 2) for name in region.SCAN_REGION_NAMES})
+                         {name: (12, 3) for name in region.SCAN_REGION_NAMES})
         at_90 = next(entry for entry in b["by_rotation"] if entry["key"] == 90)
-        self.assertEqual((at_90["best_confidence"], at_90["median_confidence"]), (0.9, 0.75))
+        self.assertEqual((at_90["best_confidence"], at_90["median_confidence"], at_90["share"]), (0.9, 0.9, 1.0))
         self.assertEqual(a["inference_ms"], {"p50": 21.0, "p95": 32.0, "max": 33.0})
         empty = next(entry for entry in a["by_rotation"] if entry["key"] == 0)
         self.assertEqual((empty["best_confidence"], empty["median_confidence"], empty["median_box_xyxy"],
                           empty["median_centre_fraction"]), (None, None, None, None))
 
+    def test_one_lucky_frame_cannot_be_the_best_entry(self):
+        schedule = region.scan_schedule()
+        box = (10, 10, 20, 20)
+        # Entry 3 was tried once and held the target (1 of 1); entry 5 was tried six times and held it five times.
+        records = [scan_record(3, {"a": (0.99, box)})] + [scan_record(5, {"a": (0.8, box) if n else None}) for n in range(6)]
+        block = region.scan_summary(records, schedule, ("a",), "a")["detectors"]["a"]
+        self.assertEqual((block["entries"][3]["share"], block["entries"][5]["share"], block["best_entry"]),
+                         (1.0, round(5 / 6, 4), 5))
+        alone = region.scan_summary(records[:1] * 2, schedule, ("a",), "a")["detectors"]["a"]
+        self.assertEqual((alone["entries"][3]["frames"], alone["best_entry"]), (2, None))  # Two frames: still too few.
+        enough = region.scan_summary(records[:1] * 3, schedule, ("a",), "a")["detectors"]["a"]
+        self.assertEqual(enough["best_entry"], 3)
+        self.assertEqual(region.BEST_ENTRY_MIN_FRAMES, 3)
+
+    def test_a_detector_that_failed_part_way_keeps_its_tallies_and_is_named(self):
+        schedule = region.scan_schedule()
+        box = (10, 10, 20, 20)
+        # "b" (not the run's detector) stopped after 4 frames; "a" looked at all 10.
+        records = [scan_record(n, {"a": (0.8, box), **({"b": (0.7, box)} if n < 4 else {})}) for n in range(10)]
+        failures = {"b": {"reason": "detector_raised", "frame_index": 4}}
+        summary = region.scan_summary(records, schedule, ("a", "b"), "a", failures=failures)
+        self.assertEqual(summary["detectors_failed"], ["b"])
+        a, b = summary["detectors"]["a"], summary["detectors"]["b"]
+        self.assertEqual((a["frames"], a["target_frames"], a["failed"]), (10, 10, None))
+        self.assertEqual((b["frames"], b["target_frames"], b["failed"]), (4, 4, {"reason": "detector_raised", "frame_index": 4}))
+        # The run's own detector failing: its fields are empty from there on and those frames are not its frames.
+        records = [scan_record(n, {"a": (0.8, box), "b": (0.7, box)}, failed=n >= 6) for n in range(10)]
+        summary = region.scan_summary(records, schedule, ("a", "b"), "a",
+                                      failures={"a": {"reason": "invalid_detection_result", "frame_index": 6}})
+        self.assertEqual((summary["detectors"]["a"]["frames"], summary["detectors"]["a"]["target_frames"],
+                          summary["detectors"]["b"]["frames"], summary["detectors_failed"]), (6, 6, 10, ["a"]))
+        self.assertEqual(region.SCAN_FAILURE_REASONS, ("detector_raised", "invalid_detection_result"))
+
     def test_a_scan_with_no_hit_and_a_scan_with_no_frame_say_so(self):
         schedule = region.scan_schedule()
-        none = region.scan_summary([scan_record(index, {"a": None}) for index in range(24)], schedule, ("a",))
+        none = region.scan_summary([scan_record(index, {"a": None}) for index in range(24)], schedule, ("a",), "a")
         self.assertEqual((none["detectors"]["a"]["target_frames"], none["detectors"]["a"]["best_entry"]), (0, None))
-        empty = region.scan_summary([], schedule, ("a", "b"))
+        empty = region.scan_summary([], schedule, ("a", "b"), "a")
         self.assertEqual(empty["frames"], 0)
         for block in empty["detectors"].values():
-            self.assertEqual((block["frames"], block["target_frames"], block["best_entry"], block["inference_ms"]),
-                             (0, 0, None, None))
+            self.assertEqual((block["frames"], block["target_frames"], block["share"], block["best_entry"],
+                              block["inference_ms"]), (0, 0, None, None, None))
             self.assertEqual(len(block["entries"]), 24)
 
 

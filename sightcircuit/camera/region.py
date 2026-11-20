@@ -37,7 +37,8 @@ from ..convert import MAX_PROCESSING_SIDE, buffer_view, processing_size, view_bg
 from ..frame import Detection, DetectionResult
 
 __all__ = ("FRAME_PIXELS", "MAX_PROCESSING_SIDE", "ORIENTATION_STATEMENT", "ROTATIONS", "WHOLE", "MIN_FRACTION", "MIN_PIXELS", "Region", "Mapping", "parse_region",
-           "prepare", "box_space", "scan_schedule", "scan_summary", "SCAN_REGIONS", "SCAN_REGION_NAMES")
+           "prepare", "box_space", "scan_schedule", "scan_summary", "scan_result", "SCAN_REGIONS", "SCAN_REGION_NAMES",
+           "BEST_ENTRY_MIN_FRAMES", "SCAN_FAILURE_REASONS", "AXIS_STATEMENT", "COVERAGE_OMITTED")
 
 FRAME_PIXELS = "whole_frame_processing_pixels"  # The whole native frame, longest side at most the processing size.
 ROTATIONS = (0, 90, 180, 270)  # Degrees clockwise the region is turned before the detector sees it.
@@ -231,11 +232,28 @@ def _percentile(values, fraction):
     return ordered[min(len(ordered) - 1, max(0, math.ceil(fraction * len(ordered)) - 1))]
 
 
+# An entry can be ``best_entry`` only with this many frames tried. A 150-frame run gives every entry 6 or 7, so 3 is
+# under half an entry's share: a run cut that short for an entry says little about it, and one lucky frame (1 of 1)
+# can no longer outrank 5 of 6.
+BEST_ENTRY_MIN_FRAMES = 3
+# Why a scan detector stopped being used: closed names, never the exception's text.
+SCAN_FAILURE_REASONS = FAILURE_RAISED, FAILURE_INVALID_RESULT = ("detector_raised", "invalid_detection_result")
+AXES = {0: "0_180", 180: "0_180", 90: "90_270", 270: "90_270"}
+AXIS_STATEMENT = (
+    "A turn and its opposite are hard to tell apart on an object that looks alike from both ends: read by_axis for "
+    "the axis of the image, and settle which way up with a run that marks up and down (the positions script).")
+COVERAGE_OMITTED = "scan_pools_views"  # Why a scan's summary has no coverage: its frames are 24 different views.
+
+
+def _share(hits, frames):
+    return round(hits / frames, 4) if frames else None
+
+
 def _tally(results):
-    """Frames tried, frames with the target, best and median confidence, and the median target box."""
+    """Frames tried, frames with the target and their share, best and median confidence, the median target box."""
     hits = [result["target"] for result in results if result["target"]["present"]]
-    tally = {"frames": len(results), "target_frames": len(hits), "best_confidence": None, "median_confidence": None,
-             "median_box_xyxy": None, "median_centre_fraction": None}
+    tally = {"frames": len(results), "target_frames": len(hits), "share": _share(len(hits), len(results)),
+             "best_confidence": None, "median_confidence": None, "median_box_xyxy": None, "median_centre_fraction": None}
     if hits:
         tally.update(best_confidence=max(hit["confidence"] for hit in hits),
                      median_confidence=round(statistics.median(hit["confidence"] for hit in hits), 4),
@@ -246,38 +264,70 @@ def _tally(results):
     return tally
 
 
-def scan_summary(records, schedule, detectors):
-    """Counts-only tallies of a scan, per detector: by schedule entry, by rotation and by region.
+def scan_result(record, name, run_detector):
+    """One detector's result in a scan record, ``{target, inference_ms}``, or ``None`` when it did not look.
+
+    The run's own detector's result is the record's own (``target``,
+    ``inference_ms``), not repeated under ``scan``; it did not look at a
+    frame marked ``run_detector_failed``. Another detector's is
+    ``record["scan"][name]``, absent once that detector has failed.
+    """
+    if name == run_detector:
+        return None if record.get("run_detector_failed") else record
+    return (record.get("scan") or {}).get(name)
+
+
+def scan_summary(records, schedule, detectors, run_detector, *, geometry=None, failures=None):
+    """Counts-only tallies of a scan, per detector: by entry, by rotation, by axis and by region.
 
     ``records`` are the per-frame records of one camera, each with ``view``
-    (``index`` into ``schedule``) and ``scan`` (per detector name, ``target``
-    from ``marks.target_of`` on the mapped boxes, so every box is in
-    ``FRAME_PIXELS``, and that detector's ``inference_ms``). ``best_entry``
-    is the entry with the largest share of its frames holding the target
-    (then the most such frames, then the best confidence), or ``None`` when
-    the target was in no frame: a reading aid, not a verdict.
+    (``index`` into ``schedule``) and each detector's result as
+    ``scan_result`` finds it (``target`` from ``marks.target_of`` on the
+    mapped boxes, so every box is in ``FRAME_PIXELS``). Every tally row
+    gives the frames tried, the frames with the target and their ``share``:
+    groups differ in size (38, 38, 37 and 37 frames per rotation in a
+    150-frame run), so rows are compared by share, never by count.
+    ``by_axis`` pools each rotation with its opposite (``AXIS_STATEMENT``).
+    ``best_entry`` is the entry, among those tried at least
+    ``BEST_ENTRY_MIN_FRAMES`` times, with the largest share (then the most
+    frames with the target, then the best confidence), or ``None`` when no
+    such entry held the target: a reading aid, not a verdict.
+
+    ``geometry`` (entry index to ``Mapping.report()``) is stated once per
+    schedule entry instead of in every record. ``failures`` (detector name
+    to ``{reason, frame_index}``) are the detectors that stopped being used
+    part way: their tallies cover the frames before that.
     """
-    listed = [dict(index=index, **entry.report()) for index, entry in enumerate(schedule)]
+    geometry, failures = geometry or {}, failures or {}
+    listed = [dict(index=index, **entry.report(), **geometry.get(index, {})) for index, entry in enumerate(schedule)]
     blocks = {}
     for name in detectors:
-        by_index = {}
+        by_index, times, hits = {}, [], 0
         for record in records:
-            by_index.setdefault(record["view"]["index"], []).append(record["scan"][name])
+            result = scan_result(record, name, run_detector)
+            if result is None:
+                continue
+            by_index.setdefault(record["view"]["index"], []).append(result)
+            times.append(result["inference_ms"])
+            hits += bool(result["target"]["present"])
 
-        def group(key):
+        def group(key, by_index=by_index):
             keys = list(dict.fromkeys(key(entry) for entry in schedule))
             return [{"key": value, **_tally([result for index, entry in enumerate(schedule) if key(entry) == value
                                              for result in by_index.get(index, ())])} for value in keys]
         entries = [{"index": index, **_tally(by_index.get(index, ()))} for index in range(len(schedule))]
-        best = max(entries, key=lambda entry: (entry["target_frames"] / entry["frames"] if entry["frames"] else 0.0,
-                                               entry["target_frames"], entry["best_confidence"] or 0.0, -entry["index"]))
-        times = [record["scan"][name]["inference_ms"] for record in records]
-        blocks[name] = {"frames": len(records),
-                        "target_frames": sum(1 for record in records if record["scan"][name]["target"]["present"]),
-                        "best_entry": best["index"] if best["target_frames"] else None,
+        eligible = [entry for entry in entries if entry["frames"] >= BEST_ENTRY_MIN_FRAMES and entry["target_frames"]]
+        best = max(eligible, key=lambda entry: (entry["share"], entry["target_frames"], entry["best_confidence"],
+                                                -entry["index"]), default=None)
+        blocks[name] = {"frames": len(times), "target_frames": hits, "share": _share(hits, len(times)),
+                        "failed": failures.get(name),
+                        "best_entry": None if best is None else best["index"],
                         "inference_ms": {"p50": _percentile(times, 0.5), "p95": _percentile(times, 0.95),
                                          "max": max(times)} if times else None,
                         "by_rotation": group(lambda entry: entry.rotation),
+                        "by_axis": group(lambda entry: AXES[entry.rotation]),
                         "by_region": group(lambda entry: entry.name), "entries": entries}
-    return {"schedule": listed, "schedule_length": len(listed), "frames": len(records), "detectors": blocks,
-            "box_coordinate_space": FRAME_PIXELS}
+    return {"schedule": listed, "schedule_length": len(listed), "frames": len(records), "run_detector": run_detector,
+            "detectors_failed": [name for name in detectors if name in failures],
+            "best_entry_min_frames": BEST_ENTRY_MIN_FRAMES, "axis_statement": AXIS_STATEMENT,
+            "detectors": blocks, "box_coordinate_space": FRAME_PIXELS}

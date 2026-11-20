@@ -15,9 +15,14 @@ the owner's explicit approval first, as every
 [lane L device step](../live-capture.md#camera-display-work-order-adopted-2026-11-16)
 does.
 
-**Nothing here has run on the Frame.** The command has been checked in the
-cloud only: offscreen, against the camera stand-in and the helper's fake
-backend. No time or count on this page is a Frame measurement.
+**One run on the Frame so far.** Run 1 of L-D1 went through this window on
+2026-11-19 ([E100](../evidence/e100.md)): the wearer found, started and
+finished it unaided with the `removal` script, the bottle was detected in
+none of 150 frames, and the run ended on its bound, not on a presence stop.
+Everything else here, the `positions` and `scan` scripts and the region
+options included, has been checked in the cloud only: offscreen, against the
+camera stand-in and the helper's fake backend. No time or count on this page
+is a Frame measurement unless it says so.
 
 [Camera recognition](camera-recognize.md) · [Scope](../poc-scope.md) ·
 [Gates](../../sightcircuit/gates.py) · [Current work](../live-capture.md#current-work-order)
@@ -243,42 +248,91 @@ them, fills the report's usual fields (the per-frame `detections`, `target`,
 --detector yolox-nano` runs one. `--region` and `--rotation` are refused with
 this script.
 
+A scan needs bounds it can serve: at least 10 seconds and 48 frames (two
+passes of the schedule). Less is refused on the command line, before any
+window. The bar on the run screen runs for the run's time bound less two
+seconds, so it and the run end together.
+
 The report gains `scan`:
 
-- `schedule`: the 24 entries as run (`index`, `name`, `region`, `rotation`);
-- per detector: `frames`, `target_frames`, that detector's inference p50, p95
-  and maximum, and three tallies, `entries` (per schedule entry),
-  `by_rotation` and `by_region`. Each tally row has the frames tried, the
-  frames with the target, the best and the median confidence, and the median
-  target box and its centre as a fraction of the frame, over the whole frame;
+- `schedule`: the 24 entries as run (`index`, `name`, `region`, `rotation`,
+  and where that region lay, `crop_native_xyxy` and `resized_size`). A frame
+  record carries only `view.index`, the entry it was seen through;
+- per detector: `frames`, `target_frames` and their `share`, that detector's
+  inference p50, p95 and maximum, and four tallies, `entries` (per schedule
+  entry), `by_rotation`, `by_axis` and `by_region`. Each tally row has the
+  frames tried, the frames with the target, their share, the best and the
+  median confidence, and the median target box and its centre as a fraction
+  of the frame, over the whole frame. Groups differ in size (38, 38, 37 and
+  37 frames per rotation in a 150-frame run), so rows are compared by share;
 - `best_entry`: the entry with the largest share of its frames holding the
-  target, or `null`. It is an aid to reading, not a verdict.
+  target, among entries tried at least 3 times, or `null`. Three is under
+  half of an entry's 6 or 7 frames, and it stops one lucky frame (1 of 1)
+  from outranking 5 of 6. It is an aid to reading, not a verdict;
+- `failed` per detector and `detectors_failed`: see below.
 
-Read `by_rotation` first: the rotation at which the detectors find the bottle
-says which way up the image is, to a quarter turn. Then the median box says
-where straight ahead falls in the image, and `by_region` and `entries` say
-which window a follow-up run should use as its `--region`. Per-entry counts
-are small (6 or 7 frames), and a detector can name a bottle that is not
-there, so a result carried by one entry at one rotation is weak.
+The run detector's result for a frame is the record's own `target`; the
+other detector's is under the record's `scan`. Neither is repeated.
+
+**The scan gives the axis, and may not give which way up.** A detector finds
+a bottle at a turn and, somewhat less often, at the opposite turn: a bottle
+looks much the same from both ends. In the independent review's cloud check an
+image stored a quarter turn off was found at 90 degrees in 6 of 12 frames
+and at 270 in 4 of 12. So read `by_axis` first (`0_180` against `90_270`):
+that is what one scan can settle. Treat the leading rotation inside the axis
+as a lean, not a finding, unless its share is far ahead. Which way up is
+settled by a run that marks up and down: the `positions` script with
+`--region` and either rotation of the axis found, where the `up` and `down`
+intervals' `rows` and `columns` tallies say which side of the image is the
+wearer's up. That needs counts only.
+
+After the axis, the median box says where straight ahead falls in the image,
+and `by_region` and `entries` say which window a follow-up run should use as
+its `--region`. Per-entry counts are small (6 or 7 frames), and a detector
+can name a bottle that is not there, so a result carried by one entry is
+weak.
+
+**No coverage figure.** A scan's 150 frames are 24 different views, so the
+share of 1-second windows that held the bottle would not be row G7's
+coverage, and the report does not offer one: `summary.coverage` is `null`
+with `summary.coverage_omitted: scan_pools_views`, the intervals and windows
+carry no target counts, and the result screen has no "seen in X of Y
+seconds" line. The scan's own tallies are the reading.
+
+**If one detector fails.** A detector that raises, or returns something that
+is not a result, is not used again in that run. The other carries on to the
+bound and keeps its tallies; the failed one's tallies cover the frames before
+it stopped. The report says which (`scan.detectors_failed`, and per detector
+`failed` with a closed `reason`, `detector_raised` or
+`invalid_detection_result`, and the `frame_index`; never the exception's
+text), and the result screen says "yolox-nano failed after 7 frames
+(detector_raised). Tell the Frame manager." If the run's own detector is the
+one that failed, its records are marked `run_detector_failed` and its usual
+fields are empty from there on. If every scan detector fails, the run ends
+`error`, `processing_failed`, as any run with a failing detector does; outside
+a scan a failing detector still ends the run at once.
 
 The window shows what it always shows during the run: the instruction, the
-bar and the time left. After the helper has ended, the result screen adds one
-or two lines per detector, for example "yolox-nano: bottle in 31 of 150
-frames" and "most often with the image turned 90 degrees (29 of 38 frames),
-and in the region lower_right (9 of 25)".
+bar and the time left. After the helper has ended, the result screen gives,
+per detector, its count ("yolox-nano: bottle in 31 of 150 frames"), the two
+leading rotations by share ("by turn of the image: 90 degrees 29 of 38, 270
+degrees 22 of 37", with "(a tie)" when the shares are equal) and the two
+leading regions, then one line saying that a turn and its opposite look
+alike to the detectors.
 
-**What has and has not been measured.** In the cloud, on a 4-core 2.3 GHz
-Xeon, with synthetic 2464-pixel frames from the camera stand-in at 5 frames a
-second: processing p95 was 37 ms for the whole frame and 32 ms for the centre
-half with `mobilenet-ssd`, 20 and 18 ms with `yolox-nano`, and 59 ms for the
-scan with both detectors (maximum 110 ms). The Frame is slower: its one
-measured run had a processing p95 of 94 ms with `mobilenet-ssd` on the whole
-frame. `yolox-nano` has not been timed on the Frame's camera path, so the
-scan's time per frame there is not known; if frames are replaced in the
-latest slot, the schedule follows the frames that were processed and the
-report's `pending_frames_replaced` and timings say so. Whether either
-detector finds the bottle through any window on the Frame is what the run is
-for.
+**Cloud figures, not Frame measurements.** On a 4-core 2.3 GHz Xeon in the
+cloud, with synthetic 2464-pixel frames from the camera stand-in at 5 frames
+a second: processing p95 was 37 ms for the whole frame and 32 ms for the
+centre half with `mobilenet-ssd`, 20 and 18 ms with `yolox-nano`, and 59 to
+71 ms for the scan with both detectors (maximum 136 ms). A scan report from
+that machine was about 0.23 MB for 127 frames, against 0.12 MB without the
+scan. The one Frame figure here is E100's: a processing p95 of 94 ms with
+`mobilenet-ssd` on the whole frame. `yolox-nano` has not been timed on the
+Frame's camera path, so the scan's time per frame there is not known; if
+frames are replaced in the latest slot, the schedule follows the frames that
+were processed and the report's `pending_frames_replaced` and timings say
+so. Whether either detector finds the bottle through any window on the Frame
+is what the run is for.
 
 ## How the run is launched on the Frame
 
@@ -319,7 +373,8 @@ track, and "Something changed", confirmed, is how the wearer says so.
 
 `camera_recognize`'s [report](camera-recognize.md#the-report), with
 `confirmation: operator_window` and a `guide` block (its own
-`schema_version` is 2):
+`schema_version` is 3 since the scan script; the recognition report's own is 3
+since the region of view):
 
 - `script`, `confirmation`, `started_by_start_button`, and `ended_by`
   (`helper`, `stop_button`, `window_closed`, `cancel_button`, `signal` or

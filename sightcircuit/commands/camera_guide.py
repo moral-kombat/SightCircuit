@@ -63,7 +63,10 @@ the target held still straight ahead at about half a metre, while each frame
 is seen through the next entry of a fixed schedule of regions and rotations
 of the camera image and every ``--scan-detectors`` detector looks at it; the
 report's ``scan`` block says, in counts and boxes over the whole frame, where
-and at which turn the target was found. ``--region`` and ``--rotation`` give
+and on which axis of the image the target was found (a turn and its opposite
+are hard to tell apart on a bottle; the positions script settles which way
+up). A detector that fails part way is dropped and named, and the other
+carries on; a scan's summary has no coverage, which would read as G7's. ``--region`` and ``--rotation`` give
 the other two scripts one fixed region (``sightcircuit.camera.region``).
 Marks are ``marks.VOCABULARY``'s, recorded with source
 ``window``; the summaries are ``marks.summarize``'s. Because ``remove`` is
@@ -1382,11 +1385,15 @@ def validate(helper=None):
                      every_frame_tallied=bool(tallies) and all(
                          frames == final.get("frames_processed") for frames, _hits in tallies.values()),
                      boxes_over_the_whole_frame=bool(final.get("detections")) and all(
-                         record["box_coordinate_space"] == regions.FRAME_PIXELS for record in final["detections"]))
+                         record["box_coordinate_space"] == regions.FRAME_PIXELS for record in final["detections"]),
+                     coverage_omitted=(final.get("summary") or {}).get("coverage") is None
+                     and (final.get("summary") or {}).get("coverage_omitted") == regions.COVERAGE_OMITTED,
+                     detectors_failed=scan.get("detectors_failed"))
         entry["ok"] = (entry["ok"] and entry["status"] == "recognized" and entry["marks"] == ["near"]
                        and entry["schedule_length"] == len(regions.scan_schedule()) and entry["view_mode"] == "scan"
                        and entry["scan_detectors"] == sorted(DETECTORS) and entry["every_frame_tallied"]
                        and entry["boxes_over_the_whole_frame"] and entry["run_screen_only_scripted"]
+                       and entry["coverage_omitted"] and entry["detectors_failed"] == []
                        and entry["helper_cleanup_ok"] is True)
         flows["scan_to_the_bound"] = entry
 
@@ -1518,6 +1525,11 @@ def main(argv=None):
         if (len(set(scan_detectors)) != len(scan_detectors) or any(name not in DETECTORS for name in scan_detectors)
                 or args.detector not in scan_detectors):
             parser.error(f"--scan-detectors takes distinct names of {', '.join(DETECTORS)}, --detector among them")
+        seconds = guidance.DEFAULT_SECONDS[args.script] if args.seconds is None else args.seconds
+        frames = seconds * args.fps if args.max_frames is None else args.max_frames
+        if seconds < guidance.SCAN_MIN_SECONDS or frames < guidance.SCAN_MIN_FRAMES:
+            parser.error(f"--script scan needs at least {guidance.SCAN_MIN_SECONDS} seconds and "
+                         f"{guidance.SCAN_MIN_FRAMES} frames (two passes of its schedule)")
         for name in scan_detectors:
             if args.target_label not in class_names(name):
                 parser.error(f"--target-label must be a class of every scan detector; {name} has no {args.target_label}")

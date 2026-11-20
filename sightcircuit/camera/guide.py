@@ -63,7 +63,8 @@ DECLINED, STARTING_STATE_NOT_STABLE = "confirmation_declined", "starting_state_n
 WATCH_SECONDS = 30  # The passthrough watch after a run (the accepted passthrough rule).
 # Pictures the window draws from shapes; none is an image and none comes from a camera.
 PICTURES = ("wait", "near", "far", "headset_off", "centre", "left", "right", "up", "down", "out_of_view", "done")
-GUIDE_SCHEMA_VERSION = 2  # 2: one click in the removal script, the budget from Start, the watch state.
+# 2: one click in the removal script, the budget from Start, the watch state. 3: the scan script (item L14).
+GUIDE_SCHEMA_VERSION = 3
 GUARD_MS = 1200  # How long a button must have been on the screen before a click on it counts.
 STARTING_HELP_SECONDS = 10  # After this long without the reader, the starting screen says what to do.
 WAIT_CYCLE_MS = 1500  # The period of the starting screen's moving dot.
@@ -101,10 +102,23 @@ POSITION_STEPS = (
     Step("out_of_view", "Take the {target} out of view", "out_of_view", ADVANCE_CLOCK, 3000, 1000, "",
          "Take the {target} out of view"),
 )
-# One instruction for the whole run: the mark is made when the reader is ready and the bar runs for 28 seconds, so
-# it is still moving when a run whose launch took up to two seconds ends on its bound.
+# One instruction for the whole run: the mark is made when the reader is ready and the bar runs for the run's time
+# bound less two seconds, so it is still moving when a run whose launch took up to two seconds ends on its bound.
 SCAN_TEXT = "Hold the {target} upright, straight ahead of you, about half a metre away. Keep it still"
-SCAN_STEPS = (Step("near", SCAN_TEXT, "near", ADVANCE_CLOCK, 28000, 5000, "", SCAN_TEXT),)
+SCAN_LAUNCH_ALLOWANCE_MS = 2000
+SCAN_NEEDS_MS = 5000
+# The bounds a scan can serve, checked on the command line before any window: two passes of its 24-entry schedule
+# (48 frames) and ten seconds, so the bar and the step's five seconds always fit the run.
+SCAN_MIN_SECONDS, SCAN_MIN_FRAMES = 10, 48
+
+
+def scan_steps(max_seconds):
+    """The scan's one step for a run of ``max_seconds``: its bar is tied to the run's bound."""
+    return (Step("near", SCAN_TEXT, "near", ADVANCE_CLOCK, max(1000, max_seconds * 1000 - SCAN_LAUNCH_ALLOWANCE_MS),
+                 SCAN_NEEDS_MS, "", SCAN_TEXT),)
+
+
+SCAN_STEPS = scan_steps(30)
 SCRIPTS = {SCRIPT_REMOVAL: REMOVAL_STEPS, SCRIPT_POSITIONS: POSITION_STEPS, SCRIPT_SCAN: SCAN_STEPS}
 # The time bound a script asks for when the operator names none: the command's whole bound. The budget is counted
 # from the Start click, so what the helper's launch takes comes out of it before the first step.
@@ -187,7 +201,7 @@ class Guide:
             raise ValueError("scale must be above zero and at most one")
         self.script, self.max_seconds, self.target, self.scale = script, max_seconds, target, scale
         self.started_ns, self.guard_ms = started_ns, guard_ms
-        self.steps = SCRIPTS[script]
+        self.steps = scan_steps(max_seconds) if script == SCRIPT_SCAN else SCRIPTS[script]
         self.ready_ns = None
         self.index = 0
         self.step_started_ns = None  # When the current step's mark was made; None while it has not begun.
@@ -396,6 +410,44 @@ def status_line(report):
     return f"The run did not work: {status}" + (f" ({reason})." if reason else ".")
 
 
+def _ranked(rows):
+    """Tally rows that held the target, largest share first (groups differ in size, so never by count)."""
+    return sorted((row for row in rows if row["target_frames"]),
+                  key=lambda row: (-row["share"], -row["target_frames"], str(row["key"])))
+
+
+def _row(row, unit=""):
+    return f"{row['key']}{unit} {row['target_frames']} of {row['frames']}"
+
+
+def scan_lines(scan, target):
+    """A scan's tallies in plain words: per detector its count, then where it found the target, by share.
+
+    The leading rotation is given with its runner-up, and a tie is called a
+    tie: a detector finds an object that looks alike from both ends at a
+    turn and at its opposite, so the words say the scan gives the axis and
+    not which way up. A detector that failed part way is named.
+    """
+    lines = []
+    for name, block in (scan.get("detectors") or {}).items():
+        failed = block.get("failed")
+        if failed:
+            lines.append(f"{name} failed after {block['frames']} frames ({failed['reason']}). {TELL_THE_MANAGER}")
+        lines.append(f"{name}: {target} in {block['target_frames']} of {block['frames']} frames.")
+        turns, regions = _ranked(block["by_rotation"]), _ranked(block["by_region"])
+        if not turns:
+            continue
+        tied = len(turns) > 1 and turns[0]["share"] == turns[1]["share"]
+        line = f"{name}, by turn of the image: " + ", ".join(_row(row, " degrees") for row in turns[:2])
+        lines.append(line + (" (a tie)." if tied else "."))
+        tied = len(regions) > 1 and regions[0]["share"] == regions[1]["share"]
+        lines.append(f"{name}, by region: " + ", ".join(_row(row) for row in regions[:2]) + (" (a tie)." if tied else "."))
+    if lines:
+        lines.append("A turn and its opposite look alike to the detectors: this gives the axis, not which way up.")
+        lines.append("Regions and turns are the camera image's as exported, which may not be yours.")
+    return lines
+
+
 def result_lines(report):
     """The finished report in plain words: counts, closed labels and timings only, each line one fact.
 
@@ -431,17 +483,7 @@ def result_lines(report):
         lines.append(line + ".")
     if any(interval["label"] in marks.POSITION_LABELS for interval in summary.get("intervals") or ()):
         lines.append("Image sides are the camera image's as exported, which may not be yours.")
-    scan = report.get("scan") or {}
-    for name, block in (scan.get("detectors") or {}).items():
-        lines.append(f"{name}: {target} in {block['target_frames']} of {block['frames']} frames.")
-        turned = max(block["by_rotation"], key=lambda entry: entry["target_frames"], default=None)
-        where = max(block["by_region"], key=lambda entry: entry["target_frames"], default=None)
-        if turned is not None and turned["target_frames"]:
-            lines.append(f"{name}: most often with the image turned {turned['key']} degrees "
-                         f"({turned['target_frames']} of {turned['frames']} frames), and in the region {where['key']} "
-                         f"({where['target_frames']} of {where['frames']}).")
-    if scan:
-        lines.append("Regions and turns are the camera image's as exported, which may not be yours.")
+    lines.extend(scan_lines(report.get("scan") or {}, target))
     for entry in summary.get("removal") or ():
         if entry["helper_end_after_mark_ms"] is None:
             lines.append("After your click to take the headset off: the camera reader left no end record.")

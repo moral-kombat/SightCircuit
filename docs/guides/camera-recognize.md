@@ -285,15 +285,16 @@ without a region, where the detector's input is the whole frame at that size
 therefore unchanged in meaning. A mapped box is clamped to the frame and is
 at least one pixel wide and tall. With a region each frame record carries
 `box_coordinate_space: whole_frame_processing_pixels`, `box_space_size`,
-`detector_input_size` (what the detector really saw) and `view` (the region,
-the rotation, `crop_native_xyxy` and `resized_size`), and the report carries
-`view` (`mode: region`, the region, the rotation, the detector requested and
-the orientation statement).
+`detector_input_size` (what the detector really saw) and `view.index`, and
+the report states the region once, in `view` (`mode: region`, the region,
+the rotation, `crop_native_xyxy` and `resized_size`, the detector requested
+and the orientation statement).
 
 A malformed region or rotation is refused on the command line, before the
 confirmation is asked and so before the camera is touched. Without the two
 options, or with the whole frame unturned spelled out, nothing is cropped
-and the report has no `view` block: it is what it was.
+and the report has no `view` block: apart from `schema_version`, it is what
+it was.
 
 Neither value is a finding. Nothing here knows where "straight ahead" falls
 in the image or which way up it is, and no calibration data is read. The
@@ -325,12 +326,13 @@ standard library only. Expect `status: validated` and exit 0.
 | `frames_received`, `frames_processed`, `stale_inputs_skipped`, `pending_frames_replaced` | Frames the reader delivered; frames the detector saw; frames older than `maximum_input_observation_age_ms` (1000) at processing; frames replaced in the latest slot |
 | `labels_seen` | Every label detected in the run |
 | `confirmation` | `operator_terminal` once the typed answer was given on this command's terminal; `null` when the run was refused before launch |
-| `schema_version` | 2 since item L15 (the times, marks, target and summaries; no earlier field changed) |
+| `schema_version` | 3 since item L14: with a region or a scan a record's `box_coordinate_space` may be `whole_frame_processing_pixels`, where `detector_input_size` is what the detector saw and `box_space_size` is the box space, and the report may carry `view` and `scan`; a run without them has the fields of 2 (item L15: the times, marks, target and summaries) unchanged |
 | `timebase`, `run_started`, `first_frame`, `helper_end`, `export_returned` | The declared clocks with the anchor, and `{monotonic_ns, utc_ns}` of the run's start, the first frame's acquire, the helper's end record as read (with its `reason`; `null` without one) and the export's return; see [times](#times-marks-and-the-target-summary) |
 | `marks` | The vocabulary, the cues and key labels requested, `cues_not_reached`, `key_marks_enabled`, `key_presses`, `key_marks_capacity`, `marks_dropped` and `recorded`: per mark `index`, `source` (`cue`, `key`, or `window` for a mark the [guided window](camera-guide.md) records at a click; `window_marks` counts those, and this command makes none), `label`, `monotonic_ns`, `utc_ns`, `offset_ms` from the first frame's acquire (`null` before it), and for a cue the scheduled offset and times and `late_ms` |
 | `target_label`, `target`, `summary` | The class named with `--target-label` (`null` without); its threshold, frame count, cell thresholds and the orientation statement; the counts-only [summaries](#times-marks-and-the-target-summary) |
 | `detections` | One record per processed frame: `sequence`, `frame_set_sequence` (the acquired set; both cameras of a set share it), `source_id` (`arcturus_camera_left` or `_right`), `camera_index`, `frame_id`, `observed_ns` (the helper's host monotonic clock at acquisition), `observed_utc_ns` (derived), `helper_realtime_ns`, with a target `target` (`present`, `count`, `confidence`, `box_xyxy`, `column`, `row`, `cell`, `centre_fraction`), `input_age_ms`, `processing_ms`, `inference_ms`, `labels`, up to 20 `detections` (`label`, `confidence`, `box_xyxy` in `detector_input_pixels`), `detection_count`, `native_size`, `detector_input_size`; Camera Data |
-| `view` | Only with `--region` or `--rotation` (or the guided window's scan): `mode` (`region` or `scan`), `box_coordinate_space` (`whole_frame_processing_pixels`), the `region` and `rotation`, the `detector` requested and the orientation statement; each frame record then has `box_space_size` and its own `view`. See [a region of view](#a-region-of-view) |
+| `view` | Only with `--region` or `--rotation` (or the guided window's scan): `mode` (`region` or `scan`), `box_coordinate_space` (`whole_frame_processing_pixels`), the `region`, `rotation`, `crop_native_xyxy` and `resized_size`, the `detector` requested and the orientation statement; each frame record then has `box_space_size` and `view.index`. See [a region of view](#a-region-of-view) |
+| `scan` | Only from the guided window's scan: the schedule and each detector's tallies; `summary.coverage` is then `null` (`coverage_omitted`). See [the scan](camera-guide.md#the-scan-where-in-the-image-and-which-way-up) |
 | `last_result` | The last record of `detections` |
 | `inference_ms`, `processing_ms`, `input_age_ms` | Count, sample size, nearest-rank p50 and p95 and the maximum, as the pipeline statistics report them |
 | `inference_p95_budget_ms`, `inference_p95_within_budget` | `LIVE_INFERENCE_P95_BUDGET_MS` (200) and whether this run's p95 met it; which machine ran it is the report's business, so a cloud figure is never a Frame figure |
