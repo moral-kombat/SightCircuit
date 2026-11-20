@@ -493,6 +493,40 @@ class CameraHudStageTests(StageCase):
         self.assertFalse(alive(supervision["worker_pid"]))
         self.assertTrue(supervision["worker_tree_reaped"])
 
+    def test_a_dead_bridge_met_by_the_pipelines_thread_before_the_watcher_is_still_the_bridge_ending_first(self):
+        from sightcircuit.hud import camera_stage
+        stage_box = []
+
+        class KillsTheBridge(ScriptedDetector):
+            """In its third call it kills the bridge and returns only once the client has read the bridge's end."""
+            def detect(self, image, threshold):
+                if len(self.called_ns) == 2:
+                    client = stage_box[0].client
+                    client.process.kill()
+                    assert client.done.wait(5) and client.error
+                return super().detect(image, threshold)
+        stage = self.stage(KillsTheBridge(), limits={"fps": 5, "max_seconds": 20, "max_frames": 100})
+        stage_box.append(stage)
+        # The watcher never reaches a poll in this run, so only ``submit`` can notice: the order a result arriving
+        # within the watcher's 20 ms produces by chance, here by construction.
+        with mock.patch.object(camera_stage, "WATCHER_POLL_SECONDS", 60.0):
+            started = time.monotonic()
+            report = stage.run()
+        self.assertLess(time.monotonic() - started, 8)
+        self.assertIsInstance(stage.failure, RuntimeError)  # Raised by ``submit``; the watcher set nothing.
+        self.assertEqual((report["status"], report["reason"]), ("error", "overlay_bridge_failed"))
+        self.assertEqual(report["end"]["bridge_ended_first"], True)
+        self.assertEqual([item["frame_id"] for item in self.queued], [1, 2])
+        self.assertEqual((report["cleanup"]["bridge_ok"], report["cleanup"]["source_ok"]), (False, True))
+        supervision = report["source"]["export"]["supervision"]
+        self.assertFalse(alive(supervision["worker_pid"]))
+        self.assertTrue(supervision["worker_tree_reaped"])
+        # And a bridge that is only gone after the run has ended is not booked as having ended first.
+        self.assertTrue(stage._ended.is_set() and stage._note_bridge_end())
+        stage.bridge_ended_first = False
+        stage._note_bridge_end()
+        self.assertFalse(stage.bridge_ended_first)
+
     def test_names_only_rows_and_each_orientation_render(self):
         import numpy as np
         from sightcircuit.hud.camera import ORIENTATIONS, camera_rows
