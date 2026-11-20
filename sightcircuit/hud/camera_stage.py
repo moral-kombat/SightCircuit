@@ -616,7 +616,9 @@ class CameraHudStage:
         self.output_age, self.display_age = TimingSample(), TimingSample()
         self.run_start_ns = None  # When the bridge was ready (``time.monotonic_ns()``).
         self.ended_ns = None  # When the watcher saw ``stop``.
-        self.bridge_ended_first = False  # The watcher set ``stop`` because the bridge ended or the client failed.
+        # The bridge ended or the client failed before the run had ended: the watcher saw it and set ``stop``, or
+        # ``submit`` met it first on the pipeline's thread and raised. Whichever thread notices, the answer is one.
+        self.bridge_ended_first = False
         self._stop_seen = None
         self._ended = threading.Event()
         self._lock = threading.Lock()
@@ -644,6 +646,7 @@ class CameraHudStage:
         if rendered is None or rendered[0] is not processed.result:
             raise ValueError("camera_hud_result_identity_mismatch")
         if self.client.error:
+            self._note_bridge_end()  # This thread can meet the dead bridge before the watcher's next look.
             raise RuntimeError(self.client.error)
         rows = rendered[1]
         frame = processed.frame
@@ -681,6 +684,7 @@ class CameraHudStage:
         # Refused by the client: the end came between the check above and here (the client latched it, so the
         # frame cannot follow the final hide), or the client is no longer running, which is the run's error.
         if not (self._ended.is_set() or self.client.final):
+            self._note_bridge_end()
             raise RuntimeError(self.client.error or "observed_frame_client_not_running")
         counts["results_after_end"] += 1
 
@@ -741,14 +745,31 @@ class CameraHudStage:
 
     # -- the run -------------------------------------------------------------------------------------------------
 
+    def _note_bridge_end(self):
+        """Record ``bridge_ended_first`` if the bridge is gone, or the client failed, and the run has not ended.
+
+        Called by whichever thread notices: the watcher at its poll, or the
+        pipeline's thread in ``submit`` just before it raises the client's
+        error. Under the lock the watcher marks the end with, so a bridge
+        that ends after the run did is never booked as having ended first.
+        Returns whether the client is gone.
+        """
+        client = self.client
+        if not (client.error or client.done.is_set()):
+            return False
+        with self._lock:
+            if not self._ended.is_set():
+                self.bridge_ended_first = True
+        return True
+
     def _watch(self, stop):
         client = self.client
         while not stop.wait(WATCHER_POLL_SECONDS):
-            if client.error or client.done.is_set():  # The bridge is gone or the client failed: no display path.
-                self.bridge_ended_first = True
+            if self._note_bridge_end():  # The bridge is gone or the client failed: no display path.
                 stop.set()
-        self._stop_seen, self.ended_ns = time.monotonic(), time.monotonic_ns()
-        self._ended.set()
+        with self._lock:
+            self._stop_seen, self.ended_ns = time.monotonic(), time.monotonic_ns()
+            self._ended.set()
         client.end()  # At once, whatever the pipeline's thread is doing; nothing is accepted after it.
 
     def run(self, stop=None):
