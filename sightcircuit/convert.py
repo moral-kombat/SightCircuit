@@ -19,13 +19,13 @@ def native_bgr(frame):
     return buffer_bgr(frame.pixels, frame.pixel_format, frame.width, frame.height, frame.stride)
 
 
-def buffer_bgr(pixels, pixel_format, width, height, stride):
-    """The one native pixel rule: a BGR24 array, or a raw RGB3/BGR3 buffer with ``stride``.
+def buffer_view(pixels, pixel_format, width, height, stride):
+    """The validated native pixels as ``(array, channel order)`` without copying: ``BGR`` or ``RGB``.
 
-    Shared by frames (``native_bgr``) and raw mirror reads (HUD observation), so
-    masking and observation measure the same native pixel space.
+    The array may be a read-only view of the source buffer. A caller that
+    needs only part of a frame slices this before ``view_bgr``, so nothing
+    outside that part is copied or converted (``sightcircuit.camera.region``).
     """
-    import cv2
     import numpy as np
 
     if pixel_format == "BGR24":
@@ -41,11 +41,26 @@ def buffer_bgr(pixels, pixel_format, width, height, stride):
                                "Recognition currently accepts RGB3/BGR3 only; no format change requested")
     if image.shape[:2] != (height, width):
         raise FrameFormatError("invalid_frame", "Image dimensions do not match native frame metadata")
+    return image, "RGB" if pixel_format == "RGB3" else "BGR"
+
+
+def view_bgr(image, order):
+    """``image`` from ``buffer_view`` (or a slice of it) in BGR order."""
     # Channel conversion is pointwise; the acquisition bound is independent of
     # the detector's processing bound.
-    if pixel_format == "RGB3":
+    if order == "RGB":
+        import cv2
         image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
     return image
+
+
+def buffer_bgr(pixels, pixel_format, width, height, stride):
+    """The one native pixel rule: a BGR24 array, or a raw RGB3/BGR3 buffer with ``stride``.
+
+    Shared by frames (``native_bgr``) and raw mirror reads (HUD observation), so
+    masking and observation measure the same native pixel space.
+    """
+    return view_bgr(*buffer_view(pixels, pixel_format, width, height, stride))
 
 
 def to_bgr(frame, max_side=MAX_PROCESSING_SIDE):

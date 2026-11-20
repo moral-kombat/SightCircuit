@@ -35,6 +35,7 @@ from sightcircuit.camera import confirmation, contract, marks, native  # noqa: E
 from sightcircuit.camera import guide as guidance  # noqa: E402
 from sightcircuit.commands import COMMANDS, camera_recognize  # noqa: E402
 from sightcircuit.commands import camera_guide as command  # noqa: E402
+from sightcircuit.frame import Detection  # noqa: E402
 from sightcircuit.runtime.supervision import RECORD_AND_POLL  # noqa: E402
 from tests import fake_camera_export  # noqa: E402
 from tests.test_camera_recognize import FORBIDDEN_NAME_PARTS, l15_leaves, l15_names  # noqa: E402
@@ -128,7 +129,11 @@ class BoundaryTests(unittest.TestCase):
                 parser.parse_args(arguments)
 
     def test_each_script_fits_the_time_it_asks_for_and_uses_only_the_vocabulary(self):
-        self.assertEqual(tuple(guidance.SCRIPTS), ("removal", "positions"))
+        self.assertEqual(tuple(guidance.SCRIPTS), ("removal", "positions", "scan"))
+        # The scan (item L14) is one instruction for the whole run, with no click: the bar runs for 28 of the 30 s.
+        self.assertEqual([(step.label, step.advance, step.record_ms, step.needs_ms, step.button)
+                          for step in guidance.SCAN_STEPS], [("near", "clock", 28000, 5000, "")])
+        self.assertEqual(command.run_limits("scan"), {"fps": 5, "max_seconds": 30, "max_frames": 150})
         self.assertEqual([step.label for step in guidance.REMOVAL_STEPS], ["near", "far", "remove"])
         self.assertEqual([step.label for step in guidance.POSITION_STEPS],
                          ["centre", "left", "right", "up", "down", "out_of_view"])
@@ -350,6 +355,33 @@ class GuideTests(unittest.TestCase):
                          ["state", "instruction", "detail", "picture", "motion", "progress", "remaining_seconds", "button",
                           "button_enabled", "step_number", "step_count"])
 
+    def test_the_scan_is_one_instruction_from_ready_to_the_end_of_the_run(self):
+        run = guide("scan")
+        self.assertEqual(guidance.plan_lines("scan", "cup")[1],
+                         "Before you click Start: hold the cup upright, straight ahead of you, about half a metre away.")
+        self.assertIn("keep it there when you click Start", guidance.start_reminder("scan"))
+        self.assertEqual(run.view(T0 + SECOND).state, "starting")
+        run.ready(T0 + 500 * MS)
+        self.assertEqual(run.advance(T0 + 500 * MS), [("near", T0 + 500 * MS)])  # The one mark, when the reader is ready.
+        text = "Hold the bottle upright, straight ahead of you, about half a metre away. Keep it still"
+        for at_ms in (600, 5000, 14500, 28400):
+            self.assertEqual(run.advance(T0 + at_ms * MS, clicked=True), [])  # No click does anything.
+            view = run.view(T0 + at_ms * MS)
+            self.assertEqual((view.state, view.instruction, view.picture, view.button, view.step_number, view.step_count),
+                             ("recording", text, "near", "", 1, 1))
+        self.assertEqual(run.view(T0 + 14500 * MS).progress, 0.5)
+        self.assertEqual(run.view(T0 + 14500 * MS).remaining_seconds, 16)
+        run.advance(T0 + 28600 * MS)
+        self.assertEqual((run.view(T0 + 28600 * MS).state, run.view(T0 + 28600 * MS).instruction),
+                         ("finished", guidance.TEXT_FINISHED))
+        self.assertEqual((run.not_reached(), run.out_of_time, [entry["label"] for entry in run.made]), ([], False, ["near"]))
+        late = guide("scan")  # A launch that left under five seconds: the step does not begin.
+        late.ready(T0 + 26 * SECOND)
+        self.assertEqual(late.advance(T0 + 26 * SECOND), [])
+        self.assertTrue(late.out_of_time)
+        self.assertEqual(guidance.static_texts("scan"), {text, guidance.TEXT_STARTING, guidance.TEXT_STOPPING,
+                                                          guidance.TEXT_FINISHED, guidance.TEXT_OUT_OF_TIME})
+
     def test_every_text_the_run_screen_can_show_is_the_scripts(self):
         for script in guidance.SCRIPTS:
             texts = guidance.static_texts(script)
@@ -561,6 +593,47 @@ class ResultTests(unittest.TestCase):
                 self.assertFalse([part for part in FORBIDDEN_NAME_PARTS if part in name], name)
 
 
+class ScanResultTests(unittest.TestCase):
+    """The scan's result in plain words: counts and closed names from the finished report, nothing else."""
+
+    def scanned(self, hits):
+        from sightcircuit.camera import region
+        schedule = region.scan_schedule()
+        records = []
+        for number in range(48):
+            entry = schedule[number % 24]
+            results = {}
+            for name, when in hits.items():
+                found = when(entry)
+                results[name] = {"target": marks.target_of(
+                    (Detection("bottle", 0.9, (700, 600, 800, 800)),) if found else (), "bottle", 0.5, 960, 960),
+                    "detection_count": int(found), "inference_ms": 20.0}
+            records.append({"view": {"index": number % 24}, "scan": results})
+        report = finished_report([window_mark(1, "near", T0)])
+        report.update(scan=region.scan_summary(records, schedule, tuple(hits)), frames_processed=48, frames_received=48)
+        return report
+
+    def test_the_words_give_each_detectors_counts_and_where_it_found_the_target_most(self):
+        report = self.scanned({"mobilenet-ssd": lambda entry: False,
+                               "yolox-nano": lambda entry: entry.rotation == 90 and entry.name in ("lower_right", "whole")})
+        lines = guidance.result_lines(report)
+        self.assertIn("mobilenet-ssd: bottle in 0 of 48 frames.", lines)
+        self.assertIn("yolox-nano: bottle in 4 of 48 frames.", lines)
+        self.assertIn("yolox-nano: most often with the image turned 90 degrees (4 of 12 frames), and in the region whole "
+                      "(2 of 8).", lines)
+        self.assertIn("Regions and turns are the camera image's as exported, which may not be yours.", lines)
+        self.assertEqual(sum(line.startswith("mobilenet-ssd:") for line in lines), 1)  # Nothing found: one line only.
+        for line in lines:
+            self.assertLess(len(line), 160)
+
+    def test_a_scan_without_a_clean_shutdown_puts_nothing_frame_derived_into_words(self):
+        report = self.scanned({"yolox-nano": lambda entry: True})
+        report["cleanup_ok"] = False
+        self.assertEqual(guidance.result_lines(report), [guidance.LINE_UNCLEAN, guidance.TELL_THE_MANAGER])
+        plain = finished_report([window_mark(1, "near", T0)])  # A run that was no scan says nothing about one.
+        self.assertFalse([line for line in guidance.result_lines(plain) if "turned" in line or "Regions" in line])
+
+
 class StandInHelper(unittest.TestCase):
     """A base: the executable stand-in helper outside the checkout, and signal handlers restored."""
 
@@ -760,8 +833,30 @@ class WorkerMainTests(unittest.TestCase):
             self.run_worker(never_ready, lines=[json.dumps({"stop": True})], gate=gate)
         self.assertTrue(seen["set_without_ready"])
 
+    def test_the_worker_passes_the_region_or_the_scan_and_no_stand_in_on_a_device_run(self):
+        from sightcircuit.camera import region
+        seen = {}
+
+        def recognize(helper, limits, cameras, **options):
+            seen.update(options)
+            return camera_recognize.new_report("recognize")
+        self.run_worker(recognize)
+        self.assertEqual((seen["region"], seen["scan_detectors"], seen["scan_detector_factory"]), (None, None, None))
+        self.run_worker(recognize, spec={"region": [0.25, 0.25, 0.75, 0.75], "rotation": 270})
+        self.assertEqual((seen["region"], seen["scan_detectors"]), (region.Region(0.25, 0.25, 0.75, 0.75, 270), None))
+        self.run_worker(recognize, spec={"rotation": 180})
+        self.assertEqual(seen["region"], region.Region(rotation=180))
+        self.run_worker(recognize, spec={"scan_detectors": ["mobilenet-ssd", "yolox-nano"], "detector": "yolox-nano"})
+        self.assertEqual((seen["region"], seen["scan_detectors"], seen["scan_detector_factory"], seen["detector_factory"],
+                          seen["detector"]), (None, ("mobilenet-ssd", "yolox-nano"), None, None, "yolox-nano"))
+
     def test_the_worker_refuses_a_run_beyond_the_commands_bounds(self):
         for change in ({"limits": {"fps": 5, "max_seconds": 31, "max_frames": 150}},
+                       {"region": [0.5, 0.5, 0.4, 0.9]}, {"region": [0, 0, 1]}, {"region": "0,0,1,1"}, {"rotation": 45},
+                       {"region": [0, 0, 1, 1], "rotation": "90"},
+                       {"scan_detectors": ["yolox-nano"]}, {"scan_detectors": "mobilenet-ssd"},
+                       {"scan_detectors": ["mobilenet-ssd"], "region": [0.25, 0.25, 0.75, 0.75]},
+                       {"scan_detectors": ["mobilenet-ssd"], "rotation": 90},
                        {"limits": {"fps": 5, "max_seconds": 30, "max_frames": 301}}, {"camera": 2}, {"limits": None}):
             with self.subTest(change=change):
                 code, records = self.run_worker(mock.Mock(side_effect=AssertionError("a run was started")), spec=change)
@@ -810,6 +905,64 @@ class WorkerTests(StandInHelper):
         self.assertGreater(report["target"]["frames_with_target"], 0)  # The scripted detector follows the marks.
         self.assertEqual((report["images_saved"], report["pixels_in_report"], report["display_started"]), (False,) * 3)
         self.assertEqual(worker.unexpected_lines, 0)
+
+    def test_the_positions_and_removal_scripts_keep_their_arithmetic_over_the_whole_frame_with_a_region(self):
+        # The scripted detector puts the bottle where the latest mark says, as a fraction of the image it is given,
+        # which is now the lower-right 0.6 of the frame turned by 90 degrees. "left" is (0.2, 0.5) of that image:
+        # unturned, (0.5, 0.8) of the crop, so (0.7, 0.88) of the frame: column right, row down.
+        config = self.config(seconds=3, region=(0.4, 0.4, 1.0, 1.0), rotation=90)
+        self.assertEqual((config.spec()["region"], config.spec()["rotation"], config.spec()["scan_detectors"]),
+                         ([0.4, 0.4, 1.0, 1.0], 90, None))
+        worker, events = self.worker(config)
+        events.wait("ready")
+        worker.mark("left", time.monotonic_ns())
+        time.sleep(1.0)
+        worker.mark("out_of_view", time.monotonic_ns())
+        report = events.wait("report")
+        self.assertEqual((report["status"], report["confirmation"]), ("recognized", "operator_window"), report.get("error"))
+        self.assertEqual((report["view"]["mode"], report["view"]["region"], report["view"]["rotation"]),
+                         ("region", [0.4, 0.4, 1.0, 1.0], 90))
+        left = report["summary"]["intervals"][0]
+        self.assertGreaterEqual(left["target_frames"], 5)
+        self.assertEqual((left["label"], left["cells"]["down_right"], left["columns"]["right"], left["rows"]["down"]),
+                         ("left", left["target_frames"], left["target_frames"], left["target_frames"]))
+        self.assertEqual(report["summary"]["intervals"][1]["target_frames"], 0)
+        (span,) = report["summary"]["coverage"]["spans"]
+        self.assertEqual((span["labels"], span["ended_by"]), (["left"], "out_of_view"))
+        self.assertGreaterEqual(span["target_frames"], 5)
+        hit = next(record for record in report["detections"] if record["target"]["present"])
+        self.assertEqual(hit["box_coordinate_space"], "whole_frame_processing_pixels")
+        self.assertEqual(hit["box_space_size"], hit["native_size"])  # The stand-in's small frames are not resized.
+        self.assertAlmostEqual(hit["target"]["centre_fraction"][0], 0.7, delta=0.03)
+        self.assertAlmostEqual(hit["target"]["centre_fraction"][1], 0.88, delta=0.03)
+        # The removal script with a region: the presence end is measured as before.
+        worker, events = self.worker(self.config("removal", name="removal-region", scenario="headset_removed", seconds=20,
+                                                 region=(0.25, 0.25, 0.75, 0.75)))
+        report = events.wait("report")
+        self.assertEqual((report["status"], report["reason"], report["helper_end"]["reason"], report["view"]["region"]),
+                         ("helper_ended_early", "headset_removed", "headset_removed", [0.25, 0.25, 0.75, 0.75]))
+
+    def test_the_scan_script_runs_the_schedule_with_every_scan_detector(self):
+        config = self.config("scan", seconds=3, scan_detectors=("mobilenet-ssd", "yolox-nano"))
+        self.assertEqual(config.spec()["scan_detectors"], ["mobilenet-ssd", "yolox-nano"])
+        worker, events = self.worker(config)
+        events.wait("ready")
+        worker.mark("near", time.monotonic_ns())
+        report = events.wait("report")
+        self.assertEqual((report["status"], report["confirmation"]), ("recognized", "operator_window"), report.get("error"))
+        self.assertEqual((report["view"]["mode"], report["view"]["scan_detectors"], report["view"]["schedule_length"]),
+                         ("scan", ["mobilenet-ssd", "yolox-nano"], 24))
+        frames = report["frames_processed"]
+        self.assertGreaterEqual(frames, 20)
+        self.assertEqual([record["view"]["index"] for record in report["detections"]], [n % 24 for n in range(frames)])
+        scan = report["scan"]
+        self.assertEqual({name: block["frames"] for name, block in scan["detectors"].items()},
+                         {"mobilenet-ssd": frames, "yolox-nano": frames})
+        self.assertGreater(scan["detectors"]["yolox-nano"]["target_frames"], 0)
+        self.assertEqual(report["marks"]["recorded"][0]["label"], "near")
+        self.assertNotIn("detector", report)  # The checks' stand-ins are not described as a model.
+        self.assertEqual({name: report[name] for name in gates.claims()}, ALL_CLOSED)
+        self.assertEqual((report["images_saved"], report["pixels_in_report"], report["display_started"]), (False,) * 3)
 
     def test_a_stop_line_ends_the_helper_cleanly_and_the_report_still_comes(self):
         worker, events = self.worker(self.config(scenario="hang", seconds=20))
@@ -1709,6 +1862,51 @@ class CommandLineTests(unittest.TestCase):
                 self.assertEqual((code, report), (2, None))
         self.assertFalse(self.report.exists())
 
+    def test_a_bad_region_or_scan_is_refused_before_any_window(self):
+        scan = self.arguments(**{"--script": "scan"})
+        for arguments in ([*self.arguments(), "--region", "0.5,0.5,0.4,0.9"], [*self.arguments(), "--region", "0,0,1"],
+                          [*self.arguments(), "--region", "0,0,1.2,1"], [*self.arguments(), "--region", "centre"],
+                          [*self.arguments(), "--rotation", "45"], [*self.arguments(), "--scan-detectors", "yolox-nano"],
+                          [*scan, "--region", "0.25,0.25,0.75,0.75"], [*scan, "--rotation", "90"],
+                          [*scan, "--scan-detectors", "yolox-nano"],  # --detector (mobilenet-ssd) is not among them.
+                          [*scan, "--scan-detectors", "mobilenet-ssd,other"],
+                          [*scan, "--scan-detectors", "mobilenet-ssd,mobilenet-ssd"], [*scan, "--scan-detectors", ""],
+                          [*scan, "--target-label", "sofa"],  # A class of one scan detector only.
+                          ["--validate", "--region", "0,0,1,1"], ["--validate", "--scan-detectors", "yolox-nano"]):
+            with self.subTest(arguments=[str(item) for item in arguments][-3:]):
+                code, report, _ = run_main(arguments)
+                self.assertEqual((code, report), (2, None))
+        self.assertFalse(self.report.exists())
+        self.run_window.assert_not_called()
+
+    def test_the_region_the_rotation_the_detector_and_the_scan_reach_the_window(self):
+        seen = []
+
+        def opened(config, windowed=False):
+            seen.append(config)
+            return command.unstarted_report(config, guidance.DECLINED)
+        self.run_window.side_effect = opened
+        import types
+        runs = ((["--region", "0.25,0.25,0.75,0.75", "--rotation", "90", "--detector", "yolox-nano"], "removal"),
+                (["--rotation", "180"], "positions"), ([], "positions"), ([], "scan"),
+                (["--scan-detectors", "yolox-nano", "--detector", "yolox-nano"], "scan"))
+        with mock.patch.dict(os.environ, {"QT_QPA_PLATFORM": "offscreen"}), \
+                mock.patch.dict(sys.modules, {"PySide6": sys.modules.get("PySide6") or types.ModuleType("PySide6")}):
+            for extra, script in runs:
+                run_main([*self.arguments(**{"--script": script}), *extra])
+        self.assertEqual([(config.script, config.region, config.rotation, config.detector, config.scan_detectors)
+                          for config in seen],
+                         [("removal", (0.25, 0.25, 0.75, 0.75), 90, "yolox-nano", ()),
+                          ("positions", (0.0, 0.0, 1.0, 1.0), 180, "mobilenet-ssd", ()),
+                          ("positions", None, 0, "mobilenet-ssd", ()),
+                          ("scan", None, 0, "mobilenet-ssd", ("mobilenet-ssd", "yolox-nano")),
+                          ("scan", None, 0, "yolox-nano", ("yolox-nano",))])
+        self.assertEqual([(config.spec()["region"], config.spec()["rotation"], config.spec()["scan_detectors"])
+                          for config in seen],
+                         [([0.25, 0.25, 0.75, 0.75], 90, None), ([0.0, 0.0, 1.0, 1.0], 180, None), (None, 0, None),
+                          (None, 0, ["mobilenet-ssd", "yolox-nano"]), (None, 0, ["yolox-nano"])])
+        self.assertEqual(seen[3].limits, {"fps": 5, "max_seconds": 30, "max_frames": 150})
+
     def test_the_report_path_is_checked_first_and_before_any_window(self):
         existing = Path(self.directory.name) / "existing.json"
         existing.write_text("{}\n")
@@ -1834,8 +2032,12 @@ class ValidateTests(unittest.TestCase):
         flows = report["flows"]
         self.assertEqual(list(flows), ["positions_to_the_bound", "removal_presence_end", "stop_during_the_run",
                                        "window_closed_during_the_run", "launch_failed", "cancel", "declined_start",
-                                       "run_too_short_for_the_script", "report_path_checked_first",
+                                       "run_too_short_for_the_script", "scan_to_the_bound", "report_path_checked_first",
                                        "worker_refuses_a_hand_launch"])
+        scan = flows["scan_to_the_bound"]
+        self.assertEqual((scan["status"], scan["marks"], scan["schedule_length"], scan["view_mode"], scan["scan_detectors"],
+                          scan["every_frame_tallied"], scan["boxes_over_the_whole_frame"], scan["run_screen_only_scripted"]),
+                         ("recognized", ["near"], 24, "scan", ["mobilenet-ssd", "yolox-nano"], True, True, True))
         self.assertEqual({name: entry["ok"] for name, entry in flows.items()}, dict.fromkeys(flows, True))
         self.assertEqual([flows[name]["workers_started"] for name in ("cancel", "declined_start")], [0, 0])
         self.assertEqual((flows["removal_presence_end"]["helper_end_reason"], flows["removal_presence_end"]["marks"]),

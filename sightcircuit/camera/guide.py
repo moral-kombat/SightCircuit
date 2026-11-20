@@ -1,4 +1,4 @@
-"""The guided bounded recognition run: its two scripts, what the run screen shows, and the result in plain words.
+"""The guided bounded recognition run: its three scripts, what the run screen shows, and the result in plain words.
 
 ``camera_guide`` walks the wearer through one ``camera_recognize`` run in a
 window, so nobody needs a keyboard, a terminal bell or a count of seconds
@@ -12,8 +12,12 @@ before it has had its time (``ADVANCE_CLOCK``), or at the wearer's click
 already held at about half a metre when Start is clicked, so ``near`` is
 marked at once, ``far`` when its instruction appears, and the one click is
 the one made just before the headset comes off. ``positions`` is five places
-and out of view, with no click after Start. What will happen is shown before
-Start (``plan_lines``).
+and out of view, with no click after Start. ``scan`` (work-order item L14,
+after E100) is one instruction for the whole run, the target held still
+straight ahead at about half a metre, while the run tries a fixed schedule of
+regions and rotations of the camera image (``camera.region.scan_schedule``,
+which this module does not import: the script is only what the wearer is
+told). What will happen is shown before Start (``plan_lines``).
 
 Two clocks. The run's time budget is counted from the Start click, which is
 before the helper begins its own bound, so the time shown is never more than
@@ -40,7 +44,7 @@ from .confirmation import OPERATOR_WINDOW
 
 MS = 1_000_000
 ADVANCE_CLICK, ADVANCE_CLOCK = "click", "clock"
-SCRIPT_REMOVAL, SCRIPT_POSITIONS = "removal", "positions"
+SCRIPT_REMOVAL, SCRIPT_POSITIONS, SCRIPT_SCAN = "removal", "positions", "scan"
 # View states of the run screen.
 STARTING, WAITING, RECORDING, FINISHED, OUT_OF_TIME, STOPPING = (
     "starting", "waiting", "recording", "finished", "out_of_time", "stopping")
@@ -97,10 +101,14 @@ POSITION_STEPS = (
     Step("out_of_view", "Take the {target} out of view", "out_of_view", ADVANCE_CLOCK, 3000, 1000, "",
          "Take the {target} out of view"),
 )
-SCRIPTS = {SCRIPT_REMOVAL: REMOVAL_STEPS, SCRIPT_POSITIONS: POSITION_STEPS}
+# One instruction for the whole run: the mark is made when the reader is ready and the bar runs for 28 seconds, so
+# it is still moving when a run whose launch took up to two seconds ends on its bound.
+SCAN_TEXT = "Hold the {target} upright, straight ahead of you, about half a metre away. Keep it still"
+SCAN_STEPS = (Step("near", SCAN_TEXT, "near", ADVANCE_CLOCK, 28000, 5000, "", SCAN_TEXT),)
+SCRIPTS = {SCRIPT_REMOVAL: REMOVAL_STEPS, SCRIPT_POSITIONS: POSITION_STEPS, SCRIPT_SCAN: SCAN_STEPS}
 # The time bound a script asks for when the operator names none: the command's whole bound. The budget is counted
 # from the Start click, so what the helper's launch takes comes out of it before the first step.
-DEFAULT_SECONDS = {SCRIPT_REMOVAL: 30, SCRIPT_POSITIONS: 30}
+DEFAULT_SECONDS = {SCRIPT_REMOVAL: 30, SCRIPT_POSITIONS: 30, SCRIPT_SCAN: 30}
 assert all(step.label in marks.VOCABULARY and step.picture in PICTURES for steps in SCRIPTS.values() for step in steps)
 TEXT_STARTING = "Starting the camera reader. Please wait"
 TEXT_STARTING_HELP = "If this does not change, click Stop and tell the Frame manager"
@@ -118,10 +126,16 @@ PLANS = {
         "This run takes about 30 seconds. No click is needed after Start.",
         "The screen shows where to hold the {target}: centre, left, right, up, down, each for about 4 seconds.",
         "Then it asks you to take the {target} out of view."),
+    SCRIPT_SCAN: (
+        "This run takes about 30 seconds. No click is needed after Start.",
+        "Before you click Start: hold the {target} upright, straight ahead of you, about half a metre away.",
+        "Keep it there, as still as you can, until the screen says the run is over. Keep the headset on."),
 }
 START_REMINDERS = {
     SCRIPT_REMOVAL: "Hold the {target} about half a metre in front of you, and keep holding it when you click Start.",
     SCRIPT_POSITIONS: "Have the {target} in your hand when you click Start.",
+    SCRIPT_SCAN: "Hold the {target} upright, straight ahead of you, about half a metre away, and keep it there when "
+                 "you click Start.",
 }
 
 
@@ -417,6 +431,17 @@ def result_lines(report):
         lines.append(line + ".")
     if any(interval["label"] in marks.POSITION_LABELS for interval in summary.get("intervals") or ()):
         lines.append("Image sides are the camera image's as exported, which may not be yours.")
+    scan = report.get("scan") or {}
+    for name, block in (scan.get("detectors") or {}).items():
+        lines.append(f"{name}: {target} in {block['target_frames']} of {block['frames']} frames.")
+        turned = max(block["by_rotation"], key=lambda entry: entry["target_frames"], default=None)
+        where = max(block["by_region"], key=lambda entry: entry["target_frames"], default=None)
+        if turned is not None and turned["target_frames"]:
+            lines.append(f"{name}: most often with the image turned {turned['key']} degrees "
+                         f"({turned['target_frames']} of {turned['frames']} frames), and in the region {where['key']} "
+                         f"({where['target_frames']} of {where['frames']}).")
+    if scan:
+        lines.append("Regions and turns are the camera image's as exported, which may not be yours.")
     for entry in summary.get("removal") or ():
         if entry["helper_end_after_mark_ms"] is None:
             lines.append("After your click to take the headset off: the camera reader left no end record.")

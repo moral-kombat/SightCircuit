@@ -49,7 +49,7 @@ when the report does not confirm a clean shutdown the window says only that.
 No image is ever shown, saved or written: the pictures are shapes drawn by
 this file. The window never opens the overlay bridge or SteamVR.
 
-Two scripts (``--script``), each shown to the wearer before Start.
+Three scripts (``--script``), each shown to the wearer before Start.
 ``removal`` needs one click in the run: the target is held at about half a
 metre when Start is clicked (mark ``near`` as soon as the reader is ready,
 about four seconds), then moved to about a metre when the screen says so
@@ -58,7 +58,14 @@ four recorded), then the click made just before the headset comes off
 (``remove``); the run ends by itself when the helper reports
 ``headset_removed`` or ``standby``, or on its bound. ``positions``: centre,
 left, right, up, down for about four seconds each, then out of view, with no
-click after Start. Marks are ``marks.VOCABULARY``'s, recorded with source
+click after Start. ``scan`` (item L14): one instruction for the whole run,
+the target held still straight ahead at about half a metre, while each frame
+is seen through the next entry of a fixed schedule of regions and rotations
+of the camera image and every ``--scan-detectors`` detector looks at it; the
+report's ``scan`` block says, in counts and boxes over the whole frame, where
+and at which turn the target was found. ``--region`` and ``--rotation`` give
+the other two scripts one fixed region (``sightcircuit.camera.region``).
+Marks are ``marks.VOCABULARY``'s, recorded with source
 ``window``; the summaries are ``marks.summarize``'s. Because ``remove`` is
 clicked before the headset comes off, each removal entry also has the time
 from the run's last frame to the helper's end record; the two limits the
@@ -105,6 +112,7 @@ if not __package__:  # Run as a file: import the package beside this one.
 from sightcircuit import gates
 from sightcircuit.camera import contract, marks
 from sightcircuit.camera import guide as guidance
+from sightcircuit.camera import region as regions
 from sightcircuit.camera.confirmation import OPERATOR_WINDOW, export_notice_body
 from sightcircuit.commands import camera_recognize
 from sightcircuit.detection import DEFAULT_DETECTOR, DETECTORS, POC_THRESHOLD, class_names
@@ -176,13 +184,20 @@ class Config:
     close_dwell_seconds: float = CLOSE_DWELL_SECONDS
     validation: bool = False  # The worker uses the scripted detector; never set from the command line of a run.
     worker_env: dict = field(default_factory=dict)
+    # Item L14. ``region`` is ``(x0, y0, x1, y1)`` as fractions of the frame, or None for the whole frame; the scan
+    # script ignores both and takes its own schedule, with every detector of ``scan_detectors`` on each frame.
+    region: tuple | None = None
+    rotation: int = 0
+    scan_detectors: tuple = ()
 
     def spec(self):
         """What the worker is told: the run's arguments, nothing else."""
         return {"helper": str(self.helper), "limits": dict(self.limits), "camera": self.camera, "target": self.target,
                 "detector": self.detector, "threshold": self.threshold, "helper_args": list(self.helper_args),
                 "late_frame_limit_ms": self.late_frame_limit_ms, "removal_end_limit_ms": self.removal_end_limit_ms,
-                "validation": bool(self.validation)}
+                "validation": bool(self.validation), "region": None if self.region is None else list(self.region),
+                "rotation": self.rotation,
+                "scan_detectors": list(self.scan_detectors) if self.script == guidance.SCRIPT_SCAN else None}
 
 
 def check_report_path(path):
@@ -330,6 +345,16 @@ def worker_main(descriptor, stdin=None, stdout=None):
             raise ValueError("beyond camera_recognize's bounds")
         cameras = camera_helper.check_cameras((spec["camera"],))
         target, helper = spec["target"], spec["helper"]
+        region, scan_detectors = None, spec.get("scan_detectors")
+        if scan_detectors is not None:  # The scan takes its own schedule: a region with it is a malformed run.
+            if (spec.get("region") is not None or spec.get("rotation", 0) != 0 or type(scan_detectors) is not list
+                    or spec["detector"] not in scan_detectors):
+                raise ValueError("scan arguments invalid")
+        elif spec.get("region") is not None or spec.get("rotation", 0) != 0:
+            fractions = regions.WHOLE if spec.get("region") is None else spec["region"]
+            if len(fractions) != 4 or any(type(value) not in (int, float) for value in fractions):
+                raise ValueError("region invalid")
+            region = regions.Region(*fractions, rotation=spec.get("rotation", 0))
     except (ValueError, KeyError, TypeError):
         emit({"event": "report", "report": report})
         return 1
@@ -372,7 +397,13 @@ def worker_main(descriptor, stdin=None, stdout=None):
         emit({"event": "ready"})
     for target_function, name in ((listen, "input"), (relay, "stop")):
         threading.Thread(target=target_function, name=f"camera-guide-worker-{name}", daemon=True).start()
-    factory = (lambda: ValidationDetector(target, lambda: state["label"])) if spec.get("validation") is True else None
+    factory = scan_factory = None
+    if spec.get("validation") is True:
+        def factory():
+            return ValidationDetector(target, lambda: state["label"])
+
+        def scan_factory(_name):
+            return factory()
     with guard.sigterm_cancels():
         try:
             report = camera_recognize.recognize(
@@ -380,7 +411,9 @@ def worker_main(descriptor, stdin=None, stdout=None):
                 detector_factory=factory, extra_args=tuple(spec["helper_args"]), stop=stop, confirmed=True,
                 confirmation=OPERATOR_WINDOW, target_label=target, terminal=_Discard(), on_session=on_session,
                 on_ready=on_ready, late_frame_limit_ms=spec["late_frame_limit_ms"],
-                removal_end_limit_ms=spec["removal_end_limit_ms"])
+                removal_end_limit_ms=spec["removal_end_limit_ms"], region=region,
+                scan_detectors=None if scan_detectors is None else tuple(scan_detectors),
+                scan_detector_factory=scan_factory)
         except _StoppedBeforeLaunch:
             report.update(confirmation=OPERATOR_WINDOW, status="stopped", reason="stopped_before_launch", cleanup_ok=True)
         except guard.CANCELLATION as error:
@@ -1196,7 +1229,7 @@ def validate(helper=None):
     The helper must say ``backend: fake`` in its ``--describe`` record before
     any window is made, so this mode can never open a camera. Each flow is
     clicked through with Qt's test tools and leaves its report: both
-    scripts, a run that reaches its bound, a presence end, Stop, the window
+    recorded scripts and the scan, a run that reaches its bound, a presence end, Stop, the window
     closed mid-run, a launch that fails, Cancel, a declined start and a run
     too short for its script; then the report path that is refused before a
     window exists and the worker that refuses to run by hand. Returns the
@@ -1335,6 +1368,28 @@ def validate(helper=None):
                        and entry["said_so"] and entry["helper_cleanup_ok"] is True)
         flows["run_too_short_for_the_script"] = entry
 
+        # 9. The scan script to the run's bound: one instruction, every frame through the next schedule entry, both
+        # stand-in detectors on each, the tallies in the report, and nothing but the script on the run screen.
+        config = make("scan", guidance.SCRIPT_SCAN, seconds=3)
+        config.scan_detectors = tuple(DETECTORS)
+        flow, started = begin(config)
+        done = started and flow.finish_after_run()
+        entry, final = base(flow, config, done)
+        scan, view = final.get("scan") or {}, final.get("view") or {}
+        tallies = {name: (block["frames"], block["target_frames"]) for name, block in (scan.get("detectors") or {}).items()}
+        entry.update(schedule_length=scan.get("schedule_length"), scan_detectors=sorted(tallies),
+                     view_mode=view.get("mode"),
+                     every_frame_tallied=bool(tallies) and all(
+                         frames == final.get("frames_processed") for frames, _hits in tallies.values()),
+                     boxes_over_the_whole_frame=bool(final.get("detections")) and all(
+                         record["box_coordinate_space"] == regions.FRAME_PIXELS for record in final["detections"]))
+        entry["ok"] = (entry["ok"] and entry["status"] == "recognized" and entry["marks"] == ["near"]
+                       and entry["schedule_length"] == len(regions.scan_schedule()) and entry["view_mode"] == "scan"
+                       and entry["scan_detectors"] == sorted(DETECTORS) and entry["every_frame_tallied"]
+                       and entry["boxes_over_the_whole_frame"] and entry["run_screen_only_scripted"]
+                       and entry["helper_cleanup_ok"] is True)
+        flows["scan_to_the_bound"] = entry
+
         # The report path is checked before a window exists: an existing file, a missing directory, another suffix.
         refused = []
         for path in (Path(directory) / "positions.json", Path(directory) / "missing" / "a.json", Path(directory) / "a.txt"):
@@ -1395,7 +1450,16 @@ def build_parser():
     parser.add_argument(WORKER_FD_FLAG, type=int, help=argparse.SUPPRESS)
     parser.add_argument("--script", choices=tuple(guidance.SCRIPTS),
                         help="removal: two distances, then the headset comes off (one click); positions: five places, "
-                             "no click")
+                             "no click; scan: the target held still straight ahead while a fixed schedule of regions "
+                             "and rotations of the image is tried, no click")
+    parser.add_argument("--region", metavar="X0,Y0,X1,Y1",
+                        help="removal and positions: look only at this rectangle of the frame, given as fractions "
+                             "(origin top left), cropped before the resize; boxes are reported over the whole frame")
+    parser.add_argument("--rotation", type=int, choices=regions.ROTATIONS, default=0,
+                        help="removal and positions: turn what the detector sees by this many degrees clockwise")
+    parser.add_argument("--scan-detectors", metavar="NAME,NAME",
+                        help=f"scan: the detectors that look at every frame; default {','.join(DETECTORS)}. "
+                             "--detector, which must be one of them, fills the report's usual fields")
     parser.add_argument("--helper", type=Path, help="The sightcircuit-camera-helper binary, given explicitly; never searched "
                                                     "(--validate: a fake-backend build; default the one under artifacts/)")
     parser.add_argument("--report", type=Path,
@@ -1428,7 +1492,7 @@ def main(argv=None):
     if args.worker:
         return worker_main(args.worker_fd)
     run_arguments = (args.allow_camera_input or args.script or args.report or args.seconds or args.max_frames
-                     or args.helper_arg or args.windowed)
+                     or args.helper_arg or args.windowed or args.region or args.rotation or args.scan_detectors)
     if args.validate:
         if run_arguments:
             parser.error("--validate takes only --helper")
@@ -1445,6 +1509,27 @@ def main(argv=None):
         parser.error("the limits are milliseconds, zero or more")
     if args.target_label not in class_names(args.detector):
         parser.error(f"--target-label must be a class of {args.detector}: {', '.join(class_names(args.detector))}")
+    # The region, the rotation and the scan's detectors are settled here: before any window, any click, any camera.
+    region, scan_detectors = None, ()
+    if args.script == guidance.SCRIPT_SCAN:
+        if args.region is not None or args.rotation:
+            parser.error("--script scan takes its own schedule of regions and rotations: no --region, no --rotation")
+        scan_detectors = tuple(DETECTORS) if args.scan_detectors is None else tuple(args.scan_detectors.split(","))
+        if (len(set(scan_detectors)) != len(scan_detectors) or any(name not in DETECTORS for name in scan_detectors)
+                or args.detector not in scan_detectors):
+            parser.error(f"--scan-detectors takes distinct names of {', '.join(DETECTORS)}, --detector among them")
+        for name in scan_detectors:
+            if args.target_label not in class_names(name):
+                parser.error(f"--target-label must be a class of every scan detector; {name} has no {args.target_label}")
+    else:
+        if args.scan_detectors is not None:
+            parser.error("--scan-detectors is for --script scan")
+        try:
+            if args.region is not None or args.rotation:
+                region = regions.Region(*(regions.WHOLE if args.region is None else regions.parse_region(args.region)),
+                                        rotation=args.rotation).fractions
+        except ValueError as error:
+            parser.error(f"--region: {error}")
     try:
         limits = run_limits(args.script, args.seconds, args.max_frames, args.fps)
     except ValueError as error:
@@ -1452,7 +1537,8 @@ def main(argv=None):
     config = Config(script=args.script, helper=str(args.helper), report_path=Path(args.report).expanduser(), limits=limits,
                     camera=args.camera, target=args.target_label, detector=args.detector, threshold=args.threshold,
                     helper_args=tuple(args.helper_arg), late_frame_limit_ms=args.late_frame_limit_ms,
-                    removal_end_limit_ms=args.removal_end_limit_ms)
+                    removal_end_limit_ms=args.removal_end_limit_ms, region=region, rotation=args.rotation,
+                    scan_detectors=scan_detectors)
     refusal = None
     try:  # The report's path first: nothing is shown to the wearer for a run whose report could not be saved.
         config.report_path = check_report_path(args.report)

@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from sightcircuit import gates  # noqa: E402
-from sightcircuit.camera import contract, fake_export, marks  # noqa: E402
+from sightcircuit.camera import contract, fake_export, marks, region  # noqa: E402
 from sightcircuit.commands import camera_recognize as command  # noqa: E402
 from sightcircuit.detection import (DETECTORS, LIVE_INFERENCE_P95_BUDGET_MS, POC_THRESHOLD,  # noqa: E402
                                     class_names)
@@ -70,6 +70,7 @@ class ScriptedDetector(StandInDetector):
 
     def detect(self, bgr, threshold):
         self.calls += 1
+        self.shapes.append(bgr.shape)
         self.on_call.get(self.calls, lambda: None)()
         centre = self.script[self.calls - 1] if self.calls <= len(self.script) else None
         found = [Detection("chair", 0.99, (0, 0, 4, 4))]
@@ -788,6 +789,304 @@ class RecognitionTests(unittest.TestCase):
         import importlib
         wrapper = importlib.import_module("scripts.camera_recognize")
         self.assertIs(wrapper, command)
+
+
+HD = ("--width", "1920", "--height", "1080", "--stride", "5760")  # The stand-in's frames, large enough to be resized.
+LOWER_RIGHT = (0.4, 0.4, 1.0, 1.0)
+
+
+def view_strings():
+    """Every string a region or scan field may hold: closed names and declared constants, never free text."""
+    return {*closed_strings(), *region.SCAN_REGION_NAMES, *DETECTORS, region.FRAME_PIXELS, region.ORIENTATION_STATEMENT,
+            "region", "scan"}
+
+
+@unittest.skipUnless(CONVERSION, "NumPy and OpenCV are needed to convert frames")
+class RegionOfViewTests(unittest.TestCase):
+    """Item L14: a region of view, its boxes over the whole frame, the scan schedule, and the default left as it was."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.directory = tempfile.TemporaryDirectory()
+        cls.binary = fake_camera_export.install(cls.directory.name)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.directory.cleanup()
+
+    def setUp(self):
+        self.previous = {number: signal.getsignal(number) for number in RECORD_AND_POLL.numbers}
+        for number, handler in self.previous.items():
+            self.addCleanup(signal.signal, number, handler)
+
+    def run_region(self, look, script, frames=6, **options):
+        detector = ScriptedDetector(script)
+        report = command.recognize(self.binary, {"fps": 10, "max_seconds": 5, "max_frames": frames}, (0,),
+                                   detector_factory=lambda: detector, confirmed=True, target_label="bottle",
+                                   extra_args=HD, terminal=mock.Mock(), region=look, **options)
+        self.assertEqual((report["status"], report["exit_code"], report["frames_processed"]), ("recognized", 0, frames),
+                         report.get("error"))
+        return report, detector
+
+    def test_a_region_is_cropped_before_the_resize_and_its_boxes_are_over_the_whole_frame(self):
+        report, detector = self.run_region(region.Region(*LOWER_RIGHT), [(0.5, 0.5)] * 6, cues=[(0, "in_view")])
+        # 0.6 of 1920 by 1080 is 1152 by 648 native pixels, which the detector sees at 960 by 540: enlarged 1.67 times
+        # over the whole frame at 960.
+        self.assertEqual(set(detector.shapes), {(540, 960, 3)})
+        self.assertEqual(report["view"], {"mode": "region", "box_coordinate_space": "whole_frame_processing_pixels",
+                                          "processing_side": 960, "detector": None,
+                                          "orientation_statement": region.ORIENTATION_STATEMENT,
+                                          "region": [0.4, 0.4, 1.0, 1.0], "rotation": 0})
+        self.assertNotIn("scan", report)
+        for record in report["detections"]:
+            self.assertEqual((record["box_coordinate_space"], record["box_space_size"], record["detector_input_size"],
+                              record["native_size"]),
+                             ("whole_frame_processing_pixels", [960, 540], [960, 540], [1920, 1080]))
+            self.assertEqual(record["view"], {"index": 0, "region": [0.4, 0.4, 1.0, 1.0], "rotation": 0,
+                                              "crop_native_xyxy": [768, 432, 1920, 1080], "resized_size": [960, 540]})
+            self.assertNotIn("scan", record)
+            chair, bottle = record["detections"]
+            self.assertEqual(chair["box_xyxy"], [384, 216, 386, 218])  # The crop's corner, in the whole frame.
+            # The detector put the bottle in the middle of what it saw: 0.7 of the way across and down the frame.
+            self.assertEqual(bottle["box_xyxy"], [671, 377, 673, 379])
+            target = record["target"]
+            self.assertEqual((target["box_xyxy"], target["cell"], target["column"], target["row"]),
+                             ([671, 377, 673, 379], "down_right", "right", "down"))
+            self.assertEqual(target["centre_fraction"], [0.7, 0.7])
+        # Coverage and the cell tallies are taken on those whole-frame boxes.
+        (interval,) = report["summary"]["intervals"]
+        self.assertEqual((interval["target_frames"], interval["cells"]["down_right"], interval["cells"]["centre"]),
+                         (interval["frames"], interval["frames"], 0))
+        self.assertEqual(report["target"]["frames_with_target"], 6)
+        self.assertEqual(report["summary"]["coverage"]["spans"][0]["target_frames"],
+                         report["summary"]["coverage"]["spans"][0]["frames"])
+
+    def test_every_rotation_maps_a_box_back_to_the_same_place(self):
+        # Where the detector must see the bottle, in the turned image, for it to be at (0.5, 0.75) of the crop, which
+        # is (0.7, 0.85) of the frame: column right, row down.
+        seen_at = {0: (0.5, 0.75), 90: (0.25, 0.5), 180: (0.5, 0.25), 270: (0.75, 0.5)}
+        for rotation, centre in seen_at.items():
+            with self.subTest(rotation=rotation):
+                report, detector = self.run_region(region.Region(*LOWER_RIGHT, rotation=rotation), [centre] * 2, frames=2)
+                self.assertEqual(set(detector.shapes), {(540, 960, 3) if rotation in (0, 180) else (960, 540, 3)})
+                record = report["detections"][0]
+                self.assertEqual(record["detector_input_size"], [960, 540] if rotation in (0, 180) else [540, 960])
+                self.assertEqual((record["box_space_size"], record["view"]["rotation"], report["view"]["rotation"]),
+                                 ([960, 540], rotation, rotation))
+                target = record["target"]
+                self.assertAlmostEqual(target["centre_fraction"][0], 0.7, delta=0.002)
+                self.assertAlmostEqual(target["centre_fraction"][1], 0.85, delta=0.003)
+                self.assertEqual(target["cell"], "down_right")
+                box = target["box_xyxy"]
+                self.assertTrue(0 <= box[0] < box[2] <= 960 and 0 <= box[1] < box[3] <= 540)
+                self.assertLessEqual(max(box[2] - box[0], box[3] - box[1]), 4)
+
+    def test_a_region_at_the_frames_edge_keeps_its_boxes_inside_the_frame(self):
+        look = region.Region(0.9, 0.9, 1.0, 1.0)  # 192 by 108 native pixels in the corner: below 960, so not resized.
+        report, detector = self.run_region(look, [(1.0, 1.0)] * 2, frames=2)
+        self.assertEqual(set(detector.shapes), {(108, 192, 3)})
+        record = report["detections"][0]
+        self.assertEqual((record["view"]["crop_native_xyxy"], record["view"]["resized_size"]), ([1728, 972, 1920, 1080],
+                                                                                              [192, 108]))
+        box = record["target"]["box_xyxy"]  # The detector's box hangs over the image's corner: clamped to the frame.
+        self.assertEqual((box[2], box[3]), (960, 540))
+        self.assertTrue(864 <= box[0] < box[2] and 486 <= box[1] < box[3])
+        self.assertEqual(record["target"]["cell"], "down_right")
+
+    def test_without_a_region_and_with_the_whole_frame_the_run_is_what_it_was(self):
+        reports = []
+        for look in (None, region.Region()):
+            detector = ScriptedDetector([(0.2, 0.5)] * 3)
+            report = command.recognize(self.binary, {"fps": 10, "max_seconds": 5, "max_frames": 3}, (0,),
+                                       detector_factory=lambda detector=detector: detector, confirmed=True,
+                                       target_label="bottle", extra_args=HD, terminal=mock.Mock(), region=look)
+            self.assertEqual(report["status"], "recognized")
+            self.assertEqual(set(detector.shapes), {(540, 960, 3)})  # The whole frame, resized as before.
+            reports.append(report)
+        plain, whole = reports
+        self.assertEqual(set(plain), set(whole))
+        for report in reports:
+            self.assertFalse({"view", "scan"} & set(report))
+            for record in report["detections"]:
+                self.assertEqual(record["box_coordinate_space"], "detector_input_pixels")
+                self.assertFalse({"view", "scan", "box_space_size"} & set(record))
+                self.assertEqual((record["target"]["box_xyxy"], record["target"]["cell"]), ([190, 268, 194, 272], "left"))
+        self.assertEqual([set(record) for record in plain["detections"]], [set(record) for record in whole["detections"]])
+        parameters = __import__("inspect").signature(command.recognize).parameters
+        self.assertEqual((parameters["region"].default, parameters["scan_detectors"].default,
+                          parameters["scan_detector_factory"].default), (None, None, None))
+
+    def test_a_region_through_the_whole_frame_agrees_with_no_region(self):
+        # The same scene two ways: the whole frame turned by 180 degrees, and unturned. The detector is told where the
+        # bottle is in what it sees; both runs must report it at the same place in the frame.
+        plain, _ = self.run_region(None, [(0.2, 0.3)] * 2, frames=2)
+        turned, _ = self.run_region(region.Region(rotation=180), [(0.8, 0.7)] * 2, frames=2)
+        self.assertEqual(turned["detections"][0]["target"]["cell"], plain["detections"][0]["target"]["cell"])
+        for value, wanted in zip(turned["detections"][0]["target"]["centre_fraction"],
+                                 plain["detections"][0]["target"]["centre_fraction"]):
+            self.assertAlmostEqual(value, wanted, delta=0.003)
+        self.assertEqual(turned["detections"][0]["box_space_size"], plain["detections"][0]["detector_input_size"])
+
+    def test_malformed_regions_and_scans_are_refused_before_anything_is_loaded(self):
+        def loaded():
+            raise AssertionError("loaded")
+        for options in ({"region": (0.4, 0.4, 1.0, 1.0)}, {"region": "0.4,0.4,1,1"},
+                        {"region": region.Region(*LOWER_RIGHT), "scan_detectors": ("mobilenet-ssd",)},
+                        {"scan_detectors": ()}, {"scan_detectors": ("yolox-nano",)},
+                        {"scan_detectors": ("mobilenet-ssd", "mobilenet-ssd")},
+                        {"scan_detectors": ("mobilenet-ssd", "other")}):
+            with self.subTest(options=options), \
+                    mock.patch.object(command.camera_helper, "run_export", side_effect=AssertionError("launched")), \
+                    self.assertRaises(ValueError):
+                command.recognize(self.binary, LIMITS, (0,), detector_factory=loaded, confirmed=True,
+                                  target_label="bottle", **options)
+        with mock.patch.object(command.camera_helper, "run_export", side_effect=AssertionError("launched")), \
+                self.assertRaises(ValueError):
+            command.recognize(self.binary, LIMITS, (0,), detector_factory=loaded, confirmed=True,
+                              scan_detectors=("mobilenet-ssd",))  # A scan tallies a target: none was named.
+
+    def test_the_command_line_refuses_a_bad_region_before_the_confirmation_and_the_camera(self):
+        base = ["--allow-camera-input", "--helper", "/h", "--seconds", "10", "--max-frames", "10", "--cameras", "0"]
+        for extra in (["--region", "0.5,0.5,0.4,0.9"], ["--region", "0,0,1"], ["--region", "0,0,1,1.5"],
+                      ["--region", "centre"], ["--region", "0,0,0.01,1"], ["--region", "nan,0,1,1"],
+                      ["--rotation", "45"], ["--rotation", "-90"], ["--region", "0.2,0.2,0.8,0.8", "--rotation", "360"]):
+            terminal = Terminal()
+            with self.subTest(extra=extra), \
+                    mock.patch.object(command, "create_detector", side_effect=AssertionError("loaded")), \
+                    mock.patch.object(command.camera_helper, "run_export", side_effect=AssertionError("launched")), \
+                    self.assertRaises(SystemExit) as caught:
+                run_main(base + extra, terminal)
+            self.assertEqual((caught.exception.code, terminal.reads), (2, 0))
+        for extra in (["--region", "0.2,0.2,0.8,0.8"], ["--rotation", "90"]):
+            with self.subTest(extra=extra), self.assertRaises(SystemExit) as caught:
+                run_main(["--validate"] + extra)
+            self.assertEqual(caught.exception.code, 2)
+
+    def test_main_passes_the_region_the_rotation_and_the_detector_and_the_report_records_them(self):
+        detector = ScriptedDetector([(0.5, 0.5)] * 4)
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(command, "create_detector", return_value=detector) as create:
+            path = Path(temporary) / "run.json"
+            code, report, _notice = run_main(
+                ["--allow-camera-input", "--helper", str(self.binary), "--seconds", "3", "--max-frames", "4", "--fps", "10",
+                 "--cameras", "0", "--report", str(path), "--target-label", "bottle", "--detector", "yolox-nano",
+                 "--region", "0.25,0.25,0.75,0.75", "--rotation", "270", "--helper-arg=--width", "--helper-arg=1920",
+                 "--helper-arg=--height", "--helper-arg=1080", "--helper-arg=--stride", "--helper-arg=5760"])
+            self.assertEqual((code, report["status"]), (0, "recognized"), report.get("error"))
+            create.assert_called_once_with("yolox-nano")
+            self.assertEqual((report["detector_requested"], report["view"]["detector"]), ("yolox-nano", "yolox-nano"))
+            self.assertEqual((report["view"]["mode"], report["view"]["region"], report["view"]["rotation"]),
+                             ("region", [0.25, 0.25, 0.75, 0.75], 270))
+            self.assertEqual(set(detector.shapes), {(960, 540, 3)})  # Half of 1920 by 1080, not resized, turned.
+            self.assertEqual(report["detections"][0]["target"]["cell"], "centre")
+            self.assertEqual(json.loads(path.read_text())["view"], report["view"])
+            self.assertEqual(sorted(entry.name for entry in Path(temporary).iterdir()), ["run.json"])
+        # The whole frame unturned, spelled out, is no region at all.
+        with mock.patch.object(command, "create_detector", return_value=StandInDetector()):
+            code, report, _notice = run_main(
+                ["--allow-camera-input", "--helper", str(self.binary), "--seconds", "3", "--max-frames", "2", "--fps", "10",
+                 "--cameras", "0", "--region", "0,0,1,1", "--rotation", "0"])
+        self.assertEqual((code, "view" in report, report["detections"][0]["box_coordinate_space"]),
+                         (0, False, "detector_input_pixels"))
+
+    def test_a_scan_sees_each_frame_through_the_next_entry_with_every_detector(self):
+        schedule = region.scan_schedule()
+        # "mobilenet-ssd" (the run's detector) finds the bottle in the middle of whatever it sees; "yolox-nano" never.
+        models = {"mobilenet-ssd": ScriptedDetector([(0.5, 0.5)] * 60), "yolox-nano": ScriptedDetector([])}
+        report = command.recognize(self.binary, {"fps": 10, "max_seconds": 6, "max_frames": 30}, (0,), confirmed=True,
+                                   target_label="bottle", extra_args=HD, terminal=mock.Mock(), cues=[(0, "near")],
+                                   scan_detectors=("mobilenet-ssd", "yolox-nano"),
+                                   scan_detector_factory=lambda name: models[name])
+        self.assertEqual((report["status"], report["exit_code"]), ("recognized", 0), report.get("error"))
+        frames = report["frames_processed"]
+        self.assertGreaterEqual(frames, 25)  # A slow machine may replace a frame; the schedule follows what was processed.
+        self.assertEqual((models["mobilenet-ssd"].calls, models["yolox-nano"].calls), (frames, frames))
+        self.assertEqual(models["mobilenet-ssd"].shapes, models["yolox-nano"].shapes)  # One prepared image for both.
+        self.assertEqual(report["view"], {"mode": "scan", "box_coordinate_space": "whole_frame_processing_pixels",
+                                          "processing_side": 960, "detector": "mobilenet-ssd",
+                                          "orientation_statement": region.ORIENTATION_STATEMENT,
+                                          "scan_detectors": ["mobilenet-ssd", "yolox-nano"], "schedule_length": 24})
+        for number, record in enumerate(report["detections"]):
+            entry = schedule[number % 24]
+            self.assertEqual((record["view"]["index"], record["view"]["name"], record["view"]["rotation"],
+                              record["view"]["region"]), (number % 24, entry.name, entry.rotation, list(entry.fractions)))
+            self.assertEqual(record["box_coordinate_space"], "whole_frame_processing_pixels")
+            self.assertEqual(set(record["scan"]), {"mobilenet-ssd", "yolox-nano"})
+            self.assertEqual(record["scan"]["mobilenet-ssd"]["target"], record["target"])  # The run's detector's own.
+            self.assertFalse(record["scan"]["yolox-nano"]["target"]["present"])
+            self.assertEqual(record["scan"]["yolox-nano"]["detection_count"], 1)  # Its chair.
+            # The middle of each window, in the whole frame, whatever the turn.
+            centre = ((entry.x0 + entry.x1) / 2, (entry.y0 + entry.y1) / 2)
+            for value, wanted in zip(record["target"]["centre_fraction"], centre):
+                self.assertAlmostEqual(value, wanted, delta=0.004)
+        scan = report["scan"]
+        self.assertEqual((scan["schedule_length"], scan["frames"], scan["box_coordinate_space"]),
+                         (24, frames, "whole_frame_processing_pixels"))
+        self.assertEqual(scan["schedule"], [dict(index=index, **entry.report()) for index, entry in enumerate(schedule)])
+        found, missed = scan["detectors"]["mobilenet-ssd"], scan["detectors"]["yolox-nano"]
+        self.assertEqual((found["frames"], found["target_frames"], missed["frames"], missed["target_frames"],
+                          missed["best_entry"]), (frames, frames, frames, 0, None))
+        self.assertEqual(sum(entry["frames"] for entry in found["entries"]), frames)
+        self.assertEqual([entry["frames"] for entry in found["entries"]],
+                         [sum(1 for number in range(frames) if number % 24 == index) for index in range(24)])
+        self.assertEqual(sum(entry["frames"] for entry in found["by_rotation"]), frames)
+        self.assertEqual([entry["key"] for entry in found["by_region"]], list(region.SCAN_REGION_NAMES))
+        lower_right = next(entry for entry in found["by_region"] if entry["key"] == "lower_right")
+        self.assertAlmostEqual(lower_right["median_centre_fraction"][0], 0.7, delta=0.004)
+        self.assertAlmostEqual(lower_right["median_centre_fraction"][1], 0.7, delta=0.004)
+        # The run's usual summaries are still there, over the whole frame.
+        self.assertEqual(report["summary"]["coverage"]["spans"][0]["target_frames"], frames)
+        self.assertEqual(report["target"]["frames_with_target"], frames)
+
+    def test_a_scan_detector_that_cannot_load_or_lacks_the_target_ends_the_run_before_the_helper(self):
+        def unavailable(name):
+            raise RuntimeError("no runtime")
+        with mock.patch.object(command.camera_helper, "run_export", side_effect=AssertionError("launched")):
+            report = command.recognize(self.binary, LIMITS, (0,), detector_factory=lambda: ScriptedDetector([]),
+                                       confirmed=True, target_label="bottle", scan_detectors=("mobilenet-ssd", "yolox-nano"),
+                                       scan_detector_factory=unavailable)
+            self.assertEqual((report["status"], report["reason"], report["exit_code"]),
+                             ("error", "detector_unavailable", 1))
+            report = command.recognize(self.binary, LIMITS, (0,), detector_factory=lambda: ScriptedDetector([]),
+                                       confirmed=True, target_label="bottle", scan_detectors=("mobilenet-ssd", "yolox-nano"),
+                                       scan_detector_factory=lambda name: StandInDetector())  # Chairs only.
+            self.assertEqual((report["status"], report["reason"]), ("error", "target_label_unknown"))
+            self.assertFalse({"view", "scan", "capture"} & set(report))
+
+    def test_no_region_or_scan_field_can_hold_pixels_free_text_or_calibration_values(self):
+        models = {"mobilenet-ssd": ScriptedDetector([(0.5, 0.5)] * 30), "yolox-nano": ScriptedDetector([None, (0.4, 0.6)] * 15)}
+        scanned = command.recognize(self.binary, {"fps": 10, "max_seconds": 5, "max_frames": 10}, (0,), confirmed=True,
+                                    target_label="bottle", terminal=mock.Mock(),
+                                    scan_detectors=("mobilenet-ssd", "yolox-nano"),
+                                    scan_detector_factory=lambda name: models[name])
+        looked, _ = self.run_region(region.Region(*LOWER_RIGHT, rotation=90), [(0.5, 0.5)] * 3, frames=3)
+        plain, _ = self.run_region(None, [(0.5, 0.5)] * 3, frames=3)
+        self.assertEqual(scanned["status"], "recognized", scanned.get("error"))
+        self.assertEqual((set(scanned) - set(plain), set(looked) - set(plain)), ({"view", "scan"}, {"view"}))
+        added = {"scan": scanned["scan"], "scan_view": scanned["view"], "view": looked["view"]}
+        for name, report in (("scanned", scanned), ("looked", looked)):
+            for record in report["detections"]:
+                self.assertEqual(set(record) - set(plain["detections"][0]),
+                                 {"view", "box_space_size"} | ({"scan"} if name == "scanned" else set()))
+                added[f"{name}{record['sequence']}"] = {key: record[key] for key in ("view", "box_space_size", "scan",
+                                                                                      "box_coordinate_space")
+                                                        if key in record}
+        allowed = view_strings()
+        for path, leaf in l15_leaves(added, "report"):
+            with self.subTest(path=path):
+                if type(leaf) is str:
+                    self.assertIn(leaf, allowed)
+                else:
+                    self.assertIn(type(leaf), (int, float, bool, type(None)))
+        for name in set(l15_names(added)) - ALLOWED_NAMES - set(DETECTORS):
+            with self.subTest(name=name):
+                self.assertFalse([part for part in FORBIDDEN_NAME_PARTS if part in name.lower()])
+        for numbers in l15_number_lists(added):
+            self.assertIn(len(numbers), (2, 4), numbers)  # A size, a centre fraction, one box or region: never a buffer.
+        for report in (scanned, looked):
+            self.assertFalse(report["pixels_in_report"] or report["images_saved"] or report["display_started"])
+            self.assertEqual({key: report[key] for key in gates.claims()}, gates.claims())
+            self.assertLess(len(json.dumps(report)), 200_000)
 
 
 class StandInProgramTests(unittest.TestCase):
