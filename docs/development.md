@@ -250,6 +250,7 @@ bash scripts/build_shm_reader.sh
 bash scripts/build_capture_supervisor.sh
 bash scripts/build_capture_gpu_check.sh
 bash scripts/build_camera_helper.sh --fake
+bash scripts/build_presence_watcher.sh
 QT_QPA_PLATFORM=offscreen .venv-replay/bin/python -m unittest discover -s tests
 uvx ruff@0.14.2 check .
 .venv-replay/bin/python scripts/evaluate_detectors.py --fetch --expect evaluation/seed-expected.json
@@ -507,6 +508,28 @@ See [Generated HUD contract header](reference/hud-development.md#generated-hud-c
 both contract headers share, `sightcircuit/native_header.py`. The
 [camera recognition guide](guides/camera-recognize.md#the-wire-protocol-camera-export-v2)
 describes the protocol; `tests/test_camera_contract.py` pins the header.
+
+## Presence watcher build (2026-11-20)
+
+`sightcircuit-presence-watcher` (`tools/presence_watcher.cpp`, with the
+signal table in `tools/presence_signals.hpp`) tells a run without display
+when SteamVR says the headset is off
+([the presence stop](guides/camera-recognize.md#the-presence-stop---presence-watcher)).
+It is a second target of `scripts/build_openvr_tool.sh`, against the same
+pinned OpenVR checkout as the bridge, and its own unit is compiled under
+`-Wall -Wextra -Wpedantic -Werror` first:
+
+```bash
+bash scripts/build_presence_watcher.sh
+artifacts/presence-watcher/sightcircuit-presence-watcher --describe
+```
+
+`--describe` makes no SteamVR call. CI builds it in the `native` and `replay`
+jobs and runs `tests/test_presence_watcher_native.py` without skips against
+the fake OpenVR runtime of the bridge's tests
+(`tests/fixtures/fake_vrclient.cpp`), which scripts runtime events and logs
+the watcher's calls. Running `--watch` against SteamVR on the Frame is a
+device step that needs the owner's approval; nothing here is device evidence.
 
 ## Camera helper build (lane S, 2026-11-09)
 

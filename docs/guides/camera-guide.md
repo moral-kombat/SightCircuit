@@ -38,7 +38,10 @@ derived from a camera frame**: no detection, label, count or thumbnail, only
 the scripted instruction, the progress bar and the time left. Results appear
 only after the helper has ended. No image is ever shown, saved or written;
 the pictures are shapes the command draws. The window never opens the overlay
-bridge or SteamVR.
+bridge and never starts SteamVR. With `--presence-watcher`, and only then, the
+run's process launches the [presence watcher](camera-recognize.md#the-presence-stop---presence-watcher),
+which joins a running SteamVR to listen for "the headset is off" and reads
+presence signals only: no camera data, no overlay, no setting.
 
 Camera Data is as the [recognition guide](camera-recognize.md#camera-data)
 states: the report holds counts, closed labels, boxes, timings and format
@@ -113,6 +116,17 @@ launch, a second notice and a second Start.
   ten, from the Start click), then holds the watch. The result says only
   "The run ended without a clean shutdown" or "The run was interrupted" and
   "Tell the Frame manager": nothing derived from a frame is put into words.
+- **The presence watch cannot be armed** (`--presence-watcher` was given and
+  SteamVR is not running, the watcher did not answer, or the headset already
+  reports standby). The camera reader is not started: `status: error`,
+  `reason: presence_watch_not_armed`, no watch, and the result says "Not
+  started: the headset-off watcher could not be armed, so the camera was not
+  read. Tell the Frame manager."
+- **The presence watcher is lost during the run.** The reader is stopped at
+  once (`presence_watch_lost`), the run is watched, and the result says the
+  run was ended because the headset-off watcher stopped answering.
+- **SteamVR reports standby before the remove click.** The run ends
+  (`presence_ended`) and the result says so; it is not called a removal.
 - **Stop while the helper is starting.** A stop that arrives before the
   helper is launched launches nothing. One that arrives during the launch is
   passed on once the helper is ready (or after 3 seconds), so the helper
@@ -137,7 +151,8 @@ helper's `ready`.
 
 The one button appears 10 seconds after the reader is ready, which leaves 20
 seconds of the run less what the launch took. After the click the screen says
-"You can take the headset off now". The run ends by itself when the helper
+"You can take the headset off now". The run ends by itself when SteamVR
+reports standby (with `--presence-watcher`: `presence_ended`), when the helper
 reports `headset_removed` or `standby`, or on its bound. If fewer than 5
 seconds are left, the button is taken down at that moment and the screen says
 there is not enough time: a click whose mark could not be recorded is never
@@ -170,6 +185,25 @@ the owner accepted G7's numbers on 2026-11-19: the run ends by itself at most
 received (`--removal-end-limit-ms 10000`; `--late-frame-limit-ms 7000` is the
 matching bound on a late frame).
 
+**The presence stop (2026-11-20).** Run 1 of L-D1 ([E100](../evidence/e100.md))
+ended on its frame bound 13.3 s after the click: the camera kept delivering
+frames with the headset off, so the helper's frame-gap stop never fired,
+while SteamVR reported standby 7.0 s after the click. With
+`--presence-watcher` the run ends on SteamVR's signal
+([the presence stop](camera-recognize.md#the-presence-stop---presence-watcher)).
+Each removal entry then also says whether the watch was armed
+(`presence_watch_armed`), which signal came (`presence_signal`), the time
+from the click to it (`presence_signal_after_mark_ms`), from it to the
+helper's end (`helper_end_after_presence_signal_ms`), the frames received
+after it, and what ended the run (`run_ended_by`, `run_end_reason`).
+`helper_end_is_presence_stop` is true when the watch's signal ended the run
+or the helper ended `headset_removed` or `standby`; a run that ends only on
+its bound has it false and, with G7's limits, `helper_end_within_limit`
+false, armed or not. The result screen adds one line: the signal with its
+two times, "SteamVR sent no headset-off signal before the run ended", or
+"SteamVR's headset-off signal was not armed for this run". Nothing about the
+watch is shown during the run. No time here is a Frame measurement.
+
 ## How the run is launched on the Frame
 
 After the owner has approved the step, and only then, the Frame manager
@@ -179,8 +213,16 @@ so that it appears on the Frame's desktop:
 ```bash
 .venv-replay/bin/python scripts/camera_guide.py --allow-camera-input \
   --helper /path/outside/the/checkout/sightcircuit-camera-helper \
+  --presence-watcher artifacts/presence-watcher/sightcircuit-presence-watcher \
   --script removal --report artifacts/camera/guide-removal-01.json
 ```
+
+`--presence-watcher` is optional and names the binary
+`bash scripts/build_presence_watcher.sh` builds on the Frame. It is checked
+before the window opens by the helper's path rules (refused as
+`presence_watcher_not_found`, `presence_watcher_inside_work_tree` or
+`presence_watcher_not_executable` with nothing shown). Without it the run is
+what it was, and its report says the signal was not armed.
 
 The second run is a second command, with `--script positions` and another
 report path. `--report` is required and is checked before the window opens: a
@@ -264,6 +306,10 @@ cryptographic one: a program written to imitate the window could satisfy it.
 
 ## Cloud checks
 
+`tests/test_camera_guide_presence.py` covers the presence stop in the window:
+the removal entry and the result's words for a run SteamVR's signal ended,
+for E100's own numbers (a run that ends only on its bound still fails), the
+worker and the window with a stand-in watcher, and the path check.
 `tests/test_camera_guide.py` covers the script logic and the notice derived
 from the contract (standard library), the worker's handshake and its
 refusals, the worker against the stand-in helper, the window offscreen with

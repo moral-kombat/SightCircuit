@@ -68,6 +68,7 @@ CELLS = tuple(column if row == "centre" else row if column == "centre" else f"{r
 LATE_FRAME_LIMIT_MS = 2000
 REMOVAL_END_LIMIT_MS = 3000
 PRESENCE_END_REASONS = ("headset_removed", "standby")
+ENDED_BY_WATCH, ENDED_BY_HELPER = "presence_watch", "helper"  # A removal entry's ``run_ended_by``.
 RUN_END = "run_end"
 TIMEBASE = {"monotonic_clock": "host_clock_monotonic_ns", "wall_clock": "utc_ns_since_unix_epoch",
             "wall_clock_derivation": "anchor_utc_ns_plus_monotonic_difference",
@@ -384,7 +385,7 @@ def _between(frames, start_ns, end_ns):
 
 
 def summarize(frames, marks, *, origin_ns, run_end_ns, helper_end=None, with_target=False,
-              late_frame_limit_ms=LATE_FRAME_LIMIT_MS, removal_end_limit_ms=REMOVAL_END_LIMIT_MS):
+              late_frame_limit_ms=LATE_FRAME_LIMIT_MS, removal_end_limit_ms=REMOVAL_END_LIMIT_MS, presence=None):
     """Counts-only summaries of one run.
 
     ``frames`` are the per-frame records (``observed_ns``, and ``target`` from
@@ -411,6 +412,21 @@ def summarize(frames, marks, *, origin_ns, run_end_ns, helper_end=None, with_tar
     L-D1's. Intervals and spans are bounded by ``boundary_ns``: a cue's
     scheduled time, a key or window mark's actual time. The tallies do not separate cameras: the caller
     gives the frames of one camera when a target is named.
+
+    ``presence`` is the presence watch's summary (``PresenceWatch.summary``:
+    ``armed``, ``ended_run``, the ending ``signal`` with its ``end_reason``
+    and ``monotonic_ns``, ``frames_received_after_signal``), or ``None`` for
+    a run without the watch. Each removal entry then says whether the watch
+    was armed (``presence_watch_armed``), which signal came
+    (``presence_signal``), the time from the mark to it
+    (``presence_signal_after_mark_ms``) and from it to the helper's end
+    record (``helper_end_after_presence_signal_ms``), the frames received
+    after it, what ended the run (``run_ended_by``: ``presence_watch`` or
+    ``helper``) and for which reason (``run_end_reason``: the signal's, else
+    the helper's own). ``helper_end_reason`` stays the helper's own end
+    record (``stop_signal`` when the watch stopped it), and
+    ``helper_end_is_presence_stop`` is true when either the helper ended for
+    a presence reason or the watch's signal ended the run.
     """
     frames = sorted(frames, key=lambda frame: frame["observed_ns"])
     marks = sorted(marks, key=boundary_ns)
@@ -469,12 +485,27 @@ def summarize(frames, marks, *, origin_ns, run_end_ns, helper_end=None, with_tar
                  "last_frame_acquire_after_mark_ms": round(max(after) / 1e6, 3) if after else None,
                  "end_limit_ms": removal_end_limit_ms, "helper_end_after_mark_ms": None, "helper_end_reason": None,
                  "helper_end_is_presence_stop": None, "helper_end_within_limit": None,
-                 "helper_end_after_last_frame_ms": None}
+                 "helper_end_after_last_frame_ms": None,
+                 "presence_watch_armed": bool(presence and presence["armed"]), "presence_signal": None,
+                 "presence_signal_after_mark_ms": None, "helper_end_after_presence_signal_ms": None,
+                 "frames_received_after_presence_signal": None, "run_ended_by": None, "run_end_reason": None}
+        by_watch = bool(presence and presence["ended_run"])
+        if presence and presence["signal"] is not None:
+            entry.update(presence_signal=presence["signal"],
+                         presence_signal_after_mark_ms=round((presence["monotonic_ns"] - start) / 1e6, 3),
+                         frames_received_after_presence_signal=presence["frames_received_after_signal"])
+        if by_watch:
+            entry.update(run_ended_by=ENDED_BY_WATCH, run_end_reason=presence["end_reason"])
         if helper_end is not None:
             elapsed_ms = round((helper_end["monotonic_ns"] - start) / 1e6, 3)
             entry.update(helper_end_after_mark_ms=elapsed_ms, helper_end_reason=helper_end["reason"],
-                         helper_end_is_presence_stop=helper_end["reason"] in PRESENCE_END_REASONS,
+                         helper_end_is_presence_stop=by_watch or helper_end["reason"] in PRESENCE_END_REASONS,
                          helper_end_within_limit=0 <= elapsed_ms <= removal_end_limit_ms)
+            if not by_watch:
+                entry.update(run_ended_by=ENDED_BY_HELPER, run_end_reason=helper_end["reason"])
+            if presence and presence["signal"] is not None:
+                entry["helper_end_after_presence_signal_ms"] = round(
+                    (helper_end["monotonic_ns"] - presence["monotonic_ns"]) / 1e6, 3)
             if frames:
                 entry["helper_end_after_last_frame_ms"] = round(
                     (helper_end["monotonic_ns"] - frames[-1]["observed_ns"]) / 1e6, 3)

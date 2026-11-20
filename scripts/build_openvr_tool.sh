@@ -11,7 +11,12 @@ case "${1:-}" in
         sightcircuit_tool_sources=(overlay_bridge.cpp overlay_bridge_lifecycle.cpp overlay_bridge_rendering.cpp
                                    overlay_bridge_reporting.cpp overlay_bridge_sensing.cpp)
         sightcircuit_name=sightcircuit-overlay-bridge ;;
-    *) echo "Usage: build_openvr_tool.sh camera-probe|overlay-bridge" >&2; exit 64 ;;
+    presence-watcher)
+        # Presence signals only (tools/presence_signals.hpp): IVRSystem events, no overlay, no camera interface.
+        # Its own unit is also checked under -Werror below.
+        sightcircuit_tool_sources=(presence_watcher.cpp); sightcircuit_name=sightcircuit-presence-watcher
+        sightcircuit_strict=1 ;;
+    *) echo "Usage: build_openvr_tool.sh camera-probe|overlay-bridge|presence-watcher" >&2; exit 64 ;;
 esac
 OPENVR_REVISION=0924064316de3effbcd1acf1e309182a2deb1c05
 sightcircuit_sdk="$PROJECT_ROOT/.cache/openvr"
@@ -72,6 +77,14 @@ sightcircuit_sources+=(
 for sightcircuit_source in dirtools envvartools pathtools sharedlibtools hmderrors vrpathregistry strtools; do
     sightcircuit_sources+=("$sightcircuit_sdk/src/vrcore/${sightcircuit_source}_public.cpp")
 done
+
+if [ "${sightcircuit_strict:-0}" = 1 ]; then
+    for sightcircuit_source in "${sightcircuit_tool_sources[@]}"; do
+        "$sightcircuit_compiler" -std=c++17 -Wall -Wextra -Wpedantic -Werror -DLINUX -DPOSIX \
+            "-D$sightcircuit_arch_define" -I"$sightcircuit_sdk/headers" -I"$sightcircuit_sdk/src" \
+            -fsyntax-only "$PROJECT_ROOT/tools/$sightcircuit_source"
+    done
+fi
 
 echo "Building $sightcircuit_name against OpenVR $OPENVR_REVISION."
 "$sightcircuit_compiler" -std=c++17 -O2 -pthread \

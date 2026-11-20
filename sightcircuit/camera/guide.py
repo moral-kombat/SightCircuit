@@ -35,7 +35,7 @@ Nothing here opens a camera, lifts a gate or approves a run.
 """
 from dataclasses import dataclass
 
-from . import marks
+from . import marks, presence
 from .confirmation import OPERATOR_WINDOW
 
 MS = 1_000_000
@@ -308,7 +308,14 @@ def watch_needed(report):
         return False
     if not clean_shutdown(report):
         return True
-    return frame_read(report) or (report.get("helper_end") or {}).get("reason") in marks.PRESENCE_END_REASONS
+    return frame_read(report) or presence_end(report)
+
+
+def presence_end(report):
+    """Whether a camera reader that was launched ended on a presence stop: the helper's own, or the presence watch's."""
+    if (report.get("helper_end") or {}).get("reason") in marks.PRESENCE_END_REASONS:
+        return True
+    return report.get("status") == presence.STATUS_PRESENCE_ENDED and report.get("helper_launched") is not False
 
 
 def guide_block(guide, *, script, started, ended_by, observations, limits_ms, watch, validation_only=False, clock=None,
@@ -371,6 +378,15 @@ def status_line(report):
         return f"The camera reader ended early ({reason}), before the click to take the headset off."
     if status == "helper_ended_early":
         return f"The camera reader ended early ({reason})."
+    if status == presence.STATUS_PRESENCE_ENDED and remove_marked(report):
+        return f"The run ended when SteamVR reported the headset off ({reason})."
+    if status == presence.STATUS_PRESENCE_ENDED:
+        return f"The run ended early: SteamVR reported the headset off ({reason}) before the click to take it off."
+    if status == presence.STATUS_WATCH_LOST:
+        return "The run was ended because the headset-off watcher stopped answering. Tell the Frame manager."
+    if reason == presence.REASON_NOT_ARMED:
+        return ("Not started: the headset-off watcher could not be armed, so the camera was not read. "
+                "Tell the Frame manager.")
     if status == "stopped":
         return "The run was stopped."
     if status == "cancelled":
@@ -428,6 +444,16 @@ def result_lines(report):
                      + (f", the last {_seconds(last)} after it." if last is not None else "."))
         if entry["helper_end_after_last_frame_ms"] is not None:
             lines.append(f"The reader ended {_seconds(entry['helper_end_after_last_frame_ms'])} after its last frame.")
+        if entry.get("presence_signal") is not None:
+            line = (f"SteamVR's headset-off signal ({entry['presence_signal']}) came "
+                    f"{_seconds(entry['presence_signal_after_mark_ms'])} after the click")
+            if entry["helper_end_after_presence_signal_ms"] is not None:
+                line += f"; the reader ended {_seconds(entry['helper_end_after_presence_signal_ms'])} after it"
+            lines.append(line + ".")
+        elif entry.get("presence_watch_armed"):
+            lines.append("SteamVR sent no headset-off signal before the run ended.")
+        else:
+            lines.append("SteamVR's headset-off signal was not armed for this run.")
     p95 = (report.get("inference_ms") or {}).get("p95")
     if p95 is not None:
         lines.append(f"Detection time, 95th percentile: {p95:.0f} ms.")

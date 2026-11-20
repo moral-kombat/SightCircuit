@@ -28,7 +28,9 @@ test can tell the end packet from the process's exit: ``--fake-linger S`` stays
 alive up to S seconds after its last packet (a stop signal ends the wait),
 ``--fake-close-stdout`` closes its stdout first, ``--fake-term-delay S`` takes S
 seconds to honour a stop signal, and ``--fake-exit N`` exits N whatever else
-happened; ``--fake-report-pid`` puts the process id in ``ready.build``.
+happened; ``--fake-report-pid`` puts the process id in ``ready.build``;
+``--fake-first-frame-delay S`` waits S seconds between ``ready`` and the first
+frame (a stop signal in that wait ends the run with no frame).
 ``--fake-clock virtual``
 is the time control: the pacing and the time bound are counted in frame
 periods (``1 / fps`` each) without sleeping, so a 90-second run at 5 frames a
@@ -118,6 +120,7 @@ def parse(argv):
     parser.add_argument("--fake-clock", choices=("real", "virtual"), default="real")
     parser.add_argument("--fake-linger", type=float, default=0)
     parser.add_argument("--fake-term-delay", type=float, default=0)
+    parser.add_argument("--fake-first-frame-delay", type=float, default=0)
     parser.add_argument("--fake-close-stdout", action="store_true")
     parser.add_argument("--fake-exit", type=int, default=None)
     parser.add_argument("--fake-report-pid", action="store_true")
@@ -196,7 +199,10 @@ def main(argv=None):
     started = time.monotonic()
     deadline = started + limits["max_seconds"]
     exported, reason = 0, "max_frames"
-    while exported < limits["max_frames"]:
+    stopped_before_frames = bool(args.fake_first_frame_delay) and stopper.wait(args.fake_first_frame_delay)
+    if stopped_before_frames:
+        reason = "stop_signal"
+    while exported < limits["max_frames"] and not stopped_before_frames:
         if elapsed_periods >= limits["max_seconds"] * limits["fps"] if virtual else time.monotonic() >= deadline:
             reason = "max_seconds"
             break

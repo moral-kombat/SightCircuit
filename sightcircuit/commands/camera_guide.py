@@ -55,8 +55,9 @@ metre when Start is clicked (mark ``near`` as soon as the reader is ready,
 about four seconds), then moved to about a metre when the screen says so
 (``far``, made when the instruction appears: about two seconds to move and
 four recorded), then the click made just before the headset comes off
-(``remove``); the run ends by itself when the helper reports
-``headset_removed`` or ``standby``, or on its bound. ``positions``: centre,
+(``remove``); the run ends by itself when SteamVR reports standby (with
+``--presence-watcher``: ``presence_ended``, see ``camera/presence.py``), when
+the helper reports ``headset_removed`` or ``standby``, or on its bound. ``positions``: centre,
 left, right, up, down for about four seconds each, then out of view, with no
 click after Start. Marks are ``marks.VOCABULARY``'s, recorded with source
 ``window``; the summaries are ``marks.summarize``'s. Because ``remove`` is
@@ -175,6 +176,7 @@ class Config:
     start_dwell_seconds: float = START_DWELL_SECONDS
     close_dwell_seconds: float = CLOSE_DWELL_SECONDS
     validation: bool = False  # The worker uses the scripted detector; never set from the command line of a run.
+    presence_watcher: str = None  # The sightcircuit-presence-watcher binary, or None for a run without the watch.
     worker_env: dict = field(default_factory=dict)
 
     def spec(self):
@@ -182,7 +184,8 @@ class Config:
         return {"helper": str(self.helper), "limits": dict(self.limits), "camera": self.camera, "target": self.target,
                 "detector": self.detector, "threshold": self.threshold, "helper_args": list(self.helper_args),
                 "late_frame_limit_ms": self.late_frame_limit_ms, "removal_end_limit_ms": self.removal_end_limit_ms,
-                "validation": bool(self.validation)}
+                "validation": bool(self.validation),
+                "presence_watcher": None if self.presence_watcher is None else str(self.presence_watcher)}
 
 
 def check_report_path(path):
@@ -330,6 +333,9 @@ def worker_main(descriptor, stdin=None, stdout=None):
             raise ValueError("beyond camera_recognize's bounds")
         cameras = camera_helper.check_cameras((spec["camera"],))
         target, helper = spec["target"], spec["helper"]
+        watcher = spec.get("presence_watcher")
+        if watcher is not None and not isinstance(watcher, str):
+            raise ValueError("the presence watcher is a path")
     except (ValueError, KeyError, TypeError):
         emit({"event": "report", "report": report})
         return 1
@@ -380,7 +386,7 @@ def worker_main(descriptor, stdin=None, stdout=None):
                 detector_factory=factory, extra_args=tuple(spec["helper_args"]), stop=stop, confirmed=True,
                 confirmation=OPERATOR_WINDOW, target_label=target, terminal=_Discard(), on_session=on_session,
                 on_ready=on_ready, late_frame_limit_ms=spec["late_frame_limit_ms"],
-                removal_end_limit_ms=spec["removal_end_limit_ms"])
+                removal_end_limit_ms=spec["removal_end_limit_ms"], presence_watcher=watcher)
         except _StoppedBeforeLaunch:
             report.update(confirmation=OPERATOR_WINDOW, status="stopped", reason="stopped_before_launch", cleanup_ok=True)
         except guard.CANCELLATION as error:
@@ -1418,6 +1424,10 @@ def build_parser():
                         help="What each removal entry compares frame times after the remove click with")
     parser.add_argument("--removal-end-limit-ms", type=int, default=marks.REMOVAL_END_LIMIT_MS, metavar="MS",
                         help="What each removal entry compares the helper's end after the remove click with")
+    parser.add_argument("--presence-watcher", type=Path, metavar="PATH",
+                        help="The sightcircuit-presence-watcher binary (scripts/build_presence_watcher.sh), given "
+                             "explicitly: the run ends when SteamVR reports standby, and refuses to read the camera "
+                             "if the watcher cannot be armed. Presence signals only; no camera data")
     parser.add_argument("--windowed", action="store_true", help="A 1280 by 800 window in place of a maximized one")
     return parser
 
@@ -1428,7 +1438,7 @@ def main(argv=None):
     if args.worker:
         return worker_main(args.worker_fd)
     run_arguments = (args.allow_camera_input or args.script or args.report or args.seconds or args.max_frames
-                     or args.helper_arg or args.windowed)
+                     or args.helper_arg or args.windowed or args.presence_watcher)
     if args.validate:
         if run_arguments:
             parser.error("--validate takes only --helper")
@@ -1463,6 +1473,12 @@ def main(argv=None):
             config.helper = camera_helper.helper_path(args.helper)
         except SightCircuitError as error:
             refusal = (error.reason, str(error))
+    if refusal is None and args.presence_watcher is not None:
+        try:  # The helper's rules: an executable outside the checkout, or under the ignored artifacts/.
+            config.presence_watcher = camera_helper.helper_path(args.presence_watcher)
+        except SightCircuitError as error:
+            refusal = ("presence_watcher_" + error.reason.removeprefix("helper_"),
+                       str(error).replace("helper", "presence watcher"))
     if refusal is None and not os.environ.get("QT_QPA_PLATFORM") and not (
             os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
         refusal = ("no_display_session", "No display session found. Run in the Frame's graphical session.")

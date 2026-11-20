@@ -146,10 +146,116 @@ on its bound. Other statuses: `no_frames` (nothing processed; `reason` says
 whether every frame was stale), `refused` (the stream violated the contract;
 `reason` names the rule), `helper_ended_early` (the helper's own `end` reason:
 `headset_removed`, `standby`, `sdk_error`, `pixel_path_error`, `watchdog`,
-`consumer_stalled`),
+`consumer_stalled`), `presence_ended` and `presence_watch_lost` (only with
+`--presence-watcher`; see [the presence stop](#the-presence-stop---presence-watcher)),
 `cancelled`, `timed_out`, `stopped`, `error` (a helper that exited non-zero,
-a failing detector, an unusable helper path) and `cleanup_failed`. Every
+a failing detector, an unusable helper path, a presence watch that could not
+be armed) and `cleanup_failed`. Every
 status but `recognized` exits 1, a cancellation 128 + signal.
+
+## The presence stop (`--presence-watcher`)
+
+The helper's own stop on headset removal waits for the camera to go quiet: it
+ends `headset_removed` or `standby` after a 2.0 s gap in frames. Device step
+L-D1's first run ([E100](../evidence/e100.md)) showed that on the Frame no
+gap comes: frames kept arriving at five a second after the headset was off,
+while SteamVR reported standby 7.0 s after the wearer's click. The owner
+decided on 2026-11-20 ("Yes, use SteamVR's signal (Recommended)") that the
+run takes "the headset is off" from SteamVR. The helper's frame-gap stop
+stays as the second line of defence.
+
+**Nothing here has run on the Frame.** The watcher has been checked in the
+cloud against a fake OpenVR runtime and a stand-in; whether SteamVR on the
+Frame delivers the event to a background application, and how soon, is for a
+device run to show.
+
+```bash
+bash scripts/build_presence_watcher.sh
+.venv-replay/bin/python scripts/camera_recognize.py --allow-camera-input \
+  --helper artifacts/camera-helper/sightcircuit-camera-helper \
+  --presence-watcher artifacts/presence-watcher/sightcircuit-presence-watcher \
+  --seconds 30 --max-frames 150 --fps 5 --cameras 0 --report artifacts/camera/run-01.json
+```
+
+`--presence-watcher` names `sightcircuit-presence-watcher`
+(`tools/presence_watcher.cpp`), held to the helper's path rules: given
+explicitly, never searched, and inside the checkout only under `artifacts/`.
+After the typed `yes` and before the helper, the command launches it with a
+bound of the run's seconds plus 20 and waits for its `ready` line.
+
+**What the watcher is.** A small OpenVR client that joins a running SteamVR
+as a `VRApplication_Background` application, which never starts SteamVR. It
+asks for `IVRSystem` and nothing else. It creates no overlay, writes no
+setting, requests no tracked-camera interface and reads **no camera data, no
+image and no calibration value**: only runtime events and the headset's
+activity level. It ends on SIGTERM, with its parent, on its own bound, or when
+SteamVR quits, and a loop step that blocks for five seconds ends it. Its
+output is strict JSON lines (`presence-watch/1`), each with a sequence number
+and the host's monotonic and realtime clocks: `ready`, `presence`, a
+`heartbeat` every 500 ms and `end`. `--describe` prints the signal table and
+these facts without calling SteamVR.
+
+**Which signal ends a run.** One table, in `tools/presence_signals.hpp` and
+`sightcircuit/camera/presence.py`; a line that disagrees with it is refused.
+
+| Signal | From (pinned OpenVR header) | Ends the run |
+| --- | --- | --- |
+| `enter_standby_event` | `VREvent_EnterStandbyMode` | yes, with reason `standby` |
+| `leave_standby_event` | `VREvent_LeaveStandbyMode` | no; recorded, and nothing restarts |
+| `proximity_off`, `proximity_on` | `VREvent_ButtonUnpress` and `VREvent_ButtonPress` of `k_EButton_ProximitySensor` on the headset | no; recorded |
+| `user_interaction_ended`, `user_interaction_started` | `VREvent_TrackedDeviceUserInteractionEnded` and `...Started` for the headset | no; recorded |
+| `hmd_activity_changed` | `GetTrackedDeviceActivityLevel` of the headset, polled every 20 ms | no; recorded |
+
+Only SteamVR's standby event ends a run, because it is SteamVR's own
+statement that the headset is idle and the one signal E100's journal shows on
+the Frame. The others may well be faster, and each is recorded with its time
+so that a device run can show how much. None ends a run yet: none has been
+observed on the Frame, and each can fire with the headset still on (a hand
+at the proximity sensor, a still head; the header gives the activity level's
+standby as "idle for at least 5 seconds"). Ending on one of them is a
+one-line change of the table once a device run supports it.
+
+**When the signal comes** the run's stop is set at once: the helper is sent
+SIGTERM and ends `stop_signal` between SDK calls, the watcher is ended, and
+the report says `status: presence_ended`, `reason: standby`, exit 1. A signal
+that arrives before the helper is launched launches nothing
+(`helper_launched: false`). A signal after the helper's own end record, or
+after a stop someone else asked for, is recorded and ends nothing.
+
+**Fail closed.** A run that names the watcher does not read the camera
+without it, because a removal stop that silently is not there is the failure
+E100 found:
+
+- If the watch cannot be armed, the run ends `status: error`, `reason:
+  presence_watch_not_armed`, no helper is launched and
+  `presence_watch.refusal` says why: `watcher_not_found`,
+  `watcher_inside_work_tree`, `watcher_not_executable`,
+  `watcher_launch_failed`, `watcher_not_ready_in_time` (12 s),
+  `watcher_error:vrserver_not_running` (SteamVR is not running),
+  `watcher_error:headset_not_connected`, `headset_in_standby_at_start` (the
+  ending signal is an edge that would never come), or the rule a `ready` line
+  broke (for example `ready_camera_data_read_refused`).
+- If the watcher is lost during the run (it exits, writes nothing for 3 s, or
+  writes a line that is not accepted), the helper is stopped at once and the
+  run ends `status: presence_watch_lost` with the reason (`watcher_exited`,
+  `heartbeat_missed`, `watcher_ended:runtime_quit`, `line_not_json`, ...).
+- A run without the option is what it was, and its report says so:
+  `presence_watch.requested` and `.armed` are `false`, and each removal entry
+  has `presence_watch_armed: false`.
+
+`presence_watch` in the report: `requested`, `armed`, `refusal`; the
+watcher's path and SHA-256; `launched`, `armed_at` and the watcher's `ready`
+(the headset's activity level, whether it reports a proximity sensor, the
+interface version); `events`, at most 64 presence events each with `signal`,
+`ends_run`, `end_reason`, the headset's activity level, the watcher's
+`monotonic_ns` with `utc_ns`, `received_monotonic_ns`, `event_age_ms` and
+`after_run_end` (`event_count` covers them all); `ending_signal` and
+`ended_run`; `run_end_reason`; `signal_to_helper_end_ms`, from the signal to
+the helper's end record; `frames_received_after_signal`; `lost`;
+`heartbeats`; the watcher's `end` line, `exit_code`, `forced_kill` and
+`cleanup_ok`, which counts towards the report's. The watcher stamps with
+`CLOCK_MONOTONIC`, the clock the report's timebase uses. Counts, closed names
+and times only.
 
 ## Times, marks and the target summary
 
@@ -198,8 +304,9 @@ for line ends and discarded.
 A cue's time is when it was shown, not when the wearer acted on it. Every
 `remove` mark, cue or key, gets its own entry in `summary.removal`, so a run
 can use a cue as the prompt and an operator key mark (`--mark-labels remove`)
-as the moment the headset is actually off. The helper has no presence signal:
-it ends `headset_removed` or `standby` once no frame set has arrived for two
+as the moment the headset is actually off. The helper itself has no presence
+signal (the [presence stop](#the-presence-stop---presence-watcher) is the
+command's): it ends `headset_removed` or `standby` once no frame set has arrived for two
 seconds ([helper reference](../reference/camera-helper.md)), found at the end
 of an acquire that timed out. The time from a cued `remove` to the helper's
 end therefore holds the wearer's reaction, then that two-second gap, then the
@@ -243,7 +350,7 @@ mark's actual time:
 | `windows` | 1-second windows from the first frame's acquire time to the last processed frame: `frames` processed in each and, with a target, `target_frames` |
 | `intervals` | Per mark, from its `boundary` to the next mark's or the run's end (the helper's end record, else the export's return): `frames`, and with a target `target_frames`, the frames per cell (`cells`, all nine names), per `columns` and per `rows`; the whole 1-second `windows` from the mark, those with a frame and those with the target, and the `remainder_ms` left over |
 | `coverage` | With a target. A span opens at `in_view`, `near`, `far` or a position mark and closes at the next `out_of_view` or `remove`, or the run's end. Per span and in total: the whole 1-second windows from the span's start, `windows_with_target`, `windows_without_frames` (they count against coverage) and `fraction` |
-| `removal` | Per `remove` mark: `frames_processed_after_mark`, `frames_acquired_over_limit` (acquire time more than 2,000 ms after the mark), `last_frame_acquire_after_mark_ms`, `helper_end_after_mark_ms` and `helper_end_reason` from the helper's end record, `helper_end_is_presence_stop` (`headset_removed` or `standby`) and `helper_end_within_limit` (3,000 ms); `helper_end_after_last_frame_ms`, from the run's last processed frame to the end record (added 2026-11-19 for a `remove` mark made before the headset comes off); the two limits are repeated per entry (`late_frame_limit_ms`, `end_limit_ms`) and are this command's 2,000 and 3,000, which only the [guided window](camera-guide.md) can be given otherwise; the end fields are `null` when no end record was read |
+| `removal` | Per `remove` mark: `frames_processed_after_mark`, `frames_acquired_over_limit` (acquire time more than 2,000 ms after the mark), `last_frame_acquire_after_mark_ms`, `helper_end_after_mark_ms` and `helper_end_reason` from the helper's end record, `helper_end_is_presence_stop` (`headset_removed` or `standby`) and `helper_end_within_limit` (3,000 ms); `helper_end_after_last_frame_ms`, from the run's last processed frame to the end record (added 2026-11-19 for a `remove` mark made before the headset comes off); the two limits are repeated per entry (`late_frame_limit_ms`, `end_limit_ms`) and are this command's 2,000 and 3,000, which only the [guided window](camera-guide.md) can be given otherwise; the end fields are `null` when no end record was read. Since 2026-11-20, for the [presence stop](#the-presence-stop---presence-watcher): `presence_watch_armed`; `presence_signal` (the ending signal, `null` when none came); `presence_signal_after_mark_ms`, from the mark to the signal; `helper_end_after_presence_signal_ms`, from the signal to the helper's end record; `frames_received_after_presence_signal`; `run_ended_by` (`presence_watch` or `helper`) and `run_end_reason` (`standby` from the watch, else the helper's own reason). `helper_end_reason` stays the helper's own end record, which is `stop_signal` when the watch stopped it, and `helper_end_is_presence_stop` is then `true` as well. A run that ends only on its bound has it `false`, armed or not |
 
 A run for the removal and the coverage, then one for the cued positions
 (examples of the options, not an approved device step):
@@ -284,7 +391,8 @@ standard library only. Expect `status: validated` and exit 0.
 | `frames_received`, `frames_processed`, `stale_inputs_skipped`, `pending_frames_replaced` | Frames the reader delivered; frames the detector saw; frames older than `maximum_input_observation_age_ms` (1000) at processing; frames replaced in the latest slot |
 | `labels_seen` | Every label detected in the run |
 | `confirmation` | `operator_terminal` once the typed answer was given on this command's terminal; `null` when the run was refused before launch |
-| `schema_version` | 2 since item L15 (the times, marks, target and summaries; no earlier field changed) |
+| `schema_version` | 3 since the presence stop (2026-11-20: `presence_watch`, the removal entries' presence fields, the statuses `presence_ended` and `presence_watch_lost`); 2 since item L15 (the times, marks, target and summaries). No earlier field changed |
+| `presence_watch`, `helper_launched` | [The presence stop](#the-presence-stop---presence-watcher): whether SteamVR's headset-off signal was armed, each presence event with its times, what ended the run; `helper_launched: false` only when the watch kept the helper from being launched |
 | `timebase`, `run_started`, `first_frame`, `helper_end`, `export_returned` | The declared clocks with the anchor, and `{monotonic_ns, utc_ns}` of the run's start, the first frame's acquire, the helper's end record as read (with its `reason`; `null` without one) and the export's return; see [times](#times-marks-and-the-target-summary) |
 | `marks` | The vocabulary, the cues and key labels requested, `cues_not_reached`, `key_marks_enabled`, `key_presses`, `key_marks_capacity`, `marks_dropped` and `recorded`: per mark `index`, `source` (`cue`, `key`, or `window` for a mark the [guided window](camera-guide.md) records at a click; `window_marks` counts those, and this command makes none), `label`, `monotonic_ns`, `utc_ns`, `offset_ms` from the first frame's acquire (`null` before it), and for a cue the scheduled offset and times and `late_ms` |
 | `target_label`, `target`, `summary` | The class named with `--target-label` (`null` without); its threshold, frame count, cell thresholds and the orientation statement; the counts-only [summaries](#times-marks-and-the-target-summary) |
@@ -340,3 +448,13 @@ detector in the replay job, including cued and key-marked runs on the fake
 producer and a check that no field added by item L15 can hold pixels, free
 text or calibration values. Nothing in CI builds against or links the SDK, and
 nothing here ran on the Frame.
+
+The presence stop: `tests/test_presence_watch.py` holds the line rules, the
+watch against a stand-in watcher (`tests/fake_presence_watcher.py`: the
+signal, the refusals, a watcher that dies, falls silent or writes a bad
+line, a signal after the run's end, leaving standby, cleanup) and
+recognition runs it ends, refuses or loses; `tests/test_presence_watcher_native.py`
+builds nothing itself and runs the real watcher against the bridge tests'
+fake OpenVR runtime, which scripts the events and logs that the watcher made
+one Background connect, asked for `IVRSystem` alone and made no overlay call.
+A fake runtime shows what the watcher calls, not what SteamVR sends.
