@@ -473,6 +473,10 @@ provenance and original uncertainty.
 
 [Full evidence](evidence/e099.md). Device report.
 
+### E100: Guided-window recognition run on Frame, the window worked, the bottle was not detected and removal did not end the run
+
+[Full evidence](evidence/e100.md). Device report.
+
 ## Maintaining the evidence
 
 The coordinator checks pending allocations before assigning an evidence ID and adds its record

@@ -693,6 +693,13 @@
       "file": "e099.md",
       "kind": "device_report",
       "reconstructed": false
+    },
+    {
+      "id": "E100",
+      "title": "Guided-window recognition run on Frame, the window worked, the bottle was not detected and removal did not end the run",
+      "file": "e100.md",
+      "kind": "device_report",
+      "reconstructed": false
     }
   ]
 }
