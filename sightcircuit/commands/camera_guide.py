@@ -104,7 +104,7 @@ if not __package__:  # Run as a file: import the package beside this one.
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from sightcircuit import gates
-from sightcircuit.camera import contract, marks
+from sightcircuit.camera import contract, marks, presence
 from sightcircuit.camera import guide as guidance
 from sightcircuit.camera.confirmation import OPERATOR_WINDOW, export_notice_body
 from sightcircuit.commands import camera_recognize
@@ -223,12 +223,25 @@ def unstarted_report(config, reason):
     report.update(confirmation=None, seconds_requested=config.limits["max_seconds"],
                   max_frames_requested=config.limits["max_frames"], fps_requested=config.limits["fps"],
                   cameras_requested=[config.camera], status="error", reason=reason, phase="closed")
+    if config.presence_watcher is not None:  # Named and never launched: requested, not armed, nothing to clean up.
+        report["presence_watch"] = presence.unstarted_report()
     return report
 
 
 def interrupted_report(config, reason):
-    """The report the window writes for a started run whose worker gave none: the helper's end is not confirmed."""
-    return dict(unstarted_report(config, reason), confirmation=OPERATOR_WINDOW, cleanup_ok=False)
+    """The report the window writes for a started run whose worker gave none: the helper's end is not confirmed.
+
+    Nor is the presence watcher's, when one was named: the block says its state is not known.
+    """
+    report = dict(unstarted_report(config, reason), confirmation=OPERATOR_WINDOW, cleanup_ok=False)
+    if config.presence_watcher is not None:
+        report["presence_watch"] = presence.unknown_report()
+    return report
+
+
+def arming_seconds(config):
+    """What arming the presence watch may add before the helper is launched: nothing without a watcher."""
+    return 0.0 if config.presence_watcher is None else presence.READY_WAIT_SECONDS + presence.STOP_WAIT_SECONDS
 
 
 # ---- the worker: the run itself, in its own process ---------------------------------------------------------------
@@ -336,6 +349,8 @@ def worker_main(descriptor, stdin=None, stdout=None):
         watcher = spec.get("presence_watcher")
         if watcher is not None and not isinstance(watcher, str):
             raise ValueError("the presence watcher is a path")
+        if watcher is not None:  # Whatever this process reports from here on says the watcher was named.
+            report["presence_watch"] = presence.unstarted_report()
     except (ValueError, KeyError, TypeError):
         emit({"event": "report", "report": report})
         return 1
@@ -386,15 +401,18 @@ def worker_main(descriptor, stdin=None, stdout=None):
                 detector_factory=factory, extra_args=tuple(spec["helper_args"]), stop=stop, confirmed=True,
                 confirmation=OPERATOR_WINDOW, target_label=target, terminal=_Discard(), on_session=on_session,
                 on_ready=on_ready, late_frame_limit_ms=spec["late_frame_limit_ms"],
-                removal_end_limit_ms=spec["removal_end_limit_ms"], presence_watcher=watcher)
+                removal_end_limit_ms=spec["removal_end_limit_ms"], presence_watcher=watcher,
+                abort=stop_requested)  # A Stop click while the watch arms is honoured at once: nothing is launched.
         except _StoppedBeforeLaunch:
             report.update(confirmation=OPERATOR_WINDOW, status="stopped", reason="stopped_before_launch", cleanup_ok=True)
         except guard.CANCELLATION as error:
             report.update(confirmation=OPERATOR_WINDOW)
             guard.cancelled(report, error)
+            presence.apply_failure(report, error, watcher is not None)
         except Exception as error:  # Whatever went wrong, the window gets a report and the wearer a result screen.
             report.update(confirmation=OPERATOR_WINDOW, status="error", reason="guide_worker_failed",
                           error=f"{type(error).__name__}: {error}"[:1024])
+            presence.apply_failure(report, error, watcher is not None)
     report["window_marks_refused"] = state["marks_refused"]
     emit({"event": "report", "report": report})
     return 0
@@ -901,8 +919,12 @@ def create_window(config, *, worker_factory=None, clock=time.monotonic_ns, size=
                                         target=config.target, scale=config.scale,
                                         guard_ms=config.guard_seconds * 1000)
             self.ended_by = guidance.ENDED_HELPER
-            self.run_deadline_ns = now_ns + int((config.limits["max_seconds"] + RUN_MARGIN_SECONDS) * 1e9)
-            self.helper_gone_ns = now_ns + int((config.limits["max_seconds"] + HELPER_GONE_MARGIN_SECONDS) * 1e9)
+            # With a presence watcher the helper is launched only after the watch has armed, so both moments move
+            # by what arming may take: a helper whose worker died is not declared gone before its own bound.
+            arming = arming_seconds(config)
+            self.run_deadline_ns = now_ns + int((config.limits["max_seconds"] + RUN_MARGIN_SECONDS + arming) * 1e9)
+            self.helper_gone_ns = now_ns + int(
+                (config.limits["max_seconds"] + HELPER_GONE_MARGIN_SECONDS + arming) * 1e9)
             self.show_phase(PHASE_RUN)
             self.worker = worker_factory(config.spec(), self.events.put)
             self.workers_started += 1

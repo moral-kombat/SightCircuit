@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from sightcircuit import gates  # noqa: E402
-from sightcircuit.camera import contract, fake_export, marks, presence  # noqa: E402
+from sightcircuit.camera import contract, fake_export, marks  # noqa: E402
 from sightcircuit.commands import camera_recognize as command  # noqa: E402
 from sightcircuit.detection import (DETECTORS, LIVE_INFERENCE_P95_BUDGET_MS, POC_THRESHOLD,  # noqa: E402
                                     class_names)
@@ -95,8 +95,7 @@ def closed_strings():
     allowed = {*marks.VOCABULARY, marks.KEY_LABEL, *marks.SOURCES, *marks.CELLS, *marks.COLUMNS, *marks.ROWS,
                marks.RUN_END, *marks.BOUNDARIES, *contract.END_REASONS, *marks.TIMEBASE.values(), marks.ORIENTATION_STATEMENT,
                "image_as_exported", "OSError", "ValueError",
-               # The presence stop's closed names in a removal entry: what ended the run and the ending signal.
-               marks.ENDED_BY_WATCH, marks.ENDED_BY_HELPER, *presence.ENDING_SIGNALS}
+               marks.ENDED_BY_HELPER}  # A removal entry's ``run_ended_by`` in a run without the presence watch.
     for name in DETECTORS:
         allowed.update(class_names(name))
     return allowed

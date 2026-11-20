@@ -109,9 +109,11 @@ class OfflineTests(unittest.TestCase):
                    "VR_PATHREG_OVERRIDE": str(Path(directory) / "absent.vrpath")}
             code, lines = run("--watch", "--seconds", "2", env=env)
         self.assertEqual((code, [entry["event"] for entry in lines]), (1, ["error"]))
-        self.assertEqual(lines[0]["reason"], "vrserver_not_running")
-        self.assertIn(lines[0]["reason"], presence.WATCHER_ERRORS)
-        self.assertTrue(lines[0]["init_error"].startswith("VRInitError_"))
+        # No path registry is not "no server": the reason is the general one and the code says which failure it was.
+        self.assertEqual((lines[0]["reason"], lines[0]["init_error_code"]), ("vr_init_failed", 110))
+        self.assertEqual(presence.INIT_ERROR_NAMES[110], lines[0]["init_error"])
+        self.assertEqual(presence.check_line(lines[0], sequence=0, ready_seen=False, launched_ns=0,
+                                             received_ns=time.monotonic_ns()), "error")
 
 
 @unittest.skipUnless(BUILT and fake_vrclient.available(),
@@ -181,6 +183,33 @@ class FakeRuntimeTests(unittest.TestCase):
         self.assertEqual(calls[0]["application_type"], APPLICATION_BACKGROUND)
         self.assertTrue(calls[1]["name"].startswith("IVRSystem_"))
 
+    def test_the_watcher_only_run_is_bounded_and_prints_exactly_what_the_guide_says(self):
+        # The first device step for this item is this mode alone (docs/guides/camera-recognize.md): no camera, no
+        # helper. Its bound and every key of every line are pinned here.
+        started = time.monotonic()
+        code, lines = run("--watch", "--seconds", "2", env=self.env(FAKE_VR_EVENTS=f"500:{ENTER_STANDBY}"))
+        elapsed = time.monotonic() - started
+        self.assertEqual(code, 0)
+        self.assertTrue(1.9 <= elapsed < 4.0, elapsed)  # Ends by itself at its bound.
+        self.check_lines(lines)
+        common = {"event", "seq", "monotonic_ns", "realtime_ns"}
+        keys = {"ready": common | {"protocol", "tool", "application_type", "starts_steamvr", "interfaces_requested",
+                                   "overlay_created", "settings_written", "camera_data_read", "signals", "poll_ms",
+                                   "heartbeat_ms", "seconds_range", "pid", "max_seconds", "hmd_connected",
+                                   "hmd_activity", "hmd_has_proximity_sensor"},
+                "presence": common | {"signal", "ends_run", "end_reason", "hmd_activity", "event_age_ms"},
+                "heartbeat": common,
+                "end": common | {"reason", "events_polled", "presence_lines", "shutdown_returned", "exit_code"}}
+        for entry in lines:
+            with self.subTest(event=entry["event"]):
+                self.assertEqual(set(entry), keys[entry["event"]])
+        self.assertEqual([entry["event"] for entry in lines if entry["event"] != "heartbeat"], ["ready", "presence", "end"])
+        beats = sum(1 for entry in lines if entry["event"] == "heartbeat")
+        self.assertTrue(2 <= beats <= 4, beats)  # Every 500 ms for two seconds.
+        self.assertEqual((lines[0]["max_seconds"], lines[-1]["reason"], lines[-1]["exit_code"]), (2, "max_seconds", 0))
+        self.assertEqual((lines[-1]["monotonic_ns"] - lines[0]["monotonic_ns"]) // 10**9, 2)
+        self.assertEqual([call["call"] for call in self.calls()], ["Init", "GetGenericInterface", "Cleanup"])
+
     def test_events_of_other_devices_and_other_buttons_are_not_presence(self):
         events = (f"100:{BUTTON_UNPRESS}:1:{PROXIMITY},150:{BUTTON_UNPRESS}:0:{TRIGGER},200:{INTERACTION_ENDED}:2,"
                   f"250:{INTERACTION_STARTED}:1,300:{BUTTON_PRESS}:3:{PROXIMITY}")
@@ -218,8 +247,8 @@ class FakeRuntimeTests(unittest.TestCase):
     def test_no_server_and_no_headset_are_errors_before_ready(self):
         code, lines = run("--watch", "--seconds", "5", env=self.env(FAKE_VR_INIT_FAIL="1"))
         self.assertEqual((code, [entry["event"] for entry in lines]), (1, ["error"]))
-        self.assertEqual((lines[0]["reason"], lines[0]["init_error"]),
-                         ("vrserver_not_running", "VRInitError_Init_NoServerForBackgroundApp"))
+        self.assertEqual((lines[0]["reason"], lines[0]["init_error"], lines[0]["init_error_code"]),
+                         ("vrserver_not_running", "VRInitError_Init_NoServerForBackgroundApp", 121))
         code, lines = run("--watch", "--seconds", "5", env=self.env(FAKE_VR_HMD_DISCONNECTED="1"))
         self.assertEqual((code, [entry["event"] for entry in lines]), (1, ["error", "end"]))
         self.assertEqual((lines[0]["reason"], lines[1]["reason"]), ("headset_not_connected", "headset_not_connected"))

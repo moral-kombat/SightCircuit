@@ -145,6 +145,47 @@ class LineRuleTests(unittest.TestCase):
         with self.assertRaises(ValueError):  # The proximity sensor never ends a run, whatever the watcher says.
             check(dict(quiet, ends_run=True, end_reason="headset_removed"), sequence=1, ready_seen=True)
 
+    def test_a_line_that_is_valid_json_but_malformed_is_refused_not_raised(self):
+        # Each of these once passed validation or raised something other than ValueError (review of 2026-11-20).
+        good = line("presence", 1, signal="enter_standby_event", ends_run=True, end_reason="standby",
+                    hmd_activity="standby", event_age_ms=4)
+        without_age = {key: value for key, value in good.items() if key != "event_age_ms"}
+        broken = [without_age, dict(good, signal=["enter_standby_event"]), dict(good, signal={"a": 1}),
+                  dict(good, hmd_activity=["standby"]), dict(good, hmd_activity={}), dict(good, event_age_ms=10**30),
+                  dict(good, event_age_ms=True), dict(good, end_reason=["standby"]), dict(good, ends_run="true"),
+                  dict(good, event=["presence"]), dict(good, seq=1.0)]
+        for message in broken:
+            with self.subTest(message=message), self.assertRaises(ValueError):
+                check(message, sequence=1, ready_seen=True)
+        ready = ready_line()
+        for change in ({"hmd_has_proximity_sensor": 1.0}, {"hmd_has_proximity_sensor": 0}, {"hmd_activity": ["idle"]},
+                       {"interfaces_requested": ["IVRSystem_ any text"]}, {"interfaces_requested": ["IVRSystem_0261"]},
+                       {"interfaces_requested": ["IVRSystem_026\n"]}, {"interfaces_requested": [26]},
+                       {"signals": "all"}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                check(dict(ready, **change))
+        with self.assertRaises(ValueError):
+            check({key: value for key, value in ready.items() if key != "hmd_has_proximity_sensor"})
+        for reason in (["stop_signal"], {"a": 1}, 3):
+            with self.subTest(reason=reason), self.assertRaises(ValueError):
+                check(line("end", 2, reason=reason), sequence=2, ready_seen=True)
+            with self.subTest(error=reason), self.assertRaises(ValueError):
+                check(line("error", reason=reason))
+        for code in (-1, 10**6, "110", 1.5, True):
+            with self.subTest(code=code), self.assertRaises(ValueError):
+                check(line("error", reason="vr_init_failed", init_error_code=code))
+        self.assertEqual(check(line("error", reason="vr_init_failed", init_error_code=110)), "error")
+
+    def test_the_named_init_errors_are_the_pinned_headers(self):
+        header = ROOT / ".cache/openvr/headers/openvr.h"
+        if not header.is_file():
+            self.skipTest("Needs the pinned OpenVR checkout (any OpenVR build script fetches it)")
+        import re
+        declared = {int(value): "VRInitError_" + name for name, value in
+                    re.findall(r"VRInitError_(\w+)\s*=\s*(\d+),", header.read_text())}
+        for code, name in presence.INIT_ERROR_NAMES.items():
+            self.assertEqual(declared[code], name)
+
     def test_end_and_error_lines_carry_closed_reasons(self):
         self.assertEqual(check(line("end", 2, reason="stop_signal"), sequence=2, ready_seen=True), "end")
         self.assertEqual(check(line("error", reason="vrserver_not_running")), "error")
@@ -385,6 +426,126 @@ class PresenceWatchTests(WatchCase):
         report = watch.report(marks.Clock())
         self.assertEqual((report["forced_kill"], report["cleanup_ok"], report["end"]), (True, False, None))
 
+    def test_a_malformed_json_line_is_a_loss_that_stops_the_run_not_a_dead_reader(self):
+        # The standby line itself is the malformed one: the run must still be stopped, as a loss.
+        cases = {"200:nokey": "presence_event_age_invalid", "200:listsignal": "presence_signal_unknown",
+                 "200:hugeage": "presence_event_age_invalid"}
+        for scenario, expected in cases.items():
+            with self.subTest(scenario=scenario):
+                watch = self.watch(scenario)
+                self.assertIsNone(watch.start())
+                self.assertTrue(self.stop.wait(3.0))
+                self.assertEqual((watch.lost["reason"], watch.lost_ended_run(), watch.ending), (expected, True, None))
+                self.assertTrue(watch.reader.is_alive())  # Still draining the pipe; it did not die on the line.
+                watch.close()
+                report = watch.report(marks.Clock())
+                self.assertEqual((report["lost"]["reason"], report["cleanup_ok"]), (expected, True))
+
+    def test_any_exception_in_the_reader_is_a_loss_that_stops_the_run(self):
+        watch = self.watch("300:enter_standby_event")
+        calls = []
+
+        def failing(message, **options):
+            calls.append(message.get("event"))
+            if message.get("event") == "presence":
+                raise RuntimeError("a bug in the reader")
+            return presence.check_line.__wrapped__(message, **options)
+        failing_check = mock.Mock(side_effect=failing)
+        original = presence.check_line
+        presence.check_line = failing_check
+        presence.check_line.__wrapped__ = original
+        self.addCleanup(setattr, presence, "check_line", original)
+        self.assertIsNone(watch.start())
+        self.assertTrue(self.stop.wait(3.0))
+        self.assertEqual((watch.lost["reason"], watch.reader_failed, watch.lost_ended_run()), ("reader_failed", True, True))
+        pid = self.watcher_pid()
+        watch.close()
+        self.assertFalse(alive(pid))
+        report = watch.report(marks.Clock())
+        self.assertEqual((report["armed"], report["lost"]["reason"], report["ended_run"], report["cleanup_ok"]),
+                         (True, "reader_failed", False, True))
+
+    def test_start_is_refused_off_the_main_thread_with_nothing_launched(self):
+        # The watcher's parent-death signal follows the thread that launched it (PR_SET_PDEATHSIG).
+        watch = self.watch()
+        answers = []
+        thread = threading.Thread(target=lambda: answers.append(watch.start()))
+        thread.start()
+        thread.join(5)
+        self.assertEqual(answers, ["watcher_start_off_main_thread"])
+        self.assertIsNone(watch.process)
+        self.assertIsNone(self.watcher_pid())
+        self.assertFalse(watch.armed)
+
+    def test_the_callers_stop_ends_the_wait_for_the_watch_at_once(self):
+        watch = self.watch("noready")
+        abort = threading.Event()
+        threading.Timer(0.3, abort.set).start()
+        started = time.monotonic()
+        self.assertEqual(watch.start(abort=abort), presence.STOPPED_WHILE_ARMING)
+        self.assertLess(time.monotonic() - started, 2.0)
+        pid = self.watcher_pid()
+        watch.close()
+        self.assertFalse(alive(pid))
+        report = watch.report(marks.Clock())
+        self.assertEqual((report["armed"], report["refusal"], report["cleanup_ok"]), (False, None, True))
+
+    def test_a_flapping_signal_cannot_push_out_the_events_around_the_removal(self):
+        watch = self.watch("100:proximity_on,150:flap=200,400:proximity_off,450:enter_standby_event,"
+                           "500:leave_standby_event")
+        self.assertIsNone(watch.start())
+        self.assertTrue(wait_until(lambda: watch.event_count == 204))
+        watch.close()
+        report = watch.report(marks.Clock())
+        kept = presence.EVENTS_KEPT_EACH_END
+        self.assertEqual((len(report["events"]), report["event_count"], report["events_not_listed"]),
+                         (2 * kept, 204, 204 - 2 * kept))
+        self.assertEqual(report["events"][0]["signal"], "proximity_on")
+        self.assertEqual([event["signal"] for event in report["events"][-3:]],
+                         ["proximity_off", "enter_standby_event", "leave_standby_event"])
+        self.assertEqual(report["signal_counts"], {**dict.fromkeys(presence.SIGNALS, 0), "hmd_activity_changed": 200,
+                                                   "proximity_on": 1, "proximity_off": 1, "enter_standby_event": 1,
+                                                   "leave_standby_event": 1})
+        self.assertEqual(report["ending_signal"]["signal"], "enter_standby_event")
+        times = [event["monotonic_ns"] for event in report["events"]]
+        self.assertEqual(times, sorted(times))
+
+    def test_a_watcher_gone_before_the_launch_is_a_refusal_or_a_loss_never_both(self):
+        for attempt in range(5):
+            with self.subTest(attempt=attempt):
+                watch = self.watch("0:die")
+                refusal = watch.start()
+                wait_until(lambda: watch.lost is not None or watch.refusal is not None, 2.0)
+                watch.close()
+                report = watch.report(marks.Clock())
+                if refusal is not None:
+                    self.assertEqual((report["armed"], report["lost_ended_run"]), (False, False))
+                else:
+                    self.assertEqual((report["armed"], report["lost"]["reason"]), (True, "watcher_exited"))
+
+    def test_a_failed_connect_keeps_its_code_and_no_text(self):
+        self.environment("error=vr_init_failed")
+        with mock.patch.dict(os.environ, {"FAKE_PRESENCE_INIT_CODE": "110"}):
+            self.stop = threading.Event()
+            watch = presence.PresenceWatch(self.watcher, 5, self.stop)
+            self.assertEqual(watch.start(), "watcher_error:vr_init_failed")
+            watch.close()
+        report = watch.report(marks.Clock())
+        self.assertEqual((report["init_error_code"], report["init_error_name"]),
+                         (110, "VRInitError_Init_PathRegistryNotFound"))
+
+    def test_blocks_for_runs_without_a_live_watch_are_fresh_and_say_what_is_known(self):
+        first, second = presence.not_requested(), presence.not_requested()
+        first["events"].append("x")
+        self.assertEqual((second["events"], presence.NOT_REQUESTED["events"]), ([], []))
+        unstarted = presence.unstarted_report()
+        self.assertEqual((unstarted["requested"], unstarted["armed"], unstarted["cleanup_ok"], unstarted["launched"]),
+                         (True, False, True, None))
+        unknown = presence.unknown_report()
+        self.assertEqual((unknown["requested"], unknown["armed"], unknown["cleanup_ok"], unknown["state_known"]),
+                         (True, None, False, False))
+        self.assertNotIn("No presence watcher was named", unstarted["statement"] + unknown["statement"])
+
     def test_the_stop_of_the_run_is_not_a_loss(self):
         watch = self.watch()
         self.assertIsNone(watch.start())
@@ -477,8 +638,8 @@ class RecognitionPresenceTests(WatchCase):
     def test_a_signal_before_the_helper_is_launched_launches_nothing(self):
         original = presence.PresenceWatch.start
 
-        def start_and_wait_for_the_signal(watch):
-            refusal = original(watch)
+        def start_and_wait_for_the_signal(watch, abort=None):
+            refusal = original(watch, abort=abort)
             self.assertTrue(wait_until(lambda: watch.ending is not None))
             return refusal
         with mock.patch.object(presence.PresenceWatch, "start", start_and_wait_for_the_signal), \
@@ -577,6 +738,172 @@ class RecognitionPresenceTests(WatchCase):
         self.assertEqual(report["status"], "cancelled")
         self.assertFalse(report["presence_watch"]["ended_run"])
         self.assertIsNone(report["presence_watch"]["lost"])
+
+    def test_a_remove_mark_made_after_the_signal_is_refused_and_the_run_is_not_read_as_a_removal(self):
+        # The review's case: the signal at 300 ms, the remove cue at 800 ms, a helper that takes a second to stop.
+        report = self.run_once("300:enter_standby_event", cues=((800, "remove"),), helper_args=("--fake-term-delay", "1.0"))
+        self.assertEqual((report["status"], report["reason"]), ("presence_ended", "standby"))
+        self.assertEqual(report["summary"]["removal"], [])  # No mark was accepted after the end was decided.
+        self.assertEqual(report["marks"]["recorded"], [])
+        self.assertGreaterEqual(report["marks"]["marks_refused_after_end"], 1)
+        from sightcircuit.camera import guide as guidance
+        self.assertEqual(guidance.status_line(report),
+                         "The run ended early: SteamVR reported the headset off (standby) before the click to take it off.")
+
+    def test_the_removal_arithmetic_is_safe_without_the_freeze(self):
+        # The same moments with the mark let through: the entry must not read as a presence stop or within the limit.
+        with mock.patch.object(marks.MarkSession, "freeze", lambda self, monotonic_ns=None: None):
+            report = self.run_once("300:enter_standby_event", cues=((800, "remove"),),
+                                   helper_args=("--fake-term-delay", "1.0"))
+        removal = report["summary"]["removal"][0]
+        self.assertLess(removal["presence_signal_after_mark_ms"], 0)
+        self.assertEqual((removal["mark_after_presence_signal"], removal["helper_end_is_presence_stop"],
+                          removal["helper_end_within_limit"]), (True, False, False))
+        from sightcircuit.camera import guide as guidance
+        lines = guidance.result_lines(report)
+        self.assertIn("before the click to take it off", lines[0])
+        self.assertTrue(any(text.startswith("SteamVR had already reported the headset off (enter_standby_event) 0.")
+                            and text.endswith("s before your click to take it off.") for text in lines), lines)
+        self.assertFalse(any("came -" in text for text in lines))
+
+    def test_a_run_whose_helper_reached_its_bound_is_never_a_presence_stop(self):
+        # The race the review named: the stop is set after the helper reached max_frames but before Python counted
+        # the run as over. Here the end record's acceptance is kept from marking the run ended, the helper lingers
+        # alive after its end record, and the signal arrives in that window.
+        original = presence.PresenceWatch.run_ended
+
+        def only_at_the_exports_return(watch, monotonic_ns=None):
+            if monotonic_ns is not None:
+                original(watch, monotonic_ns)
+        limits = {"fps": 10, "max_seconds": 5, "max_frames": 5}
+        with mock.patch.object(presence.PresenceWatch, "run_ended", only_at_the_exports_return):
+            report = self.run_once("1500:enter_standby_event", limits=limits, cues=((0, "remove"),),
+                                   helper_args=("--fake-linger", "4"))
+        self.assertEqual(report["helper_end"]["reason"], "max_frames")
+        self.assertEqual(report["presence_watch"]["ending_signal"]["signal"], "enter_standby_event")  # It did arrive.
+        self.assertNotEqual(report["status"], "presence_ended")
+        self.assertEqual((report["presence_watch"]["ended_run"], report["presence_watch"]["run_end_reason"]), (False, None))
+        removal = report["summary"]["removal"][0]
+        self.assertEqual((removal["helper_end_is_presence_stop"], removal["run_ended_by"], removal["run_end_reason"]),
+                         (False, "helper", "max_frames"))
+        # And the summary is safe on its own, whatever the caller says ended the run.
+        summary = marks.summarize([], [{"index": 1, "source": "cue", "label": "remove", "monotonic_ns": 1000}],
+                                  origin_ns=None, run_end_ns=9000, helper_end={"monotonic_ns": 9000, "reason": "max_seconds"},
+                                  presence={"armed": True, "ended_run": True, "signal": "enter_standby_event",
+                                            "end_reason": "standby", "monotonic_ns": 8000,
+                                            "frames_received_after_signal": 0})
+        self.assertEqual((summary["removal"][0]["helper_end_is_presence_stop"], summary["removal"][0]["run_ended_by"]),
+                         (False, "helper"))
+
+    def cancelled_main(self, scenario, *, stop_wait=None):
+        """``main`` with a watcher, interrupted by SIGTERM while the watch arms; returns the printed report."""
+        self.environment(scenario)
+        timer = threading.Timer(0.6, lambda: os.kill(os.getpid(), signal.SIGTERM))
+        timer.start()
+        self.addCleanup(timer.cancel)
+        output = io.StringIO()
+        patches = [mock.patch.object(command, "confirm_on_terminal", return_value=None),
+                   mock.patch.object(command, "create_detector", lambda name: StandInDetector()),
+                   mock.patch.object(command, "describe", lambda model: {"name": "stand-in"}),
+                   contextlib.redirect_stdout(output)]
+        if stop_wait is not None:
+            patches.append(mock.patch.object(presence, "STOP_WAIT_SECONDS", stop_wait))
+        with contextlib.ExitStack() as stack:
+            for patch in patches:
+                stack.enter_context(patch)
+            code = command.main(["--allow-camera-input", "--helper", str(self.helper), "--seconds", "8", "--max-frames",
+                                 "80", "--presence-watcher", str(self.watcher)])
+        return code, json.loads(output.getvalue())
+
+    def test_a_run_cancelled_while_the_watch_arms_still_says_the_watcher_was_named(self):
+        code, report = self.cancelled_main("noready")
+        self.assertEqual((report["status"], code), ("cancelled", 128 + signal.SIGTERM))
+        watch = report["presence_watch"]
+        self.assertEqual((watch["requested"], watch["armed"], watch["forced_kill"], watch["cleanup_ok"]),
+                         (True, False, False, True))
+        self.assertIsNotNone(watch["launched"])
+        self.assertNotIn("No presence watcher was named", watch["statement"])
+        self.assertTrue(report["cleanup_ok"])
+        self.assert_no_watcher_left()
+
+    def test_a_watcher_that_had_to_be_killed_is_not_reported_as_a_clean_shutdown(self):
+        code, report = self.cancelled_main("noready,deaf", stop_wait=0.3)
+        self.assertEqual(report["status"], "cancelled")
+        self.assertEqual((report["presence_watch"]["requested"], report["presence_watch"]["forced_kill"],
+                          report["presence_watch"]["cleanup_ok"], report["cleanup_ok"]), (True, True, False, False))
+        self.assert_no_watcher_left()
+
+    def test_early_returns_before_the_watch_say_it_was_named_and_never_launched(self):
+        def unavailable():
+            raise RuntimeError("no model")
+        report = command.recognize(self.helper, RUN, (0,), detector_factory=unavailable, confirmed=True,
+                                   presence_watcher=self.watcher)
+        self.assertEqual((report["status"], report["reason"]), ("error", "detector_unavailable"))
+        report_label = command.recognize(self.helper, RUN, (0,), detector_factory=StandInDetector, confirmed=True,
+                                         target_label="bottle", presence_watcher=self.watcher)
+        self.assertEqual(report_label["reason"], "target_label_unknown")
+        for early in (report, report_label):
+            watch = early["presence_watch"]
+            self.assertEqual((watch["requested"], watch["armed"], watch["launched"], watch["cleanup_ok"]),
+                             (True, False, None, True))
+        self.assertIsNone(self.watcher_pid())
+
+    def test_a_stop_asked_for_while_the_watch_arms_launches_nothing(self):
+        abort = threading.Event()
+        threading.Timer(0.4, abort.set).start()
+        with mock.patch.object(command.camera_helper, "run_export") as run_export:
+            report = self.run_once("noready", cues=(), abort=abort)
+        run_export.assert_not_called()
+        self.assertLess(self.elapsed, 3.0)  # Not the watch's twelve seconds.
+        self.assertEqual((report["status"], report["reason"], report["helper_launched"], report["cleanup_ok"]),
+                         ("stopped", "stopped_before_launch", False, True))
+        self.assertEqual((report["presence_watch"]["requested"], report["presence_watch"]["armed"]), (True, False))
+
+    def test_nothing_the_watch_adds_to_a_report_can_hold_free_text(self):
+        # As the L15 fields are checked: every leaf of the presence block and of the removal entries is a closed
+        # name, a declared constant, a number, a flag or null. The watcher's path and digest are this process's.
+        from tests.test_camera_recognize import FORBIDDEN_NAME_PARTS, l15_leaves, l15_names
+        reports = [self.run_once("200:proximity_off,300:flap=80,600:enter_standby_event,650:leave_standby_event",
+                                 helper_args=("--fake-term-delay", "0.3")),
+                   self.run_once("error=vr_init_failed"), self.run_once("500:die"), self.run_once("400:garbage")]
+        plain = command.recognize(self.helper, {"fps": 10, "max_seconds": 3, "max_frames": 5}, (0,),
+                                  detector_factory=StandInDetector, confirmed=True, cues=[(0, "remove")],
+                                  terminal=mock.Mock())
+        reports.append(plain)
+        allowed = {*presence.SIGNALS, *presence.ACTIVITY_LEVELS, *presence.WATCHER_END_REASONS, *presence.END_REASONS,
+                   *presence.INIT_ERROR_NAMES.values(), presence.PROTOCOL, presence.STATEMENT,
+                   presence.NOT_REQUESTED["statement"], "watcher_clock_monotonic_is_the_host_monotonic_clock",
+                   marks.ENDED_BY_WATCH, marks.ENDED_BY_HELPER, *marks.SOURCES, "stop_signal", "max_frames"}
+        refusals = {"watcher_error:vr_init_failed"}
+        losses = {"watcher_exited", "line_not_json"}
+        removal_added = {"presence_watch_armed", "presence_signal", "presence_signal_after_mark_ms",
+                         "helper_end_after_presence_signal_ms", "frames_received_after_presence_signal", "run_ended_by",
+                         "run_end_reason", "mark_after_presence_signal"}
+        for index, report in enumerate(reports):
+            block = dict(report["presence_watch"])
+            watcher = block.pop("watcher", None)
+            if watcher is not None:
+                self.assertEqual(watcher["path"], os.path.realpath(self.watcher))
+                self.assertRegex(watcher["sha256"], "^[0-9a-f]{64}$")
+            self.assertRegex(block["ready"]["interface"] if block.get("ready") else "IVRSystem_026", r"^IVRSystem_\d{3}$")
+            checked = {"presence_watch": block,
+                       "removal": [{name: entry[name] for name in removal_added} for entry in report["summary"]["removal"]]
+                       if "summary" in report else []}
+            for name in l15_names(checked):
+                self.assertFalse([part for part in FORBIDDEN_NAME_PARTS if part in name.lower()], name)
+            for path, leaf in l15_leaves(checked, f"report{index}"):
+                with self.subTest(path=path):
+                    if type(leaf) is str:
+                        if path.endswith(".refusal"):
+                            self.assertIn(leaf, refusals)
+                        elif path.endswith(".lost.reason"):
+                            self.assertIn(leaf, losses)
+                        elif path.endswith(".interface"):
+                            self.assertRegex(leaf, r"^IVRSystem_\d{3}$")
+                        else:
+                            self.assertIn(leaf, allowed)
+                    else:
+                        self.assertIn(type(leaf), (int, float, bool, type(None)))
 
     def test_the_command_passes_the_watcher_on_and_validate_refuses_it(self):
         seen = {}

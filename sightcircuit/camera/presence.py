@@ -43,8 +43,11 @@ Times. The watcher stamps each line with ``CLOCK_MONOTONIC``, the clock
 than its own receipt, or earlier than the launch, is refused. The report
 holds counts, closed names and times: no free text from the watcher.
 """
+import collections
+import copy
 import json
 import os
+import re
 import select
 import signal
 import subprocess
@@ -62,7 +65,7 @@ ENDING_SIGNALS = tuple(name for name, reason in SIGNALS.items() if reason is not
 END_REASONS = tuple(sorted({reason for reason in SIGNALS.values() if reason is not None}))  # ("standby",)
 ACTIVITY_LEVELS = ("unknown", "idle", "user_interaction", "user_interaction_timeout", "standby", "idle_timeout")
 WATCHER_END_REASONS = ("stop_signal", "max_seconds", "runtime_quit", "parent_gone", "headset_not_connected")
-WATCHER_ERRORS = ("vrserver_not_running", "ivrsystem_unavailable", "headset_not_connected",
+WATCHER_ERRORS = ("vrserver_not_running", "vr_init_failed", "ivrsystem_unavailable", "headset_not_connected",
                   "parent_death_signal_unavailable", "usage")
 APPLICATION_TYPE = "VRApplication_Background"
 MAX_WATCH_SECONDS = 120  # The watcher's own bound (its --seconds range).
@@ -74,7 +77,21 @@ KILL_WAIT_SECONDS = 2.0
 JOIN_SECONDS = 2.0
 POLL_SECONDS = 0.05
 MAX_LINE_BYTES = 8192
-MAX_EVENTS = 64  # Presence events repeated in the report; ``event_count`` covers them all.
+# Presence events repeated in the report: the first and the last ``EVENTS_KEPT_EACH_END`` of a run, so a signal
+# that flaps while the headset is worn cannot push out the events around the removal. ``event_count`` and
+# ``signal_counts`` cover them all, and the ending signal is always reported on its own.
+EVENTS_KEPT_EACH_END = 32
+MAX_EVENTS = 2 * EVENTS_KEPT_EACH_END
+MAX_EVENT_AGE_MS = 3_600_000  # The watcher writes null beyond an hour.
+MAX_INIT_ERROR_CODE = 9999
+INTERFACE_PATTERN = re.compile(r"IVRSystem_[0-9]{3}")
+# VR_Init's error codes this module names (pinned openvr.h, EVRInitError; a test holds them to the header). Any
+# other code is reported as its number alone: no text from the watcher reaches the report.
+INIT_ERROR_NAMES = {100: "VRInitError_Init_InstallationNotFound", 101: "VRInitError_Init_InstallationCorrupt",
+                    102: "VRInitError_Init_VRClientDLLNotFound", 105: "VRInitError_Init_InterfaceNotFound",
+                    108: "VRInitError_Init_HmdNotFound", 110: "VRInitError_Init_PathRegistryNotFound",
+                    121: "VRInitError_Init_NoServerForBackgroundApp", 124: "VRInitError_Init_Internal"}
+STOPPED_WHILE_ARMING = "stopped_while_arming"  # ``start``'s answer when the caller's stop came first; not a refusal.
 FUTURE_TOLERANCE_NS = 5_000_000
 # Statuses a command gives a run the watch ended or failed.
 STATUS_PRESENCE_ENDED, STATUS_WATCH_LOST = marks.STATUS_PRESENCE_ENDED, marks.STATUS_WATCH_LOST
@@ -87,6 +104,41 @@ NOT_REQUESTED = {"requested": False, "armed": False, "refusal": None, "protocol"
                  "ending_signal": None, "lost": None, "event_count": 0, "events": [], "cleanup_ok": True,
                  "statement": "No presence watcher was named: SteamVR's headset-off signal was not armed for this "
                               "run, which could end early only on the helper's own frame-gap stop."}
+STATE_UNKNOWN_STATEMENT = ("A presence watcher was named, but the run's process gave no report: whether the watch was "
+                           "armed and whether the watcher has ended is not known.")
+
+
+def not_requested():
+    """A fresh ``NOT_REQUESTED`` block: only for a run that named no watcher."""
+    return copy.deepcopy(NOT_REQUESTED)
+
+
+def unstarted_report():
+    """The block of a run that named the watcher and ended before launching it: requested, never armed, nothing to clean."""
+    return PresenceWatch(None, 1, threading.Event()).report(marks.Clock())
+
+
+def unknown_report():
+    """The block a caller writes for a named watcher whose run left no report: nothing about it is confirmed."""
+    return dict(unstarted_report(), armed=None, cleanup_ok=False, state_known=False, statement=STATE_UNKNOWN_STATEMENT)
+
+
+def carry(error, watch, clock):
+    """Attach a closed watch's block to the exception that is ending its run, for the caller's report."""
+    try:
+        error.presence_watch = watch.report(clock)
+    except Exception:  # Never mask the exception that is propagating.
+        pass
+
+
+def apply_failure(report, error, named):
+    """Give a report that replaces a failed run's own the truth about its watch: ``error`` may carry the block."""
+    if not named:
+        return report
+    block = getattr(error, "presence_watch", None)
+    report["presence_watch"] = block if isinstance(block, dict) else unstarted_report()
+    report["cleanup_ok"] = bool(report.get("cleanup_ok", True)) and bool(report["presence_watch"]["cleanup_ok"])
+    return report
 
 
 def signal_table():
@@ -99,18 +151,28 @@ def watch_seconds(max_seconds):
     return min(MAX_WATCH_SECONDS, int(max_seconds) + WATCH_MARGIN_SECONDS)
 
 
-def _integer(value):
-    return type(value) is int and value >= 0
+def _integer(value, maximum=None):
+    return type(value) is int and value >= 0 and (maximum is None or value <= maximum)
+
+
+def _named(value, choices):
+    return isinstance(value, str) and value in choices
 
 
 def check_line(message, *, sequence, ready_seen, launched_ns, received_ns):
-    """The validated ``event`` name of one watcher line, else ``ValueError`` with a closed reason."""
+    """The validated ``event`` name of one watcher line, else ``ValueError`` with a closed reason.
+
+    Every key this module later reads is required here with its type: a
+    closed name is a string from its list, a flag is ``True`` or ``False``
+    itself, a number is a bounded integer. Whatever else a line holds is
+    never read.
+    """
     if not isinstance(message, dict):
         raise ValueError("line_not_an_object")
     event = message.get("event")
-    if event not in ("ready", "presence", "heartbeat", "end", "error"):
+    if not _named(event, ("ready", "presence", "heartbeat", "end", "error")):
         raise ValueError("line_event_unknown")
-    if message.get("seq") != sequence or type(message.get("seq")) is not int:
+    if type(message.get("seq")) is not int or message["seq"] != sequence:
         raise ValueError("line_sequence_broken")
     if not _integer(message.get("monotonic_ns")) or not _integer(message.get("realtime_ns")):
         raise ValueError("line_time_missing")
@@ -120,34 +182,40 @@ def check_line(message, *, sequence, ready_seen, launched_ns, received_ns):
         if ready_seen:
             raise ValueError("ready_repeated")
         for name, expected in READY_FACTS.items():
-            if message.get(name) != expected or type(message.get(name)) is not type(expected):
+            if type(message.get(name)) is not type(expected) or message[name] != expected:
                 raise ValueError(f"ready_{name}_refused")
         if message.get("signals") != signal_table():
             raise ValueError("ready_signal_table_differs")
         requested = message.get("interfaces_requested")
         if (not isinstance(requested, list) or len(requested) != 1 or not isinstance(requested[0], str)
-                or not requested[0].startswith("IVRSystem_")):
+                or INTERFACE_PATTERN.fullmatch(requested[0]) is None):
             raise ValueError("ready_interfaces_refused")
-        if message.get("hmd_activity") not in ACTIVITY_LEVELS:
+        if not _named(message.get("hmd_activity"), ACTIVITY_LEVELS):
             raise ValueError("ready_activity_unknown")
-        if message.get("hmd_has_proximity_sensor") not in (True, False, None):
+        if "hmd_has_proximity_sensor" not in message or not any(
+                message["hmd_has_proximity_sensor"] is allowed for allowed in (True, False, None)):
             raise ValueError("ready_proximity_invalid")
     elif event == "error":
-        if ready_seen or message.get("reason") not in WATCHER_ERRORS:
+        if ready_seen or not _named(message.get("reason"), WATCHER_ERRORS):
             raise ValueError("error_line_refused")
+        if "init_error_code" in message and not _integer(message["init_error_code"], MAX_INIT_ERROR_CODE):
+            raise ValueError("error_init_code_invalid")
     elif not ready_seen and not (event == "end" and message.get("reason") == "headset_not_connected"):
         raise ValueError("line_before_ready")
     if event == "presence":
         name = message.get("signal")
-        if name not in SIGNALS:
+        if not _named(name, SIGNALS):
             raise ValueError("presence_signal_unknown")
-        if message.get("ends_run") is not (SIGNALS[name] is not None) or message.get("end_reason") != SIGNALS[name]:
+        reason = message.get("end_reason", "")
+        if (message.get("ends_run") is not (SIGNALS[name] is not None) or
+                not (reason is None if SIGNALS[name] is None else _named(reason, (SIGNALS[name],)))):
             raise ValueError("presence_signal_table_differs")
-        if message.get("hmd_activity") not in ACTIVITY_LEVELS:
+        if not _named(message.get("hmd_activity"), ACTIVITY_LEVELS):
             raise ValueError("presence_activity_unknown")
-        if message.get("event_age_ms") is not None and not _integer(message["event_age_ms"]):
+        if "event_age_ms" not in message or not (message["event_age_ms"] is None or
+                                                 _integer(message["event_age_ms"], MAX_EVENT_AGE_MS)):
             raise ValueError("presence_event_age_invalid")
-    elif event == "end" and message.get("reason") not in WATCHER_END_REASONS:
+    elif event == "end" and not _named(message.get("reason"), WATCHER_END_REASONS):
         raise ValueError("end_reason_unknown")
     return event
 
@@ -166,7 +234,7 @@ class PresenceWatch:
     report's ``presence_watch`` block.
     """
 
-    def __init__(self, binary, max_seconds, stop, *, ready_wait=None, heartbeat_timeout=None):
+    def __init__(self, binary, max_seconds, stop, *, ready_wait=None, heartbeat_timeout=None, on_signal=None):
         self.binary, self.max_seconds, self.stop = binary, watch_seconds(max_seconds), stop
         self.ready_wait = READY_WAIT_SECONDS if ready_wait is None else ready_wait
         self.heartbeat_timeout = HEARTBEAT_TIMEOUT_SECONDS if heartbeat_timeout is None else heartbeat_timeout
@@ -174,7 +242,12 @@ class PresenceWatch:
         self.launched_ns = self.armed_ns = self.run_over_ns = self.last_line_ns = None
         self.armed = self.closing = self.closed = self.forced_kill = False
         self.refusal = self.ready = self.end = self.ending = self.lost = self.exit_code = None
-        self.events, self.event_count, self.heartbeats, self.frames_after_signal = [], 0, 0, 0
+        self.on_signal = on_signal  # Called once, on the reader thread, when the ending signal sets the stop.
+        self.events_first, self.events_last = [], collections.deque(maxlen=EVENTS_KEPT_EACH_END)
+        self.signal_counts = dict.fromkeys(SIGNALS, 0)
+        self.event_count, self.heartbeats, self.frames_after_signal = 0, 0, 0
+        self.init_error_code = None  # VR_Init's error code from the watcher's error line: a number, never its text.
+        self.reader_failed = False
         self.lines, self.lines_ignored, self.sequence = 0, 0, 0
         self.stop_set_by = None  # "signal" or "lost": what this watch set the stop event for.
         self._lock = threading.Lock()
@@ -182,10 +255,22 @@ class PresenceWatch:
 
     # -- the run's side -----------------------------------------------------------------------------------------
 
-    def start(self):
-        """Launch the watcher and wait for its ``ready``; ``None`` when armed, else the refusal."""
+    def start(self, abort=None):
+        """Launch the watcher and wait for its ``ready``; ``None`` when armed, else the refusal.
+
+        Call it on the main thread: the watcher asks the kernel to end it when
+        its parent dies, and Linux ties that to the thread that launched it,
+        so a watcher started from a thread that then exits would be lost a
+        moment later. Any other thread is refused
+        (``watcher_start_off_main_thread``) with nothing launched. ``abort``,
+        when given, is an event of the caller (a Stop click): once it is set
+        the wait ends and the answer is ``STOPPED_WHILE_ARMING``, which is the
+        caller's own stop and not a refusal.
+        """
         from ..errors import SightCircuitError
         from ..sources import camera_helper  # Here, not at import: the sources package imports this one.
+        if threading.current_thread() is not threading.main_thread():
+            return self._refuse("watcher_start_off_main_thread")
         try:
             self.path = camera_helper.helper_path(self.binary)
         except SightCircuitError as error:
@@ -200,11 +285,17 @@ class PresenceWatch:
             return self._refuse("watcher_launch_failed")
         self.reader = threading.Thread(target=self._read, name="presence-watch-reader", daemon=True)
         self.reader.start()
-        if not self._decided.wait(self.ready_wait):
-            self._refuse("watcher_not_ready_in_time")
+        deadline = time.monotonic() + self.ready_wait
+        while not self._decided.wait(POLL_SECONDS):
+            if abort is not None and abort.is_set():
+                return STOPPED_WHILE_ARMING
+            if time.monotonic() >= deadline:
+                self._refuse("watcher_not_ready_in_time")
+                break
         with self._lock:
             if self.refusal is None and self.lost is not None:  # Armed and lost again before the run began.
                 self.refusal = "watcher_lost_before_launch:" + self.lost["reason"]
+                self.stop_set_by = None  # Nothing was running for the loss to end: it is a refusal, not an end.
             if self.refusal is not None:
                 self.armed = False
             return self.refusal
@@ -284,6 +375,19 @@ class PresenceWatch:
         self._decided.set()
 
     def _read(self):
+        """The reader thread. Whatever goes wrong in it is a loss: a watch whose reader died is not listening."""
+        try:
+            self._read_lines()
+        except Exception:
+            self.reader_failed = True
+            self._lose("reader_failed", time.monotonic_ns())
+            try:  # Keep the pipe empty so the watcher can still write its end and leave when it is stopped.
+                while os.read(self.process.stdout.fileno(), 65536):
+                    pass
+            except (OSError, ValueError):
+                pass
+
+    def _read_lines(self):
         descriptor = self.process.stdout.fileno()
         pending = bytearray()
         while True:
@@ -355,6 +459,7 @@ class PresenceWatch:
                     self.armed, self.armed_ns = True, received_ns
             self._decided.set()
         elif event == "error":
+            self.init_error_code = message.get("init_error_code")
             self._refuse("watcher_error:" + message["reason"])
         elif event == "heartbeat":
             self.heartbeats += 1
@@ -370,14 +475,21 @@ class PresenceWatch:
             over = self.run_over_ns is not None
             record["after_run_end"] = over
             self.event_count += 1
-            if len(self.events) < MAX_EVENTS:
-                self.events.append(record)
+            self.signal_counts[message["signal"]] += 1
+            if len(self.events_first) < EVENTS_KEPT_EACH_END:
+                self.events_first.append(record)
+            else:
+                self.events_last.append(record)
+            ended = False
             if message["ends_run"] and self.ending is None and not over and not self.closing:
                 # The first ending signal of the run. A stop someone else already asked for stays theirs.
                 self.ending = dict(record, stop_already_set=self.stop.is_set())
                 if not self.stop.is_set():
                     self.stop_set_by = "signal"
                     self.stop.set()
+                    ended = True
+        if ended and self.on_signal is not None:
+            self.on_signal(self.ending["monotonic_ns"])
 
     # -- the report -----------------------------------------------------------------------------------------------
 
@@ -405,6 +517,8 @@ class PresenceWatch:
                 entry[name.replace("monotonic_ns", "utc_ns")] = clock.utc(record[name])
             return entry
         ending = None if self.ending is None else stamped(self.ending)
+        with self._lock:
+            events = [*self.events_first, *self.events_last]
         signal_to_end_ms = None
         if ending is not None and helper_end_ns is not None:
             signal_to_end_ms = round((helper_end_ns - ending["monotonic_ns"]) / 1e6, 3)
@@ -414,8 +528,11 @@ class PresenceWatch:
                 "armed_at": None if self.armed_ns is None else clock.stamp(self.armed_ns),
                 "ready": None if self.ready is None else stamped(self.ready),
                 "ending_signals": list(ENDING_SIGNALS), "reported_signals": list(SIGNALS),
-                "events": [stamped(record) for record in self.events], "event_count": self.event_count,
-                "events_not_listed": self.event_count - len(self.events),
+                "events": [stamped(record) for record in events], "event_count": self.event_count,
+                "events_not_listed": self.event_count - len(events), "events_kept_each_end": EVENTS_KEPT_EACH_END,
+                "signal_counts": dict(self.signal_counts),
+                "init_error_code": self.init_error_code,
+                "init_error_name": INIT_ERROR_NAMES.get(self.init_error_code),
                 "ending_signal": ending, "ended_run": self.ended_run(run_stopped),
                 "run_end_reason": ending["end_reason"] if ending is not None and self.ended_run(run_stopped) else None,
                 "signal_to_helper_end_ms": signal_to_end_ms,

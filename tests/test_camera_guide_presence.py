@@ -147,6 +147,40 @@ class RemovalReadingTests(unittest.TestCase):
                          "The run was ended because the headset-off watcher stopped answering. Tell the Frame manager.")
         self.assertFalse(lost["summary"]["removal"][0]["helper_end_is_presence_stop"])
 
+    def test_a_click_made_after_the_signal_is_worded_as_an_early_end_and_passes_nothing(self):
+        # SteamVR's signal at 12.5 s, the click at 13.0 s, the helper's end at 13.5 s: inside every limit by the
+        # clock, and still not a removal.
+        report = removal_report(status="presence_ended", reason="standby", watch=watch_summary(12500, frames_after=3),
+                                helper_end={"monotonic_ns": T0 + 13500 * MS, "reason": "stop_signal"},
+                                frames_until_ms=13500)
+        removal = report["summary"]["removal"][0]
+        self.assertEqual((removal["presence_signal_after_mark_ms"], removal["mark_after_presence_signal"],
+                          removal["helper_end_is_presence_stop"], removal["helper_end_within_limit"],
+                          removal["run_ended_by"]), (-500.0, True, False, False, "presence_watch"))
+        lines = guidance.result_lines(report)
+        self.assertEqual(lines[0],
+                         "The run ended early: SteamVR reported the headset off (standby) before the click to take it off.")
+        self.assertIn("SteamVR had already reported the headset off (enter_standby_event) 0.5 s before your click "
+                      "to take it off.", lines)
+        self.assertFalse([text for text in lines if "-0.5" in text or "After your click" in text])
+
+    def test_reports_the_window_writes_itself_say_the_watcher_was_named(self):
+        limits = command.run_limits("removal", 20, command.MAX_FRAMES, 10)
+        named = command.Config(script="removal", helper="/x/helper", report_path=Path("/x/r.json"), limits=limits,
+                               presence_watcher="/x/watcher")
+        plain = command.Config(script="removal", helper="/x/helper", report_path=Path("/x/r.json"), limits=limits)
+        unstarted = command.unstarted_report(named, guidance.DECLINED)["presence_watch"]
+        self.assertEqual((unstarted["requested"], unstarted["armed"], unstarted["cleanup_ok"]), (True, False, True))
+        interrupted = command.interrupted_report(named, "guide_worker_died")
+        self.assertEqual((interrupted["presence_watch"]["requested"], interrupted["presence_watch"]["armed"],
+                          interrupted["presence_watch"]["cleanup_ok"], interrupted["cleanup_ok"]),
+                         (True, None, False, False))
+        for report in (command.unstarted_report(plain, guidance.DECLINED), command.interrupted_report(plain, "x")):
+            self.assertEqual(report["presence_watch"], presence.NOT_REQUESTED)
+        # Arming precedes the helper's launch, so the moment a dead worker's helper is surely gone moves with it.
+        self.assertEqual(command.arming_seconds(plain), 0.0)
+        self.assertGreaterEqual(command.arming_seconds(named), presence.READY_WAIT_SECONDS)
+
     def test_a_presence_end_before_the_click_is_not_called_a_removal(self):
         report = camera_recognize.new_report("recognize")
         report.update(status="presence_ended", reason="standby", confirmation="operator_window", cleanup_ok=True,
@@ -190,6 +224,33 @@ class WorkerPresenceTests(guide_tests.StandInHelper):
         self.assertTrue(report["presence_watch"]["armed"])
         self.assertEqual(guidance.result_lines(report)[0], "The run ended when SteamVR reported the headset off (standby).")
         self.assertTrue(guidance.watch_needed(report))
+
+    def test_stop_while_the_watch_arms_is_honoured_at_once_and_launches_nothing(self):
+        config = self.config("removal", seconds=20, presence_watcher=str(self.watcher))
+        worker, events = self.worker(config, "noready")
+        time.sleep(0.8)  # The detector is loaded and the watch is waiting for a ready that will not come.
+        started = time.monotonic()
+        worker.stop()
+        report = events.wait("report")
+        self.assertLess(time.monotonic() - started, 4.0)  # Not the twelve seconds the watch would wait.
+        self.assertEqual((report["status"], report["reason"], report["cleanup_ok"]),
+                         ("stopped", "stopped_before_launch", True))
+        self.assertNotIn("capture", report)
+        self.assertEqual([item[0] for item in events.items], ["report"])
+        self.assertEqual((report["presence_watch"]["requested"], report["presence_watch"]["armed"]), (True, False))
+
+    def test_a_worker_cancelled_while_the_watch_arms_reports_the_watcher_as_named(self):
+        import signal
+        config = self.config("removal", seconds=20, presence_watcher=str(self.watcher))
+        worker, events = self.worker(config, "noready")
+        time.sleep(0.8)
+        worker.process.send_signal(signal.SIGTERM)
+        report = events.wait("report")
+        self.assertEqual(report["status"], "cancelled")
+        watch = report["presence_watch"]
+        self.assertEqual((watch["requested"], watch["armed"], watch["cleanup_ok"], report["cleanup_ok"]),
+                         (True, False, True, True))
+        self.assertIsNotNone(watch["launched"])
 
     def test_a_watcher_that_cannot_be_armed_starts_no_reader(self):
         config = self.config("removal", seconds=20, presence_watcher=str(self.watcher))

@@ -69,6 +69,7 @@ LATE_FRAME_LIMIT_MS = 2000
 REMOVAL_END_LIMIT_MS = 3000
 PRESENCE_END_REASONS = ("headset_removed", "standby")
 ENDED_BY_WATCH, ENDED_BY_HELPER = "presence_watch", "helper"  # A removal entry's ``run_ended_by``.
+STOP_SIGNAL_END_REASON = "stop_signal"  # The helper's own end reason when it was stopped (the export contract's).
 # What a command reports for a run the presence watch (``presence.py``) ended, lost or could not arm.
 STATUS_PRESENCE_ENDED, STATUS_WATCH_LOST = "presence_ended", "presence_watch_lost"
 REASON_WATCH_NOT_ARMED = "presence_watch_not_armed"
@@ -160,6 +161,8 @@ class MarkSession:
         self.key_fd, self.output = key_fd, output
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
+        self.frozen_ns = None  # Set by ``freeze``: the run's end was decided then, and later marks are refused.
+        self.refused_after_end = 0
         self.origin_set = threading.Event()
         self.origin_ns = None
         self.recorded = []
@@ -184,6 +187,17 @@ class MarkSession:
         for thread in self.threads:
             thread.join(JOIN_SECONDS)
 
+    def freeze(self, monotonic_ns=None):
+        """Refuse every mark from now on: the run's end has been decided (the presence stop's signal).
+
+        A mark made after that moment would be measured against an end that
+        came before it. Marks already recorded stay; a refused one is counted
+        (``marks_refused_after_end``).
+        """
+        with self.lock:
+            if self.frozen_ns is None:
+                self.frozen_ns = time.monotonic_ns() if monotonic_ns is None else monotonic_ns
+
     def first_frame(self, observed_ns):
         """Set the cue origin once, to the first frame's acquire time."""
         if self.origin_ns is None:
@@ -201,6 +215,9 @@ class MarkSession:
 
     def _record(self, source, label, monotonic_ns, scheduled=None):
         with self.lock:
+            if self.frozen_ns is not None:
+                self.refused_after_end += 1
+                return False
             if source != SOURCE_CUE:  # A cue always has its place; key and window marks never take one.
                 if self.key_recorded >= self.key_capacity:
                     self.dropped += 1
@@ -296,7 +313,7 @@ class MarkSession:
                 "mark_labels_requested": list(self.labels), "key_marks_enabled": self.key_fd is not None,
                 "key_presses": self.key_presses, "key_listener_error": self.key_error, "marks_dropped": self.dropped,
                 "maximum_marks": MAX_MARKS, "key_marks_capacity": self.key_capacity, "window_marks": self.window_marks,
-                "recorded": self.marks()}
+                "marks_refused_after_end": self.refused_after_end, "recorded": self.marks()}
 
 
 def terminal_fd(stream=None):
@@ -430,6 +447,15 @@ def summarize(frames, marks, *, origin_ns, run_end_ns, helper_end=None, with_tar
     record (``stop_signal`` when the watch stopped it), and
     ``helper_end_is_presence_stop`` is true when either the helper ended for
     a presence reason or the watch's signal ended the run.
+
+    Two things keep that from being true by accident. The watch's signal
+    counts as what ended the run only when the helper's own end record says
+    ``stop_signal`` (or there is none): a helper that reached ``max_frames``
+    or ``max_seconds`` ended on its bound, whatever arrived as it did. And a
+    mark made after the ending signal (``mark_after_presence_signal``) is
+    not a removal: SteamVR had reported the headset off before the click, so
+    that entry is neither a presence stop nor within the limit, and its
+    ``presence_signal_after_mark_ms`` is negative.
     """
     frames = sorted(frames, key=lambda frame: frame["observed_ns"])
     marks = sorted(marks, key=boundary_ns)
@@ -492,7 +518,12 @@ def summarize(frames, marks, *, origin_ns, run_end_ns, helper_end=None, with_tar
                  "presence_watch_armed": bool(presence and presence["armed"]), "presence_signal": None,
                  "presence_signal_after_mark_ms": None, "helper_end_after_presence_signal_ms": None,
                  "frames_received_after_presence_signal": None, "run_ended_by": None, "run_end_reason": None}
-        by_watch = bool(presence and presence["ended_run"])
+        # The watch ended the run only if the helper was stopped: its own end record, when there is one, says so.
+        by_watch = bool(presence and presence["ended_run"]
+                        and (helper_end is None or helper_end["reason"] == STOP_SIGNAL_END_REASON))
+        # A mark made after the signal: the end was decided before the click, so this entry is not a removal.
+        late_mark = bool(presence and presence["signal"] is not None and presence["monotonic_ns"] < start)
+        entry["mark_after_presence_signal"] = late_mark
         if presence and presence["signal"] is not None:
             entry.update(presence_signal=presence["signal"],
                          presence_signal_after_mark_ms=round((presence["monotonic_ns"] - start) / 1e6, 3),
@@ -502,8 +533,9 @@ def summarize(frames, marks, *, origin_ns, run_end_ns, helper_end=None, with_tar
         if helper_end is not None:
             elapsed_ms = round((helper_end["monotonic_ns"] - start) / 1e6, 3)
             entry.update(helper_end_after_mark_ms=elapsed_ms, helper_end_reason=helper_end["reason"],
-                         helper_end_is_presence_stop=by_watch or helper_end["reason"] in PRESENCE_END_REASONS,
-                         helper_end_within_limit=0 <= elapsed_ms <= removal_end_limit_ms)
+                         helper_end_is_presence_stop=not late_mark and (
+                             by_watch or helper_end["reason"] in PRESENCE_END_REASONS),
+                         helper_end_within_limit=not late_mark and 0 <= elapsed_ms <= removal_end_limit_ms)
             if not by_watch:
                 entry.update(run_ended_by=ENDED_BY_HELPER, run_end_reason=helper_end["reason"])
             if presence and presence["signal"] is not None:

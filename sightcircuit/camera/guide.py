@@ -365,7 +365,8 @@ def _seconds(ms):
 
 
 def remove_marked(report):
-    return bool((report.get("summary") or {}).get("removal"))
+    """Whether the run has a remove click that came before its end was decided (a click after SteamVR's signal is not one)."""
+    return any(not entry.get("mark_after_presence_signal") for entry in (report.get("summary") or {}).get("removal") or ())
 
 
 def status_line(report):
@@ -434,6 +435,11 @@ def result_lines(report):
     if any(interval["label"] in marks.POSITION_LABELS for interval in summary.get("intervals") or ()):
         lines.append("Image sides are the camera image's as exported, which may not be yours.")
     for entry in summary.get("removal") or ():
+        if entry.get("mark_after_presence_signal"):
+            # The end was decided before the click: nothing is measured from it, and it is not called a removal.
+            lines.append(f"SteamVR had already reported the headset off ({entry['presence_signal']}) "
+                         f"{_seconds(-entry['presence_signal_after_mark_ms'])} before your click to take it off.")
+            continue
         if entry["helper_end_after_mark_ms"] is None:
             lines.append("After your click to take the headset off: the camera reader left no end record.")
             continue

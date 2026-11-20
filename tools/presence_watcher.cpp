@@ -14,7 +14,8 @@
 //   presence   one signal of presence_signals.hpp, with "ends_run" and "end_reason" from its table
 //   heartbeat  every 500 ms, so a parent can tell a stuck watcher from a quiet runtime
 //   end        the last line: "reason" is stop_signal, max_seconds, runtime_quit or parent_gone
-// A failure before ready is one "error" line and exit 1. SDK chatter goes to stderr (the bridge's stdout
+// A failure before ready is one "error" line and exit 1; a failed connect carries VR_Init's numeric error code
+// ("init_error_code") beside its symbol. SDK chatter goes to stderr (the bridge's stdout
 // isolation). SIGTERM or SIGINT ends the watch cleanly (exit 0); the parent's death does too. A loop step that
 // blocks for 5 s is ended by SIGALRM's default action, which the parent sees as a watcher that died.
 #include <openvr.h>
@@ -127,8 +128,13 @@ int watch(int seconds) {
     if (error != vr::VRInitError_None || !system) {
         Json::Value line;
         line["event"] = "error";
-        line["reason"] = error != vr::VRInitError_None ? "vrserver_not_running" : "ivrsystem_unavailable";
-        line["init_error"] = vr::VR_GetVRInitErrorAsSymbol(error);
+        // Only the runtime's own "no server for a background application" is called a server that is not
+        // running; every other failure keeps its code, so an arming failure on the device can be told apart.
+        line["reason"] = error == vr::VRInitError_None ? "ivrsystem_unavailable" :
+                         error == vr::VRInitError_Init_NoServerForBackgroundApp ? "vrserver_not_running" :
+                         "vr_init_failed";
+        line["init_error_code"] = static_cast<int>(error);
+        line["init_error"] = vr::VR_GetVRInitErrorAsSymbol(error);  // For a person reading the line; Python keeps the code.
         output.emit(line);
         if (error == vr::VRInitError_None) vr::VR_Shutdown();
         alarm(0);

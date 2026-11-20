@@ -14,8 +14,10 @@ signals), ``exit=<code>`` (the exit code at the end). Timed steps,
 ``sightcircuit.camera.presence.SIGNALS`` (one presence line), ``die`` (exit 3
 with no end line), ``silent`` (stop writing, stay alive), ``garbage`` (a line
 that is not JSON), ``skip`` (a heartbeat with a wrong sequence number),
-``future`` (a heartbeat stamped ten seconds ahead) and ``end=<reason>`` (an
-end line and exit 0). ``FAKE_PRESENCE_PID_FILE`` names a file the process id
+``future`` (a heartbeat stamped ten seconds ahead), ``nokey``, ``listsignal``
+and ``hugeage`` (a standby line that is valid JSON but lacks ``event_age_ms``,
+has a list for its signal, or an absurd age), ``flap=<n>`` (n activity
+changes at once) and ``end=<reason>`` (an end line and exit 0). ``FAKE_PRESENCE_PID_FILE`` names a file the process id
 is written to. The tests install it as an executable file outside the
 checkout. Never SteamVR, never a camera.
 """
@@ -76,7 +78,8 @@ def main(argv=None):
         signal.signal(number, (lambda *_: None) if "deaf" in flags else (lambda *_: stopping.append(1)))
     writer = Writer()
     if "error" in flags:
-        writer.line("error", reason=flags["error"])
+        code = os.environ.get("FAKE_PRESENCE_INIT_CODE")
+        writer.line("error", reason=flags["error"], **({} if code is None else {"init_error_code": int(code)}))
         return 1
     if "noready" in flags:
         while not stopping:
@@ -87,7 +90,7 @@ def main(argv=None):
         table = [dict(entry, ends_run=True, end_reason="headset_removed") if entry["signal"] == "proximity_off"
                  else entry for entry in table]
     writer.line("ready", **dict(presence.READY_FACTS, camera_data_read="camera" in flags), tool="fake",
-                interfaces_requested=["IVRSystem_fake"], signals=table, pid=os.getpid(), max_seconds=int(argv[2]),
+                interfaces_requested=["IVRSystem_026"], signals=table, pid=os.getpid(), max_seconds=int(argv[2]),
                 hmd_activity=flags.get("activity", "user_interaction"), hmd_has_proximity_sensor=True)
     origin = time.monotonic_ns()
     deadline = origin + int(argv[2]) * 1_000_000_000
@@ -109,6 +112,20 @@ def main(argv=None):
                 writer.line("presence", signal=action, ends_run=reason is not None, end_reason=reason,
                             hmd_activity="standby" if action == "enter_standby_event" else "user_interaction",
                             event_age_ms=None if action == "hmd_activity_changed" else 4)
+            elif action in ("nokey", "listsignal", "hugeage"):  # Valid JSON, not a valid presence line.
+                fields = {"signal": "enter_standby_event", "ends_run": True, "end_reason": "standby",
+                          "hmd_activity": "standby", "event_age_ms": 4}
+                if action == "nokey":
+                    del fields["event_age_ms"]
+                elif action == "listsignal":
+                    fields["signal"] = ["enter_standby_event"]
+                else:
+                    fields["event_age_ms"] = 10**30
+                writer.line("presence", **fields)
+            elif action.startswith("flap="):  # Many activity changes at once, as a level that flaps while worn.
+                for index in range(int(action[5:])):
+                    writer.line("presence", signal="hmd_activity_changed", ends_run=False, end_reason=None,
+                                hmd_activity="idle" if index % 2 else "user_interaction", event_age_ms=None)
             elif action == "die":
                 os._exit(3)
             elif action == "silent":

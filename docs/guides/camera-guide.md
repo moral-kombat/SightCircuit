@@ -125,6 +125,11 @@ launch, a second notice and a second Start.
 - **The presence watcher is lost during the run.** The reader is stopped at
   once (`presence_watch_lost`), the run is watched, and the result says the
   run was ended because the headset-off watcher stopped answering.
+- **Stop while the presence watch is arming.** The stop is honoured at once:
+  the wait for the watcher ends, nothing is launched and the run is
+  `stopped` (`stopped_before_launch`). After a worker that died, the window
+  waits out the helper's bound plus what arming may have taken before the
+  helper was launched.
 - **SteamVR reports standby before the remove click.** The run ends
   (`presence_ended`) and the result says so; it is not called a removal.
 - **Stop while the helper is starting.** A stop that arrives before the
@@ -201,7 +206,12 @@ or the helper ended `headset_removed` or `standby`; a run that ends only on
 its bound has it false and, with G7's limits, `helper_end_within_limit`
 false, armed or not. The result screen adds one line: the signal with its
 two times, "SteamVR sent no headset-off signal before the run ended", or
-"SteamVR's headset-off signal was not armed for this run". Nothing about the
+"SteamVR's headset-off signal was not armed for this run". Once the signal
+has ended the run the window's marks are refused, so a click that lands
+after it records nothing; were one recorded all the same, its entry is
+marked `mark_after_presence_signal`, counts as neither a presence stop nor
+within the limit, and the result says "SteamVR had already reported the
+headset off ... before your click to take it off". Nothing about the
 watch is shown during the run. No time here is a Frame measurement.
 
 ## How the run is launched on the Frame
