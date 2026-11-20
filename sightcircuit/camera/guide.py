@@ -35,7 +35,7 @@ Nothing here opens a camera, lifts a gate or approves a run.
 """
 from dataclasses import dataclass
 
-from . import marks, presence
+from . import marks
 from .confirmation import OPERATOR_WINDOW
 
 MS = 1_000_000
@@ -315,7 +315,7 @@ def presence_end(report):
     """Whether a camera reader that was launched ended on a presence stop: the helper's own, or the presence watch's."""
     if (report.get("helper_end") or {}).get("reason") in marks.PRESENCE_END_REASONS:
         return True
-    return report.get("status") == presence.STATUS_PRESENCE_ENDED and report.get("helper_launched") is not False
+    return report.get("status") == marks.STATUS_PRESENCE_ENDED and report.get("helper_launched") is not False
 
 
 def guide_block(guide, *, script, started, ended_by, observations, limits_ms, watch, validation_only=False, clock=None,
@@ -378,13 +378,13 @@ def status_line(report):
         return f"The camera reader ended early ({reason}), before the click to take the headset off."
     if status == "helper_ended_early":
         return f"The camera reader ended early ({reason})."
-    if status == presence.STATUS_PRESENCE_ENDED and remove_marked(report):
+    if status == marks.STATUS_PRESENCE_ENDED and remove_marked(report):
         return f"The run ended when SteamVR reported the headset off ({reason})."
-    if status == presence.STATUS_PRESENCE_ENDED:
+    if status == marks.STATUS_PRESENCE_ENDED:
         return f"The run ended early: SteamVR reported the headset off ({reason}) before the click to take it off."
-    if status == presence.STATUS_WATCH_LOST:
+    if status == marks.STATUS_WATCH_LOST:
         return "The run was ended because the headset-off watcher stopped answering. Tell the Frame manager."
-    if reason == presence.REASON_NOT_ARMED:
+    if reason == marks.REASON_WATCH_NOT_ARMED:
         return ("Not started: the headset-off watcher could not be armed, so the camera was not read. "
                 "Tell the Frame manager.")
     if status == "stopped":

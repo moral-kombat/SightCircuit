@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from sightcircuit import gates  # noqa: E402
-from sightcircuit.camera import contract, fake_export, marks  # noqa: E402
+from sightcircuit.camera import contract, fake_export, marks, presence  # noqa: E402
 from sightcircuit.commands import camera_recognize as command  # noqa: E402
 from sightcircuit.detection import (DETECTORS, LIVE_INFERENCE_P95_BUDGET_MS, POC_THRESHOLD,  # noqa: E402
                                     class_names)
@@ -94,7 +94,9 @@ def closed_strings():
     """Every string an L15 field may hold: vocabulary, sources, cells, end reasons, classes and declared constants."""
     allowed = {*marks.VOCABULARY, marks.KEY_LABEL, *marks.SOURCES, *marks.CELLS, *marks.COLUMNS, *marks.ROWS,
                marks.RUN_END, *marks.BOUNDARIES, *contract.END_REASONS, *marks.TIMEBASE.values(), marks.ORIENTATION_STATEMENT,
-               "image_as_exported", "OSError", "ValueError"}
+               "image_as_exported", "OSError", "ValueError",
+               # The presence stop's closed names in a removal entry: what ended the run and the ending signal.
+               marks.ENDED_BY_WATCH, marks.ENDED_BY_HELPER, *presence.ENDING_SIGNALS}
     for name in DETECTORS:
         allowed.update(class_names(name))
     return allowed
@@ -429,7 +431,8 @@ class RecognitionTests(unittest.TestCase):
                                    terminal=terminal)
         after = marks.Clock()
         self.assertEqual((report["status"], report["exit_code"], report["frames_processed"]), ("recognized", 0, 5))
-        self.assertEqual(report["schema_version"], 2)
+        self.assertEqual(report["schema_version"], 3)  # 3: the presence watch's block and removal fields.
+        self.assertEqual((report["presence_watch"]["requested"], report["presence_watch"]["armed"]), (False, False))
         terminal.write.assert_not_called()  # No cue, no key press: nothing is printed during the run.
         self.assertEqual(threading.active_count(), 1)  # No mark thread was left, and none was needed.
         self.assertEqual(report["marks"]["recorded"], [])

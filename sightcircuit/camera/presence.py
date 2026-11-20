@@ -51,6 +51,8 @@ import subprocess
 import threading
 import time
 
+from . import marks
+
 PROTOCOL = "presence-watch/1"
 # signal -> the run's end reason, or None for a signal that is recorded and ends nothing.
 SIGNALS = {"enter_standby_event": "standby", "leave_standby_event": None, "user_interaction_ended": None,
@@ -75,8 +77,8 @@ MAX_LINE_BYTES = 8192
 MAX_EVENTS = 64  # Presence events repeated in the report; ``event_count`` covers them all.
 FUTURE_TOLERANCE_NS = 5_000_000
 # Statuses a command gives a run the watch ended or failed.
-STATUS_PRESENCE_ENDED, STATUS_WATCH_LOST = "presence_ended", "presence_watch_lost"
-REASON_NOT_ARMED = "presence_watch_not_armed"
+STATUS_PRESENCE_ENDED, STATUS_WATCH_LOST = marks.STATUS_PRESENCE_ENDED, marks.STATUS_WATCH_LOST
+REASON_NOT_ARMED = marks.REASON_WATCH_NOT_ARMED
 STATEMENT = ("Presence signals from SteamVR only: runtime events and the headset's activity level. The watcher "
              "reads no camera data, image or calibration value, creates no overlay and writes no setting.")
 READY_FACTS = {"protocol": PROTOCOL, "application_type": APPLICATION_TYPE, "starts_steamvr": False,

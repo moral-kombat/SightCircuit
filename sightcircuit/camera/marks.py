@@ -69,6 +69,9 @@ LATE_FRAME_LIMIT_MS = 2000
 REMOVAL_END_LIMIT_MS = 3000
 PRESENCE_END_REASONS = ("headset_removed", "standby")
 ENDED_BY_WATCH, ENDED_BY_HELPER = "presence_watch", "helper"  # A removal entry's ``run_ended_by``.
+# What a command reports for a run the presence watch (``presence.py``) ended, lost or could not arm.
+STATUS_PRESENCE_ENDED, STATUS_WATCH_LOST = "presence_ended", "presence_watch_lost"
+REASON_WATCH_NOT_ARMED = "presence_watch_not_armed"
 RUN_END = "run_end"
 TIMEBASE = {"monotonic_clock": "host_clock_monotonic_ns", "wall_clock": "utc_ns_since_unix_epoch",
             "wall_clock_derivation": "anchor_utc_ns_plus_monotonic_difference",
