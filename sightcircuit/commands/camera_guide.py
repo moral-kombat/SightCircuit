@@ -55,8 +55,9 @@ metre when Start is clicked (mark ``near`` as soon as the reader is ready,
 about four seconds), then moved to about a metre when the screen says so
 (``far``, made when the instruction appears: about two seconds to move and
 four recorded), then the click made just before the headset comes off
-(``remove``); the run ends by itself when the helper reports
-``headset_removed`` or ``standby``, or on its bound. ``positions``: centre,
+(``remove``); the run ends by itself when SteamVR reports standby (with
+``--presence-watcher``: ``presence_ended``, see ``camera/presence.py``), when
+the helper reports ``headset_removed`` or ``standby``, or on its bound. ``positions``: centre,
 left, right, up, down for about four seconds each, then out of view, with no
 click after Start. ``scan`` (item L14): one instruction for the whole run,
 the target held still straight ahead at about half a metre, while each frame
@@ -113,7 +114,7 @@ if not __package__:  # Run as a file: import the package beside this one.
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from sightcircuit import gates
-from sightcircuit.camera import contract, marks
+from sightcircuit.camera import contract, marks, presence
 from sightcircuit.camera import guide as guidance
 from sightcircuit.camera import region as regions
 from sightcircuit.camera.confirmation import OPERATOR_WINDOW, export_notice_body
@@ -186,6 +187,7 @@ class Config:
     start_dwell_seconds: float = START_DWELL_SECONDS
     close_dwell_seconds: float = CLOSE_DWELL_SECONDS
     validation: bool = False  # The worker uses the scripted detector; never set from the command line of a run.
+    presence_watcher: str = None  # The sightcircuit-presence-watcher binary, or None for a run without the watch.
     worker_env: dict = field(default_factory=dict)
     # Item L14. ``region`` is ``(x0, y0, x1, y1)`` as fractions of the frame, or None for the whole frame; the scan
     # script ignores both and takes its own schedule, with every detector of ``scan_detectors`` on each frame.
@@ -200,7 +202,8 @@ class Config:
                 "late_frame_limit_ms": self.late_frame_limit_ms, "removal_end_limit_ms": self.removal_end_limit_ms,
                 "validation": bool(self.validation), "region": None if self.region is None else list(self.region),
                 "rotation": self.rotation,
-                "scan_detectors": list(self.scan_detectors) if self.script == guidance.SCRIPT_SCAN else None}
+                "scan_detectors": list(self.scan_detectors) if self.script == guidance.SCRIPT_SCAN else None,
+                "presence_watcher": None if self.presence_watcher is None else str(self.presence_watcher)}
 
 
 def check_report_path(path):
@@ -238,12 +241,25 @@ def unstarted_report(config, reason):
     report.update(confirmation=None, seconds_requested=config.limits["max_seconds"],
                   max_frames_requested=config.limits["max_frames"], fps_requested=config.limits["fps"],
                   cameras_requested=[config.camera], status="error", reason=reason, phase="closed")
+    if config.presence_watcher is not None:  # Named and never launched: requested, not armed, nothing to clean up.
+        report["presence_watch"] = presence.unstarted_report()
     return report
 
 
 def interrupted_report(config, reason):
-    """The report the window writes for a started run whose worker gave none: the helper's end is not confirmed."""
-    return dict(unstarted_report(config, reason), confirmation=OPERATOR_WINDOW, cleanup_ok=False)
+    """The report the window writes for a started run whose worker gave none: the helper's end is not confirmed.
+
+    Nor is the presence watcher's, when one was named: the block says its state is not known.
+    """
+    report = dict(unstarted_report(config, reason), confirmation=OPERATOR_WINDOW, cleanup_ok=False)
+    if config.presence_watcher is not None:
+        report["presence_watch"] = presence.unknown_report()
+    return report
+
+
+def arming_seconds(config):
+    """What arming the presence watch may add before the helper is launched: nothing without a watcher."""
+    return 0.0 if config.presence_watcher is None else presence.READY_WAIT_SECONDS + presence.STOP_WAIT_SECONDS
 
 
 # ---- the worker: the run itself, in its own process ---------------------------------------------------------------
@@ -348,6 +364,11 @@ def worker_main(descriptor, stdin=None, stdout=None):
             raise ValueError("beyond camera_recognize's bounds")
         cameras = camera_helper.check_cameras((spec["camera"],))
         target, helper = spec["target"], spec["helper"]
+        watcher = spec.get("presence_watcher")
+        if watcher is not None and not isinstance(watcher, str):
+            raise ValueError("the presence watcher is a path")
+        if watcher is not None:  # Whatever this process reports from here on says the watcher was named.
+            report["presence_watch"] = presence.unstarted_report()
         region, scan_detectors = None, spec.get("scan_detectors")
         if scan_detectors is not None:  # The scan takes its own schedule: a region with it is a malformed run.
             if (spec.get("region") is not None or spec.get("rotation", 0) != 0 or type(scan_detectors) is not list
@@ -416,15 +437,18 @@ def worker_main(descriptor, stdin=None, stdout=None):
                 on_ready=on_ready, late_frame_limit_ms=spec["late_frame_limit_ms"],
                 removal_end_limit_ms=spec["removal_end_limit_ms"], region=region,
                 scan_detectors=None if scan_detectors is None else tuple(scan_detectors),
-                scan_detector_factory=scan_factory)
+                scan_detector_factory=scan_factory, presence_watcher=watcher,
+                abort=stop_requested)  # A Stop click while the watch arms is honoured at once: nothing is launched.
         except _StoppedBeforeLaunch:
             report.update(confirmation=OPERATOR_WINDOW, status="stopped", reason="stopped_before_launch", cleanup_ok=True)
         except guard.CANCELLATION as error:
             report.update(confirmation=OPERATOR_WINDOW)
             guard.cancelled(report, error)
+            presence.apply_failure(report, error, watcher is not None)
         except Exception as error:  # Whatever went wrong, the window gets a report and the wearer a result screen.
             report.update(confirmation=OPERATOR_WINDOW, status="error", reason="guide_worker_failed",
                           error=f"{type(error).__name__}: {error}"[:1024])
+            presence.apply_failure(report, error, watcher is not None)
     report["window_marks_refused"] = state["marks_refused"]
     emit({"event": "report", "report": report})
     return 0
@@ -931,8 +955,12 @@ def create_window(config, *, worker_factory=None, clock=time.monotonic_ns, size=
                                         target=config.target, scale=config.scale,
                                         guard_ms=config.guard_seconds * 1000)
             self.ended_by = guidance.ENDED_HELPER
-            self.run_deadline_ns = now_ns + int((config.limits["max_seconds"] + RUN_MARGIN_SECONDS) * 1e9)
-            self.helper_gone_ns = now_ns + int((config.limits["max_seconds"] + HELPER_GONE_MARGIN_SECONDS) * 1e9)
+            # With a presence watcher the helper is launched only after the watch has armed, so both moments move
+            # by what arming may take: a helper whose worker died is not declared gone before its own bound.
+            arming = arming_seconds(config)
+            self.run_deadline_ns = now_ns + int((config.limits["max_seconds"] + RUN_MARGIN_SECONDS + arming) * 1e9)
+            self.helper_gone_ns = now_ns + int(
+                (config.limits["max_seconds"] + HELPER_GONE_MARGIN_SECONDS + arming) * 1e9)
             self.show_phase(PHASE_RUN)
             self.worker = worker_factory(config.spec(), self.events.put)
             self.workers_started += 1
@@ -1489,6 +1517,10 @@ def build_parser():
                         help="What each removal entry compares frame times after the remove click with")
     parser.add_argument("--removal-end-limit-ms", type=int, default=marks.REMOVAL_END_LIMIT_MS, metavar="MS",
                         help="What each removal entry compares the helper's end after the remove click with")
+    parser.add_argument("--presence-watcher", type=Path, metavar="PATH",
+                        help="The sightcircuit-presence-watcher binary (scripts/build_presence_watcher.sh), given "
+                             "explicitly: the run ends when SteamVR reports standby, and refuses to read the camera "
+                             "if the watcher cannot be armed. Presence signals only; no camera data")
     parser.add_argument("--windowed", action="store_true", help="A 1280 by 800 window in place of a maximized one")
     return parser
 
@@ -1499,7 +1531,8 @@ def main(argv=None):
     if args.worker:
         return worker_main(args.worker_fd)
     run_arguments = (args.allow_camera_input or args.script or args.report or args.seconds or args.max_frames
-                     or args.helper_arg or args.windowed or args.region or args.rotation or args.scan_detectors)
+                     or args.helper_arg or args.windowed or args.region or args.rotation or args.scan_detectors
+                     or args.presence_watcher)
     if args.validate:
         if run_arguments:
             parser.error("--validate takes only --helper")
@@ -1561,6 +1594,12 @@ def main(argv=None):
             config.helper = camera_helper.helper_path(args.helper)
         except SightCircuitError as error:
             refusal = (error.reason, str(error))
+    if refusal is None and args.presence_watcher is not None:
+        try:  # The helper's rules: an executable outside the checkout, or under the ignored artifacts/.
+            config.presence_watcher = camera_helper.helper_path(args.presence_watcher)
+        except SightCircuitError as error:
+            refusal = ("presence_watcher_" + error.reason.removeprefix("helper_"),
+                       str(error).replace("helper", "presence watcher"))
     if refusal is None and not os.environ.get("QT_QPA_PLATFORM") and not (
             os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
         refusal = ("no_display_session", "No display session found. Run in the Frame's graphical session.")

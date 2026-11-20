@@ -484,6 +484,7 @@ class ResultTests(unittest.TestCase):
             "After your click to take the headset off: the camera reader ended 4.3 s later (headset_removed).",
             "11 frames came after the click, the last 2.2 s after it.",
             "The reader ended 2.1 s after its last frame.",
+            "SteamVR's headset-off signal was not armed for this run.",  # No presence watcher was named (2026-11-20).
             "Detection time, 95th percentile: 42 ms."])
         self.assertTrue(guidance.watch_needed(report))
 

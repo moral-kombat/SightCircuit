@@ -5,6 +5,13 @@
 //   FAKE_VR_<Call>_DELAY_MS  comma-separated milliseconds, one per call of that name in order (then none)
 //   FAKE_VR_<Call>_FAIL      comma-separated 1-based call numbers that return VROverlayError_RequestFailed
 //   FAKE_VR_STICKY_VISIBLE   when set, HideOverlay returns success and the overlay stays visible
+// For the presence watcher's tests (tools/presence_watcher.cpp), all relative to the first Init:
+//   FAKE_VR_EVENTS           comma-separated ms:eventType[:device[:button]] entries PollNextEvent hands out when due
+//   FAKE_VR_ACTIVITY         comma-separated ms:level entries: the HMD's activity level from that time on (first: 0:1)
+//   FAKE_VR_INIT_FAIL        when set, Init fails as a runtime without a server does for a Background application
+//   FAKE_VR_HMD_DISCONNECTED when set, no tracked device is connected
+//   FAKE_VR_POLL_BLOCK_MS    PollNextEvent blocks this long once the given time has passed (ms:block_ms)
+//   FAKE_VR_LOG_SYSTEM       when set, Init, GetGenericInterface and Cleanup are logged too
 // fake_vrclient_stubs.hpp is generated from the pinned openvr.h by tests/fake_vrclient.py: every pure virtual
 // of IVRSystem and IVROverlay with a default body, so this file names only what the bridge calls.
 #include <openvr.h>
@@ -154,18 +161,84 @@ struct Overlay final : FakeOverlayStubs {
         return true;
     }
 };
+std::uint64_t init_ns = 0;  // The first Init: the origin of the scripted times.
+void log_system(const char* call, const std::string& extra = "") {
+    const char* path = std::getenv("FAKE_VR_LOG");
+    if (!path || !std::getenv("FAKE_VR_LOG_SYSTEM")) return;
+    if (FILE* log = std::fopen(path, "a")) {
+        std::fprintf(log, "{\"call\":\"%s\",\"start_ns\":%llu%s}\n", call,
+                     static_cast<unsigned long long>(now_ns()), extra.c_str());
+        std::fclose(log);
+    }
+}
+// One "a:b:c:d" entry of a comma-separated script; absent fields are 0.
+struct Entry { long field[4] = {0, 0, 0, 0}; };
+std::deque<Entry> script(const char* name) {
+    std::deque<Entry> entries;
+    const char* text = std::getenv(name);
+    while (text && *text) {
+        Entry entry;
+        for (int index = 0; index < 4; ++index) {
+            char* end = nullptr;
+            entry.field[index] = std::strtol(text, &end, 10);
+            text = end;
+            if (*text != ':') break;
+            ++text;
+        }
+        entries.push_back(entry);
+        if (*text != ',') break;
+        ++text;
+    }
+    return entries;
+}
 struct System final : FakeSystemStubs {
-    bool IsTrackedDeviceConnected(vr::TrackedDeviceIndex_t) override { return true; }
-    bool PollNextEvent(vr::VREvent_t*, uint32_t) override { return false; }
-    void AcknowledgeQuit_Exiting() override {}
+    std::deque<Entry> events = script("FAKE_VR_EVENTS"), activity = script("FAKE_VR_ACTIVITY");
+    std::deque<Entry> blocks = script("FAKE_VR_POLL_BLOCK_MS");
+    long level = vr::k_EDeviceActivityLevel_UserInteraction;
+    long elapsed_ms() const { return static_cast<long>((now_ns() - init_ns) / 1000000ULL); }
+    bool IsTrackedDeviceConnected(vr::TrackedDeviceIndex_t) override { return !std::getenv("FAKE_VR_HMD_DISCONNECTED"); }
+    bool PollNextEvent(vr::VREvent_t* event, uint32_t size) override {
+        if (!blocks.empty() && elapsed_ms() >= blocks.front().field[0]) {
+            const long ms = blocks.front().field[1];
+            blocks.pop_front();
+            timespec wait{ms / 1000, (ms % 1000) * 1000000L};
+            while (nanosleep(&wait, &wait)) {}
+        }
+        if (events.empty() || elapsed_ms() < events.front().field[0]) return false;
+        std::memset(event, 0, size);
+        event->eventType = static_cast<uint32_t>(events.front().field[1]);
+        event->trackedDeviceIndex = static_cast<vr::TrackedDeviceIndex_t>(events.front().field[2]);
+        event->data.controller.button = static_cast<uint32_t>(events.front().field[3]);
+        event->eventAgeSeconds = 0.004f;
+        events.pop_front();
+        return true;
+    }
+    vr::EDeviceActivityLevel GetTrackedDeviceActivityLevel(vr::TrackedDeviceIndex_t) override {
+        while (!activity.empty() && elapsed_ms() >= activity.front().field[0]) {
+            level = activity.front().field[1];
+            activity.pop_front();
+        }
+        return static_cast<vr::EDeviceActivityLevel>(level);
+    }
+    bool GetBoolTrackedDeviceProperty(vr::TrackedDeviceIndex_t, vr::ETrackedDeviceProperty property,
+                                      vr::ETrackedPropertyError* error) override {
+        if (error) *error = vr::TrackedProp_Success;
+        return property == vr::Prop_ContainsProximitySensor_Bool;
+    }
+    void AcknowledgeQuit_Exiting() override { log_system("AcknowledgeQuit_Exiting"); }
 };
 struct Core final : vr::IVRClientCore {
     Overlay overlay;
     System system;
-    vr::EVRInitError Init(vr::EVRApplicationType, const char*) override { return vr::VRInitError_None; }
-    void Cleanup() override {}
+    vr::EVRInitError Init(vr::EVRApplicationType type, const char*) override {
+        if (!init_ns) init_ns = now_ns();
+        log_system("Init", ",\"application_type\":" + std::to_string(static_cast<int>(type)));
+        return std::getenv("FAKE_VR_INIT_FAIL") ? vr::VRInitError_Init_NoServerForBackgroundApp : vr::VRInitError_None;
+    }
+    void Cleanup() override { log_system("Cleanup"); }
     vr::EVRInitError IsInterfaceVersionValid(const char*) override { return vr::VRInitError_None; }
     void* GetGenericInterface(const char* name, vr::EVRInitError* error) override {
+        log_system("GetGenericInterface", std::string(",\"name\":\"") + name + "\"");
         if (error) *error = vr::VRInitError_None;
         if (!std::strcmp(name, vr::IVRSystem_Version)) return static_cast<vr::IVRSystem*>(&system);
         if (!std::strcmp(name, vr::IVROverlay_Version)) return static_cast<vr::IVROverlay*>(&overlay);
@@ -175,7 +248,9 @@ struct Core final : vr::IVRClientCore {
     bool BIsHmdPresent() override { return true; }
     const char* GetEnglishStringForHmdError(vr::EVRInitError) override { return "fake"; }
     const char* GetIDForVRInitError(vr::EVRInitError error) override {
-        return error == vr::VRInitError_None ? "VRInitError_None" : "VRInitError_Fake";
+        return error == vr::VRInitError_None ? "VRInitError_None" :
+               error == vr::VRInitError_Init_NoServerForBackgroundApp ? "VRInitError_Init_NoServerForBackgroundApp" :
+               "VRInitError_Fake";
     }
 };
 } // namespace

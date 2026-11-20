@@ -23,6 +23,9 @@
     "test_camera_hud_stage": 180,
     "test_camera_hud_command": 240,
     "test_camera_guide": 150,
+    "test_presence_watch": 60,
+    "test_presence_watcher_native": 60,
+    "test_camera_guide_presence": 90,
     "test_observed_frame_client": 45
   }
 }

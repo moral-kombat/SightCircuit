@@ -72,6 +72,19 @@ helper's SDK build on the Frame is a device step that needs its own approval;
 the cloud checks run it against the fake producer only. ``--validate`` runs
 the reader against the fake producer's valid and invalid streams without any
 helper or detector.
+
+The presence stop (``sightcircuit.camera.presence``; the owner's decision of
+2026-11-20 after E100). With ``--presence-watcher PATH`` the command launches
+``sightcircuit-presence-watcher`` before the helper and ends the run when
+SteamVR reports standby: the helper is stopped at once and the status is
+``presence_ended`` with reason ``standby``. The watcher reads presence
+signals only, never camera data. A run that names the watcher does not read
+the camera without it: if the watcher cannot be armed the run ends ``error``
+with reason ``presence_watch_not_armed`` and no helper is launched, and if it
+is lost during the run the helper is stopped and the status is
+``presence_watch_lost``. Every report has a ``presence_watch`` block whose
+``armed`` says whether the stop was in force; without the option it is false
+and the run can end early only on the helper's own frame-gap stop, as before.
 """
 import argparse
 import json
@@ -86,7 +99,7 @@ if not __package__:  # Run as a file: import the package beside this one.
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from sightcircuit import gates
-from sightcircuit.camera import contract, fake_export, marks
+from sightcircuit.camera import contract, fake_export, marks, presence
 from sightcircuit.camera import region as regions
 # The informed start, shared with ``camera_hud`` (work-order item L9); the names stay this module's.
 from sightcircuit.camera.confirmation import CONFIRMATION_ANSWER, OPERATOR_TERMINAL, confirm_on_terminal  # noqa: F401
@@ -105,7 +118,9 @@ REPORT_KIND = "camera_recognition"
 # 2 adds the timebase, wall-clock times, marks, the target and the summaries (item L15). 3 (item L14): with a region
 # or a scan a record's ``box_coordinate_space`` may be ``whole_frame_processing_pixels`` (then ``detector_input_size``
 # is not the box space; ``box_space_size`` is) and the report may carry ``view`` and ``scan``.
-SCHEMA_VERSION = 3
+# 4 (item L16, the presence stop): ``presence_watch`` is always present, each removal entry carries the presence
+# fields, ``marks.marks_refused_after_end`` exists and the statuses ``presence_ended`` and ``presence_watch_lost`` may occur.
+SCHEMA_VERSION = 4
 # The command's bounds (work-order item S7), inside the helper's own (``contract.LIMITS``: 90 s, 900 frames).
 MAX_SECONDS, MAX_FRAMES = 30, 300
 MAX_FPS = contract.LIMITS["fps"][1]
@@ -137,7 +152,8 @@ def new_report(mode):
             "frames_received": 0, "frames_processed": 0, "stale_inputs_skipped": 0, "pending_frames_replaced": 0,
             "labels_seen": [], "maximum_pending_frames": 1, "maximum_input_observation_age_ms": MAX_DISPLAY_AGE_MS,
             "inference_p95_budget_ms": LIVE_INFERENCE_P95_BUDGET_MS, "inference_p95_within_budget": None,
-            "confidence_is_calibrated_probability": False, "scope": SCOPE}
+            "confidence_is_calibrated_probability": False, "scope": SCOPE,
+            "presence_watch": presence.not_requested()}
 
 
 def frame_record(frame, result, image, input_age_ms, processing_ms, *, clock=None, target_label=None, threshold=0.0,
@@ -283,7 +299,7 @@ def recognize(binary, limits, cameras, *, threshold=POC_THRESHOLD, detector=DEFA
               extra_args=(), stop=None, timeout=None, confirmed=False, cues=(), mark_labels=(), key_fd=None,
               target_label=None, terminal=None, confirmation=OPERATOR_TERMINAL, on_session=None, on_ready=None,
               late_frame_limit_ms=marks.LATE_FRAME_LIMIT_MS, removal_end_limit_ms=marks.REMOVAL_END_LIMIT_MS,
-              region=None, scan_detectors=None, scan_detector_factory=None):
+              region=None, scan_detectors=None, scan_detector_factory=None, presence_watcher=None, abort=None):
     """One bounded run: load the detector, export frames through the helper, detect on the latest; return the report.
 
     ``detector`` names a ``DETECTORS`` entry; an injected ``detector_factory``
@@ -326,6 +342,18 @@ def recognize(binary, limits, cameras, *, threshold=POC_THRESHOLD, detector=DEFA
     anything is loaded. ``scan_detector_factory(name)`` replaces
     ``create_detector`` for the scan's models (the checks' stand-ins), the
     run's own included unless a ``detector_factory`` gives that one.
+
+    ``presence_watcher`` names the ``sightcircuit-presence-watcher`` binary
+    (the helper's path rules). When given, the watch is armed before the
+    helper is launched and the run does not read the camera without it:
+    ``error``/``presence_watch_not_armed`` with no helper launched when it
+    cannot be armed, ``presence_ended`` (reason ``standby``) when SteamVR's
+    signal ends the run, ``presence_watch_lost`` when the watcher is lost
+    mid-run. The report's ``presence_watch`` block says which. ``abort`` is
+    an event of the caller that ends the wait for the watch at once (a Stop
+    click while it arms): nothing is launched and the run is ``stopped``.
+    An exception that leaves this function (a cancellation) carries the
+    closed watch's block as ``presence_watch``, for ``presence.apply_failure``.
     """
     cues, mark_labels = marks.check_cues(cues), marks.check_mark_labels(mark_labels)
     if target_label is not None and len(tuple(cameras)) != 1:
@@ -349,6 +377,8 @@ def recognize(binary, limits, cameras, *, threshold=POC_THRESHOLD, detector=DEFA
     report = new_report("recognize")
     report.update(timebase=clock.report(), run_started=clock.stamp(clock.monotonic_ns), target_label=None)
     report["confirmation"] = confirmation if confirmed else None
+    if presence_watcher is not None:  # From here every report of this run says the watcher was named.
+        report["presence_watch"] = presence.unstarted_report()
     report.update(seconds_requested=limits.get("max_seconds"), max_frames_requested=limits.get("max_frames"),
                   fps_requested=limits.get("fps"), cameras_requested=list(cameras), threshold=threshold,
                   detector_requested=detector if detector_factory is None else None, phase="loading_detector")
@@ -393,25 +423,53 @@ def recognize(binary, limits, cameras, *, threshold=POC_THRESHOLD, detector=DEFA
     processor = Processor(slot, model, threshold, clock=clock, target_label=target_label, views=views,
                           scan_detectors=scan_models, detector_name=detector)
     session = marks.MarkSession(clock, cues, mark_labels, key_fd, sys.stderr if terminal is None else terminal)
+    stop = threading.Event() if stop is None else stop
+    watch = None if presence_watcher is None else presence.PresenceWatch(
+        presence_watcher, limits["max_seconds"], stop, on_signal=session.freeze)  # No mark after the ending signal.
 
     def on_frame(frame):
+        if watch is not None:
+            watch.frame()
         session.first_frame(frame.observed_ns)
         slot.put(frame)
+
+    def on_end(_header):  # The helper's end record, as it is accepted: a signal after it ends nothing.
+        watch.run_ended()
     if on_session is not None:
         on_session(session)
-    processor.start()
-    report["phase"] = "exporting"
-    started = time.monotonic()
     try:
-        session.start()
-        captured = camera_helper.run_export(binary, limits, cameras, on_frame=on_frame, stop=stop, extra_args=extra_args,
-                                            timeout=timeout, confirmed=confirmed,
-                                            on_ready=None if on_ready is None else lambda _header: on_ready())
+        if watch is not None:
+            report["phase"] = "arming_presence_watch"
+            refusal = watch.start(abort=abort)
+            if refusal is not None or stop.is_set():
+                # Not armed, or SteamVR's signal (or the watcher's loss) came before the launch: no helper, no frame.
+                watch.run_ended()
+                watch.close()
+                return finish_unlaunched(report, watch, clock)
+        processor.start()
+        report["phase"] = "exporting"
+        started = time.monotonic()
+        try:
+            session.start()
+            captured = camera_helper.run_export(binary, limits, cameras, on_frame=on_frame, stop=stop,
+                                                extra_args=extra_args, timeout=timeout, confirmed=confirmed,
+                                                on_end=None if watch is None else on_end,
+                                                on_ready=None if on_ready is None else lambda _header: on_ready())
+        finally:
+            returned_ns = time.monotonic_ns()
+            if watch is not None:
+                watch.run_ended(returned_ns)
+            session.stop()
+            slot.close()
+            processor.join(PROCESSOR_JOIN_SECONDS)
+    except BaseException as error:  # A cancellation or a failure: the caller's report still needs the watch's truth.
+        if watch is not None:
+            watch.close()
+            presence.carry(error, watch, clock)
+        raise
     finally:
-        returned_ns = time.monotonic_ns()
-        session.stop()
-        slot.close()
-        processor.join(PROCESSOR_JOIN_SECONDS)
+        if watch is not None:
+            watch.close()  # Whatever happened, a signal included: no watcher outlives the run.
     report["elapsed_seconds"] = round(time.monotonic() - started, 3)
     if schedule is not None:
         report["scan"] = regions.scan_summary(processor.records, schedule, scan_detectors, detector,
@@ -420,11 +478,28 @@ def recognize(binary, limits, cameras, *, threshold=POC_THRESHOLD, detector=DEFA
         report["view"].update(processor.geometry.get(0) or {"crop_native_xyxy": None, "resized_size": None})
     return finish(report, captured, processor, slot, clock=clock, session=session, returned_ns=returned_ns,
                   late_frame_limit_ms=late_frame_limit_ms, removal_end_limit_ms=removal_end_limit_ms,
-                  pooled_views=schedule is not None)
+                  pooled_views=schedule is not None, watch=watch)
+
+
+def finish_unlaunched(report, watch, clock):
+    """The report of a run whose presence watch kept the helper from being launched: nothing read the camera."""
+    report["presence_watch"] = watch.report(clock)
+    report.update(cleanup_ok=watch.cleanup_ok, helper_launched=False, phase="closed")
+    if watch.refusal == presence.STOPPED_WHILE_ARMING or (watch.refusal is None and watch.stop_set_by is None):
+        report.update(status="stopped", reason="stopped_before_launch")  # The caller's own stop came first.
+    elif watch.refusal is not None:
+        report.update(status="error", reason=presence.REASON_NOT_ARMED)
+    elif watch.ended_run():
+        report.update(status=presence.STATUS_PRESENCE_ENDED, reason=watch.ending["end_reason"])
+    elif watch.lost_ended_run():
+        report.update(status=presence.STATUS_WATCH_LOST, reason=watch.lost["reason"])
+    else:
+        report.update(status="stopped", reason="stopped_before_launch")
+    return report
 
 
 def measurements(captured, processor, clock, session, returned_ns, *, late_frame_limit_ms=marks.LATE_FRAME_LIMIT_MS,
-                 removal_end_limit_ms=marks.REMOVAL_END_LIMIT_MS, pooled_views=False):
+                 removal_end_limit_ms=marks.REMOVAL_END_LIMIT_MS, pooled_views=False, presence_summary=None):
     """The report's L15 fields: the run's times, the marks and the counts-only summaries (``marks.summarize``).
 
     ``pooled_views`` (a scan): the frames are 24 different views, so the
@@ -445,7 +520,7 @@ def measurements(captured, processor, clock, session, returned_ns, *, late_frame
               "summary": marks.summarize(processor.records, recorded, origin_ns=session.origin_ns,
                                          run_end_ns=returned_ns if end_ns is None else end_ns, helper_end=helper_end,
                                          with_target=summarized, late_frame_limit_ms=late_frame_limit_ms,
-                                         removal_end_limit_ms=removal_end_limit_ms)}
+                                         removal_end_limit_ms=removal_end_limit_ms, presence=presence_summary)}
     if pooled_views:
         fields["summary"]["coverage_omitted"] = regions.COVERAGE_OMITTED
     if with_target:
@@ -458,21 +533,38 @@ def measurements(captured, processor, clock, session, returned_ns, *, late_frame
 
 def finish(report, captured, processor, slot, *, clock=None, session=None, returned_ns=None,
            late_frame_limit_ms=marks.LATE_FRAME_LIMIT_MS, removal_end_limit_ms=marks.REMOVAL_END_LIMIT_MS,
-           pooled_views=False):
-    """Fold the source report and the processor's results into the command's report; set status and exit code."""
+           pooled_views=False, watch=None):
+    """Fold the source report and the processor's results into the command's report; set status and exit code.
+
+    With a presence ``watch``: the block is its report, the removal entries
+    carry its signal, its cleanup counts, and a run the export reports
+    ``stopped`` because the watch set the stop is ``presence_ended`` (the
+    signal's reason) or ``presence_watch_lost`` (the loss's reason).
+    """
     timings = processor.report()
+    # The watch ended the run only if the run did end on the stop event and the helper was in fact stopped: a
+    # helper whose own end record gives its bound or its frame-gap stop ended the run itself, whatever arrived as
+    # it did (the stop can be set between the helper reaching its bound and that record being accepted here).
+    own_end = ((captured.get("stream") or {}).get("end") or {}).get("reason")
+    run_stopped = captured["status"] == "stopped" and own_end in (None, marks.STOP_SIGNAL_END_REASON)
     if clock is not None and session is not None:
         report.update(measurements(captured, processor, clock, session, returned_ns,
                                    late_frame_limit_ms=late_frame_limit_ms, removal_end_limit_ms=removal_end_limit_ms,
-                                   pooled_views=pooled_views))
+                                   pooled_views=pooled_views,
+                                   presence_summary=None if watch is None else watch.summary(run_stopped)))
         report["timebase"] = clock.report()
+    if watch is not None:
+        end_ns = (captured.get("stream") or {}).get("end_received_monotonic_ns")
+        report["presence_watch"] = watch.report(clock if clock is not None else marks.Clock(), run_stopped=run_stopped,
+                                                helper_end_ns=end_ns)
     report.update(capture=captured, frames_received=captured["frames_read"], frames_processed=len(processor.records),
                   stale_inputs_skipped=processor.stale, pending_frames_replaced=slot.replaced,
                   labels_seen=sorted(processor.labels), detections=processor.records,
                   last_result=processor.records[-1] if processor.records else None, phase="closed", **timings)
     p95 = timings["inference_ms"]["p95"]
     report["inference_p95_within_budget"] = None if p95 is None else p95 <= LIVE_INFERENCE_P95_BUDGET_MS
-    report["cleanup_ok"] = bool(captured["cleanup_ok"]) and not processor.is_alive()
+    report["cleanup_ok"] = (bool(captured["cleanup_ok"]) and not processor.is_alive()
+                            and (watch is None or watch.cleanup_ok))
     if processor.is_alive():
         report.update(status="error", reason="processor_did_not_finish")
     elif processor.error is not None:
@@ -486,6 +578,10 @@ def finish(report, captured, processor, slot, *, clock=None, session=None, retur
         for name in ("reason", "error", "signal"):
             if name in captured:
                 report[name] = captured[name]
+        if watch is not None and watch.ended_run(run_stopped):
+            report.update(status=presence.STATUS_PRESENCE_ENDED, reason=watch.ending["end_reason"])
+        elif watch is not None and watch.lost_ended_run(run_stopped):
+            report.update(status=presence.STATUS_WATCH_LOST, reason=watch.lost["reason"])
     if report["status"] == "recognized" and not report["cleanup_ok"]:
         report["status"] = "cleanup_failed"
     report["exit_code"] = (0 if report["status"] == "recognized" else
@@ -589,12 +685,16 @@ def main(argv=None):
     parser.add_argument("--target-label", metavar="CLASS",
                         help="A class of the chosen detector to summarize: windows, coverage, cells (counts only); "
                              "needs a single camera")
+    parser.add_argument("--presence-watcher", type=Path, metavar="PATH",
+                        help="The sightcircuit-presence-watcher binary (scripts/build_presence_watcher.sh), given "
+                             "explicitly: end the run when SteamVR reports standby. The run refuses to read the camera "
+                             "if the watcher cannot be armed. Presence signals only; no camera data")
     args = parser.parse_args(argv)
     if not math.isfinite(args.threshold) or not 0 <= args.threshold <= 1:
         parser.error("--threshold must be between zero and one")
     if args.validate:
         if (args.allow_camera_input or args.helper or args.seconds or args.max_frames or args.cue or args.mark_labels or
-                args.key_marks or args.target_label or args.region or args.rotation):
+                args.key_marks or args.target_label or args.region or args.rotation or args.presence_watcher):
             parser.error("--validate takes no run arguments")
         report = validate()
     else:
@@ -620,6 +720,8 @@ def main(argv=None):
         report = new_report("recognize")
         report.update(confirmation=None, seconds_requested=args.seconds, max_frames_requested=args.max_frames,
                       fps_requested=args.fps, cameras_requested=list(args.cameras))
+        if args.presence_watcher is not None:
+            report["presence_watch"] = presence.unstarted_report()
         with guard.sigterm_cancels():
             try:
                 refusal = confirm_on_terminal(limits, args.cameras)
@@ -630,9 +732,11 @@ def main(argv=None):
                                        detector=args.detector, extra_args=args.helper_arg, confirmed=True,
                                        cues=cues, mark_labels=mark_labels,
                                        key_fd=marks.terminal_fd() if args.key_marks or mark_labels else None,
-                                       target_label=args.target_label, region=None if region.whole else region)
+                                       target_label=args.target_label, region=None if region.whole else region,
+                                       presence_watcher=args.presence_watcher)
             except guard.CANCELLATION as error:
                 guard.cancelled(report, error)
+                presence.apply_failure(report, error, args.presence_watcher is not None)
     if args.report is not None:  # The operator's explicit action to save Camera Data; the file names itself.
         report["camera_data"].update(report_saved_by_operator=True, report_path=str(Path(args.report).expanduser()))
         try:

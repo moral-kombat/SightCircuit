@@ -47,7 +47,7 @@ jobs:
           python -m pip install ruff==0.14.2
           ruff check .
       - name: Check shell syntax
-        run: bash -n scripts/setup.sh scripts/setup_replay.sh scripts/setup_window.sh scripts/compile_locks.sh scripts/build_openvr_tool.sh scripts/build_overlay_bridge.sh scripts/build_camera_helper.sh
+        run: bash -n scripts/setup.sh scripts/setup_replay.sh scripts/setup_window.sh scripts/compile_locks.sh scripts/build_openvr_tool.sh scripts/build_overlay_bridge.sh scripts/build_camera_helper.sh scripts/build_presence_watcher.sh
       - name: Fail if the generated HUD contract header differs from the Python contract
         run: python3 scripts/hud_contract_header.py --check
       - name: Fail if the generated camera export header differs from the Python contract
@@ -56,6 +56,10 @@ jobs:
         run: bash scripts/build_overlay_bridge.sh
       - name: Check the bridge source under -Werror
         run: g++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -I.cache/openvr/headers -I.cache/openvr/src -fsyntax-only tools/overlay_bridge.cpp tools/overlay_bridge_lifecycle.cpp tools/overlay_bridge_rendering.cpp tools/overlay_bridge_reporting.cpp tools/overlay_bridge_sensing.cpp
+      - name: Build the presence watcher (its unit under -Werror; presence signals only, no SteamVR call here)
+        run: |
+          bash scripts/build_presence_watcher.sh
+          artifacts/presence-watcher/sightcircuit-presence-watcher --describe
       - name: Build the native exec boundary without starting capture
         run: bash scripts/build_capture_supervisor.sh
       - name: Build capability query without loading Vulkan
@@ -178,7 +182,8 @@ jobs:
             tests/test_arcturus_sdk_headers.py tests/test_camera_helper.py tests/test_camera_helper_boundaries.py \
             tests/test_camera_export.py \
             tests/test_camera_contract.py tests/test_camera_export_reader.py tests/test_camera_helper_source.py \
-            tests/test_camera_marks.py tests/test_fixed_hud_runtime.py tests/test_observed_frame_client.py
+            tests/test_camera_marks.py tests/test_fixed_hud_runtime.py tests/test_observed_frame_client.py \
+            tests/test_presence_watcher_native.py
 
   replay:
     # The decoder-only and the full replay-window environments, each exercised
@@ -203,6 +208,8 @@ jobs:
         run: bash scripts/setup_window.sh
       - name: Build native overlay transport for validation tests
         run: bash scripts/build_overlay_bridge.sh
+      - name: Build the presence watcher for its fake-runtime tests
+        run: bash scripts/build_presence_watcher.sh
       - name: Fetch the seed images and fail if detectors regress from the pinned counts (runner CPU wiring check, not Frame)
         run: |
           .venv-replay/bin/python scripts/evaluate_detectors.py --fetch --expect evaluation/seed-expected.json \
@@ -231,7 +238,8 @@ jobs:
             tests/test_camera_marks.py \
             tests/test_camera_recognize.py tests/test_still_panel.py tests/test_fixed_hud_runtime.py \
             tests/test_observed_frame_client.py tests/test_camera_hud_stage.py tests/test_scope_record.py \
-            tests/test_camera_hud_command.py tests/test_camera_guide.py
+            tests/test_camera_hud_command.py tests/test_camera_guide.py \
+            tests/test_presence_watch.py tests/test_camera_guide_presence.py tests/test_presence_watcher_native.py
       - name: Verify links, compatibility anchors and generated summaries
         run: |
           python scripts/check_docs.py

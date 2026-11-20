@@ -95,7 +95,8 @@ def closed_strings():
     """Every string an L15 field may hold: vocabulary, sources, cells, end reasons, classes and declared constants."""
     allowed = {*marks.VOCABULARY, marks.KEY_LABEL, *marks.SOURCES, *marks.CELLS, *marks.COLUMNS, *marks.ROWS,
                marks.RUN_END, *marks.BOUNDARIES, *contract.END_REASONS, *marks.TIMEBASE.values(), marks.ORIENTATION_STATEMENT,
-               "image_as_exported", "OSError", "ValueError"}
+               "image_as_exported", "OSError", "ValueError",
+               marks.ENDED_BY_HELPER}  # A removal entry's ``run_ended_by`` in a run without the presence watch.
     for name in DETECTORS:
         allowed.update(class_names(name))
     return allowed
@@ -430,7 +431,8 @@ class RecognitionTests(unittest.TestCase):
                                    terminal=terminal)
         after = marks.Clock()
         self.assertEqual((report["status"], report["exit_code"], report["frames_processed"]), ("recognized", 0, 5))
-        self.assertEqual(report["schema_version"], 3)  # 3: region fields may be present (item L14); none is here.
+        self.assertEqual(report["schema_version"], 4)  # 3: region fields may be present (item L14); 4: the presence fields are.
+        self.assertEqual((report["presence_watch"]["requested"], report["presence_watch"]["armed"]), (False, False))
         terminal.write.assert_not_called()  # No cue, no key press: nothing is printed during the run.
         self.assertEqual(threading.active_count(), 1)  # No mark thread was left, and none was needed.
         self.assertEqual(report["marks"]["recorded"], [])
