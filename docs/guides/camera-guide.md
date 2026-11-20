@@ -199,7 +199,11 @@ shows the measured values and judges nothing. For a click made before removal
 the owner accepted G7's numbers on 2026-11-19: the run ends by itself at most
 10 s after the click and at most 3.0 s after the last frame the helper
 received (`--removal-end-limit-ms 10000`; `--late-frame-limit-ms 7000` is the
-matching bound on a late frame).
+matching bound on a late frame). On 2026-11-20, with the presence stop below,
+the owner replaced the second clause: the helper's end record follows
+SteamVR's signal by at most 1.0 s with at most 5 frames received after it,
+and the watch was armed and not lost, with the click before the signal (row
+G7 of the [acceptance table](../live-capture.md#edge-hud-acceptance-gates)).
 
 **The presence stop (2026-11-20).** Run 1 of L-D1 ([E100](../evidence/e100.md))
 ended on its frame bound 13.3 s after the click: the camera kept delivering
