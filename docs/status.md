@@ -477,6 +477,10 @@ provenance and original uncertainty.
 
 [Full evidence](evidence/e100.md). Device report.
 
+### E101: Presence watcher alone on Frame, SteamVR's standby event reached a background application
+
+[Full evidence](evidence/e101.md). Device report.
+
 ## Maintaining the evidence
 
 The coordinator checks pending allocations before assigning an evidence ID and adds its record

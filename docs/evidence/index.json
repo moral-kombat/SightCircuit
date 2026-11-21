@@ -700,6 +700,13 @@
       "file": "e100.md",
       "kind": "device_report",
       "reconstructed": false
+    },
+    {
+      "id": "E101",
+      "title": "Presence watcher alone on Frame, SteamVR's standby event reached a background application",
+      "file": "e101.md",
+      "kind": "device_report",
+      "reconstructed": false
     }
   ]
 }
