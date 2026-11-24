@@ -420,6 +420,111 @@ def select_rows(rows, limit):
     return tuple(selected)
 
 
+# ---- the box panel (work-order item B1, 2026-11-24) ---------------------------------------------------------------
+# A second geometry beside the strip. Nothing above changes with it and nothing selects it by default: no stage,
+# command or bridge mode reads ``BOX_PANEL_CONFIG`` (the bridge's second geometry is item B3, the layout of
+# ``camera_hud`` item B5), and it is deliberately NOT in the generated native header yet, so
+# ``tools/hud_contract.hpp`` and ``kContractDigest`` are what they were. docs/reference/box-panel.md has the reasons
+# for every number.
+
+BOX_PANEL_PIXELS = "box_panel_pixels"  # The coordinate space of ``PanelBox.box_xyxy``.
+
+
+@dataclass(frozen=True)
+class BoxPanelConfig:
+    """``head-fixed-box-panel-v1``: a transparent panel fixed in front of the head, boxes and names only.
+
+    Placement is head-fixed like the strip's (metres, in the head's frame):
+    centred in the view (``x_m`` and ``y_m`` zero), ``distance_m`` ahead and
+    ``panel_width_m`` wide; the panel is square, so as tall. Every pixel that
+    is not part of an outline or a name tag is fully transparent, and alpha
+    is binary: 0 with RGB 0, or 255. Colours are ``(R, G, B)``. The physical
+    size is a design choice, not a calibration: the camera's field of view
+    is unmeasured, and the wearer's alignment (item B2) absorbs scale and
+    offset.
+    """
+    layout_id: str = "head-fixed-box-panel-v1"
+    width_px: int = 512
+    height_px: int = 512
+    max_boxes: int = 5
+    panel_width_m: float = 0.9
+    distance_m: float = 0.75
+    x_m: float = 0.0
+    y_m: float = 0.0
+    opacity: float = 1.0
+    outline_px: int = 2  # The bright core of a box's outline,
+    casing_px: int = 1  # and the dark line on each side of it.
+    min_box_px: int = 12  # A box is drawn at least this wide and tall.
+    name_font: str = "hershey_simplex"
+    name_font_scale: float = 0.5
+    name_thickness_px: int = 1
+    name_pad_px: int = 3  # Between a name and the edge of its plate.
+    name_max_px: int = 192  # Widest name drawn; a longer one is cut to the longest prefix that fits.
+    outline_rgb: tuple = (130, 230, 70)
+    casing_rgb: tuple = (16, 16, 16)
+    plate_rgb: tuple = (16, 16, 16)
+    name_rgb: tuple = (235, 235, 235)
+
+    @property
+    def update_bytes(self):
+        """RGBA bytes of one panel image: what one update carries to the bridge."""
+        return self.width_px * self.height_px * RGBA_BYTES
+
+
+BOX_PANEL_CONFIG = BoxPanelConfig()
+
+
+@dataclass(frozen=True)
+class PanelBox:
+    """One box of the box panel: a sanitized name, a score and a rectangle in panel pixels.
+
+    ``box_xyxy`` is integers in ``BOX_PANEL_PIXELS``: origin top left, x0 and
+    y0 inclusive, x1 and y1 exclusive, ``0 <= x0 < x1 <= width_px`` and
+    ``0 <= y0 < y1 <= height_px``. A side that lies on the panel's edge
+    means the box may continue beyond it; the renderer leaves that side open.
+    """
+    label: str
+    confidence: float
+    box_xyxy: tuple
+
+    def as_dict(self):
+        return {"label": self.label, "confidence": self.confidence, "box_xyxy": list(self.box_xyxy)}
+
+
+def panel_box_valid(box, config):
+    """Whether ``box`` is a ``PanelBox`` the panel of ``config`` can draw: the one rule the renderer and selector share."""
+    if not isinstance(box, PanelBox):
+        return False
+    rect, score, label = box.box_xyxy, box.confidence, box.label
+    return (type(rect) is tuple and len(rect) == 4 and all(type(value) is int for value in rect) and
+            0 <= rect[0] < rect[2] <= config.width_px and 0 <= rect[1] < rect[3] <= config.height_px and
+            type(score) in (int, float) and math.isfinite(score) and 0 <= score <= 1 and
+            type(label) is str and bool(label) and row_label(label) == label)
+
+
+def select_boxes(boxes, limit):
+    """The box hygiene: order, the exact-duplicate dedupe and the cap. Returns ``(kept, duplicates, over_cap)``.
+
+    Boxes are ordered by descending confidence, then label, then rectangle,
+    so the order never depends on the detector's. A box with the same label
+    and rectangle as an earlier one is a duplicate, whatever the cap; the
+    first ``limit`` of the rest are kept and the others counted as over the
+    cap.
+    """
+    kept, seen, duplicates, over_cap = [], set(), 0, 0
+    for box in sorted(boxes, key=lambda box: (-box.confidence, box.label, box.box_xyxy)):
+        key = (box.label, box.box_xyxy)
+        if key in seen:
+            duplicates += 1
+            continue
+        seen.add(key)
+        if len(kept) == limit:
+            over_cap += 1
+        else:
+            kept.append(box)
+    return tuple(kept), duplicates, over_cap
+
+
 @dataclass(frozen=True)
 class HudChecks:
     """One frame's exclusion telemetry, never presented.
