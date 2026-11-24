@@ -59,6 +59,10 @@ Each device guide describes prerequisites, operating limits, and shutdown.
 - [Camera HUD stage](reference/camera-hud.md) — the stage that turns each
   processed camera frame into an observed frame on the bridge, its client and
   its report; library code, cloud-checked, real output refused.
+- [Box panel](reference/box-panel.md) — the second HUD geometry
+  (`head-fixed-box-panel-v1`), its renderer and `camera_boxes` with the
+  wearer's alignment; contract and library code, cloud-checked, selected by
+  nothing yet.
 - [Agent-on-Frame design](agent-on-frame.md) and
   [third-party attribution](../THIRD_PARTY.md).
 
