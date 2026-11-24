@@ -121,11 +121,11 @@ each a new approval; the displayed path waits for L17.
 | L10 | Done (#91, 2026-11-16), independently reviewed and accepted by the owner ("Yes, accept the edit (Recommended)"): the record also binds the step and the run's actual bounds, is re-checked at the start, is revoked by a refused or failed run, and requires a manifest that carries the camera group (schema 3, which also pins the inference runtime); the writer is `scripts/stage_scope_record.py`, outside the operator commands. Reviewed `gates.py` edit 1, no gate opens: a new `LIVE_CAMERA_INPUT` lifted by G7, G8 and G10; `LIVE_HUD_OUTPUT` lifted by G8, G9 and G10; `LIVE_IMAGE_INPUT` (the mirror) and `HARDWARE_MAPPING` unchanged. A one-run scope record consulted only by `camera_hud`, written by the Frame manager when staging an approved step, bound to the revision, the manifest digests, a run id, an absolute deadline, the source and the geometry. This is a procedural control against mistakes, not a cryptographic one: anyone who can run the writer on the Frame can write a record, so the owner's approval in the Frame manager's session stays the authority. Tests refuse a missing, expired, mismatched or reused record, the mirror, both cameras, other geometry and other runners | M, cloud and decision | L3, L7, L8, decisions 1, 2 and 15 |
 | L11 | Done (#85, 2026-11-16). Close the replay window's ungated live-source hook (input review finding 1): `ReplayWorker` accepts recorded sources only | S, cloud | none |
 | L12 | Pre-sitting rehearsal before each displayed device step (L-D3 included): the full pre-push list on the pinned commit plus ARM64 on demand, an independent review against this order and the consent rules, the Frame manager's manifest and step cards; afterwards evidence entries and a verdict per row stating what stays unproven | S, cloud and docs | L9, L10, L11 |
-| L13 | Reviewed `gates.py` edit 2, the lift, only after G7 to G10 are accepted and the owner decides: the camera input and HUD output gates open for `camera_hud`, the left camera and `fixed-edge-hud-v1` only. The gate model has no notion of a gate open for a named runner today, so this edit specifies that mechanism and its tests. Mirror input and hardware mapping stay closed; bounded attended runs and the typed start stay | M, cloud and decision | L-D1 to L-D5 accepted |
+| L13 | Since 2026-11-24 the lift names the box panel's geometry, not `fixed-edge-hud-v1` (B6). Reviewed `gates.py` edit 2, the lift, only after G7 to G10 are accepted and the owner decides: the camera input and HUD output gates open for `camera_hud`, the left camera and `fixed-edge-hud-v1` only. The gate model has no notion of a gate open for a named runner today, so this edit specifies that mechanism and its tests. Mirror input and hardware mapping stay closed; bounded attended runs and the typed start stay | M, cloud and decision | L-D1 to L-D5 accepted |
 | L14 | Done for runs without display (#99, 2026-11-20), independently reviewed, after [E100](evidence/e100.md) (coverage 0 of 16 windows) and the owner's choice of the centre of view: a region of the frame cropped before the resize and optionally turned by quarter turns, boxes mapped back to one whole-frame space; `--region` and `--rotation` on `camera_recognize` and `camera_guide`; and the guided window's `scan` script, which sees each frame through a schedule of six windows at four rotations with both detectors and tallies where the target was found. A scan gives the image's axis and not which way up, and reports no coverage figure. `camera_hud` is not wired (L17). The helper-side crop stays held. The original text: held remedies if a device step shows processing p95 over 200 ms, a stalled consumer or coverage short of its threshold: downscale or crop inside the helper (frames are 18,213,888 bytes), or preprocessing changes | M, held | a failing device result |
 | L15 | Done (#82, 2026-11-16), independently reviewed: `--cue`, `--key-marks` and `--mark-labels`, `--target-label` with a single camera, coverage bounded by scheduled cue times, one removal entry per `remove` mark; without the new options the terminal is never read after the confirmation. Make L-D1 measurable: `camera_recognize` records a wall-clock time beside each frame's monotonic time and accepts operator marks (removal, cue positions), counts only; the arrow side checked on both axes, with the camera image's orientation confirmed by a cue | S, cloud | none |
 | L16 | Done for runs without display (#100, 2026-11-20), independently reviewed, on the owner's decision of that day after [E100](evidence/e100.md) (N1's presence source brought forward for the stop only; resume stays in lane N): `sightcircuit-presence-watcher` joins a running SteamVR as a background application, reads presence events only (no overlay, no setting, no camera interface) and `--presence-watcher` on `camera_recognize` and `camera_guide` ends the run on SteamVR's standby event. A run that names the watcher does not read the camera unless the watch is armed, and stops if it is lost; a click made after the signal, or a helper that reached its bound, is never a presence stop. The faster signals (proximity, activity level) are recorded, not acted on, until seen on the Frame. Nothing has run against SteamVR. `camera_hud` is not wired (L17) | M, cloud | E100, decision of 2026-11-20 |
-| L17 | Open, after L-D1b's result: the region of view and the presence watch on the displayed path. `CameraHudStage` takes a region and passes the mapped box space to `camera_rows`; `camera_hud --camera` runs the watch beside the bridge and the helper, and a watch-ended run hides the tile and reports the signal-to-hide time; the watcher's binary and sources join the manifest's `camera_hud` group; the scope record binds the region and rotation if the owner so decides; `--validate` gets a watcher stand-in | M, cloud and decision | L14, L16, L-D1b |
+| L17 | Open, after L-D1b's result, and landing on the box panel's layout (B5) since 2026-11-24: the region of view and the presence watch on the displayed path. `CameraHudStage` takes a region and passes the mapped box space to `camera_rows`; `camera_hud --camera` runs the watch beside the bridge and the helper, and a watch-ended run hides the tile and reports the signal-to-hide time; the watcher's binary and sources join the manifest's `camera_hud` group; the scope record binds the region and rotation if the owner so decides; `--validate` gets a watcher stand-in | M, cloud and decision | L14, L16, L-D1b |
 
 #### Lane L device steps
 
@@ -142,10 +142,10 @@ SteamVR mirror may be in the cameras' view during a run.
 | L-D1 | G7 and coverage, no display of camera results, out of gate as in E99: two bounded recognition runs of at most 30 s, left camera, 5 fps, through the guided window ([`camera_guide`](guides/camera-guide.md), #96; the owner's choice of 2026-11-19 after the terminal runs could not be operated without a keyboard). Run 1 (`removal`): the bottle held at about 0.5 m at Start, then about 1 m, then one click, "I am taking it off now", and the headset comes off. Run 2 (`positions`): the bottle held where the screen shows (centre, left, right, up, down). Approved by the owner on 2026-11-19; the helper was rebuilt and its offline tests passed on the Frame on 2026-11-18 (the Frame manager's report). Run 1 ran on 2026-11-19 and did not meet G7 ([E100](evidence/e100.md)); run 2 was held and did not run. Any further run is a new approval | the run ends by itself on the presence watch's signal or the helper's own presence stop at most 10 s after the click, the helper's end at most 1.0 s and 5 frames after SteamVR's signal, the watch armed and not lost (row G7 as restated on 2026-11-20); the bottle in at least 80% of in-view 1-s windows within 1 m; p95s within 200 ms; the offline side matches the shown position in the majority of each position's frames, or decision 3 falls to names only | L1, L15, #96, approval |
 | L-D1a | The presence watcher alone, no camera, no helper, no window: `sightcircuit-presence-watcher --watch --seconds 60` with SteamVR running; the wearer wears the headset about 20 s, takes it off about 20 s and puts it back ([the guide's step](guides/camera-recognize.md#the-watcher-alone-the-first-device-step-for-this-item)). Approved by the owner on 2026-11-20 ("Yes, approve it (Recommended)"). Ran on 2026-11-20 ([E101](evidence/e101.md)): the standby event reached the watcher twice, each within 3 ms of the XRService line and 5.03 s after `user_interaction_ended`; exit 0; passthrough unchanged. Not shown: whether a worn, still headset goes to standby | a `ready` line with the activity level while worn; whether `enter_standby_event` reaches a background application and how long after removal; which faster signals exist; exit 0; passthrough unchanged. A finding, not a pass or fail of G7 | L16, approval |
 | L-D1b | One scan run through the guided window, out of gate as E100: `camera_guide --script scan`, left camera, 5 fps, 30 s, both detectors, the bottle held upright and still, straight ahead at about 0.5 m. After E101 the scan runs without the armed watch, since a wearer keeping still might be read as idle; the watcher runs beside it by itself, observing only, to answer that. Approved by the owner on 2026-11-20 ("Yes, approve it (Recommended)"); not yet run | the bottle found by at least one detector through at least one window, with the axis and the median box that give L-D1's `--region` and `--rotation`; processing p95 within 200 ms with both detectors, or the scan repeated with one; passthrough unchanged. No coverage figure and no G7 verdict come from a scan | L14, L-D1a, approval |
-| L-D2 | G8, coexistence and the canary: the bridge shows the public seed fixture with horses (a class absent from the room) at the HUD position at HUD size, updated at 5 Hz for at least 120 s, during one `camera_recognize` run; a printed copy held in view for the last 10 s as the positive control. No camera-derived output is shown. The panel driver needed for a still at 5 Hz is part of L7 | no horse while only the panel shows it; the print detected at least once; at least 600 acknowledged updates, no freeze; camera p95 within 200 ms with the bridge running; both cleanups clean. Measured for this scene and panel only | L1, decisions 6 and 7, approval |
-| L-D3 | G9, real-output expiry and soak, no camera: `camera_hud --synthetic-rows` on the rebuilt bridge under one scope record; a counter row at 5 Hz for at least 75 s with three stops | at least 375 acknowledged updates at 320x128; each stop gives `frame_expired` within 1,000 ms plus one poll and the wearer sees the tile blank; nothing displayed past its deadline | L7, L9, L10, L12, approval |
-| L-D4 | First displayed camera labels: `camera_hud --camera`, at most 30 s, on the bottle; the wearer turns away at least three times; the headset removed once at the end, so the presence stop is seen on the displayed path. A separate entry; it does not count as G10 | the bottle named; arrows within tolerance if decision 3 is arrows; the name gone within about 2 s of each turn-away by the wearer and `frame_expired`; the tile cleared on removal; p95s within 200 ms | L-D1 to L-D3, L4, L9, L10, L12, approval |
-| L-D5 | G10, the 60-second camera-HUD acceptance (formerly F7 and WP12): `camera_hud --camera`, 90 s bound, the bottle within 1 m, head turns, the bottle out of view for 5 s and back. The arrow tolerance agreed in writing first | the bottle named for at least 90% of a contiguous 60 s window, no gap over 2 s, and the wearer agrees; expiry on leaving view; capture-to-display p95 within decision 9's bound; input age at most 1,000 ms; passthrough and tracking normal during and for 30 s after; clean shutdown; green input aborts (G2) | L-D4, approval |
+| L-D2 | Retargeted to the box panel on 2026-11-24 (lane B, item B6 restates this row; the text that follows is the strip's). G8, coexistence and the canary: the bridge shows the public seed fixture with horses (a class absent from the room) at the HUD position at HUD size, updated at 5 Hz for at least 120 s, during one `camera_recognize` run; a printed copy held in view for the last 10 s as the positive control. No camera-derived output is shown. The panel driver needed for a still at 5 Hz is part of L7 | no horse while only the panel shows it; the print detected at least once; at least 600 acknowledged updates, no freeze; camera p95 within 200 ms with the bridge running; both cleanups clean. Measured for this scene and panel only | L1, decisions 6 and 7, approval |
+| L-D3 | Retargeted to the box panel on 2026-11-24 (lane B, item B6 restates this row; the text that follows is the strip's). G9, real-output expiry and soak, no camera: `camera_hud --synthetic-rows` on the rebuilt bridge under one scope record; a counter row at 5 Hz for at least 75 s with three stops | at least 375 acknowledged updates at 320x128; each stop gives `frame_expired` within 1,000 ms plus one poll and the wearer sees the tile blank; nothing displayed past its deadline | L7, L9, L10, L12, approval |
+| L-D4 | Retargeted to the box panel on 2026-11-24 (lane B, item B6 restates this row; the text that follows is the strip's). First displayed camera labels: `camera_hud --camera`, at most 30 s, on the bottle; the wearer turns away at least three times; the headset removed once at the end, so the presence stop is seen on the displayed path. A separate entry; it does not count as G10 | the bottle named; arrows within tolerance if decision 3 is arrows; the name gone within about 2 s of each turn-away by the wearer and `frame_expired`; the tile cleared on removal; p95s within 200 ms | L-D1 to L-D3, L4, L9, L10, L12, approval |
+| L-D5 | Retargeted to the box panel on 2026-11-24 (lane B, item B6 restates this row; the text that follows is the strip's). G10, the 60-second camera-HUD acceptance (formerly F7 and WP12): `camera_hud --camera`, 90 s bound, the bottle within 1 m, head turns, the bottle out of view for 5 s and back. The arrow tolerance agreed in writing first | the bottle named for at least 90% of a contiguous 60 s window, no gap over 2 s, and the wearer agrees; expiry on leaving view; capture-to-display p95 within decision 9's bound; input age at most 1,000 ms; passthrough and tracking normal during and for 30 s after; clean shutdown; green input aborts (G2) | L-D4, approval |
 
 The red LED is a code property (no software path touches it), not a wearer
 observation; the step cards say so.
@@ -233,12 +233,13 @@ The list keeps each question as it was put.
     and needs a rule for a re-run after a failure: each re-run is a new
     approval with a new record. Recommended: yes.
 
-### Box display, draft scope change (2026-11-24, not adopted)
+### Box display scope change (adopted 2026-11-24)
 
-A draft the owner asked for on 2026-11-24. Nothing here is decided: the
-[scope](poc-scope.md)'s Decision, D1 and the acceptance rows stand as written
-until the owner answers the questions at the end, and the scope records only
-what is accepted. This draft changes no device step, gate or consent rule.
+Drafted at the owner's request on 2026-11-24 and adopted the same day: the
+owner answered its seven questions, each with the recommended answer, and
+the [scope](poc-scope.md#decision) carries the result. The answers are at the
+end of this section. Adoption opens no gate and approves no device step; the
+box display's acceptance numbers are settled with lane B's work order.
 
 **Why.** The goal the owner states for the product is a box and a name drawn
 around each recognised object in view (the README, #95). The fixed strip at
@@ -248,9 +249,9 @@ scene. Since 2026-11-16 the input is the SDK camera, which images the room and
 not the display. That is the 2026-11-09 review's statement and row G8 is its
 device test; if G8 holds, nothing confines the output to the edge.
 
-**What would change.** The scope's Decision (names with direction arrows in a
+**What changes.** The scope's Decision (names with direction arrows in a
 fixed strip at the edge, no label crossing the scene) and D1 (the fixed edge
-HUD as this phase's product) would be superseded by: detect objects in the
+HUD as this phase's product) are superseded by: detect objects in the
 left SDK camera's image and draw a box with a name around each, over the
 scene. Unchanged: the SDK camera as input, the region of view, the presence
 stop, attended bounded runs, the one-run record, the passthrough rule, what
@@ -270,43 +271,39 @@ anywhere" and the 2026-11-16 decision that no calibration is used in this
 phase changed, and whether the SDK agreement allows that use is the owner's
 to check. Levels 1 and 2 need neither.
 
-**Recommendation.** Adopt the goal. Build Level 1 as this phase's display and
-accept it with the still-head claim. Make Level 2 the first item of the next
-phase. Leave calibration data unused until Level 1's error has been measured
-on the Frame.
+**Adopted.** Level 1 is this phase's display, accepted with the still-head
+claim. Level 2 is the first item of the next phase. Calibration data stays
+unused; the question returns only if Level 1's error, measured on the Frame,
+calls for it.
 
-**The strip.** Recommended: retarget the displayed steps, do not finish the
-strip first. L-D2 (the canary) would show its panel at the box panel's
-position and size, L-D3 (expiry) would run on the box panel, L-D4 would show
-the first boxes and L-D5 would be the acceptance run with boxes. The strip
-stays in the code as the names-only fallback and a diagnostic, with no
-acceptance run of its own. This costs the build work below and saves the
-sittings that the strip's own L-D2 to L-D5 would take before the same four
-are repeated for boxes. The alternative, finishing the strip's acceptance
-first, proves the transport sooner on a display nobody intends to keep.
+**The strip.** The displayed steps are retargeted; the strip is not finished
+first. L-D2 (the canary) shows its panel at the box panel's position and
+size, L-D3 (expiry) runs on the box panel, L-D4 shows the first boxes and
+L-D5 is the acceptance run with boxes. The strip stays in the code as the
+names-only fallback and a diagnostic, with no acceptance run of its own.
+This costs the build work of lane B and saves the sittings that the strip's
+own L-D2 to L-D5 would take before the same four are repeated for boxes.
 
-**Build outline if adopted** (cloud, each item reviewed; an outline, not a
-work order):
+#### Lane B, the box panel
 
-- A second geometry in the HUD contract, the box panel: its size and
-  placement, per-pixel transparency, a thin outline and a name per box, a cap
-  on the number of boxes, with its renderer and digests.
-- `camera_boxes` beside `camera_rows`: mapped boxes in the whole-frame space
-  to panel pixels through the alignment; boxes outside the region dropped.
-- The bridge shows the box panel as a second fixed geometry of its
-  real-output mode, with the same observed-frame protocol, expiry,
-  acknowledgements and hide.
-- The alignment: at most five numbers (scale and offset on each axis, and the
-  quarter turn), set by the wearer in a guided, displayed step.
-- `camera_hud` takes the layout; the scope record and the manifest bind the
-  layout and the alignment. L17 (the region and the presence watch on the
-  displayed path) lands on this.
-- Rows G8 to G10 and the device steps restated; the lift (L13) names the box
-  geometry.
-- Later, for Level 2: the pose history, then placement in tracking space.
+Cloud items, each a reviewed pull request against `main`; none needs the
+Frame. B1 to B3 do not depend on the scan and can start at once; B4 and B5
+need the region and orientation from L-D1b and L-D1.
 
-**Proposed acceptance for Level 1** (G10 restated; the numbers are for the
-owner): the bottle, held within 1 m in the region of view, boxed and named
+| Item | Work | Kind | Depends on |
+| --- | --- | --- | --- |
+| B1 | A second geometry in the HUD contract, the box panel: its size and head-fixed placement, per-pixel transparency, a thin outline and a name per box, a cap on the number of boxes; its renderer and digests; the strip's geometry and digests unchanged | M, cloud | the decision of 2026-11-24 |
+| B2 | `camera_boxes` beside `camera_rows`: mapped boxes in the whole-frame space to panel pixels through an alignment (scale and offset on each axis and the quarter turn, at most five numbers); boxes outside the region dropped; the alignment a validated, reported value | S, cloud | B1, L14 |
+| B3 | The bridge shows the box panel as a second fixed geometry of its real-output mode, with the same observed-frame protocol, expiry, acknowledgements and hide; tested on the fake runtime | M, cloud, native | B1 |
+| B4 | The alignment step: the wearer sets the alignment in a guided, displayed run with the bottle held still; its numbers are saved on the Frame and reported as format metadata (the owner, 2026-11-24). A displayed step, so it runs under a scope record and its own approval | M, cloud and decision | B2, B3, L-D1b, L-D1 |
+| B5 | `camera_hud` takes the layout; the scope record and the manifest bind the layout and the alignment; L17 (the region and the presence watch on the displayed path) lands on this | M, cloud | B2, B3, L17 |
+| B6 | Rows G8 to G10 and steps L-D2 to L-D5 restated for the box panel with the owner's numbers; L13's lift names the box geometry | S, docs and decision | L-D1b, B1 to B5 |
+
+Later, for Level 2 and not in this lane: the pose history, then placement in
+tracking space.
+
+**Proposed acceptance for Level 1** (G10 restated; proposals until B6, by
+the owner's answer 7): the bottle, held within 1 m in the region of view, boxed and named
 for at least 90% of a contiguous 60 s with no gap over 2 s; with the head
 still, the wearer answers at each of five cued positions (centre, left,
 right, up, down) whether the box is on the bottle, touching it or off it,
@@ -323,25 +320,25 @@ more visible than a name in a strip does, and [E100](evidence/e100.md) holds
 a false animal label at a confidence of 1.0. At 5 frames a second a box
 moves in steps.
 
-**Questions for the owner.**
+**The owner's answers (2026-11-24).**
 
 1. Goal: boxes and names over the scene replace the edge strip as this
-   phase's product. Recommended: yes.
-2. The strip: retarget the remaining displayed steps to the box panel
-   (recommended), or finish the strip's acceptance first.
+   phase's product. "Yes, boxes are the goal (Recommended)".
+2. The strip: the remaining displayed steps are retargeted to the box panel.
+   "Yes, retarget to boxes (Recommended)".
 3. First claim: Level 1, the box on the object while the head is still, with
-   Level 2 next (recommended), or no acceptance before Level 2.
-4. Calibration data: stays unused for now (recommended), revisited with
-   Level 1's measured error.
+   Level 2 next. "Yes, still-head first (Recommended)".
+4. Calibration data stays unused. "Yes, keep it unused (Recommended)".
 5. Consent: boxes and names may be shown to the wearer over the scene in
    attended bounded runs, with nothing more saved than today, and the
    passthrough rule's exception for the tile extends to the box panel (only a
-   change in the passthrough image itself counts). Recommended: yes.
+   change in the passthrough image itself counts). "Yes, allow boxes
+   (Recommended)".
 6. The alignment's numbers, which are ours and set by the wearer, not the
    SDK's calibration, may be saved on the Frame and published as format
-   metadata. Recommended: yes.
-7. The acceptance numbers above. Recommended: settle them when the work order
-   is written, after L-D1b has shown the region.
+   metadata. "Yes, save and publish (Recommended)".
+7. The acceptance numbers are settled when the work order's rows are restated
+   (B6), after L-D1b has shown the region. "Settle them later (Recommended)".
 
 ### Implementation and evidence reconciliation
 
@@ -672,11 +669,13 @@ handler on the main thread ([checks reference](reference/development-checks.md#h
   released (lane R's R0 records it in this page), and the bottle replaces the
   chair as the object. Next device approvals on that lane, each separate:
   L-D1, then L-D2, then L-D3 to L-D5 after their cloud items.
-- Open since 2026-11-24: the seven questions of the
-  [box display draft](#box-display-draft-scope-change-2026-11-24-not-adopted),
-  a scope change the owner asked to have drafted. Until they are answered the
-  edge strip remains this phase's display and nothing in the draft is in
-  force.
+- Decided 2026-11-24: the [box display scope change](#box-display-scope-change-adopted-2026-11-24)
+  is adopted with all seven answers (scope row of that date): boxes and names
+  over the scene are this phase's product, as a head-fixed panel accurate
+  while the head is still; the displayed steps L-D2 to L-D5 are retargeted
+  to it; calibration data stays unused; the alignment's numbers may be saved
+  and published. Still to settle, with B6: the box display's acceptance
+  numbers.
 - The Frame rebooted into SteamOS 0.5.8 ([E85](evidence/e085.md)); a Frame
   manager session exists and the "Frame update check" scheduled task was
   rebound to it on 2026-11-07, with the old task left disabled as a record.
@@ -703,9 +702,9 @@ as a numbered evidence entry, distinct from cloud checks and CI results.
 | G5. feedback exclusion and physical expiry | HUD visible during head motion with no detections from its footprint; independently observed expiry within the declared bound | Not run in committed evidence |
 | G6. combined live HUD | The [60-second POC acceptance](poc-scope.md#acceptance), with the report fields below | Not run. The POC object is chair; the 400-frame replay panel continued updating on the tested device/runtime, but that is not combined live acceptance; [E81](evidence/e081.md). Mirror route: superseded by G10 |
 | G7. presence stop and coverage (camera) | Step L-D1, no display of camera results: a bounded recognition run through the guided window ends by itself, `presence_ended` with reason `standby` from the armed presence watch or `headset_removed` or `standby` from the helper, at most 10 s after the wearer's "I am taking it off now" click (made just before the headset comes off, with about 17 s of the run left, so a run that only ends on its bound fails; a click made after SteamVR's signal is not a removal); the helper's end record at most 1.0 s after SteamVR's signal with at most 5 frames received after it; the watch armed and not lost; the bottle, within 1 m, detected in at least 80% of the in-view 1-second windows; inference and processing p95 at most 200 ms; passthrough unchanged during the run and for 30 s after the headset is back on | Not met on the first run ([E100](evidence/e100.md), 2026-11-19, a device report): the guided window worked and passthrough was unchanged, but the bottle was detected in none of 150 frames, and the run ended on its frame bound 13.3 s after the click, not on a presence stop (SteamVR logged standby 7.0 s after the click and frames kept arriving for the 6.3 s left). L14 and L16 come before a re-run, which is a new approval; the timing was restated on 2026-11-20 with L16 (the owner: "Yes, accept it (Recommended)"), replacing the frame-gap stop's "at most 3.0 s after the last frame the helper received"; the 1.0 s and 5 frames are first estimates to be brought back if the Frame's helper needs longer to stop. Before it, the proof of concept ([E99](evidence/e099.md)) did not exercise removal and did not detect the bottle at distance. The limits were revised by the owner on 2026-11-19 ("Yes, accept them (Recommended)"): the first wording timed the stop from a key press made once the headset was off, which a wearer without a keyboard could not give |
-| G8. coexistence and no feedback (camera) | Step L-D2: with the bridge showing a public seed image of horses at the HUD position and size, updated at 5 Hz for at least 120 s (at least 600 acknowledged updates, no freeze), one bounded `camera_recognize` run reports no `horse` while only the panel shows it and at least one `horse` when a printed copy is held in view (the positive control); camera inference p95 at most 200 ms with the bridge running; both cleanups clean; passthrough unchanged; no screen showing the Frame's output in the cameras' view | Not run. That the camera images the room before compositing is the 2026-11-09 review's statement, not device evidence; a pass holds for the scene and panel tested |
-| G9. real-output expiry and soak | Step L-D3, no camera: synthetic rows through the `--fixed-hud` bridge at 5 Hz for at least 75 s (at least 375 acknowledged updates at 320x128, the wearer sees the counter advance to the end); at each of three stops a `frame_expired` record whose hide was called within one 20 ms poll of the deadline (1,000 ms after the last frame's observation) and whose `hide_returned_ns` is within 250 ms after the deadline, `hide_ok` true and the runtime reporting the tile not visible, and the wearer sees the tile gone; nothing displayed past its deadline; cleanup clean; passthrough and tracking normal during and for 30 s after | Not run. The mode has met only a fake runtime in tests (#81). The bound was revised by the owner on 2026-11-16 ("Yes, use 1.25 s (Recommended)"): the first wording, hide returned within 1,000 ms plus one poll, measured 1,007 to 1,015 ms on a fake runtime whose calls cost nothing, so a working headset would have failed it |
-| G10. combined camera HUD | The [60-second POC acceptance](poc-scope.md#acceptance) on the camera route, step L-D5 after a first-light run (L-D4): the bottle named for at least 90% of a contiguous 60 s window with no gap over 2 s, and the wearer agrees; arrows within the tolerance agreed in writing before the run, or names only; the name gone when the bottle leaves view and the tile cleared on headset removal, by `frame_expired` and by the wearer; nothing displayed past its deadline; input age at most 1,000 ms; inference and processing p95 at most 200 ms and capture-to-display p95 at most 400 ms; passthrough and tracking normal during and for 30 s after; clean shutdown with truthful helper, supervisor, worker and bridge reports; green input aborts the run (G2) | Not run |
+| G8. coexistence and no feedback (camera) | To be restated for the box panel (owner, 2026-11-24; item B6); until then the strip's wording stands and is not run: Step L-D2: with the bridge showing a public seed image of horses at the HUD position and size, updated at 5 Hz for at least 120 s (at least 600 acknowledged updates, no freeze), one bounded `camera_recognize` run reports no `horse` while only the panel shows it and at least one `horse` when a printed copy is held in view (the positive control); camera inference p95 at most 200 ms with the bridge running; both cleanups clean; passthrough unchanged; no screen showing the Frame's output in the cameras' view | Not run. That the camera images the room before compositing is the 2026-11-09 review's statement, not device evidence; a pass holds for the scene and panel tested |
+| G9. real-output expiry and soak | To be restated for the box panel (owner, 2026-11-24; item B6); until then the strip's wording stands and is not run: Step L-D3, no camera: synthetic rows through the `--fixed-hud` bridge at 5 Hz for at least 75 s (at least 375 acknowledged updates at 320x128, the wearer sees the counter advance to the end); at each of three stops a `frame_expired` record whose hide was called within one 20 ms poll of the deadline (1,000 ms after the last frame's observation) and whose `hide_returned_ns` is within 250 ms after the deadline, `hide_ok` true and the runtime reporting the tile not visible, and the wearer sees the tile gone; nothing displayed past its deadline; cleanup clean; passthrough and tracking normal during and for 30 s after | Not run. The mode has met only a fake runtime in tests (#81). The bound was revised by the owner on 2026-11-16 ("Yes, use 1.25 s (Recommended)"): the first wording, hide returned within 1,000 ms plus one poll, measured 1,007 to 1,015 ms on a fake runtime whose calls cost nothing, so a working headset would have failed it |
+| G10. combined camera HUD | To be restated for the box panel (owner, 2026-11-24; item B6); until then the strip's wording stands and is not run: The [60-second POC acceptance](poc-scope.md#acceptance) on the camera route, step L-D5 after a first-light run (L-D4): the bottle named for at least 90% of a contiguous 60 s window with no gap over 2 s, and the wearer agrees; arrows within the tolerance agreed in writing before the run, or names only; the name gone when the bottle leaves view and the tile cleared on headset removal, by `frame_expired` and by the wearer; nothing displayed past its deadline; input age at most 1,000 ms; inference and processing p95 at most 200 ms and capture-to-display p95 at most 400 ms; passthrough and tracking normal during and for 30 s after; clean shutdown with truthful helper, supervisor, worker and bridge reports; green input aborts the run (G2) | Not run |
 
 [`sightcircuit/gates.py`](../sightcircuit/gates.py) is the code's single gate
 table, and since work-order item L10 (its reviewed edit 1) it has four gates.
