@@ -153,13 +153,13 @@ changes.
 
 | Rule | In `--fixed-hud` |
 | --- | --- |
-| Arguments | none, apart from the trailing `--connect-as` every runtime mode takes; anything else is exit 64 before any connect |
-| Geometry | the `fixed-edge-hud-v1` placement and opacity (`kHud*` in the generated header), applied once at connect by `hud_settings()`; the final report's `fixed_hud` object records it with the configuration digest |
+| Arguments | none, apart from `--layout ID` ([fixed layouts](#fixed-layouts-work-order-item-b3-2026-11-24)) and the trailing `--connect-as` every runtime mode takes; anything else is exit 64 before any connect |
+| Geometry | without `--layout`, the `fixed-edge-hud-v1` placement and opacity (`kHud*` in the generated header), applied once at connect by `hud_settings()`; the final report's `fixed_hud` object records it with the configuration digest |
 | Settings packet (opcode `2`) | refused: `fixed_hud_refuses_settings`, exit 1, the usual cleanup. Nothing on the pipe can move, resize or fade the tile |
 | Frame without a deadline (opcode `1`), expiring frame of the validation layout (opcode `4`) | refused: `fixed_hud_requires_observed_frame` |
-| Observed frame (opcode `6`) | accepted at exactly 320 × 128 (`fixed_hud_frame_size` otherwise) |
+| Observed frame (opcode `6`) | accepted at exactly the layout's size, 320 × 128 without `--layout` (`fixed_hud_frame_size` otherwise) |
 | Visibility request (opcode `5`) and stop (opcode `3`) | as in the stream modes; a show request cannot bring back an expired tile, because a show with no image presented is a `HideOverlay` call (`no_image`) |
-| `ready` line | `frame_expiry_supported: true`, `observed_frames_supported: true` and `fixed_hud: true` |
+| `ready` line | `frame_expiry_supported: true`, `observed_frames_supported: true` and `fixed_hud: true`; `layout_id` only when `--layout` was given |
 
 `frame_expiry_supported` and `observed_frames_supported` are true in
 `--validate-stdin` and `--fixed-hud` and in no other mode. `--stdin` still ends
@@ -167,6 +167,65 @@ a run that sends opcode `4` with `expiring_frames_validation_only` (and one
 that sends opcode `6` with `observed_frames_fixed_hud_or_validation_only`), the
 marker modes still take the visibility request alone, and the test panel reads
 no input.
+
+### Fixed layouts (work-order item B3, 2026-11-24)
+
+The mode has two fixed geometries, both from the generated contract header:
+the strip and the [box panel](box-panel.md#the-bridge-and-the-panel-item-b3).
+The layout is chosen on the command line, once, and nothing on the pipe can
+change it. **Cloud-checked only**, on the fake runtime; the Frame's bridge
+predates it, and no caller that is permitted to drive real output names a
+layout.
+
+| Launch | Layout | Frame taken | Placement |
+| --- | --- | --- | --- |
+| `--fixed-hud` | `fixed-edge-hud-v1`, as before layouts existed: the same lines, report and error names, byte for byte | 320 × 128 | 0.32 m wide, 1.25 m ahead, `x` 0.55, `y` −0.35, opacity 1.0 |
+| `--fixed-hud --layout fixed-edge-hud-v1` | the same, named | 320 × 128 | the same |
+| `--fixed-hud --layout head-fixed-box-panel-v1` | the box panel | 512 × 512 (1,048,576 bytes, the largest frame a packet carries) | 0.9 m wide, 0.75 m ahead, centred, opacity 1.0 |
+| `--validate-stdin --layout ID` | the layout's size rule, without a runtime | the layout's | none: validation places nothing |
+
+`--layout` comes right after the mode, before a trailing `--connect-as`. An
+unknown name is `unknown_layout`; `--layout` after any other mode, twice, or
+without a name is the usual argument error. All are exit 64 before any
+connect.
+
+What a named layout changes, and it is all it changes:
+
+- **The size rule.** A frame of another size ends the run before any upload:
+  `frame_for_other_layout` when it is exactly another layout's size (its
+  sender drew for the wrong one), `fixed_hud_frame_size` otherwise. A run
+  without `--layout` keeps the one name it has always given,
+  `fixed_hud_frame_size`.
+- **The placement**, applied once at connect (`layout_settings`), within the
+  panel limits every settings packet is held to (a `static_assert` in
+  `overlay_frame.hpp`).
+- **The lines that name it.** The `ready` line carries `layout_id`; the final
+  report's `fixed_hud` block has the same fourteen keys for both layouts
+  (`config_id`, `config_digest`, `width`, `height`, the placement as applied,
+  the display-age and tolerance limits and the three refusals), with the
+  layout's values. A validation run reports `validation_layout` (`config_id`,
+  `config_digest`, `width`, `height`) and no `fixed_hud` block.
+
+Everything else is the same code and does not read the layout: the packet
+rule, the observed frame and its deadline, expiry with its hide, the
+per-frame `frame_presented` and `frame_refused` lines, the visibility
+requests, cleanup and the watchdogs. The layout is one process-wide value
+(`pinned_layout` in `overlay_frame.hpp`) written while the arguments are
+read and consulted by `check_frame_size`, the entry point and the report;
+the sensing and lifecycle units do not mention it, which a test pins.
+
+**Pixels and alpha.** A frame's bytes go to `SetOverlayRaw` as they arrived,
+four bytes a pixel, row 0 first, R, G, B, A. The bridge neither converts nor
+flips them and makes no new OpenVR call for the panel; with the overlay's
+opacity at 1.0 the image's own alpha is the only transparency. What the
+Frame's compositor does with that alpha, and which way up it shows row 0, is
+[unproven](box-panel.md#row-direction-and-alpha).
+
+**The megabyte.** One panel is 6.4 times the strip's bytes. On a cloud host
+the deadline is still acted on within one poll while a panel is arriving,
+and writing and handing one over takes about 1.6 ms; the pipe is left at its
+default size. The figures, the machine and what they do not show are in the
+[box panel reference](box-panel.md#the-megabyte-measured-in-the-cloud).
 
 ### The observed frame (opcode 6)
 
@@ -305,8 +364,11 @@ the keepalive against the ten-second timeout. The dispatch fixture
 mode and the deadline rule with a fake clock; `tests/test_overlay_bridge.py`
 (`FixedHudModeTests`) pins that the units use those helpers alone and the set
 of OpenVR calls the bridge names; `tests/test_display_expiry.py` times the
-same rules on the validation bridge and checks the Python gate. None of this
-is a Frame measurement.
+same rules on the validation bridge and checks the Python gate.
+`tests/test_box_panel_bridge.py` runs the whole of
+`tests/test_fixed_hud_runtime.py` a second time with the bridge launched on
+the box panel's layout and a megabyte per tile, and adds the layout's own
+cases (item B3). None of this is a Frame measurement.
 
 ## Still panel for L-D2 (work-order item L7, 2026-11-16)
 
@@ -489,12 +551,12 @@ mode and no-server refusal pass against the rebuilt binary unchanged.
 | `overlay_bridge.hpp` | shared header | the `Overlay` state (connection, handle, retirement, event flags, settings), the stop flag, the watchdog budgets, `Settings`, and the declarations of the four units |
 | `overlay_bridge.cpp` | entry point | `main`: argument parsing, the opt-in checks, and the connect, run, cleanup, report sequence |
 | `overlay_bridge_lifecycle.cpp` | lifecycle | the stop signal, arming a watchdog phase, the Background-then-Overlay connect (`Overlay::init`), error names, and `Overlay::close` |
-| `overlay_bridge_rendering.cpp` | rendering | settings decoding and bounds, `hud_settings` and `marker_settings`, the test pattern and the calibration marker, `SetOverlayRaw`, show and hide, and `--render-calibration-marker` |
+| `overlay_bridge_rendering.cpp` | rendering | settings decoding and bounds, `hud_settings`, `layout_settings` and `marker_settings`, the test pattern and the calibration marker, `SetOverlayRaw`, show and hide, and `--render-calibration-marker` |
 | `overlay_bridge_reporting.cpp` | reporting | `emit` (the only JSON writer), the watchdog line, the usage text, the initial, marker, connect and final report fields, and the `ready`, `frame_*` and `test_panel_submitted` lines |
 | `overlay_bridge_sensing.cpp` | sensing | `monotonic_ns` (the clock every reported timestamp reads), the stdin protocol loop with its bounded reads and expiry poll, the decoded visibility request shared by both loops and the marker mode's stdin poll (`MarkerInput`), runtime event polling, the visibility queries and the read-only headset view record |
 
 `overlay_lifecycle.hpp` (stdout isolation, the SIGALRM handler, the connect
-order) and `overlay_frame.hpp` (packet decoding, each stream mode's packet rule, the frame deadline, retirement) stay the OpenVR-free
+order) and `overlay_frame.hpp` (packet decoding, each stream mode's packet rule, the fixed layouts and their size rule, the frame deadline, retirement) stay the OpenVR-free
 helpers that the fixture tests compile on their own; every contract value still
 comes from the generated `hud_contract.hpp`. The `Overlay` member functions are
 defined in the unit that owns them, as the header notes beside each group.

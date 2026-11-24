@@ -3,6 +3,7 @@
 #pragma once
 #include "hud_contract.hpp"
 #include <cstdint>
+#include <cstring>
 #include <stdexcept>
 #include <vector>
 
@@ -95,11 +96,65 @@ inline const char* packet_refusal(StreamMode mode, std::uint32_t kind, std::uint
     }
     return nullptr;
 }
-// The fixed HUD presents the contract's tile and nothing else.
+// The fixed geometries a run can be pinned to (work-order item B3): each a tile size and a head-fixed placement
+// from the generated contract, the strip first. A layout changes what size of frame is taken, where the overlay
+// is placed and what the report names; the packet rules, the deadline, the acknowledgements, the hide and the
+// watchdogs are the same code for every layout and never read it.
+struct FixedLayout {
+    const char* id;
+    const char* digest;
+    std::uint32_t width, height;
+    float panel_width_m, distance_m, x_m, y_m, opacity;
+};
+constexpr FixedLayout kFixedLayouts[] = {
+    {sightcircuit_contract::kHudLayoutId, sightcircuit_contract::kHudConfigDigest,
+     sightcircuit_contract::kHudWidthPx, sightcircuit_contract::kHudHeightPx,
+     sightcircuit_contract::kHudPanelWidthM, sightcircuit_contract::kHudDistanceM,
+     sightcircuit_contract::kHudXM, sightcircuit_contract::kHudYM, sightcircuit_contract::kHudOpacity},
+    {sightcircuit_contract::kBoxPanelLayoutId, sightcircuit_contract::kBoxPanelConfigDigest,
+     sightcircuit_contract::kBoxPanelWidthPx, sightcircuit_contract::kBoxPanelHeightPx,
+     sightcircuit_contract::kBoxPanelPanelWidthM, sightcircuit_contract::kBoxPanelDistanceM,
+     sightcircuit_contract::kBoxPanelXM, sightcircuit_contract::kBoxPanelYM, sightcircuit_contract::kBoxPanelOpacity},
+};
+constexpr int kFixedLayoutCount = int(sizeof kFixedLayouts / sizeof kFixedLayouts[0]);
+constexpr int kStripLayout = 0, kNoLayout = -1;
+constexpr bool layout_within_limits(const FixedLayout& layout) {
+    namespace contract = sightcircuit_contract;
+    return layout.width >= 1 && layout.width <= contract::kMaxSide &&
+           layout.height >= 1 && layout.height <= contract::kMaxSide &&
+           layout.panel_width_m >= contract::kPanelWidthMin && layout.panel_width_m <= contract::kPanelWidthMax &&
+           layout.distance_m >= contract::kPanelDistanceMin && layout.distance_m <= contract::kPanelDistanceMax &&
+           layout.x_m >= contract::kPanelXMin && layout.x_m <= contract::kPanelXMax &&
+           layout.y_m >= contract::kPanelYMin && layout.y_m <= contract::kPanelYMax &&
+           layout.opacity >= contract::kPanelOpacityMin && layout.opacity <= contract::kPanelOpacityMax;
+}
+// A layout outside the limits every settings packet is held to does not compile.
+static_assert(layout_within_limits(kFixedLayouts[0]) && layout_within_limits(kFixedLayouts[1]));
+// The index of the layout named `id`, or kNoLayout.
+inline int layout_index(const char* id) {
+    for (int index = 0; index < kFixedLayoutCount; ++index)
+        if (!std::strcmp(id, kFixedLayouts[index].id)) return index;
+    return kNoLayout;
+}
+// The layout this process was launched with ("--layout ID"): written once by the entry point, before the first
+// packet is read, and only read afterwards. kNoLayout when none was named.
+inline int pinned_layout = kNoLayout;
+// The layout whose size rule applies: the named one; without a name the strip in the fixed HUD and none in the
+// other streams, as before layouts existed.
+inline const FixedLayout* layout_in_force(StreamMode mode) {
+    if (pinned_layout != kNoLayout) return &kFixedLayouts[pinned_layout];
+    return mode == StreamMode::FixedHud ? &kFixedLayouts[kStripLayout] : nullptr;
+}
+// A run pinned to a layout presents that layout's tile and nothing else. A run that named its layout also says
+// when a refused frame has exactly the size of another layout: its sender drew for the wrong one.
 inline void check_frame_size(StreamMode mode, const FrameView& frame) {
-    if (mode == StreamMode::FixedHud && (frame.width != sightcircuit_contract::kHudWidthPx ||
-                                         frame.height != sightcircuit_contract::kHudHeightPx))
-        throw std::runtime_error("fixed_hud_frame_size");
+    const FixedLayout* layout = layout_in_force(mode);
+    if (!layout || (frame.width == layout->width && frame.height == layout->height)) return;
+    if (pinned_layout != kNoLayout)
+        for (const FixedLayout& other : kFixedLayouts)
+            if (frame.width == other.width && frame.height == other.height)
+                throw std::runtime_error("frame_for_other_layout");
+    throw std::runtime_error("fixed_hud_frame_size");
 }
 // What becomes of an arriving frame.
 enum class Arrival {

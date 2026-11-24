@@ -422,11 +422,11 @@ def select_rows(rows, limit):
 
 
 # ---- the box panel (work-order item B1, 2026-11-24) ---------------------------------------------------------------
-# A second geometry beside the strip. Nothing above changes with it and nothing selects it by default: no stage,
-# command or bridge mode reads ``BOX_PANEL_CONFIG`` (the bridge's second geometry is item B3, the layout of
-# ``camera_hud`` item B5), and it is deliberately NOT in the generated native header yet, so
-# ``tools/hud_contract.hpp`` and ``kContractDigest`` are what they were. docs/reference/box-panel.md has the reasons
-# for every number.
+# A second geometry beside the strip. Nothing above changes with it and nothing selects it by default. Since item B3
+# the generated native header carries it (``sightcircuit.hud.native``) and the bridge's ``--fixed-hud`` mode can be
+# launched with it as a named layout (``FIXED_LAYOUTS``, below); no stage or command names it (the layout of
+# ``camera_hud`` is item B5), and nothing that is permitted to drive real output selects it.
+# docs/reference/box-panel.md has the reasons for every number.
 
 BOX_PANEL_PIXELS = "box_panel_pixels"  # The coordinate space of ``PanelBox.box_xyxy``.
 # The head-fixed placement a box panel may have, the bridge's panel limits of today (``overlay.PANEL_LIMITS``;
@@ -522,6 +522,21 @@ class BoxPanelConfig:
 
 
 BOX_PANEL_CONFIG = BoxPanelConfig()
+
+# The fixed geometries the bridge can be pinned to at launch (``--layout <layout_id>``, work-order item B3), the
+# strip first: it is the layout of a bridge started without the argument. Each has a ``layout_id``, a pixel size
+# and a head-fixed placement, and the generated header carries exactly these, so the bridge and its clients know
+# the same set. Being listed here permits nothing: which layout may be driven as real output is decided where
+# real output is (``sightcircuit.observed_frames``).
+FIXED_LAYOUTS = (HUD_CONFIG, BOX_PANEL_CONFIG)
+
+
+def fixed_layout(layout_id):
+    """The fixed geometry named ``layout_id``; ``ValueError("fixed_layout_unknown")`` for any other value."""
+    for config in FIXED_LAYOUTS:
+        if type(layout_id) is str and config.layout_id == layout_id:
+            return config
+    raise ValueError("fixed_layout_unknown")
 
 
 @dataclass(frozen=True)

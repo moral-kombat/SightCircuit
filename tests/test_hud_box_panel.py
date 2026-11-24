@@ -51,7 +51,9 @@ PLATE, NAME = (*CONFIG.plate_rgb, 255), (*CONFIG.name_rgb, 255)
 STRIP_FIELDS = {"layout_id": "fixed-edge-hud-v1", "width_px": 320, "height_px": 128, "rows": 3, "panel_width_m": 0.32,
                 "distance_m": 1.25, "x_m": 0.55, "y_m": -0.35, "opacity": 1.0, "inference_max_side": 960}
 STRIP_CONFIG_DIGEST = "82f3f630a37c07eda5094ccc38e99b2e022ba732003fb1a76ee4cc9e60d5f392"
-HEADER_CONTRACT_DIGEST = "70663bdcb8b2fecb0f653666852142b2eaf2ff342e24874b53e11c66b04f6c98"
+# Moved once, deliberately, by item B3, which put the box panel into the generated header in the change that made
+# the bridge use it: before it this was 70663bdcb8b2fecb0f653666852142b2eaf2ff342e24874b53e11c66b04f6c98.
+HEADER_CONTRACT_DIGEST = "8192f6451d50b1966cca48e0f3a1b580fc2db6c0610661170a742b13b5860531"
 STRIP_TILES = {
     "empty": ((), "fb77fdb76eb6451cee6fed944e8f380ded14ef2c5ae114e153c5668ceb425f53"),
     "arrows": ((HudRow("chair", .93, (1, 1)), HudRow("person", .81, (-1, 0)), HudRow("tv", .7, (0, 0))),
@@ -142,14 +144,18 @@ class StripUnchangedTests(unittest.TestCase):
         self.assertEqual([field.name for field in dataclasses.fields(HUD_CONFIG)], list(STRIP_FIELDS))
         self.assertEqual(config_digest(HUD_CONFIG), STRIP_CONFIG_DIGEST)
 
-    def test_the_generated_header_is_unchanged_and_does_not_hold_the_box_panel(self):
+    def test_the_generated_header_holds_the_box_panel_since_item_b3_and_the_strips_digest_is_unchanged(self):
         header = (ROOT / "tools/hud_contract.hpp").read_text()
         self.assertEqual(header, native.header_text())
         self.assertEqual(native.contract_digest(), HEADER_CONTRACT_DIGEST)
         self.assertIn(f'kContractDigest[] = "{HEADER_CONTRACT_DIGEST}";', header)
         self.assertIn(f'kHudConfigDigest[] = "{STRIP_CONFIG_DIGEST}";', header)
-        for word in ("BoxPanel", "box-panel", "box_panel", CONFIG.layout_id, box_font.FONT_ID):
-            self.assertNotIn(word, header, word)
+        # Item B3: the panel's name, its digest and its font's are in the header, under names of their own.
+        for line in (f'constexpr char kBoxPanelLayoutId[] = "{CONFIG.layout_id}";',
+                     f'constexpr char kBoxPanelConfigDigest[] = "{BOX_PANEL_CONFIG_DIGEST}";',
+                     f'constexpr char kBoxPanelNameFont[] = "{box_font.FONT_ID}";'):
+            self.assertEqual(header.count(line), 1, line)
+        self.assertNotIn("BoxPanel", header.split("// BoxPanelConfig:", 1)[0])  # nothing of it inside the strip's block
 
     @unittest.skipUnless(TILES, "NumPy and OpenCV are required for the strip's tile")
     def test_the_strip_renderer_draws_the_pinned_tiles(self):
@@ -269,10 +275,15 @@ class BoxPanelContractTests(unittest.TestCase):
         self.assertEqual(select_boxes((), 5), ((), 0, 0))
 
     def test_nothing_selects_the_box_panel(self):
-        # Items B3 and B5 are where a bridge mode and a command take the geometry; until then only the contract,
-        # the font, the renderer and the selector may name it.
+        # Items B3 and B5 are where a bridge mode and a command take the geometry. B3 is in: the generated header
+        # and its generator name the panel, the bridge's table of fixed layouts reads its constants, and the
+        # synthetic scenes list boxes for it. The bridge's other units and the observed-frame client read a layout
+        # from that table or the contract's list and never name this one. Until B5 no stage, command, scope record
+        # or manifest may name it (tests/test_box_panel_bridge.py holds the rest).
         allowed = {"sightcircuit/hud/contract.py", "sightcircuit/hud/box_render.py", "sightcircuit/hud/boxes.py",
-                   "sightcircuit/hud/box_font.py", "sightcircuit/hud/__init__.py"}
+                   "sightcircuit/hud/box_font.py", "sightcircuit/hud/__init__.py",
+                   "sightcircuit/hud/native.py", "sightcircuit/hud/box_scenes.py", "tools/hud_contract.hpp",
+                   "tools/overlay_frame.hpp"}
         words = ("BOX_PANEL_CONFIG", "BoxPanelConfig", "box_render", "draw_boxes", "camera_boxes", "PanelBox",
                  "head-fixed-box-panel", "box_font")
         paths = [path for folder in ("sightcircuit", "scripts", "tools")

@@ -41,6 +41,14 @@ int main(int argc, char* argv[]) {
             background_only=how=="background";
             argc-=2;
         }
+        // "--layout ID" right after --fixed-hud or --validate-stdin pins the run to one fixed geometry of the
+        // contract (item B3). Without it --fixed-hud is the strip and validation checks no size, as before.
+        if (argc==4 && std::string(argv[2])=="--layout" && (fixed_hud || mode=="--validate-stdin")) {
+            sightcircuit_overlay::pinned_layout=sightcircuit_overlay::layout_index(argv[3]);
+            if (sightcircuit_overlay::pinned_layout==sightcircuit_overlay::kNoLayout)
+                throw std::runtime_error("unknown_layout");
+            argc-=2;
+        }
         if (view_record) {
             if (argc!=3 || std::string(argv[2])!="--allow-runtime-query")
                 throw std::runtime_error("view_record_requires_explicit_opt_in");
@@ -85,11 +93,15 @@ int main(int argc, char* argv[]) {
         overlay.validation_only=validate;
         describe_marker_run(report,seconds,marker_start,marker_deadline);
     }
+    // The named layout, or null: only --fixed-hud and --validate-stdin can name one.
+    const auto* layout=sightcircuit_overlay::pinned_layout==sightcircuit_overlay::kNoLayout ? nullptr :
+                       &sightcircuit_overlay::kFixedLayouts[sightcircuit_overlay::pinned_layout];
     if (fixed_hud) {
         // The placement is compiled in and applied once, at connect; the stream then refuses settings.
         overlay.config=hud_settings();
-        describe_fixed_hud(report,overlay.config);
-    }
+        if (layout) overlay.config=layout_settings(*layout);
+        describe_fixed_hud(report,*sightcircuit_overlay::layout_in_force(StreamMode::FixedHud),overlay.config);
+    } else if (layout) describe_validation_layout(report,*layout);
     describe_connect(report,view_record,validate,background_only);
     try {
         watchdog(mode,"connect",kWatchdogConnectSeconds);
@@ -104,7 +116,7 @@ int main(int argc, char* argv[]) {
         if (marker && monotonic_ns()>=marker_deadline)
             throw std::runtime_error("calibration_deadline_before_marker");
         if (stopping) throw Stopped{};
-        emit_ready(mode,validate,marker,marker_deadline);
+        emit_ready(mode,validate,marker,marker_deadline,layout);
         if (marker) {
             auto pixels=calibration_marker(report["marker"],overlay.config);
             report["generated_marker_frames"]=1U;
