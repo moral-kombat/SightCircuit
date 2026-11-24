@@ -233,6 +233,116 @@ The list keeps each question as it was put.
     and needs a rule for a re-run after a failure: each re-run is a new
     approval with a new record. Recommended: yes.
 
+### Box display, draft scope change (2026-11-24, not adopted)
+
+A draft the owner asked for on 2026-11-24. Nothing here is decided: the
+[scope](poc-scope.md)'s Decision, D1 and the acceptance rows stand as written
+until the owner answers the questions at the end, and the scope records only
+what is accepted. This draft changes no device step, gate or consent rule.
+
+**Why.** The goal the owner states for the product is a box and a name drawn
+around each recognised object in view (the README, #95). The fixed strip at
+the edge of the view answered a problem of the mirror route: the mirror showed
+our own output, so the output had to stay in a masked footprint outside the
+scene. Since 2026-11-16 the input is the SDK camera, which images the room and
+not the display. That is the 2026-11-09 review's statement and row G8 is its
+device test; if G8 holds, nothing confines the output to the edge.
+
+**What would change.** The scope's Decision (names with direction arrows in a
+fixed strip at the edge, no label crossing the scene) and D1 (the fixed edge
+HUD as this phase's product) would be superseded by: detect objects in the
+left SDK camera's image and draw a box with a name around each, over the
+scene. Unchanged: the SDK camera as input, the region of view, the presence
+stop, attended bounded runs, the one-run record, the passthrough rule, what
+may be saved, and every gate closed until its rows are accepted.
+
+**Three levels, each a larger claim.**
+
+| Level | What it is | What it needs | What it can claim |
+| --- | --- | --- | --- |
+| 1. Head-fixed box panel | A transparent panel fixed in front of the head, as the strip is today, covering the region of view; each box drawn where a fixed mapping puts its image position | The region and orientation from L-D1b and L-D1; an alignment by the wearer (scale and offset, found once with the bottle held still); a second panel geometry in the bridge and the HUD contract. No head pose and no calibration data | The box sits on the object while the head is still, within a tolerance the wearer agrees. During a head turn it trails by the display age (up to 400 ms, so about 12 degrees at 30 degrees a second), and away from the alignment's distance it is off by parallax, because the camera is not at the eye |
+| 2. Rotation-compensated | The same box placed in the room for its lifetime: the head's pose at the frame's capture time fixes its direction, so it stays put while the head turns | Level 1; a pose history in the bridge on the host clock (WP3), an approximate projection from the alignment (part of WP4), an overlay placed in tracking space (WP5) | The box stays on a still object through head rotation. It drifts when the head moves sideways, since the distance is assumed |
+| 3. Calibrated | Boxes projected with the camera's own intrinsics, extrinsics and distortion, and distance from the two cameras | Level 2; the full projection (WP4) from the SDK's calibration data, used in memory; both cameras and the deferred stereo depth | Position without a wearer's alignment, across the whole image and at any distance |
+
+The helper already receives the SDK's calibration and reports only its size
+and SHA-256. Level 3 would need the consent rule "no calibration data
+anywhere" and the 2026-11-16 decision that no calibration is used in this
+phase changed, and whether the SDK agreement allows that use is the owner's
+to check. Levels 1 and 2 need neither.
+
+**Recommendation.** Adopt the goal. Build Level 1 as this phase's display and
+accept it with the still-head claim. Make Level 2 the first item of the next
+phase. Leave calibration data unused until Level 1's error has been measured
+on the Frame.
+
+**The strip.** Recommended: retarget the displayed steps, do not finish the
+strip first. L-D2 (the canary) would show its panel at the box panel's
+position and size, L-D3 (expiry) would run on the box panel, L-D4 would show
+the first boxes and L-D5 would be the acceptance run with boxes. The strip
+stays in the code as the names-only fallback and a diagnostic, with no
+acceptance run of its own. This costs the build work below and saves the
+sittings that the strip's own L-D2 to L-D5 would take before the same four
+are repeated for boxes. The alternative, finishing the strip's acceptance
+first, proves the transport sooner on a display nobody intends to keep.
+
+**Build outline if adopted** (cloud, each item reviewed; an outline, not a
+work order):
+
+- A second geometry in the HUD contract, the box panel: its size and
+  placement, per-pixel transparency, a thin outline and a name per box, a cap
+  on the number of boxes, with its renderer and digests.
+- `camera_boxes` beside `camera_rows`: mapped boxes in the whole-frame space
+  to panel pixels through the alignment; boxes outside the region dropped.
+- The bridge shows the box panel as a second fixed geometry of its
+  real-output mode, with the same observed-frame protocol, expiry,
+  acknowledgements and hide.
+- The alignment: at most five numbers (scale and offset on each axis, and the
+  quarter turn), set by the wearer in a guided, displayed step.
+- `camera_hud` takes the layout; the scope record and the manifest bind the
+  layout and the alignment. L17 (the region and the presence watch on the
+  displayed path) lands on this.
+- Rows G8 to G10 and the device steps restated; the lift (L13) names the box
+  geometry.
+- Later, for Level 2: the pose history, then placement in tracking space.
+
+**Proposed acceptance for Level 1** (G10 restated; the numbers are for the
+owner): the bottle, held within 1 m in the region of view, boxed and named
+for at least 90% of a contiguous 60 s with no gap over 2 s; with the head
+still, the wearer answers at each of five cued positions (centre, left,
+right, up, down) whether the box is on the bottle, touching it or off it,
+and the result is on at the centre and on or touching at the other four; the
+box gone within the expiry when the bottle leaves view and on headset
+removal; capture-to-display p95 at most 400 ms; the passthrough behind the
+panel unchanged. No claim is made during head turns.
+
+**Risks.** G8 is unproven: if the camera does see what the headset displays,
+boxes over the scene would feed back into detection and the strip's reasoning
+returns. A panel over the centre of view sits where the wearer looks, so it
+is outlines only and runs stay attended and bounded. Boxes make a wrong label
+more visible than a name in a strip does, and [E100](evidence/e100.md) holds
+a false animal label at a confidence of 1.0. At 5 frames a second a box
+moves in steps.
+
+**Questions for the owner.**
+
+1. Goal: boxes and names over the scene replace the edge strip as this
+   phase's product. Recommended: yes.
+2. The strip: retarget the remaining displayed steps to the box panel
+   (recommended), or finish the strip's acceptance first.
+3. First claim: Level 1, the box on the object while the head is still, with
+   Level 2 next (recommended), or no acceptance before Level 2.
+4. Calibration data: stays unused for now (recommended), revisited with
+   Level 1's measured error.
+5. Consent: boxes and names may be shown to the wearer over the scene in
+   attended bounded runs, with nothing more saved than today, and the
+   passthrough rule's exception for the tile extends to the box panel (only a
+   change in the passthrough image itself counts). Recommended: yes.
+6. The alignment's numbers, which are ours and set by the wearer, not the
+   SDK's calibration, may be saved on the Frame and published as format
+   metadata. Recommended: yes.
+7. The acceptance numbers above. Recommended: settle them when the work order
+   is written, after L-D1b has shown the region.
+
 ### Implementation and evidence reconciliation
 
 The checkout already contains packages A–H, the mirror session tokens and
@@ -562,6 +672,11 @@ handler on the main thread ([checks reference](reference/development-checks.md#h
   released (lane R's R0 records it in this page), and the bottle replaces the
   chair as the object. Next device approvals on that lane, each separate:
   L-D1, then L-D2, then L-D3 to L-D5 after their cloud items.
+- Open since 2026-11-24: the seven questions of the
+  [box display draft](#box-display-draft-scope-change-2026-11-24-not-adopted),
+  a scope change the owner asked to have drafted. Until they are answered the
+  edge strip remains this phase's display and nothing in the draft is in
+  force.
 - The Frame rebooted into SteamOS 0.5.8 ([E85](evidence/e085.md)); a Frame
   manager session exists and the "Frame update check" scheduled task was
   rebound to it on 2026-11-07, with the old task left disabled as a record.
