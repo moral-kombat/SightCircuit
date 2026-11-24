@@ -16,10 +16,10 @@
   3x3 direction cell over the full frame, or names only. It shares the row
   hygiene in ``contract`` (``row_label``, ``select_rows``) with ``HudMask`` and
   imports no mask, mapping or qualification code.
-* ``box_render`` and ``boxes``: the box panel (lane B). ``contract`` holds its
+* ``box_font``, ``box_render`` and ``boxes``: the box panel (lane B). ``contract`` holds its
   geometry (``BoxPanelConfig``, ``head-fixed-box-panel-v1``) and ``PanelBox``;
   ``box_render.draw_boxes`` draws outlines and names on a transparent RGBA
-  image from boxes alone; ``boxes.camera_boxes`` maps camera detections to
+  image from boxes alone, the names from ``box_font``'s own glyph bitmaps; ``boxes.camera_boxes`` maps camera detections to
   panel boxes through the wearer's ``Alignment``. Imported from their
   modules, not from this package, and selected by nothing yet.
 * ``camera_stage``: ``CameraHudStage``, the camera route's run (source,

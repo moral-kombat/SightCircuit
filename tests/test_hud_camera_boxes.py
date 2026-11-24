@@ -95,13 +95,14 @@ class AlignmentTests(unittest.TestCase):
             NEUTRAL.scale_x = 2.0
 
     def test_validation(self):
-        for good in (dict(scale_x=0.25), dict(scale_y=4), dict(offset_x=-1), dict(offset_y=1), dict(turn=270)):
+        for good in (dict(scale_x=0.25), dict(scale_y=4), dict(offset_x=-1), dict(offset_y=1), dict(turn=270),
+                     dict(scale_x=Fraction(1, 2))):
             Alignment(**good)
+        self.assertEqual(Alignment(scale_x=Fraction(1, 2)), Alignment(scale_x=0.5))
         for bad, code in ((dict(scale_x=0.2499), "scale"), (dict(scale_y=4.01), "scale"), (dict(scale_x=0), "scale"),
                           (dict(scale_x=-1), "scale"), (dict(scale_y=float("nan")), "scale"),
                           (dict(scale_x=float("inf")), "scale"), (dict(scale_x="1"), "scale"),
                           (dict(scale_x=True), "scale"), (dict(scale_y=None), "scale"),
-                          (dict(scale_x=Fraction(1, 2)), "scale"),
                           (dict(offset_x=1.001), "offset"), (dict(offset_y=-1.5), "offset"),
                           (dict(offset_x=float("nan")), "offset"), (dict(offset_y="0"), "offset"),
                           (dict(offset_x=False), "offset"),
@@ -238,8 +239,26 @@ class ExactMappingTests(unittest.TestCase):
         self.assertEqual((wide.box_xyxy[2] - wide.box_xyxy[0], wide.box_xyxy[3] - wide.box_xyxy[1]),
                          (2 * (plain.box_xyxy[2] - plain.box_xyxy[0]), plain.box_xyxy[3] - plain.box_xyxy[1]))
 
+    def test_one_frame_pixel_in_panel_pixels_by_region(self):
+        # Boxes arrive as whole pixels of the box space (``Mapping.to_frame`` rounds them), so a box edge is off by
+        # up to half a frame pixel, as panel pixels, plus the half panel pixel of this module's own rounding.
+        def frame_pixel(fraction):
+            low = (1 - fraction) / 2
+            mapping = mapping_of(fractions=(low, low, low + fraction, low + fraction))
+            return float(panel_point(481, 480, mapping, CONFIG)[0] - panel_point(480, 480, mapping, CONFIG)[0])
+        self.assertAlmostEqual(frame_pixel(1.0), 0.533, places=3)
+        self.assertAlmostEqual(frame_pixel(0.5), 1.067, places=3)
+        self.assertAlmostEqual(frame_pixel(0.25), 2.133, places=3)
+        self.assertAlmostEqual(frame_pixel(0.05), 10.6, places=1)  # The crop taken is 124 of 2464 native pixels.
+        self.assertAlmostEqual(frame_pixel(0.05) / 2 + 0.5, 5.8, places=1)  # The worst edge error there.
+        # An edge stays within 2 panel pixels while a frame pixel is at most 3 of them: a region of at least
+        # 512 / (3 * 960) = 0.178 of the frame on that axis (171 box-space pixels, 438 of the Frame's 2464).
+        self.assertLessEqual(frame_pixel(0.18) / 2 + 0.5, 2.0)
+        self.assertGreater(frame_pixel(0.17) / 2 + 0.5, 2.0)
+        self.assertAlmostEqual(W / (3 * 960), 0.178, places=3)
+
     def test_another_panel_size_scales_with_it(self):
-        small = dataclasses.replace(CONFIG, width_px=200, height_px=120)
+        small = dataclasses.replace(CONFIG, width_px=200, height_px=120, name_max_px=58)
         self.assertEqual(panel_point(480, 480, CENTRE, small), (100, 60))
         self.assertEqual(select([Detection("bottle", .9, (240, 240, 720, 720))], CENTRE, small).boxes[0].box_xyxy,
                          (0, 0, 200, 120))
@@ -369,11 +388,40 @@ class SelectionRuleTests(unittest.TestCase):
                Detection("bottle", .9, (300, float("nan"), 400, 400)), Detection("bottle", .9, (300, 300, float("inf"), 400)),
                Detection("bottle", .9, ("300", 300, 400, 400)), Detection("bottle", None, (300, 300, 400, 400)),
                Detection("bottle", float("nan"), (300, 300, 400, 400)), Detection("bottle", -.5, (300, 300, 400, 400)),
-               Detection(7, .9, (300, 300, 400, 400)), Detection("bottle", True, (300, 300, 400, 400))]
+               Detection(7, .9, (300, 300, 400, 400)), Detection("bottle", True, (300, 300, 400, 400)),
+               Detection("bottle", .9, (True, 300, 400, 400)), Detection("bottle", "0.9", (300, 300, 400, 400)),
+               Detection("bottle", .9, (300, 300, 400, 400 + 0j))]
         selection = select([*bad, good], CENTRE)
         self.assertEqual(selection.boxes, (PanelBox("bottle", .9, (64, 64, 171, 171)),))
         self.assertEqual(dropped(selection), {"invalid": len(bad)})
         self.assertEqual(selection.detections, len(bad) + 1)
+
+    @unittest.skipUnless(DRAWING, "NumPy is required for its scalars")
+    def test_numpy_numbers_are_numbers_and_booleans_are_not(self):
+        # A future detector may emit NumPy scalars. They are converted once; the result holds plain numbers.
+        detections = [Detection("bottle", np.float32(0.75), (np.int64(300), np.float64(300), np.float32(400), 400)),
+                      Detection("vase", np.float64(0.9), np.array([500, 300, 600, 400]).tolist()),
+                      Detection("cup", np.bool_(True), (300, 300, 400, 400)),
+                      Detection("tv", .9, (np.bool_(True), 300, 400, 400)),
+                      Detection("fork", np.float64("nan"), (300, 300, 400, 400))]
+        selection = select(detections, CENTRE, threshold=np.float64(0.5),
+                           alignment=Alignment(scale_x=np.float32(1.0), offset_y=np.int64(0)))
+        self.assertEqual(selection.boxes, (PanelBox("vase", 0.9, (277, 64, 384, 171)),
+                                           PanelBox("bottle", 0.75, (64, 64, 171, 171))))
+        self.assertEqual(dropped(selection), {"invalid": 3})
+        for box in selection.boxes:
+            self.assertIs(type(box.confidence), float)
+            self.assertEqual({type(value) for value in box.box_xyxy}, {int})
+        self.assertIs(type(selection.threshold), float)
+        self.assertTrue(selection.alignment.neutral)
+        json.dumps(boxes_report(selection, CONFIG))
+        # Where camera_rows differs: it takes int and float and their subclasses, so np.float64 and Python's True
+        # are numbers to it and np.float32 and np.int64 are not.
+        rows = camera.camera_rows(detections, (960, 960), HUD_CONFIG, threshold=0.5, directions=False)
+        self.assertEqual([row.label for row in rows], ["vase"])
+        true_score = [Detection("cup", True, (300, 300, 400, 400))]
+        self.assertEqual(len(camera.camera_rows(true_score, (960, 960), HUD_CONFIG, threshold=0.5)), 1)
+        self.assertEqual(dropped(select(true_score, CENTRE)), {"invalid": 1})
 
     def test_cap_by_confidence_then_a_stable_tie_break(self):
         names = ["bottle", "cup", "chair", "person", "tv", "vase", "book"]
@@ -403,8 +451,10 @@ class SelectionRuleTests(unittest.TestCase):
             select([Detection("a", .9, (1, 1, 2, 2))] * (boxes.MAX_DETECTIONS + 1))
         with self.assertRaisesRegex(ValueError, "hud_detection_budget_exceeded"):
             select(iter(()))
-        self.assertEqual(select((), CENTRE), BoxSelection((), 0, tuple((name, 0) for name in DROP_REASONS)))
-        for config in (HUD_CONFIG, None, dataclasses.replace(CONFIG, max_boxes=0), dataclasses.replace(CONFIG, width_px=0)):
+        self.assertEqual(select((), CENTRE), BoxSelection(
+            (), 0, tuple((name, 0) for name in DROP_REASONS), config_digest(CONFIG), (960, 960),
+            (616, 616, 1848, 1848), 0, 0.5, NEUTRAL))
+        for config in (HUD_CONFIG, None, dataclasses.asdict(CONFIG)):
             with self.subTest(config=config), self.assertRaisesRegex(ValueError, "box_panel_config_invalid"):
                 select([], CENTRE, config)
         good = mapping_of()
@@ -425,7 +475,7 @@ class ReportTests(unittest.TestCase):
                            Detection("kettle", .2, (300, 300, 400, 400)), Detection("\n", .9, (300, 300, 400, 400)),
                            None, Detection("bottle", .9, (300, 300, 400, 400)), Detection("tv", .9, (470, 241, 490, 260))]
         self.selection = select(self.detections, CENTRE, alignment=self.alignment)
-        self.report = boxes_report(self.selection, CENTRE, CONFIG, threshold=.5, alignment=self.alignment)
+        self.report = boxes_report(self.selection, CONFIG)
 
     def test_block_is_counts_and_format_metadata_with_closed_keys(self):
         self.assertEqual(tuple(self.report), BOX_REPORT_KEYS)
@@ -441,7 +491,7 @@ class ReportTests(unittest.TestCase):
         for word in ("bottle", "zebra", "kettle", "box_xyxy", "label", "confidence"):
             self.assertNotIn(word, text, word)  # No label, box or score: counts only.
         self.assertLess(len(text), 800)
-        neutral = boxes_report(select(self.detections, CENTRE), CENTRE, CONFIG, threshold=.5)
+        neutral = boxes_report(select(self.detections, CENTRE), CONFIG)
         self.assertTrue(neutral["alignment_neutral"])
         self.assertEqual(neutral["alignment"], NEUTRAL.report())
 
@@ -455,19 +505,36 @@ class ReportTests(unittest.TestCase):
             camera_stage.check_report({"boxes": {**self.report, "pixels": 1}}, blocks={"boxes": BOX_REPORT_KEYS})
         self.assertNotIn("boxes", camera_stage.REPORT_BLOCKS)  # Not wired in: that is item B5.
 
+    def test_the_report_states_what_the_selection_was_made_with(self):
+        # The region, the threshold and the alignment are the selection's own: the report cannot be handed others.
+        self.assertEqual(list(__import__("inspect").signature(boxes_report).parameters), ["selection", "config"])
+        self.assertEqual((self.selection.alignment, self.selection.threshold, self.selection.rotation),
+                         (self.alignment, 0.5, 0))
+        self.assertEqual((self.selection.space, self.selection.crop), (CENTRE.space, CENTRE.crop))
+        self.assertEqual(self.selection.config_sha256, config_digest(CONFIG))
+        turned_mapping = mapping_of((1920, 1080), (0.25, 0.0, 0.75, 1.0), 270)
+        other = boxes_report(camera_boxes([], turned_mapping, CONFIG, threshold=1, alignment=Alignment(turn=180)), CONFIG)
+        self.assertEqual((other["source_space_px"], other["region_crop_native_xyxy"], other["region_rotation"]),
+                         ([960, 540], [480, 0, 1440, 1080], 270))
+        self.assertEqual((other["threshold"], other["alignment"]["turn"], other["alignment_neutral"]), (1.0, 180, False))
+        # A report for another geometry than the selection was made for is refused.
+        with self.assertRaisesRegex(ValueError, "box_selection_config_changed"):
+            boxes_report(self.selection, dataclasses.replace(CONFIG, max_boxes=6))
+
     def test_an_inconsistent_selection_is_refused(self):
         counts = self.selection.dropped
         for bad in (None, (), dataclasses.replace(self.selection, detections=8),
                     dataclasses.replace(self.selection, dropped=counts[:-1]),
                     dataclasses.replace(self.selection, dropped=counts[::-1]),
                     dataclasses.replace(self.selection, dropped=(("invalid", -1), *counts[1:]), detections=5),
-                    dataclasses.replace(self.selection, boxes=self.selection.boxes * 6, detections=12)):
+                    dataclasses.replace(self.selection, boxes=self.selection.boxes * 6, detections=12),
+                    dataclasses.replace(self.selection, alignment=None),
+                    dataclasses.replace(self.selection, alignment=(1, 1, 0, 0, 0)),
+                    dataclasses.replace(self.selection, threshold="0.5")):
             with self.subTest(selection=bad), self.assertRaisesRegex(ValueError, "box_selection_invalid"):
-                boxes_report(bad, CENTRE, CONFIG, threshold=.5)
-        with self.assertRaisesRegex(ValueError, "hud_threshold_invalid"):
-            boxes_report(self.selection, CENTRE, CONFIG, threshold=2)
-        with self.assertRaisesRegex(ValueError, "box_alignment_invalid"):
-            boxes_report(self.selection, CENTRE, CONFIG, threshold=.5, alignment=None)
+                boxes_report(bad, CONFIG)
+        with self.assertRaisesRegex(ValueError, "box_panel_config_invalid"):
+            boxes_report(self.selection, HUD_CONFIG)
 
 
 class BoundaryTests(unittest.TestCase):
@@ -480,7 +547,7 @@ class BoundaryTests(unittest.TestCase):
             elif isinstance(node, ast.ImportFrom):
                 imported.update(("." * node.level + (node.module or ""), alias.name) for alias in node.names)
         self.assertEqual(imported, {
-            ("dataclasses", "dataclass"), ("fractions", "Fraction"), ("math", None),
+            ("dataclasses", "dataclass"), ("fractions", "Fraction"), ("math", None), ("numbers", None),
             ("..camera.region", "FRAME_PIXELS"), ("..camera.region", "ROTATIONS"), ("..camera.region", "Mapping"),
             ("..frame", "Detection"), (".contract", "BOX_PANEL_PIXELS"), (".contract", "BoxPanelConfig"),
             (".contract", "PanelBox"), (".contract", "config_digest"), (".contract", "row_label"),

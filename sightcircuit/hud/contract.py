@@ -18,6 +18,7 @@ import json
 import math
 
 from ..frame import MAX_NATIVE_BYTES, MAX_NATIVE_SIDE
+from . import box_font
 from .geometry import eye_viewports
 
 
@@ -428,6 +429,11 @@ def select_rows(rows, limit):
 # for every number.
 
 BOX_PANEL_PIXELS = "box_panel_pixels"  # The coordinate space of ``PanelBox.box_xyxy``.
+# The head-fixed placement a box panel may have, the bridge's panel limits of today (``overlay.PANEL_LIMITS``;
+# a test keeps the two equal, since ``overlay`` imports this module).
+BOX_PANEL_LIMITS = (("panel_width_m", .25, 1.5), ("distance_m", .5, 3), ("x_m", -1, 1), ("y_m", -1, 1),
+                    ("opacity", .2, 1))
+MAX_PANEL_BOXES = 16  # The most boxes any box-panel geometry may allow.
 
 
 @dataclass(frozen=True)
@@ -437,11 +443,20 @@ class BoxPanelConfig:
     Placement is head-fixed like the strip's (metres, in the head's frame):
     centred in the view (``x_m`` and ``y_m`` zero), ``distance_m`` ahead and
     ``panel_width_m`` wide; the panel is square, so as tall. Every pixel that
-    is not part of an outline or a name tag is fully transparent, and alpha
-    is binary: 0 with RGB 0, or 255. Colours are ``(R, G, B)``. The physical
+    is not part of an outline or a name plate is fully transparent, and alpha
+    is binary: 0 with RGB 0, or 255. Colours are ``(R, G, B)``. Names are
+    drawn from the project's own glyph bitmaps (``box_font``) at a whole
+    ``name_scale``, and ``name_font_sha256`` pins those glyphs. The physical
     size is a design choice, not a calibration: the camera's field of view
     is unmeasured, and the wearer's alignment (item B2) absorbs scale and
     offset.
+
+    A configuration is checked when it is built (``box_panel_config_invalid``),
+    so the selector and the renderer rely on one rule: sizes within the
+    bridge's ``MAX_SIDE`` and large enough for a smallest box with a
+    one-character name plate above it, the placement within
+    ``BOX_PANEL_LIMITS``, the font the one this checkout holds, and colours
+    that are never the transparent pixel's.
     """
     layout_id: str = "head-fixed-box-panel-v1"
     width_px: int = 512
@@ -455,20 +470,55 @@ class BoxPanelConfig:
     outline_px: int = 2  # The bright core of a box's outline,
     casing_px: int = 1  # and the dark line on each side of it.
     min_box_px: int = 12  # A box is drawn at least this wide and tall.
-    name_font: str = "hershey_simplex"
-    name_font_scale: float = 0.5
-    name_thickness_px: int = 1
+    name_font: str = box_font.FONT_ID
+    name_font_sha256: str = box_font.FONT_SHA256
+    name_scale: int = 2  # Panel pixels per glyph cell.
     name_pad_px: int = 3  # Between a name and the edge of its plate.
-    name_max_px: int = 192  # Widest name drawn; a longer one is cut to the longest prefix that fits.
+    name_max_px: int = 190  # Widest name drawn (sixteen characters); a longer one is cut to the prefix that fits.
     outline_rgb: tuple = (130, 230, 70)
     casing_rgb: tuple = (16, 16, 16)
     plate_rgb: tuple = (16, 16, 16)
     name_rgb: tuple = (235, 235, 235)
 
+    def __post_init__(self):
+        integers = (self.width_px, self.height_px, self.max_boxes, self.outline_px, self.casing_px, self.min_box_px,
+                    self.name_scale, self.name_pad_px, self.name_max_px)
+        colours = (self.outline_rgb, self.casing_rgb, self.plate_rgb, self.name_rgb)
+        if (not token_valid(self.layout_id, 64) or any(type(value) is not int or value < 1 for value in integers) or
+                any(type(getattr(self, name)) is not float or not low <= getattr(self, name) <= high
+                    for name, low, high in BOX_PANEL_LIMITS) or
+                self.name_font != box_font.FONT_ID or self.name_font_sha256 != box_font.FONT_SHA256 or
+                any(type(colour) is not tuple or len(colour) != 3 or
+                    any(type(part) is not int or not 0 <= part <= 255 for part in colour) or not any(colour)
+                    for colour in colours)):
+            raise ValueError("box_panel_config_invalid")
+        one_character = box_font.text_width("W", self.name_scale)
+        if (self.max_boxes > MAX_PANEL_BOXES or max(self.width_px, self.height_px) > MAX_SIDE or
+                # A smallest box keeps a transparent inside.
+                self.min_box_px <= 2 * self.outline_band_px or
+                not one_character <= self.name_max_px or
+                # Room for a name plate that never covers its own box's outline: a box too tall for a plate above
+                # or below it and too wide for one beside it has an inside that holds one (box_render.layout).
+                self.width_px < 2 * (self.name_max_px + 2 * self.name_pad_px) + 2 * self.outline_band_px +
+                one_character + 2 * self.name_pad_px or
+                self.height_px < 3 * self.name_plate_height_px + 2 * self.outline_band_px or
+                min(self.width_px, self.height_px) < self.min_box_px):
+            raise ValueError("box_panel_config_invalid")
+
     @property
     def update_bytes(self):
         """RGBA bytes of one panel image: what one update carries to the bridge."""
         return self.width_px * self.height_px * RGBA_BYTES
+
+    @property
+    def outline_band_px(self):
+        """Width of a box's outline: the core and the casing on each side of it."""
+        return self.outline_px + 2 * self.casing_px
+
+    @property
+    def name_plate_height_px(self):
+        """Height of every name plate: the glyph cell at ``name_scale`` and the padding above and below."""
+        return box_font.CELL_HEIGHT * self.name_scale + 2 * self.name_pad_px
 
 
 BOX_PANEL_CONFIG = BoxPanelConfig()

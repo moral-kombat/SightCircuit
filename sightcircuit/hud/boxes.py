@@ -40,6 +40,7 @@ then name, then rectangle; exact duplicates dropped; at most
 from dataclasses import dataclass
 from fractions import Fraction
 import math
+import numbers
 
 from ..camera.region import FRAME_PIXELS, ROTATIONS, Mapping
 from ..frame import Detection
@@ -56,8 +57,17 @@ ALIGNMENT_FIELDS = ("scale_x", "scale_y", "offset_x", "offset_y", "turn")
 DROP_REASONS = ("invalid", "below_threshold", "unnamed", "outside_region", "off_panel", "duplicate", "over_cap")
 
 
-def _number(value):
-    return type(value) in (int, float) and math.isfinite(value)
+def _real(value):
+    """A finite real number as a plain ``int`` or ``float``, or ``None``.
+
+    Python and NumPy integers and floats are accepted (NumPy registers its
+    scalars as ``numbers.Real``) and converted once; ``bool`` and NumPy's
+    boolean are refused, as is anything that is not a number.
+    """
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        return None
+    value = int(value) if isinstance(value, numbers.Integral) else float(value)
+    return value if math.isfinite(value) else None
 
 
 @dataclass(frozen=True)
@@ -79,13 +89,13 @@ class Alignment:
 
     def __post_init__(self):
         for name in ("scale_x", "scale_y"):
-            value = getattr(self, name)
-            if not _number(value) or not SCALE_LIMITS[0] <= value <= SCALE_LIMITS[1]:
+            value = _real(getattr(self, name))
+            if value is None or not SCALE_LIMITS[0] <= value <= SCALE_LIMITS[1]:
                 raise ValueError("box_alignment_scale_invalid")
             object.__setattr__(self, name, float(value))
         for name in ("offset_x", "offset_y"):
-            value = getattr(self, name)
-            if not _number(value) or not -OFFSET_LIMIT <= value <= OFFSET_LIMIT:
+            value = _real(getattr(self, name))
+            if value is None or not -OFFSET_LIMIT <= value <= OFFSET_LIMIT:
                 raise ValueError("box_alignment_offset_invalid")
             object.__setattr__(self, name, float(value))
         if type(self.turn) is not int or self.turn not in ROTATIONS:
@@ -143,9 +153,15 @@ def _region_rect(mapping):
 
 
 def _check_config(config):
-    if (not isinstance(config, BoxPanelConfig) or
-            any(type(value) is not int or value < 1 for value in (config.width_px, config.height_px, config.max_boxes))):
+    if not isinstance(config, BoxPanelConfig):  # A configuration validates itself when it is built.
         raise ValueError("box_panel_config_invalid")
+
+
+def _check_threshold(threshold):
+    value = _real(threshold)
+    if value is None or not 0 <= value <= 1:
+        raise ValueError("hud_threshold_invalid")
+    return float(value)
 
 
 def panel_point(x, y, mapping, config, alignment=NEUTRAL):
@@ -165,10 +181,22 @@ def panel_point(x, y, mapping, config, alignment=NEUTRAL):
 
 @dataclass(frozen=True)
 class BoxSelection:
-    """One frame's boxes for the panel and the count of what was dropped, by ``DROP_REASONS``."""
+    """One frame's boxes for the panel, what was dropped, and everything they were selected with.
+
+    The selection carries its own settings (the geometry's digest, the
+    mapping's space, crop and rotation, the threshold and the alignment), so
+    ``boxes_report`` states what was used and cannot be handed another
+    alignment or threshold by mistake.
+    """
     boxes: tuple
     detections: int
     dropped: tuple  # ``(reason, count)`` for every reason of ``DROP_REASONS``, in that order.
+    config_sha256: str
+    space: tuple  # (width, height) of the box space the detections were in.
+    crop: tuple  # The region as the native crop taken: (left, top, right, bottom).
+    rotation: int
+    threshold: float
+    alignment: Alignment
 
     @property
     def labels(self):
@@ -190,7 +218,11 @@ def camera_boxes(detections, mapping, config, *, threshold, alignment=NEUTRAL):
     from ``threshold`` to 1, its box is finite, nonempty and inside the
     space, and its label keeps a printable character (``contract.row_label``);
     the caller passes the threshold (``detection.POC_THRESHOLD`` for the
-    proof of concept). The module's docstring has the mapping and its two
+    proof of concept). Numbers differ from ``camera_rows`` in one way: any
+    real number is taken, NumPy scalars of every width included, and a
+    ``bool`` is not a number here (``camera_rows`` takes ``int`` and
+    ``float`` and their subclasses, so ``np.float64`` and ``True`` but not
+    ``np.float32`` or ``np.int64``). The module's docstring has the mapping and its two
     drop rules; every detection that gets no box is counted under one of
     ``DROP_REASONS``.
     """
@@ -198,8 +230,7 @@ def camera_boxes(detections, mapping, config, *, threshold, alignment=NEUTRAL):
     _check_config(config)
     if not isinstance(alignment, Alignment):
         raise ValueError("box_alignment_invalid")
-    if not _number(threshold) or not 0 <= threshold <= 1:
-        raise ValueError("hud_threshold_invalid")
+    threshold = _check_threshold(threshold)
     if not isinstance(detections, (list, tuple)) or len(detections) > MAX_DETECTIONS:
         raise ValueError("hud_detection_budget_exceeded")
     dropped = dict.fromkeys(DROP_REASONS, 0)
@@ -209,8 +240,9 @@ def camera_boxes(detections, mapping, config, *, threshold, alignment=NEUTRAL):
     mapped = []
     for detection in detections:
         box, score, label = (getattr(detection, name, None) for name in ("box_xyxy", "confidence", "label"))
-        if (not isinstance(detection, Detection) or not isinstance(box, (list, tuple)) or len(box) != 4 or
-                not all(map(_number, box)) or not _number(score) or not 0 <= score <= 1 or
+        score = _real(score)
+        box = tuple(map(_real, box)) if isinstance(box, (list, tuple)) and len(box) == 4 else (None,)
+        if (not isinstance(detection, Detection) or None in box or score is None or not 0 <= score <= 1 or
                 not isinstance(label, str) or
                 not (0 <= box[0] < box[2] <= space_width and 0 <= box[1] < box[3] <= space_height)):
             dropped["invalid"] += 1
@@ -236,7 +268,8 @@ def camera_boxes(detections, mapping, config, *, threshold, alignment=NEUTRAL):
         y0, y1 = _pixels(max(py0, 0), min(py1, height), height)
         mapped.append(PanelBox(name, float(score), (x0, y0, x1, y1)))
     kept, dropped["duplicate"], dropped["over_cap"] = select_boxes(mapped, config.max_boxes)
-    return BoxSelection(kept, len(detections), tuple(dropped.items()))
+    return BoxSelection(kept, len(detections), tuple(dropped.items()), config_digest(config), mapping.space,
+                        mapping.crop, mapping.rotation, threshold, alignment)
 
 
 # Keys of the report block of one displayed frame: counts and format metadata only. No label, no box and no
@@ -247,29 +280,30 @@ BOX_REPORT_KEYS = ("layout_id", "config_sha256", "panel_px", "max_boxes", "box_c
                    "dropped")
 
 
-def boxes_report(selection, mapping, config, *, threshold, alignment=NEUTRAL):
+def boxes_report(selection, config):
     """The counts-only block for one frame's ``BoxSelection``: exactly the keys of ``BOX_REPORT_KEYS``.
 
     The geometry's name and digest, the panel's size, the two coordinate
     spaces, the region and the alignment are format metadata; the rest are
-    counts (boxes shown, detections dropped and why).
+    counts (boxes shown, detections dropped and why). The region, the
+    threshold and the alignment are the selection's own, the ones
+    ``camera_boxes`` used; ``config`` must be the configuration it was
+    selected for (``box_selection_config_changed`` otherwise).
     """
-    _check_mapping(mapping)
     _check_config(config)
-    if not isinstance(alignment, Alignment):
-        raise ValueError("box_alignment_invalid")
-    if not _number(threshold) or not 0 <= threshold <= 1:
-        raise ValueError("hud_threshold_invalid")
     if (not isinstance(selection, BoxSelection) or tuple(name for name, _count in selection.dropped) != DROP_REASONS or
             any(type(count) is not int or count < 0 for _name, count in selection.dropped) or
             type(selection.detections) is not int or len(selection.boxes) > config.max_boxes or
-            len(selection.boxes) + sum(count for _name, count in selection.dropped) != selection.detections):
+            len(selection.boxes) + sum(count for _name, count in selection.dropped) != selection.detections or
+            not isinstance(selection.alignment, Alignment) or type(selection.threshold) is not float):
         raise ValueError("box_selection_invalid")
-    return {"layout_id": config.layout_id, "config_sha256": config_digest(config),
+    if selection.config_sha256 != config_digest(config):
+        raise ValueError("box_selection_config_changed")
+    return {"layout_id": config.layout_id, "config_sha256": selection.config_sha256,
             "panel_px": [config.width_px, config.height_px], "max_boxes": config.max_boxes,
             "box_coordinate_space": BOX_PANEL_PIXELS, "source_coordinate_space": FRAME_PIXELS,
-            "source_space_px": list(mapping.space), "region_crop_native_xyxy": list(mapping.crop),
-            "region_rotation": mapping.rotation, "alignment": alignment.report(),
-            "alignment_neutral": alignment.neutral, "threshold": float(threshold),
+            "source_space_px": list(selection.space), "region_crop_native_xyxy": list(selection.crop),
+            "region_rotation": selection.rotation, "alignment": selection.alignment.report(),
+            "alignment_neutral": selection.alignment.neutral, "threshold": selection.threshold,
             "detections": selection.detections, "boxes_shown": len(selection.boxes),
             "boxes_dropped": selection.detections - len(selection.boxes), "dropped": dict(selection.dropped)}
