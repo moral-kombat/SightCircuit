@@ -129,10 +129,28 @@ class BoundaryTests(unittest.TestCase):
                                                            notices=(confirmation.DISPLAY_NOTICE,)))
         self.assertEqual(shown.getvalue(), contract.EXPORT_NOTICE + "\n" + confirmation.DISPLAY_NOTICE + "\n" +
                          "Bounds: 150 frames, 30 seconds, 5 frames a second, cameras 0.\nType yes to continue: ")
-        for notice in (confirmation.DISPLAY_NOTICE, confirmation.SYNTHETIC_NOTICE):
+        for notice in (confirmation.DISPLAY_NOTICE, confirmation.BOX_DISPLAY_NOTICE, confirmation.SYNTHETIC_NOTICE):
             self.assertIn("it is not an approval and creates no scope record", notice)
             self.assertIn("Ctrl-C", notice)
             self.assertIn("green input", notice)
+        # The box panel's notice, as the owner accepted it on 2026-11-25 (owner decision C of item B5), sentence
+        # for sentence: a change to any of them is a change the owner is asked about.
+        self.assertEqual([sentence.strip() for sentence in confirmation.BOX_DISPLAY_NOTICE.split(". ")], [
+            "camera_hud: draws a box with a name around each detected object, on a transparent panel in the middle "
+            "of the view in the headset, for the bounds shown below",
+            "A box sits on its object only while the head is still; it trails when the head turns",
+            "A box is taken down about one second after the camera frame it came from unless a newer frame shows "
+            "it again",
+            "The panel shows no camera image",
+            "The command saves no image; its report holds counts, labels, timings and format metadata, printed on "
+            "this terminal and written to a file only if you named --report",
+            "Stop with Ctrl-C at any passthrough change, any green input, or when the wearer asks",
+            "Typing yes starts this one run; it is not an approval and creates no scope record."])
+        shown = io.StringIO()
+        self.assertIsNone(confirmation.confirm_on_terminal(limits, (0,), stdin=Terminal(), output=shown,
+                                                           notices=(confirmation.BOX_DISPLAY_NOTICE,)))
+        self.assertEqual(shown.getvalue(), contract.EXPORT_NOTICE + "\n" + confirmation.BOX_DISPLAY_NOTICE + "\n" +
+                         "Bounds: 150 frames, 30 seconds, 5 frames a second, cameras 0.\nType yes to continue: ")
         # The helper's notice is true of a display command that is given --report (revised with this command).
         self.assertIn("a display command shows labels and approximate arrows in the headset and saves only the report "
                       "you name (counts, labels, boxes and timings)", contract.EXPORT_NOTICE)
@@ -352,9 +370,22 @@ class GuideAndTemplateTests(unittest.TestCase):
                          ("camera_hud_device_report_worksheet", True, "not_run"))
         self.assertEqual({name: template[name] for name in gates.claims()}, ALL_CLOSED)
         blocks = camera_hud.CAMERA_BLOCKS
-        for name in ("config", "frames", "deadlines", "frame_expired", "end", "cleanup", "scope_record", "command", "target"):
+        for name in ("config", "frames", "deadlines", "frame_expired", "end", "cleanup", "scope_record", "command", "target",
+                     "view", "boxes", "steps_ms"):
             with self.subTest(block=name):
                 self.assertLessEqual(set(template[name]), set(blocks[name]))
+        # The record's bound fields and the box layout's blocks are on the worksheet (work-order item B5): the
+        # layout, the region and rotation, the alignment's five numbers and the watch, and the boxes' counts.
+        self.assertLessEqual({"requested_layout", "hud_config_id", "hud_config_sha256", "region", "rotation", "alignment",
+                              "presence_watch"}, set(template["scope_record"]))
+        self.assertEqual(set(template["scope_record"]), set(camera_hud.SCOPE_KEYS) - {"requested_runner", "requested_step",
+                                                                                     "requested_source"})
+        from sightcircuit.hud import boxes as box_selection
+        self.assertEqual((set(template["boxes"]["dropped"]), set(template["config"]["alignment"]),
+                          set(template["scope_record"]["alignment"])),
+                         (set(box_selection.DROP_REASONS), set(box_selection.ALIGNMENT_FIELDS),
+                          set(box_selection.ALIGNMENT_FIELDS)))
+        self.assertEqual(set(template["steps_ms"]) - {"unit", "clock"}, set(camera_stage.STEPS))
         self.assertLessEqual(set(template["timings"]) - {"timebase"}, set(blocks["timings"]))
         self.assertLessEqual(set(template["bridge"]) - {"final_report"}, set(blocks["bridge"]))
         self.assertLessEqual(set(template["helper"]["ready"]), set(camera_helper.READY_FIELDS))
@@ -418,6 +449,21 @@ class ValidateTests(unittest.TestCase):
         self.assertEqual((report["command"]["mode"], report["command"]["exit_code"], report["command"]["confirmation"]),
                          ("validate", 0, None))
         camera_stage.check_report(report, camera_hud.VALIDATION_BLOCKS, camera_hud.MAX_REPORT_BYTES)
+        # The same path for the box panel (work-order item B5): the fake helper's frames through a region turned
+        # a quarter turn, a megabyte per update on the validation bridge, each one acknowledged.
+        panel = report["camera_panel"]
+        self.assertEqual((panel["status"], panel["bridge_mode"], panel["layout_id"], panel["update_bytes"],
+                          panel["region_rotation"], panel["frames_emitted"], panel["ok"], panel["source_cleanup_ok"],
+                          panel["bridge_cleanup_ok"]),
+                         ("completed", "--validate-stdin", "head-fixed-box-panel-v1", 1_048_576, 90, 6, True, True, True))
+        self.assertEqual(panel["acknowledged_presented"], panel["frames_sent"])
+        # One box in every result the client accepted. (A result accepted as the run ends can be withdrawn
+        # unwritten by the final take-down, so that count is at least, not exactly, the frames written.)
+        self.assertEqual(panel["boxes_sent"], panel["results_sent"])
+        self.assertGreaterEqual(panel["results_sent"], panel["frames_sent"])
+        self.assertGreater(panel["frames_sent"], 0)
+        self.assertEqual(panel["labels"], [{"label": "bottle", "spells": panel["labels"][0]["spells"]}])
+        self.assertEqual(report["schema_version"], 2)  # 2 since the panel's part.
 
     def test_validate_refuses_any_helper_that_does_not_describe_itself_as_the_fake(self):
         os.makedirs(self.directory.name + "/stand-in", exist_ok=True)
@@ -435,8 +481,9 @@ class ValidateTests(unittest.TestCase):
                     mock.patch.object(camera_hud, "run_synthetic_rows") as rows:
                 report = camera_hud.validate(helper)
                 self.assertEqual((report["status"], report["reason"], report["command"]["exit_code"],
-                                  report["helper"]["fake"], report["camera"], report["synthetic_rows"]),
-                                 ("validation_failed", "validate_requires_fake_helper", 1, False, None, None))
+                                  report["helper"]["fake"], report["camera"], report["camera_panel"],
+                                  report["synthetic_rows"]),
+                                 ("validation_failed", "validate_requires_fake_helper", 1, False, None, None, None))
                 for called in (exported, camera, rows):
                     called.assert_not_called()
 
@@ -448,6 +495,38 @@ class ValidateTests(unittest.TestCase):
         self.assertEqual((report["status"], report["reason"], report["camera"]["ok"], report["command"]["exit_code"]),
                          ("validation_failed", "camera_path_failed", False, 1))
         self.assertEqual({name: report[name] for name in gates.claims()}, ALL_CLOSED)
+
+    def test_validate_fails_its_panel_part_by_name_when_the_boxes_block_is_missing_or_says_nothing_was_sent(self):
+        # The panel's pass is judged on its boxes block: without the block, or with one that counts nothing
+        # sent, the validation is not ``validated``, whatever else the pass reports. The strip's pass and the
+        # synthetic rows are untouched, so the reason is the panel's own.
+        run_camera = camera_hud.run_camera
+
+        def spoiled(change):
+            def run(*arguments, **options):
+                report = run_camera(*arguments, **options)
+                if options.get("layout") is not None:  # The panel's pass.
+                    change(report)
+                return report
+            return run
+
+        def emptied(report):
+            report["boxes"].update(results_sent=0, boxes_sent=0)
+
+        def unsent(report):
+            report["boxes"].update(boxes_sent=report["boxes"]["boxes_sent"] - 1)
+        for name, change in (("no block", lambda report: report.update(boxes=None)),
+                             ("no block at all", lambda report: report.pop("boxes")),
+                             ("nothing sent", emptied), ("a box short", unsent)):
+            with self.subTest(spoiled=name), mock.patch.object(camera_hud, "run_camera", spoiled(change)):
+                report = camera_hud.validate(self.helper)
+            with self.subTest(spoiled=name):
+                self.assertEqual((report["status"], report["reason"], report["command"]["exit_code"]),
+                                 ("validation_failed", "camera_panel_path_failed", 1))
+                self.assertEqual((report["camera"]["ok"], report["camera_panel"]["ok"], report["synthetic_rows"]["ok"]),
+                                 (True, False, True))
+                self.assertEqual(report["camera_panel"]["status"], "completed")  # The pass ran; its count failed it.
+                camera_stage.check_report(report, camera_hud.VALIDATION_BLOCKS, camera_hud.MAX_REPORT_BYTES)
 
 
 @unittest.skipUnless(RUNNABLE, NEEDS)
@@ -533,6 +612,53 @@ class RefusalTests(DeviceModeCase):
 
     def arguments(self, mode, record):
         return [*mode, "--scope-record", record, "--manifest", self.path]
+
+    def test_the_layouts_options_are_checked_before_the_confirmation_and_before_any_record(self):
+        # What the command line itself can say is wrong, it says before the operator is asked anything: an
+        # option that belongs to the other layout, a missing alignment, numbers out of range, the camera's
+        # options on a mode that opens no camera. Nothing is consulted, launched or spent.
+        record, _ = self.staged("L-D4")
+        panel = ["--camera", "--allow-camera-input", "--allow-hud-output", "--seconds", "3", "--step", "L-D4",
+                 "--layout", "head-fixed-box-panel-v1"]
+        strip = [*panel[:-2], "--names-only", "--orientation", "identity"]
+        cases = (
+            ([*panel], "needs --alignment"),
+            ([*panel, "--alignment", "1,1,0,0"], "--alignment needs five numbers"),
+            ([*panel, "--alignment", "1,1,0,0,45"], "--alignment: scales are 0.25 to 4"),
+            ([*panel, "--alignment", "9,1,0,0,0"], "--alignment: scales are 0.25 to 4"),
+            ([*panel, "--alignment", "1,1,0,0,inf"], "--alignment needs five numbers"),
+            ([*panel, "--alignment", "1,1,0,0,90.5"], "--alignment needs five numbers"),
+            ([*panel, "--alignment", "1,1,0,0,0", "--names-only"], "belong to the strip"),
+            ([*panel, "--alignment", "1,1,0,0,0", "--orientation", "identity"], "belong to the strip"),
+            ([*panel, "--alignment", "1,1,0,0,0", "--region", "0.5,0.5,0.52,0.9"], "--region"),
+            ([*panel, "--alignment", "1,1,0,0,0", "--region", "0,0,1"], "--region"),
+            ([*panel, "--alignment", "1,1,0,0,0", "--rotation", "45"], "--rotation"),
+            ([*panel[:-1], "head-fixed-box-panel-v2", "--alignment", "1,1,0,0,0"], "--layout"),
+            ([*strip, "--alignment", "1,1,0,0,0"], "--alignment belongs to the box panel"),
+            ([*panel[:-2], "--region", "0.25,0.25,0.75,0.75"], "--directions or --names-only"),
+            (["--synthetic-rows", "--allow-hud-output", "--seconds", "8", "--layout", "head-fixed-box-panel-v1"],
+             "takes no camera arguments"),
+            (["--synthetic-rows", "--allow-hud-output", "--seconds", "8", "--region", "0.25,0.25,0.75,0.75"],
+             "takes no camera arguments"),
+            (["--validate", "--layout", "head-fixed-box-panel-v1"], "--validate takes no run arguments"),
+            (["--validate", "--alignment", "1,1,0,0,0"], "--validate takes no run arguments"),
+        )
+        for index, (arguments, said) in enumerate(cases):
+            terminal = Terminal()
+            line = arguments if arguments[0] == "--validate" else self.arguments(arguments, record)
+            with self.subTest(case=index, said=said), self.launches() as seen, \
+                    mock.patch.object(scope.RunScope, "permit", side_effect=AssertionError("consulted")), \
+                    mock.patch.object(camera_hud, "create_detector", side_effect=AssertionError("loaded")), \
+                    mock.patch.object(camera_hud, "validate", side_effect=AssertionError("validated")):
+                code, report, shown = run_main(line, terminal)
+                self.assertEqual((code, report, terminal.asked, seen), (2, None, 0, []))
+                self.assertIn(said, shown)
+        self.assertEqual(self.ledger(), [])
+        # The same alignment written three ways is one alignment, and the neutral one is the default object's.
+        from sightcircuit.hud.boxes import Alignment
+        self.assertEqual({camera_hud.parse_alignment(text) for text in ("1,1,0,0,0", "1.0,1.0,0.0,-0.0,0", "1e0,1,0,0,0.0")},
+                         {Alignment()})
+        self.assertEqual(camera_hud.parse_alignment("1.25,0.8,0.1,-0.2,90"), Alignment(1.25, 0.8, 0.1, -0.2, 90))
 
     def test_no_terminal_and_a_declined_answer_start_nothing_and_consult_no_record(self):
         record, _ = self.staged("L-D4")
@@ -861,6 +987,101 @@ class FixedHudCommandTests(DeviceModeCase):
             code, again, _ = run_main([*arguments[:-2], "--report", self.out / "again.json"], Terminal())
         self.assertEqual((code, again["status"], again["command"]["refusal"], seen),
                          (1, "refused", "scope_run_id_used", []))
+
+
+    def test_the_command_line_runs_the_box_panel_through_a_region_under_a_record_that_names_all_of_it(self):
+        from sightcircuit.hud.contract import BOX_PANEL_CONFIG as PANEL, config_digest
+        neutral = {"scale_x": 1.0, "scale_y": 1.0, "offset_x": 0.0, "offset_y": 0.0, "turn": 0}
+        centre = [0.25, 0.25, 0.75, 0.75]
+        bound = {"hud_config": PANEL, "region": centre, "rotation": 90, "alignment": neutral, "presence_watch": False}
+        base = ["--camera", "--allow-camera-input", "--allow-hud-output", "--manifest", self.path, "--seconds", "3",
+                "--step", "L-D4", "--target-label", "bottle"]
+        view = ["--layout", PANEL.layout_id, "--region", "0.25,0.25,0.75,0.75", "--rotation", "90",
+                "--alignment", "1,1,0,0,0"]
+
+        def run(record, options, name):
+            with mock.patch.dict(os.environ, self.runtime_env), \
+                    mock.patch.object(camera_hud, "create_detector", return_value=camera_hud.ValidationDetector()):
+                return run_main([*base, "--scope-record", record, *options, "--report", self.out / f"{name}.json"], Terminal())
+
+        # Every difference between the command line and the record is refused before anything is launched, by
+        # name, with the record unspent. Each case is the right command line with one thing changed.
+        path, record = self.staged("L-D4", **bound)
+        differing = (
+            ("the strip", ["--directions", "--orientation", "identity", "--region", "0.25,0.25,0.75,0.75", "--rotation",
+                           "90"], "fixed_hud_layout_not_approved", "scope_layout_mismatch"),
+            ("another rotation", [*view[:5], "270", *view[6:]], "fixed_hud_output_not_approved", "scope_rotation_mismatch"),
+            ("another region", [*view[:3], "0.2,0.25,0.75,0.75", *view[4:]], "fixed_hud_output_not_approved",
+             "scope_region_mismatch"),
+            ("no region", [*view[:2], *view[6:]], "fixed_hud_output_not_approved", "scope_region_mismatch"),
+            ("another alignment", [*view[:7], "1,1,0,0,90"], "fixed_hud_output_not_approved", "scope_alignment_mismatch"),
+            ("an alignment off by a little", [*view[:7], "1,1,0.01,0,0"], "fixed_hud_output_not_approved",
+             "scope_alignment_mismatch"))
+        for name, options, reason, refusal in differing:
+            with self.subTest(differs=name), self.launches() as seen:
+                code, report, _ = run(path, options, f"refused-{len(list(self.out.iterdir()))}")
+                self.assertEqual((code, seen, self.ledger()), (1, [], []))
+                self.assert_refused(report, reason, refusal, camera_hud.CAMERA_BLOCKS)
+                self.assertEqual((report["scope_record"]["consumed"], report["scope_record"]["hud_config_id"]),
+                                 (False, PANEL.layout_id))
+        self.assertEqual(fake_vrclient.calls(self.log) if self.log.exists() else [], [])  # The runtime saw nothing.
+        # The command line that asks for what the record binds runs, on the fake runtime.
+        code, report, shown = run(path, view, "run")
+        self.assertEqual((code, report["status"], report["command"]["confirmation"], report["scope_record"]["run_id"]),
+                         (0, "completed", "operator_terminal", record["run_id"]))
+        self.assertEqual(json.loads((self.out / "run.json").read_text()), report)
+        camera_stage.check_report(report, camera_hud.CAMERA_BLOCKS, camera_hud.MAX_REPORT_BYTES)
+        self.assertEqual({name: report[name] for name in gates.claims()}, ALL_CLOSED)
+        # The record's bound fields are in the report, as the record states them.
+        block = report["scope_record"]
+        self.assertEqual((block["status"], block["consumed"], block["requested_layout"], block["hud_config_id"],
+                          block["hud_config_sha256"], block["region"], block["rotation"], block["alignment"],
+                          block["presence_watch"]),
+                         ("granted", True, PANEL.layout_id, PANEL.layout_id, config_digest(PANEL),
+                          dict(zip(("x0", "y0", "x1", "y1"), centre)), 90, neutral, False))
+        # What ran is what the record names: the layout, the megabyte, the region and turn, the alignment.
+        self.assertEqual((report["config"]["hud_config_id"], report["config"]["update_bytes"], report["config"]["alignment"],
+                          report["view"]["region"], report["view"]["rotation"], report["view"]["crop_native_xyxy"],
+                          report["boxes"]["region_rotation"], report["boxes"]["alignment_neutral"]),
+                         (PANEL.layout_id, 1_048_576, neutral, block["region"], 90, [16, 12, 48, 36], 90, True))
+        # The wearer-facing notice was the panel's, not the strip's.
+        self.assertIn(confirmation.BOX_DISPLAY_NOTICE, shown)
+        self.assertNotIn(confirmation.DISPLAY_NOTICE, shown)
+        self.assertIn(contract.EXPORT_NOTICE, shown)
+        self.assertGreater(report["frames"]["sent"], 0)
+        # Every frame written was answered by the bridge, and the boxes block agrees with the frames block:
+        # one box in every result the client accepted. (This run may end on its own bound, where the last
+        # frame's deadline is the run's end: a result accepted then can be withdrawn unwritten, and one written
+        # across the bound can be refused as expired. Neither is asserted away; at most that one frame is refused.)
+        frames = report["frames"]
+        self.assertEqual((frames["acknowledged_presented"] + frames["acknowledged_refused"], frames["unacknowledged"]),
+                         (frames["sent"], 0))
+        self.assertLessEqual(frames["acknowledged_refused"], 1)
+        self.assertEqual(frames["acknowledged_refused"], frames["refused_reasons"]["expired_on_arrival"]
+                         + frames["refused_reasons"]["expired_before_show"])
+        self.assertEqual((report["boxes"]["boxes_sent"], report["boxes"]["results_sent"]), (frames["submitted"],) * 2)
+        self.assertEqual([row["label"] for row in report["labels"]["rows"]], ["bottle"])
+        final = report["bridge"]["final_report"]
+        self.assertEqual((final["mode"], final["fixed_hud"]["config_id"], final["fixed_hud"]["config_digest"],
+                          final["fixed_hud"]["width"], final["fixed_hud"]["height"]),
+                         ("--fixed-hud", PANEL.layout_id, config_digest(PANEL), 512, 512))
+        uploads = [call for call in fake_vrclient.calls(self.log) if call["call"] == "SetOverlayRaw"]
+        self.assertEqual(len(uploads), report["frames"]["acknowledged_presented"])
+        self.assert_retired(report)
+        self.assertNotIn("calibration", json.dumps(report).lower())
+        # Spent: the same command line again is refused, and nothing more is launched.
+        with self.launches() as seen:
+            code, again, _ = run(path, view, "again")
+        self.assertEqual((code, again["status"], again["command"]["refusal"], seen), (1, "refused", "scope_run_id_used", []))
+        # The strip through the same region, under a strip record that names it: the region is the strip's too.
+        strip_bound = {"region": centre, "rotation": 90, "presence_watch": False}
+        path, _ = self.staged("L-D4", **strip_bound)
+        code, report, _ = run(path, ["--names-only", "--orientation", "identity", "--region", "0.25,0.25,0.75,0.75",
+                                     "--rotation", "90"], "strip")
+        self.assertEqual((code, report["status"], report["config"]["hud_config_id"], report["view"]["rotation"],
+                          report["view"]["prepared"], report["boxes"], report["config"]["update_bytes"]),
+                         (0, "completed", "fixed-edge-hud-v1", 90, True, None, 163_840))
+        self.assertEqual([row["label"] for row in report["labels"]["rows"]], ["bottle"])
 
 
 @unittest.skipUnless(RUNNABLE, NEEDS)

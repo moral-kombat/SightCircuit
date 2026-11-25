@@ -176,8 +176,9 @@ The layout is chosen on the command line, once, and nothing on the pipe can
 change it. **Cloud-checked only**, on the fake runtime; the Frame's bridge
 predates it. A caller in this repository starts real output with a layout
 only under a one-run scope record that names that layout
-([who may show it](box-panel.md#who-may-show-it)), and no stage or command
-names one yet.
+([who may show it](box-panel.md#who-may-show-it)). The camera HUD stage
+draws for either layout and `camera_hud --layout` names one
+([two layouts](camera-hud.md#two-layouts-and-a-region-of-view-items-b5-and-l17)).
 
 | Launch | Layout | Frame taken | Placement |
 | --- | --- | --- | --- |

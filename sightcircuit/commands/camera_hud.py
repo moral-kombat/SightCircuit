@@ -16,8 +16,16 @@ times a second into the bridge's ``--fixed-hud`` mode for ``--seconds``, with
 answers ``no_image``), so the bridge's own expiry is observed. The camera is never opened and no detector is loaded.
 
 ``--camera`` is the driver of steps L-D4 and L-D5: the left camera through
-``CameraHudStage`` (detector, rows, tile, one observed frame per result) for
-at most 90 seconds.
+``CameraHudStage`` (detector, rows or boxes, tile, one observed frame per
+result) for at most 90 seconds. ``--layout`` names what it draws: the strip
+(the default) or the box panel, on which a box and a name are drawn for
+each detection through ``--alignment``, the wearer's five numbers (the
+project's own, never the SDK's calibration; neutral is ``1,1,0,0,0``).
+``--region`` and ``--rotation`` give the detector a rectangle of the frame,
+turned by quarter turns, for either layout. The layout, the region, the
+rotation and the alignment are each compared with the run's scope record
+before anything is launched; a difference is a refusal and leaves the record
+unspent.
 
 Gates. Every gate stays closed and this command opens none; every report
 carries ``gates.claims()``, all false. The two device modes are gated use:
@@ -88,14 +96,15 @@ if not __package__:  # Run as a file: import the package beside this one.
 
 from sightcircuit import gates
 from sightcircuit.camera import confirmation, marks
-from sightcircuit.convert import to_bgr
+from sightcircuit.camera import region as regions
 from sightcircuit.detection import DEFAULT_DETECTOR, DETECTORS, POC_THRESHOLD, class_names, create_detector
 from sightcircuit.errors import SightCircuitError
 from sightcircuit.frame import Detection, DetectionResult
 from sightcircuit.hud import camera_stage, synthetic_rows
+from sightcircuit.hud.boxes import ALIGNMENT_FIELDS, Alignment
 from sightcircuit.hud.camera import ORIENTATIONS
 from sightcircuit.hud.camera_stage import CAMERA_INPUT_REFUSAL, CameraHudStage
-from sightcircuit.hud.contract import BRIDGE_READY_WAIT_SECONDS
+from sightcircuit.hud.contract import BRIDGE_READY_WAIT_SECONDS, FIXED_LAYOUTS, HUD_CONFIG, fixed_layout
 from sightcircuit.observed_frames import FIXED_HUD_REFUSAL, LAYOUT_REFUSAL, ObservedFrameClient
 from sightcircuit.overlay import DEFAULT_BRIDGE
 from sightcircuit.runtime import guard, manifest, scope
@@ -134,8 +143,13 @@ VALIDATION_HELPER_ARGS = ("--fake-scenario", "export_nv12", "--pixel-path", "cpu
 CAMERA_DATA_STATEMENT = "labels_and_display_intervals_are_camera_data"
 COMMAND_KEYS = ("name", "mode", "exit_code", "confirmation", "refusal", "seconds_requested", "fps_requested",
                 "max_frames_requested", "stops_requested", "detector", "report_saved_by_operator", "camera_data")
-SCOPE_KEYS = ("status", "refusal", "consumed", "requested_runner", "requested_step", "requested_source", "step", "source", "run_id",
-              "revision", "manifest_sha256", "deadline_utc", "max_seconds", "approval")
+SCOPE_KEYS = ("status", "refusal", "consumed", "requested_runner", "requested_step", "requested_source",
+              "requested_layout", "step", "source", "run_id", "revision", "manifest_sha256", "deadline_utc",
+              "max_seconds", "approval", "hud_config_id", "hud_config_sha256", "region", "rotation", "alignment",
+              "presence_watch")
+# The validate mode's view for the box panel: the centre half of the frame turned a quarter turn (E103's view; the
+# stand-in's frames have no right way up) and the neutral alignment.
+VALIDATION_REGION = regions.Region(0.25, 0.25, 0.75, 0.75, rotation=90)
 COMMAND_BLOCKS = {"command": COMMAND_KEYS, "scope_record": SCOPE_KEYS}
 ERROR_BLOCKS.update(COMMAND_BLOCKS)
 CAMERA_BLOCKS = {
@@ -156,6 +170,10 @@ VALIDATION_BLOCKS = {
     "helper": ("backend", "fake", "build_dirty", "sdk_release", "contract"),
     "camera": ("status", "reason", "bridge_mode", "frames_emitted", "frames_sent", "acknowledged_presented",
                "labels", "expiries", "tile_already_down", "source_cleanup_ok", "bridge_cleanup_ok", "ok"),
+    "camera_panel": ("status", "reason", "bridge_mode", "layout_id", "update_bytes", "region_rotation",
+                     "frames_emitted", "frames_sent", "acknowledged_presented", "results_sent", "boxes_sent", "labels",
+                     "expiries",
+                     "tile_already_down", "source_cleanup_ok", "bridge_cleanup_ok", "ok"),
     "synthetic_rows": ("status", "reason", "bridge_mode", "requested", "acknowledged_presented", "stops_reached",
                        "stops_expired", "stops_within_bound", "bridge_cleanup_ok", "complete", "ok"),
 }
@@ -350,8 +368,14 @@ def exit_code(report, signals=()):
 def run_camera(limits, *, run_scope=None, helper=None, bridge=None, detector=DEFAULT_DETECTOR, detector_factory=None,
                threshold=POC_THRESHOLD, directions=True, orientation="identity", target_label=None, cues=(),
                mark_labels=(), key_fd=None, terminal=None, confirmed=False, validation_only=False, client_env=None,
-               extra_args=(), stop=None, signals=None, mode="camera"):
+               extra_args=(), stop=None, signals=None, mode="camera", layout=HUD_CONFIG, region=None, alignment=None):
     """One bounded camera HUD run; returns the report (the stage's plus this command's blocks). Main thread only.
+
+    ``layout`` is the fixed layout the run draws for (the strip unless the
+    box panel is named), ``region`` the ``Region`` the detector is given and
+    ``alignment`` the panel's ``Alignment``; the stage and the client are
+    built from them, and a device run's ``run_scope`` must have been asked
+    for the same, or the sites refuse.
 
     ``run_scope`` is the ``RunScope`` of a device run (None in validation,
     where nothing is displayed). ``helper`` and ``bridge`` default to the
@@ -381,8 +405,10 @@ def run_camera(limits, *, run_scope=None, helper=None, bridge=None, detector=DEF
     signals = [] if signals is None else signals
     source = CameraHelperSource(helper, limits, confirmed=confirmed, extra_args=extra_args,
                                 attach_seconds=ATTACH_SECONDS)
+    # The strip's client names no layout, so its bridge is launched exactly as it always was.
     client = ObservedFrameClient(bridge, validation_only=validation_only, env=client_env, scope=run_scope,
-                                 max_output_seconds=None if validation_only else output_bound(run_scope))
+                                 max_output_seconds=None if validation_only else output_bound(run_scope),
+                                 layout=None if layout is HUD_CONFIG else layout)
     refusal = model = None
     try:
         camera_helper.helper_path(helper)
@@ -400,11 +426,9 @@ def run_camera(limits, *, run_scope=None, helper=None, bridge=None, detector=DEF
     if refusal is None and target_label is not None and target_label not in model.classes:
         refusal = "target_label_unknown"
 
-    def convert(frame):
-        session.first_frame(frame.observed_ns)
-        return to_bgr(frame)
     stage = CameraHudStage(source, model, client, threshold=threshold, directions=directions, orientation=orientation,
-                           max_fps=limits["fps"], seconds=limits["max_seconds"], convert=convert,
+                           max_fps=limits["fps"], seconds=limits["max_seconds"], config=layout, region=region,
+                           alignment=alignment, on_frame=lambda frame: session.first_frame(frame.observed_ns),
                            target_label=target_label if refusal is None else None, signalled=lambda: bool(signals))
     status = invalid = None
     if refusal is not None:
@@ -505,6 +529,10 @@ def describe_helper(binary):
     return next((line for line in lines if isinstance(line, dict) and line.get("event") == "describe"), None)
 
 
+def _positive(value):
+    return type(value) is int and value > 0
+
+
 def validate(helper=None, bridge=None):
     """The whole path with nothing real in it: the fake helper, a scripted detector, the validation bridge.
 
@@ -518,9 +546,10 @@ def validate(helper=None, bridge=None):
     helper = Path(guard.ROOT) / FAKE_HELPER if helper is None else helper
     bridge = DEFAULT_BRIDGE if bridge is None else bridge
     command = command_block("validate", detector=ValidationDetector.name)
-    report = {"report_kind": VALIDATION_KIND, "schema_version": 1, "status": "validation_failed", "reason": None,
+    report = {"report_kind": VALIDATION_KIND, "schema_version": 2, "status": "validation_failed", "reason": None,
               **gates.claims(), "validation_only": True, "images_saved": False, "pixels_in_report": False,
-              "camera_opened": False, "command": command, "helper": None, "camera": None, "synthetic_rows": None}
+              "camera_opened": False, "command": command, "helper": None, "camera": None, "camera_panel": None,
+              "synthetic_rows": None}
     described = describe_helper(helper)
     fake = described is not None and described.get("backend") == "fake" and described.get("sdk_release") is None
     report["helper"] = {"backend": camera_stage._identifier((described or {}).get("backend"), None), "fake": fake,
@@ -535,12 +564,18 @@ def validate(helper=None, bridge=None):
         return finish(report, VALIDATION_BLOCKS, "validate")
     # The fake backend has no camera and no wearer: its parent's confirmation is this check that it is the fake.
     previous = os.environ.get("XDG_RUNTIME_DIR")
+    panel = camera_stage.box_layout()  # By what it is, never by its place in the contract's list.
     with tempfile.TemporaryDirectory(prefix="sightcircuit-camera-hud-validate-") as runtime_directory:
         os.environ["XDG_RUNTIME_DIR"] = runtime_directory
         try:
             stage = run_camera(VALIDATION_LIMITS, helper=helper, bridge=bridge, detector_factory=ValidationDetector,
                                confirmed=True, validation_only=True, extra_args=VALIDATION_HELPER_ARGS,
                                target_label="bottle", mode="validate")
+            # The same path for the box panel, through a region turned a quarter turn: a megabyte per update.
+            boxed = run_camera(VALIDATION_LIMITS, helper=helper, bridge=bridge, detector_factory=ValidationDetector,
+                               confirmed=True, validation_only=True, extra_args=VALIDATION_HELPER_ARGS,
+                               target_label="bottle", mode="validate", layout=panel, region=VALIDATION_REGION,
+                               alignment=Alignment())
         finally:
             if previous is None:
                 os.environ.pop("XDG_RUNTIME_DIR", None)
@@ -558,6 +593,33 @@ def validate(helper=None, bridge=None):
                     and (frames.get("sent") or 0) > 0 and frames.get("acknowledged_presented") == frames.get("sent")
                     and [row["label"] for row in camera["labels"]] == ["bottle"])
     report["camera"] = camera
+    frames, cleanup, source = boxed.get("frames") or {}, boxed.get("cleanup") or {}, boxed.get("source") or {}
+    config, counted = boxed.get("config") or {}, boxed.get("boxes")
+    counted = counted if isinstance(counted, dict) else {}  # A missing block is a failed part, not an empty one.
+    camera_panel = {
+        "status": boxed["status"], "reason": boxed["reason"], "bridge_mode": boxed.get("bridge_mode"),
+        "layout_id": config.get("hud_config_id"), "update_bytes": config.get("update_bytes"),
+        "region_rotation": (boxed.get("view") or {}).get("rotation"),
+        "frames_emitted": source.get("frames_emitted"), "frames_sent": frames.get("sent"),
+        "acknowledged_presented": frames.get("acknowledged_presented"),
+        "results_sent": counted.get("results_sent"), "boxes_sent": counted.get("boxes_sent"),
+        "labels": [{"label": row["label"], "spells": row["spells"]} for row in (boxed.get("labels") or {}).get("rows", [])],
+        "expiries": (boxed.get("frame_expired") or {}).get("count"),
+        "tile_already_down": (boxed.get("end") or {}).get("tile_already_down"),
+        "source_cleanup_ok": cleanup.get("source_ok"), "bridge_cleanup_ok": cleanup.get("bridge_ok")}
+    camera_panel["ok"] = (
+        boxed["status"] == "completed" and cleanup.get("ok") is True and boxed.get("validation_only") is True
+        and config.get("hud_config_id") == panel.layout_id
+        and config.get("update_bytes") == panel.width_px * panel.height_px * 4
+        and (frames.get("sent") or 0) > 0 and frames.get("acknowledged_presented") == frames.get("sent")
+        # The boxes block is there and agrees with the frames block: every result the client accepted
+        # (``submitted``; the run's last may be withdrawn unwritten when the end comes, so not ``sent``)
+        # carried the one scripted box.
+        and _positive(counted.get("results_sent")) and counted.get("results_sent") == frames.get("submitted")
+        and counted.get("boxes_sent") == counted.get("results_sent")
+        and counted.get("boxes_selected") == counted.get("results_counted")
+        and [row["label"] for row in camera_panel["labels"]] == ["bottle"])
+    report["camera_panel"] = camera_panel
     rows = run_synthetic_rows(validation_only=True, bridge=bridge, mode="validate", **VALIDATION_ROWS)
     updates, stops = rows.get("updates") or {}, rows.get("stops") or {}
     report["synthetic_rows"] = {
@@ -571,10 +633,11 @@ def validate(helper=None, bridge=None):
                and updates.get("acknowledged_presented") == updates.get("requested")
                and stops.get("expired") == stops.get("reached") == VALIDATION_ROWS["stops"]
                and (rows.get("cleanup") or {}).get("ok") is True)}
-    if camera["ok"] and report["synthetic_rows"]["ok"]:
+    if camera["ok"] and camera_panel["ok"] and report["synthetic_rows"]["ok"]:
         report["status"] = "validated"
     else:
-        report["reason"] = "camera_path_failed" if not camera["ok"] else "synthetic_rows_failed"
+        report["reason"] = ("camera_path_failed" if not camera["ok"] else "camera_panel_path_failed"
+                            if not camera_panel["ok"] else "synthetic_rows_failed")
     command["exit_code"] = 0 if report["status"] == "validated" else 1
     return finish(report, VALIDATION_BLOCKS, "validate")
 
@@ -656,6 +719,18 @@ def build_parser():
                       help="--camera: rows carry names only")
     parser.add_argument("--orientation", choices=sorted(ORIENTATIONS),
                         help="--camera: the camera image's orientation relative to the view, as the device step measured it")
+    parser.add_argument("--layout", choices=[layout.layout_id for layout in FIXED_LAYOUTS],
+                        help=f"--camera: the fixed layout the run draws for (default {HUD_CONFIG.layout_id}, the "
+                             "strip); the record must name the same")
+    parser.add_argument("--region", metavar="X0,Y0,X1,Y1",
+                        help="--camera: the region of the frame the detector is given, as fractions (default: the "
+                             "whole frame); the record must name the same")
+    parser.add_argument("--rotation", type=int, choices=regions.ROTATIONS,
+                        help="--camera: the clockwise quarter turn applied to the region (default 0); the record "
+                             "must name the same")
+    parser.add_argument("--alignment", metavar="SX,SY,OX,OY,TURN",
+                        help="--camera on the box panel, required there: the wearer's alignment, the project's own "
+                             "five numbers (neutral is 1,1,0,0,0); the record must name the same")
     parser.add_argument("--detector", choices=DETECTORS, help=f"--camera: the model (default {DEFAULT_DETECTOR})")
     parser.add_argument("--threshold", type=float, help=f"--camera: the detection threshold (default {POC_THRESHOLD})")
     parser.add_argument("--target-label", metavar="CLASS",
@@ -673,6 +748,21 @@ def build_parser():
     return parser
 
 
+def parse_alignment(text):
+    """``SX,SY,OX,OY,TURN`` as an ``Alignment``; ``ValueError`` with a sentence for anything else."""
+    parts = text.split(",") if isinstance(text, str) else ()
+    try:
+        values = [float(part) for part in parts]
+    except ValueError:
+        values = []
+    if len(values) != len(ALIGNMENT_FIELDS) or not all(math.isfinite(value) for value in values) or values[4] != int(values[4]):
+        raise ValueError("--alignment needs five numbers: scale_x,scale_y,offset_x,offset_y and a turn of 0, 90, 180 or 270")
+    try:
+        return Alignment(*values[:4], int(values[4]))
+    except ValueError:
+        raise ValueError("--alignment: scales are 0.25 to 4, offsets -1 to 1, the turn 0, 90, 180 or 270") from None
+
+
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -680,7 +770,8 @@ def main(argv=None):
         parser.error("--threshold must be between zero and one")
     camera_only = (args.allow_camera_input or args.directions is not None or args.orientation or args.target_label
                    or args.cue or args.key_marks or args.mark_labels or args.step or args.fps is not None
-                   or args.detector is not None or args.threshold is not None)
+                   or args.detector is not None or args.threshold is not None or args.layout is not None
+                   or args.region is not None or args.rotation is not None or args.alignment is not None)
     rows_only = args.stops is not None or args.stop_seconds is not None
     device_only = args.allow_hud_output or args.scope_record or args.manifest or args.seconds
     if args.report is not None:  # Before anything else: a path that cannot be written never costs a run.
@@ -721,8 +812,28 @@ def main(argv=None):
                 parser.error(f"--seconds must be 1..{MAX_SECONDS} for --camera")
             if args.step is None:
                 parser.error(f"--camera needs --step ({' or '.join(CAMERA_STEPS)}): the record must be for the step that runs")
-            if args.directions is None or args.orientation is None:
-                parser.error("--camera needs --directions or --names-only, and --orientation: neither has a default")
+            layout = HUD_CONFIG if args.layout is None else fixed_layout(args.layout)
+            alignment = None
+            if layout is HUD_CONFIG:
+                if args.directions is None or args.orientation is None:
+                    parser.error("--camera needs --directions or --names-only, and --orientation: neither has a default")
+                if args.alignment is not None:
+                    parser.error("--alignment belongs to the box panel; the strip's rows take none")
+            else:
+                if args.directions is not None or args.orientation is not None:
+                    parser.error("--directions, --names-only and --orientation belong to the strip; the box panel "
+                                 "draws a box where the object is")
+                if args.alignment is None:
+                    parser.error("--camera on the box panel needs --alignment: it has no default (neutral is 1,1,0,0,0)")
+                try:
+                    alignment = parse_alignment(args.alignment)
+                except ValueError as error:
+                    parser.error(str(error))
+            try:
+                region = regions.Region(*(regions.WHOLE if args.region is None else regions.parse_region(args.region)),
+                                        rotation=0 if args.rotation is None else args.rotation)
+            except ValueError as error:
+                parser.error(f"--region: {error}")
             fps = DEFAULT_FPS if args.fps is None else args.fps
             detector = DEFAULT_DETECTOR if args.detector is None else args.detector
             threshold = POC_THRESHOLD if args.threshold is None else args.threshold
@@ -742,8 +853,8 @@ def main(argv=None):
                 if args.synthetic_rows:
                     refusal = confirmation.confirm_synthetic_rows(args.seconds, synthetic_rows.UPDATE_HZ)
                 else:
-                    refusal = confirmation.confirm_on_terminal(limits, (camera_helper.LEFT_CAMERA,),
-                                                               notices=(confirmation.DISPLAY_NOTICE,))
+                    notice = confirmation.DISPLAY_NOTICE if layout is HUD_CONFIG else confirmation.BOX_DISPLAY_NOTICE
+                    refusal = confirmation.confirm_on_terminal(limits, (camera_helper.LEFT_CAMERA,), notices=(notice,))
                 if refusal is not None:  # Nothing is launched, loaded or consulted without the typed answer.
                     report = refused_before_start(mode, refusal, blocks, kind)
             except guard.CANCELLATION as error:
@@ -762,11 +873,18 @@ def main(argv=None):
                     report = run_synthetic_rows(args.seconds, stops=stops, stop_seconds=stop_seconds,
                                                 run_scope=run_scope, confirmed=True, stop=RecordedStop(recorded))
                 else:
+                    # The scope is asked for exactly what the stage is built from; each is compared with the
+                    # record before anything is launched (the scope's steps 1 and 3, which consume nothing).
                     run_scope = scope.RunScope(args.scope_record, args.manifest, runner=RUNNER, step=args.step,
-                                               source=scope.CAMERA_LEFT, seconds=args.seconds)
+                                               source=scope.CAMERA_LEFT, seconds=args.seconds, hud_config=layout,
+                                               region=list(region.fractions), rotation=region.rotation,
+                                               alignment=None if alignment is None else alignment.report(),
+                                               presence_watch=False)
                     with relayed_stop(recorded) as stop:
                         report = run_camera(limits, run_scope=run_scope, detector=detector, threshold=threshold,
-                                            directions=args.directions, orientation=args.orientation,
+                                            layout=layout, region=region, alignment=alignment,
+                                            directions=True if args.directions is None else args.directions,
+                                            orientation="identity" if args.orientation is None else args.orientation,
                                             target_label=args.target_label, cues=cues, mark_labels=mark_labels,
                                             key_fd=marks.terminal_fd() if args.key_marks or mark_labels else None,
                                             confirmed=True, stop=stop, signals=recorded)

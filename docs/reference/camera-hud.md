@@ -135,6 +135,113 @@ pipeline's only sink. For each frame the pipeline processes:
 | A bridge that ends, or a client that fails, ends the run at once | The same watcher looks at the client every 20 ms and sets `stop` itself, so the camera helper is stopped whatever the detector is doing. A result that reaches `submit` inside those 20 ms meets the client's error on the pipeline's thread first and raises it, which ends the run the same way. `end.bridge_ended_first` records either, as long as the run had not already ended |
 | A frame the client refuses is never silently lost | `submit` counts it as after the end when the run has ended, and raises otherwise (`observed_frame_client_not_running`) |
 
+### Two layouts and a region of view (items B5 and L17)
+
+The steps above are the strip's. The stage draws for one of the bridge's
+[fixed layouts](overlay.md#fixed-layouts-work-order-item-b3-2026-11-24),
+named by `config` (one of the contract's own `FIXED_LAYOUTS` objects; the
+strip unless the box panel is named), and it must be the layout its client
+names: a stage that would draw one layout through a client that sends
+another is refused when it is built (`camera_hud_layout_mismatch`).
+
+| | Strip (`fixed-edge-hud-v1`) | Box panel (`head-fixed-box-panel-v1`) |
+| --- | --- | --- |
+| Step 2 | `camera_rows` | [`camera_boxes`](box-panel.md#camera_boxes) with the run's `alignment` |
+| Step 3 | `draw_tile`, 320 × 128 BGR, converted to RGBA when sent | [`draw_boxes`](box-panel.md#the-renderer), 512 × 512 RGBA, sent as drawn, row 0 first |
+| One update | 163,840 bytes | 1,048,576 bytes |
+| `alignment` | refused: rows take none | required, an `Alignment`; the neutral one is a value like any other. The project's own five numbers, never the SDK's calibration |
+| `directions`, `orientation` | the stage's parameters | not used |
+| A result with nothing to show | no rows | no boxes: no detection, or every detection dropped by a rule of `camera_boxes` |
+
+Everything in the table of rules above is the same code for both: the
+deadline from the camera frame's observation, sending every newer result,
+the acknowledgements and the ledger (fed from the rows' labels or from the
+selection's), the watcher, the end, the latch and the bridge-death path.
+`tests/test_camera_hud_stage_panel.py` runs the strip's stage suite with
+the panel: of the 30 tests the strip had, 26 are run with nothing changed
+for the panel, three through the harness's layout parameters (the frame
+size the client takes and the payload expected for a result), and one, the
+strip's names-only rows and orientations, does not apply to the panel and
+is left out there by name. One assertion of that suite was restated for
+both layouts when the megabyte made it fail: that every frame's write
+returns before its deadline is not something the stage promises of a frame
+handed over just before the run's own end (`frames.written_past_deadline`
+counts exactly that), so the suite now asserts what is promised and forces
+the case on every run.
+
+**What the sites compare is read-only.** `config`, `region`, `alignment`
+and `presence_watch` are properties without setters, and whether a frame is
+prepared (`prepares`) is derived from the layout and the region on every
+frame, so the sites cannot approve one view and the run use another.
+`presence_watch` is whether the stage holds a watch, not a flag beside it;
+the stage holds none.
+
+**A detection is judged in the detector's input, before its box is mapped.**
+Taking a box back to the whole frame sorts, clamps and rounds it
+(`Mapping.to_frame`), so `valid_detections` first drops every detection
+whose box is not a list or tuple of four coordinates the layout's selector
+takes with `0 <= x0 < x1 <= width` and `0 <= y0 < y1 <= height` of the image
+the detector was given: a box outside the input, inverted, empty, with a
+NaN or an infinity, of three numbers, `None` or text. They are counted
+(`view.invalid_detections`, and on the panel in `boxes.dropped.invalid`) and
+never raise, so a region or a rotation does not change which detections
+count as valid, and a malformed box cannot end a run and waste its record.
+
+**A rotation and the strip's arrows.** With a rotation the panel shows the
+region as the detector saw it. The strip's arrows do not follow the
+rotation: boxes are taken back to the unturned whole frame and the arrow is
+worked out there, so it refers to the camera's delivered image unless
+`orientation` is given as well. `ROTATION_ORIENTATION` is the pairing that
+makes the arrows refer to the image as the detector saw it (90 with
+`rotate_90_cw`, 270 with `rotate_90_ccw`, 180 with `rotate_180`); the stage
+does not apply it, because both are the operator's arguments.
+
+**The rule for nothing to show is one rule, kept.** A result with no rows, or
+with no boxes, takes the tile down at once with a hide request and nothing is
+sent for it; the next result with something to show is sent and followed by
+the show request. An all-transparent panel is therefore never uploaded: an
+empty view costs one small packet, not a megabyte, and the panel is down by
+name and not merely see-through.
+
+**The region of view** (`region`, a `camera.region.Region`; item L17). With a
+region the detector is given that rectangle of the native frame, resized and
+turned by its quarter turn (`region.prepare`, as in
+[bounded recognition](../guides/camera-recognize.md#a-region-of-view)), and
+its boxes are taken back to the whole frame (`Mapping.result`) before rows or
+boxes are selected: `camera_rows` gets the mapped detections and the box
+space's shape, so an arrow says where the object is in the whole frame, and
+`camera_boxes` gets them with the frame's `Mapping`, so the panel shows the
+region as the detector saw it. The region and the rotation are arguments,
+not findings: nothing here knows which way up the camera image is (E103
+found the left camera's image a quarter turn from upright and left open
+which one). The strip with the whole frame, unturned, converts the frame as
+it always did; any other region, and every panel run (its boxes need the
+`Mapping`), is prepared by the stage itself.
+
+**Per-frame time on the fake path: cloud figures, not Frame figures.** One
+x86_64 cloud container (4 virtual cores, Python 3.12), the camera stand-in
+producing 2464 × 2464 frames at 5 a second, a scripted detector that returns
+five boxes and takes no time, the validation bridge; 50 frames a row,
+milliseconds as p50 / p95. `prepare` is the pipeline's conversion step (the
+crop, the resize to the processing size and the turn); the next five are the
+stage's own steps (`steps_ms` in the report).
+
+| Layout, view | `prepare` | `map` | `select` | `draw` | `pack` | `queue` | all processing |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| strip, whole frame | 10.6 / 13.3 | 0 | 0.06 / 0.10 | 0.16 / 0.26 | 0.10 / 0.17 | 0.08 / 0.22 | 10.9 / 13.7 |
+| strip, centre half turned 90 | 6.6 / 8.0 | 0.04 / 0.10 | 0.05 / 0.09 | 0.17 / 0.26 | 0.09 / 0.15 | 0.08 / 0.10 | 7.0 / 8.3 |
+| panel, whole frame | 10.1 / 11.8 | 0.04 / 0.06 | 0.69 / 1.13 | 0.99 / 1.46 | 0.17 / 0.27 | 0.30 / 0.49 | 12.2 / 14.2 |
+| panel, centre half turned 90 | 6.1 / 7.8 | 0.03 / 0.06 | 0.68 / 1.19 | 0.90 / 1.47 | 0.16 / 0.23 | 0.28 / 0.40 | 8.1 / 10.4 |
+
+On this host the panel costs about 2 ms a frame more than the strip (exact
+rational mapping of five boxes, the megabyte drawn, one copy to bytes, one
+copy into the packet), and a region costs less than the whole frame because
+less is resized. The detector, not the stage, is the larger part of a real
+frame's time. The stage adds no thread, no timer and no polling for the
+panel: the steps run once per result on the pipeline's thread. What a
+megabyte costs the Frame's CPU and its compositor at 5 a second is unknown
+([the megabyte, measured in the cloud](box-panel.md#the-megabyte-measured-in-the-cloud)).
+
 `run(stop=None)` must be called on the main thread, because the source's
 supervision primitive takes the process's signals. It calls
 `client.check_start()` first, so a refused start launches neither the helper
@@ -308,12 +415,16 @@ site compares the layout the client is about to launch with the scope's and,
 once the record is read, with the record's id and digest
 ([who may show it](box-panel.md#who-may-show-it)); it already compared the
 duration and the bridge. Each site reads the client's scope once and
-judges, asks and compares that one object. The camera site compares the view: the stage as it
-stands draws the strip from the whole frame, unturned, with no alignment and
-no presence watch, so it serves a scope that asks for exactly that and
-refuses any other with the record unspent (`stage_view_bound`). The stage
-that takes a region, the panel and the watch is the second part of item B5
-and compares its own values there.
+judges, asks and compares that one object. The camera site compares the
+layout and the view with the stage's own (`stage_view_bound`): the scope's
+layout must be the contract's object the stage draws for, and its region,
+rotation, alignment and presence-watch requirement, stated as a record
+states them, must equal the stage's region and turn, its alignment's five
+numbers (or none) and whether it holds the watch. Any difference is refused
+with the record unspent, so a record is never spent on a run that would not
+do what it says. The stage holds no presence watch yet (the watch on the
+displayed path is the last part of item L17), so a record that requires the
+watch is still refused by every run.
 
 **What verification runs.** It hashes files and runs read-only queries: `git`
 for the commit and the tree's state, and, where no package database is
@@ -385,10 +496,14 @@ run stays the bounded recognition without display. Both sites take only a
 the mirror's HUD mode and `require_synthetic` are unchanged and never consult
 a record.
 
-`RunScope.report()` gives identifiers only (the requested and the recorded
-step and source, the run id, the revision, the manifest digest, the
-deadline, the bound, the approval reference, whether it was granted, revoked
-and consumed, and the refusal), for a command's report.
+`RunScope.report()` gives identifiers and format metadata only, for a
+command's report: the requested and the recorded step and source, the run
+id, the revision, the manifest digest, the deadline, the bound, the approval
+reference, whether it was granted, revoked and consumed, and the refusal;
+and, since the record's schema version 2, `requested_layout` (stated from
+the start) with what the accepted record binds: `hud_config_id`,
+`hud_config_sha256`, the region as `{x0, y0, x1, y1}`, the rotation, the
+alignment's five numbers (a copy) and `presence_watch`.
 
 **A stored report from before this change.** Reports that carry every gate
 claim (`gates.claims()`) gained `production_camera_input_enabled`. The
@@ -416,15 +531,20 @@ The records that verify there are test fixture records.
 
 ## The report
 
-`report()` returns kind `camera_hud_stage`, schema version 1.
+`report()` returns kind `camera_hud_stage`, schema version 1. Three blocks
+and three keys of `config` (`max_boxes`, `alignment`, `update_bytes`) were added with the box layout (items B5 and L17);
+no key was removed or changed its meaning.
 
 | Block | Holds |
 | --- | --- |
 | top level | `status`, `reason`, `error_type`, the three gate claims (all false), `validation_only`, `bridge_mode`, `images_saved`, `pixels_in_report` and `physical_display_observed` (all false), `fields_withheld` |
-| `config` | the HUD configuration id and digest, the tile size, rows, threshold, `directions`, `orientation`, the bounds, the maximum display age and the keepalive interval |
+| `config` | the layout's id and digest, the tile size and `update_bytes` (its RGBA bytes: 163,840 or 1,048,576), `rows` (the strip) or `max_boxes` (the panel), the threshold, `directions` and `orientation` (null on the panel), `alignment` (the five numbers; null on the strip), the bounds, the maximum display age and the keepalive interval |
+| `view` | the region as `{x0, y0, x1, y1}` (a report holds no list of fractions), the rotation, `whole_frame`, `prepared` (whether frames went through `region.prepare`), the box space's name and size, where the region lay in the first frame (`crop_native_xyxy`, `resized_px`), `geometry_constant`, and `invalid_detections`: detections dropped before mapping because their box was not a valid box in the detector's input |
+| `boxes` | the panel only (null on the strip): [`boxes_report`](box-panel.md#the-report-block) of every counted result, the metadata from the first and the counts summed (`detections`, `boxes_selected`, `boxes_dropped`, `dropped` per reason), with `results_counted`. `boxes_selected` is that block's `boxes_shown` under the name of what it counts here: boxes selected and drawn, whether or not the result was then sent (a result too old or after the end is drawn and not sent). `results_sent` and `boxes_sent` count the results the client accepted and the boxes in them. No label, score, box or pixel |
+| `steps_ms` | this side's own work per result: `map`, `select`, `draw` for every result drawn, `pack` for every result packed and `queue` for every result the client accepted (a submit it refused is not timed), each with count, p50, p95 and max on this host's `perf_counter` |
 | `identities` | the identity rule (`camera_frame_sequence`), the first and last frame identity written, the last result index and the source id |
-| `results` | results seen, with rows, without rows, too old, and after the end |
-| `frames` | `submitted` (handed to the client), `sent` (written to the pipe), `not_sent` (replaced, withdrawn by a take-down or past its deadline before the write), `written_past_deadline`; the bridge's answers per frame: `acknowledged_presented`, `acknowledged_refused`, `refused_reasons`, `unacknowledged`; and the bridge's final counts: `bridge_received`, `bridge_accepted`, `retransmitted`, `refused` (stale or expired on arrival), `expired`, `expired_in_upload` |
+| `results` | results seen, with rows, without rows, too old, and after the end (on the panel "rows" reads "boxes": the keys are the strip's and are kept) |
+| `frames` | `submitted` (handed to the client), `sent` (written to the pipe), `not_sent` (replaced, withdrawn by a take-down or past its deadline before the write), `written_past_deadline` (the write returned at or after the frame's deadline by this side's clock: the writer looks at the deadline before it writes, and the bridge then judges the frame on arrival by its own clock, refusing it if the deadline has passed); the bridge's answers per frame: `acknowledged_presented`, `acknowledged_refused`, `refused_reasons`, `unacknowledged`; and the bridge's final counts: `bridge_received`, `bridge_accepted`, `retransmitted`, `refused` (stale or expired on arrival), `expired`, `expired_in_upload` |
 | `deadlines` | the cap, the longest deadline after its observation, `within_cap` |
 | `end` | `run_start_ns` (the bridge was ready), `ended_ns` (the watcher saw `stop`), `hide_written_ns` and `bridge_hide_returned_ns` for the final hide with each one's milliseconds after the end, `tile_already_down`, `bridge_ended_first` |
 | `timings` | below |
@@ -517,7 +637,8 @@ enforces:
 
 So bytes, buffers, arrays, tuples, prose, paths and wide integers are refused
 wherever they sit, and no arrangement of fields can carry a tile (163,840
-bytes) or a camera frame: the total is a quarter of a tile.
+bytes), a panel update (1,048,576 bytes) or a camera frame: the total is a
+quarter of a tile and a twenty-fifth of a panel update.
 
 It does not, and cannot, check that a number or an identifier-shaped string
 means what its key says. A few kilobytes of data spelled as numbers inside
@@ -540,8 +661,16 @@ the HUD contract's constants.
 is the only code that builds a `RunScope`, and it has three modes.
 
 **`--validate`** runs `run_camera` on the helper's fake backend with a
-scripted detector and the validation bridge, then the synthetic rows on the
-validation bridge with one stop. Before asking the helper to export anything
+scripted detector and the validation bridge, once for the strip from the
+whole frame and once for the box panel through a region turned a quarter
+(`camera_panel` in its report, whose schema version is 2 since that part was
+added), then the synthetic rows on the validation bridge with one stop. The
+panel's pass is judged on its `boxes` block as well: the block must be
+there, with a positive `results_sent` equal to the frames handed to the
+client (`frames.submitted`; the run's last may be withdrawn unwritten, so
+not the frames written), one box for each (`boxes_sent`) and one selected
+for each counted result; otherwise
+the validation fails with `camera_panel_path_failed`. Before asking the helper to export anything
 it reads the helper's `--describe` record (no connect, no camera) and refuses
 unless it says `backend: fake` with no SDK release. It needs no record and no
 terminal.
@@ -576,7 +705,15 @@ counter alone.
 the chosen detector, `CameraHudStage` and an `ObservedFrameClient` in real
 output carrying the run's `RunScope`. `--step` (L-D4 or L-D5) is required
 and must be the record's step. `--directions` or `--names-only` and
-`--orientation` are required and passed to the stage. The client's own bound
+`--orientation` are required and passed to the stage. `--layout` names the
+fixed layout (the strip unless given); the box panel requires `--alignment`
+(five numbers, no default) and refuses the strip's three options, and the
+strip refuses `--alignment`. `--region` and `--rotation` are
+`camera_recognize`'s, parsed by the same `parse_region`. All four are
+checked by the parser, before the informed start and before any record is
+read, and they are what the run's `RunScope` asks the record for (with no
+presence watch: the command holds none yet). A panel run's informed start
+shows `BOX_DISPLAY_NOTICE` in place of the strip's display notice. The client's own bound
 on real output is the scope's seconds: the run's `--seconds`, which also
 bound the stage and the helper; for the synthetic rows it is `--seconds`
 plus a 10 s allowance for the bridge's start. The run is on the main

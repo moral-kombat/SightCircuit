@@ -637,14 +637,30 @@ class RunScope:
             self.status, self.refusal = "revoked", self.refusal or "scope_revoked"
 
     def report(self):
-        """Identifiers only: what the record said, whether it was granted, and why not."""
+        """Identifiers and format metadata only: what the record said, whether it was granted, and why not.
+
+        Beside L10's fields, what the record binds since schema 2: the
+        layout's id and digest, the region (as ``{"x0", "y0", "x1", "y1"}``,
+        because a report holds no list of fractions), the rotation, the
+        alignment's five numbers and the presence-watch requirement; and
+        ``requested_layout``, the id of the layout the run asked for, which
+        is stated from the start. The record's fields are null until a
+        record was accepted. The alignment is a copy, never the record's
+        own object.
+        """
         record = self.record or {}
+        region, alignment = record.get("region"), record.get("alignment")
+        layout = self.hud_config if any(self.hud_config is known for known in FIXED_LAYOUTS) else None
         return {"status": self.status, "refusal": self.refusal, "consumed": self.consumed,
                 "requested_runner": self.runner if type(self.runner) is str and APPROVAL.fullmatch(self.runner) else None,
                 "requested_step": self.step if type(self.step) is str and self.step in STEPS else None,
                 "requested_source": self.source if type(self.source) is str and self.source in USES else None,
+                "requested_layout": None if layout is None else layout.layout_id,
                 **{name: record.get(name) for name in ("step", "source", "run_id", "revision", "manifest_sha256",
-                                                       "deadline_utc", "max_seconds", "approval")}}
+                                                       "deadline_utc", "max_seconds", "approval", "hud_config_id",
+                                                       "hud_config_sha256", "rotation", "presence_watch")},
+                "alignment": dict(alignment) if isinstance(alignment, dict) else None,
+                "region": None if region is None else dict(zip(("x0", "y0", "x1", "y1"), region))}
 
 
 def write_record(path, *, step, approval, checkpoint_manifest, valid_minutes, hud_config, max_seconds=None,
