@@ -707,6 +707,20 @@
       "file": "e101.md",
       "kind": "device_report",
       "reconstructed": false
+    },
+    {
+      "id": "E102",
+      "title": "Camera probes on Frame after an OS update, two session crashes and a power loss, both probes clean",
+      "file": "e102.md",
+      "kind": "device_report",
+      "reconstructed": false
+    },
+    {
+      "id": "E103",
+      "title": "Scan run on Frame, both detectors found the bottle with the camera image turned a quarter turn",
+      "file": "e103.md",
+      "kind": "device_report",
+      "reconstructed": false
     }
   ]
 }
