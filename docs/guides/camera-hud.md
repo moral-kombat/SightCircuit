@@ -64,22 +64,26 @@ All of this is preparation. None of it opens the camera or shows anything.
 ### The operator's rebuild
 
 1. Check out the approved revision with a clean tree.
-2. Rebuild the helper and the bridge on the Frame from that revision. The
-   helper speaks camera export v2, and the bridge on the Frame predates
-   `--fixed-hud`, so both must be rebuilt. The SDK directory `DIR` is the
+2. Rebuild the helper, the bridge and the presence watcher on the Frame from
+   that revision. The helper speaks camera export v2, and the bridge on the
+   Frame predates `--fixed-hud`, so both must be rebuilt; the watcher is
+   pinned by the manifest of step 4 since its schema version 4, whether or
+   not the step's record requires the watch. The SDK directory `DIR` is the
    operator's own copy, outside the checkout, as in the
    [probe guide's preparation](camera-probe.md#preparation):
 
    ```bash
    bash scripts/build_camera_helper.sh --sdk DIR
    bash scripts/build_overlay_bridge.sh
+   bash scripts/build_presence_watcher.sh
    ```
 
 3. If SteamOS, SteamVR or Mesa changed since the last step, the Frame manager
    first re-runs the helper's `--describe`, the offline tests and
    `--query-gpu`, as it did for E99.
 4. Write the checkpoint manifest after the builds. It pins the commit, the
-   bridge, the helper, the models, every module and this command's scripts:
+   bridge, the helper, the presence watcher, the models, every module and
+   this command's scripts, and records the digest of each fixed layout:
 
    ```bash
    mkdir -p artifacts/camera-hud
@@ -88,9 +92,10 @@ All of this is preparation. None of it opens the camera or shows anything.
    ```
 
    `--camera-hud` makes the manifest carry the camera HUD's group, which a
-   scope record requires for all three steps; a missing helper is then
-   reported as a problem. `--write` never overwrites; move an earlier
-   manifest aside first.
+   scope record requires for all three steps; a missing helper or watcher is
+   then reported as a problem. `--write` never overwrites; move an earlier
+   manifest aside first. A manifest written before schema version 4 does
+   not verify and no record can be staged against it: write a new one.
 5. Run `--validate` (above) on the rebuilt binaries.
 
 ### The Frame manager's staging and the record
@@ -103,6 +108,7 @@ the approval by an identifier; it is not the approval.
 .venv-replay/bin/python scripts/checkpoint_manifest.py \
   --verify artifacts/camera-hud/checkpoint-manifest.json &&
 .venv-replay/bin/python scripts/stage_scope_record.py --step L-D3 \
+  --layout fixed-edge-hud-v1 \
   --approval OWNER-APPROVAL-IDENTIFIER --valid-minutes 60 \
   --checkpoint-manifest artifacts/camera-hud/checkpoint-manifest.json \
   --out artifacts/camera-hud/scope-L-D3.json
@@ -112,10 +118,20 @@ the approval by an identifier; it is not the approval.
 write a record. The record is bound to the commit, the manifest's digest, a
 single-use run id, an absolute UTC deadline (the whole run must end before
 it), a duration bound (at most 120 s for L-D3, 30 s for L-D4, 90 s for L-D5),
-the source, the tile configuration and the step. Any rebuild, edit or new
-commit after staging makes the record refuse; so do a second run, a run for
-another step, a clock that reads earlier than the record's creation, and a
-start after the deadline.
+the source, the step, and since its schema version 2 exactly what the run
+shows and through which view: the layout (`--layout`, which has no default),
+and for a camera step the region and rotation, the alignment where the
+layout takes one, and whether the presence watch is required
+(`--presence-watch required` or `none`, which has no default either;
+[the reference](../reference/camera-hud.md#the-one-run-scope-record) lists
+them). Any rebuild, edit or new commit after staging makes the record
+refuse; so do a second run, a run for another step, a run with another
+layout or view than the record names, a clock that reads earlier than the
+record's creation, and a start after the deadline. A record written before
+schema version 2 is refused by name. `camera_hud` as it stands shows the
+strip from the whole frame with no watch, so it runs only under a record
+that names `fixed-edge-hud-v1` and nothing more; its options for the box
+panel, the region and the watch are the second part of work-order item B5.
 
 The duration is not only a number in the record. The command's client ends
 real output by itself when the run's seconds are over, whatever else is

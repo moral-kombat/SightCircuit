@@ -15,7 +15,12 @@ camera helper built on this machine, its sources and build script, and the
 scope-record staging tool) are the ``camera_hud`` group since schema version
 3, so the manifest's digest, which a one-run scope record names
 (``runtime/scope.py``), covers the helper as well as the bridge and the
-models. That group is optional: a manifest carries it when it is asked for
+models. Since schema version 4 (work-order items B5 and L17) the group also
+holds the presence watcher built on this machine, its sources and its build
+script, and every manifest records ``layouts``: the configuration digest of
+each fixed layout the bridge can be launched with (``hud.contract.FIXED_LAYOUTS``),
+as this checkout's code computes it, so the record's layout digest can be
+compared with the manifest's. That group is optional: a manifest carries it when it is asked for
 or when the helper exists, says so in ``groups``, and is verified with
 exactly the groups it carries, so a machine without the SDK helper still
 writes and verifies a manifest for the commands that never use it; the scope
@@ -38,11 +43,15 @@ import tempfile
 
 from .. import assets
 from ..errors import SightCircuitError
+from ..hud.contract import FIXED_LAYOUTS, config_digest
 
 ROOT = Path(__file__).resolve().parents[2]
 # 2 (2026-11-07): the agent package left ``modules`` for its own ``agent`` group.
 # 3 (2026-11-16): ``groups``, the optional ``camera_hud`` group and ``runtime_packages`` (work-order item L10).
-SCHEMA_VERSION = 3
+# 4 (2026-11-25): the ``camera_hud`` group gains the presence watcher, its sources and its build script, and
+#   ``layouts`` records each fixed layout's configuration digest (work-order items B5 and L17). A manifest of
+#   an earlier version never verifies (``schema_version`` differs), and a scope record refuses it by name.
+SCHEMA_VERSION = 4
 REPORT_KIND = "checkpoint_artifact_manifest"
 VERIFICATION_KIND = "checkpoint_manifest_verification"
 SCOPE = ("Pins software identity only (checkout, interpreter, packages, the SteamVR package and the bridge built "
@@ -79,8 +88,16 @@ CAMERA_HELPER_SOURCES = (
     "tools/camera_convert_spirv.hpp", "tools/camera_export_protocol.hpp", "tools/camera_helper.cpp",
     "tools/camera_pixels.hpp", "tools/camera_pixels_cpu.cpp", "tools/camera_pixels_gpu.cpp",
     "tools/camera_sha256.hpp", "tools/camera_status_map.hpp", "tools/camera_ycbcr.hpp")
-CAMERA_HUD_SCRIPTS = ("scripts/build_camera_helper.sh", "scripts/camera_hud.py", "scripts/stage_scope_record.py")
-CAMERA_HUD_FILES = (CAMERA_HELPER, *CAMERA_HELPER_SOURCES, *CAMERA_HUD_SCRIPTS)
+# The presence watcher (work-order item L16) joins the group with items B5 and L17, for the displayed path's
+# watch: the binary scripts/build_presence_watcher.sh leaves in the ignored artifacts directory, its one unit and
+# the local header that unit includes beside tools/overlay_lifecycle.hpp (already in NATIVE_SOURCES), and its
+# build script (scripts/build_openvr_tool.sh, which that script runs, is in CHECKPOINT_SCRIPTS).
+PRESENCE_WATCHER = "artifacts/presence-watcher/sightcircuit-presence-watcher"
+PRESENCE_WATCHER_SOURCES = ("tools/presence_signals.hpp", "tools/presence_watcher.cpp")
+CAMERA_HUD_SCRIPTS = ("scripts/build_camera_helper.sh", "scripts/build_presence_watcher.sh", "scripts/camera_hud.py",
+                      "scripts/stage_scope_record.py")
+CAMERA_HUD_BINARIES = (CAMERA_HELPER, PRESENCE_WATCHER)  # What the group's device modes launch, beside the bridge.
+CAMERA_HUD_FILES = (*CAMERA_HUD_BINARIES, *CAMERA_HELPER_SOURCES, *PRESENCE_WATCHER_SOURCES, *CAMERA_HUD_SCRIPTS)
 CAMERA_GROUP = "camera_hud"
 BASE_GROUPS = ("agent", "assets", "bridge", "modules", "native_sources", "scripts")  # Every manifest carries these.
 FILE_GROUPS = tuple(sorted((*BASE_GROUPS, CAMERA_GROUP)))
@@ -312,12 +329,18 @@ def package_versions(packages=CHECKPOINT_PACKAGES):
     return versions
 
 
+def layout_digests():
+    """{layout id: configuration digest} of every fixed layout, as this checkout's contract computes them."""
+    return {layout.layout_id: config_digest(layout) for layout in FIXED_LAYOUTS}
+
+
 def observe(root=ROOT, packages=CHECKPOINT_PACKAGES, camera_hud=None):
     """The manifest of the checkout and interpreter as they are now, plus its dirty entries; writes nothing.
 
     ``camera_hud`` says whether the camera HUD's group is carried: True or
     False, or None for "when the helper exists". ``groups`` records the
-    answer.
+    answer. A carried group holds the helper and the presence watcher: one
+    that is not built is recorded as null and is a problem.
     """
     root = Path(root)
     if camera_hud is None:
@@ -337,7 +360,8 @@ def observe(root=ROOT, packages=CHECKPOINT_PACKAGES, camera_hud=None):
                             "kernel_release": platform.release(), "os_release": os_release(),
                             "steamvr_package": steamvr_package()},
                "packages": package_versions(packages),
-               "runtime_packages": package_versions({name: name for name in RUNTIME_PACKAGES}), "groups": sorted(groups)}
+               "runtime_packages": package_versions({name: name for name in RUNTIME_PACKAGES}), "groups": sorted(groups),
+               "layouts": layout_digests()}
     current.update({group: {path: _digest(root / path) for path in paths} for group, paths in groups.items()})
     return current, changes
 

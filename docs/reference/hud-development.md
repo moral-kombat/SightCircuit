@@ -98,8 +98,19 @@ without it. `runtime_packages` records whether `onnxruntime`, which
 detection uses when it is installed, is present and at which version: absent
 is recorded as null and is not a problem, and installing, removing or
 upgrading it afterwards is a difference. The Python version was already
-pinned. A version 2 manifest no longer verifies and is rewritten after the
-builds. It also pins the installed package versions, all
+pinned. Since schema version 4 (2026-11-25, work-order items B5 and L17) the
+`camera_hud` group also pins the presence watcher built on the machine
+(`artifacts/presence-watcher/sightcircuit-presence-watcher`), its unit
+`tools/presence_watcher.cpp` with `tools/presence_signals.hpp`, and
+`build_presence_watcher.sh`, so that a displayed run can launch only the
+watcher the manifest hashed; a carried group with no watcher built is a
+problem, as a missing helper is. Every manifest also records `layouts`: the
+configuration digest of each fixed layout the bridge can be launched with
+(`fixed-edge-hud-v1`, `head-fixed-box-panel-v1`), as the checkout's contract
+computes it, which a scope record's layout digest is compared with. A
+manifest of version 2 or 3 no longer verifies (`schema_version` differs, and
+the fields it lacks are differences) and is rewritten after the builds; a
+scope record refuses one as `scope_manifest_schema_unsupported`. It also pins the installed package versions, all
 as deterministic JSON with checkout-relative paths. It creates a new file
 (never overwriting) and refuses a dirty tree unless `--allow-dirty` records
 `dirty: true`. `--verify PATH` is read-only: it writes nothing, builds nothing
@@ -361,13 +372,14 @@ version and build), the kernel release, the SteamVR package identity (since
 `artifacts/overlay-bridge/sightcircuit-overlay-bridge`, every
 `sightcircuit/**/*.py` outside `sightcircuit/agent/` (`modules`), the agent
 package with its scripts and settings template in their own `agent` group,
-the camera helper with its sources, build script and the scope-record staging
-tool in the `camera_hud` group when the manifest carries it, the scripts this
-procedure runs, the bridge sources
+the camera helper and the presence watcher with their sources and build
+scripts and the scope-record staging tool in the `camera_hud` group when the
+manifest carries it, the scripts this procedure runs, the bridge sources
 including `tools/hud_contract.hpp`, and the models and fixture listed in
 `scripts/smoke-assets.json`. It also records the installed `numpy` and
 `opencv-python-headless` versions. Paths are relative to the checkout. The JSON
-is deterministic (sorted keys), with `schema_version` 3, `report_kind`
+is deterministic (sorted keys), with `schema_version` 4, `layouts` (the
+configuration digest of each fixed layout), `report_kind`
 `checkpoint_artifact_manifest` and a `scope` stating that it pins software
 identity only. It is not device or qualification evidence.
 `checkpoint_manifest.py --help` confirms these flags:

@@ -217,7 +217,11 @@ class SyntheticRows:
         if self._ran:
             raise ValueError("synthetic_rows_already_run")
         self._ran = True
-        self.client.check_start()
+        try:
+            self.client.check_start()
+        except ValueError:
+            self.client.withdraw()  # A refused run gives its scope back: nothing can start under it later.
+            raise
         stop = threading.Event() if stop is None else stop
         try:
             self._drive(stop)

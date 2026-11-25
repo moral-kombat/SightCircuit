@@ -275,10 +275,14 @@ class BoxPanelContractTests(unittest.TestCase):
         self.assertEqual(select_boxes((), 5), ((), 0, 0))
 
     def test_nothing_selects_the_box_panel(self):
-        # Items B3 and B5 are where a bridge mode and a command take the geometry. B3 is in, and there are now two
-        # ways to reach the panel, each with its own words and its own list of files, so that a file allowed one
-        # is still forbidden the other. Until B5 no stage, command, scope record, manifest or script may use either
-        # (tests/test_box_panel_bridge.py holds the rest).
+        # Who names the panel and who uses the layout mechanism: two lists of files, each with its own words, so
+        # that a file allowed one is still forbidden the other. Since item B5 this is no longer what keeps the
+        # panel off a headset: a scope record that names the layout does (tests/test_scope_record.py), and the
+        # words of the stopgap it replaced are gone from the list because the stopgap is gone. What the lists
+        # still hold is the shape: the scope record, the manifest and the staging tool reach layouts only as
+        # "one of the contract's fixed layouts" and never name the panel; one module builds a bridge command
+        # line with a layout; and no stage or command selects the panel yet (the stage's layout is B5's second
+        # change, which will move these lists).
         #
         # The panel by name: its contract, font, renderer, selector and scenes, the header generator and the
         # generated header, and the bridge's table of fixed layouts, which reads the header's constants.
@@ -288,14 +292,15 @@ class BoxPanelContractTests(unittest.TestCase):
         panel_words = ("BOX_PANEL_CONFIG", "BoxPanelConfig", "box_render", "draw_boxes", "camera_boxes", "PanelBox",
                        "head-fixed-box-panel", "box_font", "kBoxPanel", "box_scenes", "orientation_scene")
         # The panel as "the second fixed layout": the contract's list, the bridge's table and the units that read
-        # a layout from it, and the observed-frame client. None of the bridge's other units or the client names
-        # the panel itself.
+        # a layout from it, the observed-frame client, and since item B5 the three that bind a layout to a run:
+        # the scope record, the checkpoint manifest and the staging tool. None of them names the panel itself.
         layout_files = {"sightcircuit/hud/contract.py", "sightcircuit/hud/__init__.py", "sightcircuit/observed_frames.py",
+                        "sightcircuit/runtime/scope.py", "sightcircuit/runtime/manifest.py",
+                        "scripts/stage_scope_record.py",
                         "tools/overlay_frame.hpp", "tools/overlay_bridge.cpp", "tools/overlay_bridge.hpp",
                         "tools/overlay_bridge_rendering.cpp", "tools/overlay_bridge_reporting.cpp"}
         layout_words = ("FIXED_LAYOUTS", "fixed_layout", "kFixedLayouts", "FixedLayout", "pinned_layout", "layout_index",
-                        "layout_in_force", "--layout", "LAYOUT_ARGUMENT", "launch_arguments", "layout_output_permitted",
-                        "require_real_output_layout", "REAL_OUTPUT_LAYOUT_IDS")
+                        "layout_in_force", "--layout", "LAYOUT_ARGUMENT", "launch_arguments", "layout_bound(")
         paths = [path for folder in ("sightcircuit", "scripts", "tools")
                  for path in (ROOT / folder).rglob("*") if path.suffix in (".py", ".cpp", ".hpp", ".sh", ".json")]
         self.assertGreater(len(paths), 100)

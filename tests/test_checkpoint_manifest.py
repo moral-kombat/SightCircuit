@@ -23,6 +23,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from sightcircuit.hud.contract import FIXED_LAYOUTS, config_digest
 from sightcircuit.runtime import manifest
 from scripts import checkpoint_manifest as command
 
@@ -75,7 +76,8 @@ class CheckoutCase(unittest.TestCase):
                      "name": "model.onnx", "url": "https://example.invalid/model.onnx",
                      "sha256": hashlib.sha256(ASSET).hexdigest()}]})}
         files.update({path: f"# {path}\n" for path in manifest.CHECKPOINT_SCRIPTS + manifest.NATIVE_SOURCES +
-                      manifest.AGENT_FILES + manifest.CAMERA_HELPER_SOURCES + manifest.CAMERA_HUD_SCRIPTS})
+                      manifest.AGENT_FILES + manifest.CAMERA_HELPER_SOURCES + manifest.PRESENCE_WATCHER_SOURCES +
+                      manifest.CAMERA_HUD_SCRIPTS})
         for path, text in files.items():
             (self.root / path).parent.mkdir(parents=True, exist_ok=True)
             (self.root / path).write_text(text)
@@ -85,6 +87,9 @@ class CheckoutCase(unittest.TestCase):
         self.helper = self.root / manifest.CAMERA_HELPER
         self.helper.parent.mkdir(parents=True)
         self.helper.write_bytes(b"camera helper built on this machine")
+        self.watcher = self.root / manifest.PRESENCE_WATCHER
+        self.watcher.parent.mkdir(parents=True)
+        self.watcher.write_bytes(b"presence watcher built on this machine")
         self.asset = self.root / manifest.ASSET_DIRECTORY / "model.onnx"
         self.asset.parent.mkdir(parents=True)
         self.asset.write_bytes(ASSET)
@@ -155,7 +160,7 @@ class WriteTests(CheckoutCase):
         text = self.path.read_text()
         data = json.loads(text)
         self.assertEqual(text, json.dumps(data, sort_keys=True, indent=2) + "\n")
-        self.assertEqual((data["schema_version"], data["report_kind"]), (3, "checkpoint_artifact_manifest"))
+        self.assertEqual((data["schema_version"], data["report_kind"]), (4, "checkpoint_artifact_manifest"))
         self.assertIn("software identity only", data["scope"])
         self.assertIn("not device", data["scope"])
         self.assertEqual(data["git"], {"commit": self.git("rev-parse", "HEAD").strip(), "dirty": False})
@@ -182,9 +187,17 @@ class WriteTests(CheckoutCase):
                                                  "sightcircuit/agent/runner.py"])
         self.assertEqual(data["agent"]["sightcircuit/agent/runner.py"], hashlib.sha256(b"KILL_GRACE = 10\n").hexdigest())
         self.assertEqual(sorted(data["scripts"]), sorted(manifest.CHECKPOINT_SCRIPTS))
-        # The camera HUD's group (L10): the helper built here, its sources, its build script, the staging tool.
+        # The camera HUD's group (L10): the helper built here, its sources, its build script, the staging tool;
+        # and since schema 4 (B5, L17) the presence watcher built here, its sources and its build script.
         self.assertEqual(sorted(data["camera_hud"]), sorted(manifest.CAMERA_HUD_FILES))
         self.assertEqual(data["camera_hud"][manifest.CAMERA_HELPER], hashlib.sha256(self.helper.read_bytes()).hexdigest())
+        self.assertEqual(data["camera_hud"][manifest.PRESENCE_WATCHER],
+                         hashlib.sha256(self.watcher.read_bytes()).hexdigest())
+        for path in ("tools/presence_watcher.cpp", "tools/presence_signals.hpp", "scripts/build_presence_watcher.sh"):
+            self.assertRegex(data["camera_hud"][path], r"\A[0-9a-f]{64}\Z")
+        # Each fixed layout's configuration digest, as this checkout's contract computes it (B5).
+        self.assertEqual(data["layouts"], {layout.layout_id: config_digest(layout) for layout in FIXED_LAYOUTS})
+        self.assertEqual(sorted(data["layouts"]), ["fixed-edge-hud-v1", "head-fixed-box-panel-v1"])
         self.assertIn("tools/hud_contract.hpp", data["native_sources"])
         self.assertEqual(data["assets"], {f"{manifest.ASSET_DIRECTORY}/model.onnx": hashlib.sha256(ASSET).hexdigest()})
         self.assertEqual(data["packages"], VERSIONS)
@@ -347,6 +360,69 @@ class VerifyTests(CheckoutCase):
         (self.root / "tools/camera_helper.cpp").write_text("// edited\n")
         self.git("commit", "-q", "-am", "change the helper source")
         self.assertDiffers(("camera_hud.tools/camera_helper.cpp", "changed"), ("git.commit", "changed"))
+
+    def test_fails_for_a_rebuilt_or_missing_presence_watcher_or_a_changed_watcher_source(self):
+        # Since schema 4 the camera HUD's group pins the watcher as it pins the helper (items B5 and L17).
+        self.write()
+        self.watcher.write_bytes(b"presence watcher rebuilt")
+        report = self.assertDiffers((f"camera_hud.{manifest.PRESENCE_WATCHER}", "changed"))
+        self.assertEqual(len(report["differences"]), 1)  # The ignored binary leaves the tree clean.
+        self.watcher.unlink()
+        self.assertDiffers((f"camera_hud.{manifest.PRESENCE_WATCHER}", "changed"))
+        self.watcher.write_bytes(b"presence watcher built on this machine")
+        self.assertVerifies()
+        for path in manifest.PRESENCE_WATCHER_SOURCES + ("scripts/build_presence_watcher.sh",):
+            (self.root / path).write_text("// edited\n")
+            self.git("commit", "-q", "-am", f"change {path}")
+            with self.subTest(path=path):
+                self.assertDiffers((f"camera_hud.{path}", "changed"), ("git.commit", "changed"))
+        # Asked for with --camera-hud, a watcher that was never built is a problem beside nothing else.
+        self.watcher.unlink()
+        self.path = self.out / "no-watcher.json"
+        code, out, _ = self.run_command("--write", str(self.path), "--camera-hud")
+        self.assertEqual((code, [(item["field"], item["reason"]) for item in json.loads(out)["problems"]]),
+                         (0, [(f"camera_hud.{manifest.PRESENCE_WATCHER}", "file_missing")]))
+        self.assertDiffers((f"camera_hud.{manifest.PRESENCE_WATCHER}", "file_missing"))
+
+    def test_a_manifest_of_the_schema_before_the_watcher_and_the_layouts_never_verifies(self):
+        # What a schema 3 manifest held: no ``layouts``, and a camera group without the watcher, its sources and
+        # its build script. It is refused as a whole, field by field, never read with the old meaning.
+        self.write()
+        data = json.loads(self.path.read_text())
+        old = {**data, "schema_version": 3}
+        del old["layouts"]
+        old[manifest.CAMERA_GROUP] = {
+            path: digest for path, digest in data[manifest.CAMERA_GROUP].items()
+            if path not in (manifest.PRESENCE_WATCHER, *manifest.PRESENCE_WATCHER_SOURCES,
+                            "scripts/build_presence_watcher.sh")}
+        self.path = self.out / "schema-3.json"
+        self.path.write_bytes(manifest.encode(old))
+        self.assertDiffers(("schema_version", "changed"), ("layouts", "unexpected"),
+                           (f"camera_hud.{manifest.PRESENCE_WATCHER}", "unexpected"),
+                           ("camera_hud.tools/presence_watcher.cpp", "unexpected"),
+                           ("camera_hud.tools/presence_signals.hpp", "unexpected"),
+                           ("camera_hud.scripts/build_presence_watcher.sh", "unexpected"))
+        # The version alone, on a manifest otherwise current, is a difference too.
+        self.path = self.out / "schema-3-only.json"
+        self.path.write_bytes(manifest.encode({**data, "schema_version": 3}))
+        report = self.assertDiffers(("schema_version", "changed"))
+        self.assertEqual(len(report["differences"]), 1)
+
+    def test_fails_for_a_layout_digest_that_is_not_this_checkouts(self):
+        self.write()
+        data = json.loads(self.path.read_text())
+        panel = FIXED_LAYOUTS[1].layout_id
+        cases = {"changed": ({**data["layouts"], panel: "0" * 64}, (f"layouts.{panel}", "changed")),
+                 "swapped": (dict(zip(data["layouts"], reversed(list(data["layouts"].values())))),
+                             (f"layouts.{panel}", "changed")),
+                 "dropped": ({name: digest for name, digest in data["layouts"].items() if name != panel},
+                             (f"layouts.{panel}", "unexpected")),
+                 "added": ({**data["layouts"], "another-layout-v1": "0" * 64}, ("layouts.another-layout-v1", "missing"))}
+        for name, (layouts, expected) in cases.items():
+            with self.subTest(case=name):
+                self.path = self.out / f"layouts-{name}.json"
+                self.path.write_bytes(manifest.encode({**data, "layouts": layouts}))
+                self.assertDiffers(expected)
 
     def test_without_the_sdk_helper_a_manifest_is_written_and_verified_for_the_commands_that_never_use_it(self):
         # A machine without an SDK build of the camera helper (the cloud, or a mirror-route checkpoint): the
@@ -748,11 +824,31 @@ class ProcedureDriftTests(unittest.TestCase):
         self.assertEqual(included - set(manifest.NATIVE_SOURCES), headers)
         self.assertIn("tools/camera_convert.comp", manifest.CAMERA_HELPER_SOURCES)  # The SPIR-V header's source.
         self.assertEqual(manifest.CAMERA_HUD_FILES[0], manifest.CAMERA_HELPER)
+        self.assertEqual(manifest.CAMERA_HUD_BINARIES, (manifest.CAMERA_HELPER, manifest.PRESENCE_WATCHER))
         self.assertNotIn("tools/camera_backend_fake.cpp", manifest.CAMERA_HUD_FILES)  # Never the fake backend.
+
+    def test_the_camera_group_pins_the_presence_watchers_unit_and_every_local_header_it_includes(self):
+        build = (ROOT / "scripts/build_openvr_tool.sh").read_text()
+        wrapper = (ROOT / "scripts/build_presence_watcher.sh").read_text()
+        self.assertIn("build_openvr_tool.sh\" presence-watcher", wrapper)
+        self.assertIn("scripts/build_openvr_tool.sh", manifest.CHECKPOINT_SCRIPTS)  # Pinned in every manifest.
+        self.assertIn("scripts/build_presence_watcher.sh", manifest.CAMERA_HUD_SCRIPTS)
+        # The one unit the build compiles for the watcher, and the binary it leaves where the manifest hashes it.
+        units = re.findall(r"presence-watcher\)(?:\n\s*#.*)*\n\s*sightcircuit_tool_sources=\(([^)]*)\); "
+                           r"sightcircuit_name=(\S+)", build)
+        self.assertEqual(units, [("presence_watcher.cpp", "sightcircuit-presence-watcher")])
+        self.assertIn('sightcircuit_build="$PROJECT_ROOT/artifacts/$1"', build)
+        self.assertEqual(manifest.PRESENCE_WATCHER, "artifacts/presence-watcher/sightcircuit-presence-watcher")
+        pinned_units = {path for path in manifest.PRESENCE_WATCHER_SOURCES if path.endswith(".cpp")}
+        self.assertEqual(pinned_units, {"tools/presence_watcher.cpp"})
+        headers = {path for path in manifest.PRESENCE_WATCHER_SOURCES if path.endswith(".hpp")}
+        self.assertEqual(local_includes(ROOT / "tools/presence_watcher.cpp") - set(manifest.NATIVE_SOURCES), headers)
+        self.assertEqual(headers, {"tools/presence_signals.hpp"})
+        self.assertFalse(set(manifest.PRESENCE_WATCHER_SOURCES) & set(manifest.CAMERA_HELPER_SOURCES))
 
     def test_pinned_files_exist_and_are_listed_once(self):
         listed = (manifest.CHECKPOINT_SCRIPTS + manifest.NATIVE_SOURCES + (manifest.ASSET_MANIFEST,) +
-                  manifest.CAMERA_HELPER_SOURCES + manifest.CAMERA_HUD_SCRIPTS)
+                  manifest.CAMERA_HELPER_SOURCES + manifest.PRESENCE_WATCHER_SOURCES + manifest.CAMERA_HUD_SCRIPTS)
         self.assertEqual(len(listed), len(set(listed)))
         for path in listed:
             with self.subTest(path=path):

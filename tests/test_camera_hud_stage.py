@@ -1015,7 +1015,7 @@ class FixedHudStageTests(StageCase):
         detector = ScriptedDetector([BOTTLE, BOTTLE, (), (), BOTTLE])
         report = self.stage(detector).run()
         self.assertEqual((report["status"], report["reason"]), ("completed", "max_frames"))
-        self.permitted.assert_called_with(self.the_stage.client)
+        self.permitted.assert_called_with(self.the_stage.client, None)  # The client and its layout value.
         self.assertEqual([item["frame_id"] for item in self.queued], [1, 2, 5, 6, 7, 8])
         sent = self.named("frame_sent")
         self.assertEqual(len(self.calls("SetOverlayRaw")), len(sent))

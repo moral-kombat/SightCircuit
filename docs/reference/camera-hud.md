@@ -45,7 +45,8 @@ the bridge is launched with `--layout`, must repeat the name on its `ready`
 line, and only frames of exactly that layout's size are queued. Without the
 argument the client is the strip's, as described here, with the command line
 it has always had. The stage and the command on this page pass no layout.
-Real output with the box panel's layout is refused before the scope is asked
+Real output with a layout is admitted only under a
+[scope record](#the-one-run-scope-record) that names that layout
 ([who may show it](box-panel.md#who-may-show-it)).
 
 **The keepalive repeats the request in force.** The
@@ -175,16 +176,34 @@ Frame can write a record, and anyone who can edit files there can forge one
 or delete the ledger. The owner's approval, given in the Frame manager's
 session, is the authority. The record makes the ordinary mistakes fail
 closed: the wrong commit, a rebuilt binary, a second run, a run after the
-sitting, the wrong source, a longer run, another program.
+sitting, the wrong source, a longer run, another program, and since schema
+version 2 (work-order item B5, 2026-11-25) another layout, another region or
+rotation of the camera image, another alignment, and a run without the
+presence watch where the record requires it.
+
+**Schema version 2.** Version 1 (item L10) bound `fixed-edge-hud-v1` and its
+digest as constants and compared them with nothing, because there was one
+geometry. Version 2 changes two things and nothing else: `hud_config_id` and
+`hud_config_sha256` may name either of the bridge's
+[fixed layouts](box-panel.md#who-may-show-it) and are compared with what the
+run is about to show, and four fields are new: `region`, `rotation`,
+`alignment` and `presence_watch`. A record that states any other version is
+refused as `scope_record_schema_unsupported`, whatever else it holds; it is
+never read with the old meaning. The ledger, the run id, the deadline, the
+steps and their bounds, the runner and the writer's place outside the
+operator commands are unchanged.
 
 | Field | Bound to |
 | --- | --- |
 | `step` | `L-D3`, `L-D4` or `L-D5` |
 | `source` | `synthetic` for L-D3 (the camera is never opened), `arcturus_camera_left` for L-D4 and L-D5; the step fixes it |
 | `runner` | `camera_hud`, the only runner a record may name. The caller declares its own name, so this field keeps a record written for another runner from being accepted by a caller that names itself truthfully; it cannot identify the calling program |
-| `hud_config_id`, `hud_config_sha256` | `fixed-edge-hud-v1` and the digest of the HUD contract in this checkout |
+| `hud_config_id`, `hud_config_sha256` | the layout the run may show: the id of one of the contract's fixed layouts (`fixed-edge-hud-v1`, `head-fixed-box-panel-v1`) and the digest of that layout's fields as this checkout computes it. The run's own layout must be the same, by id and by digest |
+| `region`, `rotation` | the view the detector is given: four fractions of the native frame `[x0, y0, x1, y1]` and the clockwise quarter turn (0, 90, 180, 270), by the rules of the [region of view](../guides/camera-recognize.md#a-region-of-view). A camera step's record always states both (the whole frame, unturned, is `[0.0, 0.0, 1.0, 1.0]` and `0`); the synthetic step has no frame and states `null` for both |
+| `alignment` | the wearer's [alignment](box-panel.md#the-alignment), its five numbers (`scale_x`, `scale_y`, `offset_x`, `offset_y`, `turn`), for a camera step on a layout that maps boxes to a panel; the neutral alignment is stated like any other. `null` for the strip, which takes none, and for the synthetic step. The numbers are the project's own format metadata, never the SDK's calibration |
+| `presence_watch` | `true` when the run must hold the [presence watch](../guides/camera-recognize.md#the-presence-stop---presence-watcher), else `false`; always `false` for the synthetic step, which opens no camera |
 | `revision` | the checkout's full commit |
-| `manifest_sha256` | the SHA-256 of the [checkpoint manifest](hud-development.md#checkpoint-manifest-identity-and-verification) file, which must carry the `camera_hud` group and so pins the camera helper, the bridge, the models, every module, the inference runtime's version and the camera HUD's scripts |
+| `manifest_sha256` | the SHA-256 of the [checkpoint manifest](hud-development.md#checkpoint-manifest-identity-and-verification) file, which must be of schema version 4 and carry the `camera_hud` group, and so pins the camera helper, the presence watcher, the bridge, the models, every module, the inference runtime's version and the camera HUD's scripts, and records each fixed layout's digest |
 | `run_id` | 32 random hexadecimal characters; single-use through the ledger |
 | `created_utc`, `deadline_utc` | absolute UTC times; the deadline is at most 240 minutes after creation, and the whole run must fit before it |
 | `max_seconds` | the run's duration bound, at most the step's: 120 s for L-D3, 30 s for L-D4, 90 s for L-D5 |
@@ -198,16 +217,24 @@ the Frame manager, when staging a step the owner approved. It lives in
 operator commands: it has no body in `sightcircuit/commands/`, no console
 entry point, and no command imports it, so nothing an operator starts a run
 with can create a record. The checkpoint manifest pins it in the `camera_hud`
-group. It reads the revision, the manifest digest and the configuration
+group. It reads the revision, the manifest digest and the layout's
 digest from the checkout, requires the manifest to carry the `camera_hud`
 group and to verify at that moment (so never a dirty tree or another build),
 takes the source and the default duration from the step, and refuses an
 unknown step, a free-text approval, a duration over the step's bound, a
 validity outside 1 to 240 minutes, an existing path and a path that would
-dirty the checkout.
+dirty the checkout. What the run may show is named, not defaulted:
+
+| Option | For | Without it |
+| --- | --- | --- |
+| `--layout ID` | every step | refused: no record names a layout nobody chose |
+| `--region X0,Y0,X1,Y1`, `--rotation DEGREES` | camera steps | the whole frame, unturned, stated in the record; the synthetic step refuses both |
+| `--alignment SX,SY,OX,OY,TURN` | camera steps on a panel layout | refused there (the neutral alignment is `1,1,0,0,0`), and refused everywhere else when given |
+| `--presence-watch required` or `none` | camera steps | refused for a camera step; the synthetic step refuses `required` |
 
 ```bash
 .venv-replay/bin/python scripts/stage_scope_record.py --step L-D3 \
+  --layout fixed-edge-hud-v1 \
   --approval OWNER-APPROVAL-IDENTIFIER --valid-minutes 60 \
   --checkpoint-manifest artifacts/camera-hud/checkpoint-manifest.json \
   --out artifacts/camera-hud/scope-L-D3.json
@@ -219,19 +246,21 @@ instruction.
 
 **The check.** A runner holds a `RunScope`: the record's path, the manifest's
 path, its own name, the step it is running, the source it will read, its
-duration and the tile configuration. Naming the paths permits nothing.
+duration, the layout it shows (one of the contract's own objects; the strip
+unless another is named) and its view: region, rotation, alignment and
+whether it holds the presence watch. Naming the paths permits nothing.
 `permit(use, holder)` answers the literal `True` or `False`. The first call
 verifies everything, in order, and stops at the first refusal, which
 `refusal` names:
 
 | Order | Check | Refusal |
 | --- | --- | --- |
-| 1 | The request: runner `camera_hud`, a known step and source that belong together, a positive finite duration | `scope_runner_not_permitted`, `scope_source_not_permitted`, `scope_step_unknown`, `scope_step_source_mismatch`, `scope_duration_invalid` |
-| 2 | The record: present, at most 4,096 bytes, no key written twice, exactly the fields above, a known step with that step's source, the fixed configuration, a duration within the step's bound | `scope_record_missing`, `scope_record_invalid`, `scope_step_unknown`, `scope_source_not_permitted` (the mirror, both cameras, anything else), `scope_step_source_mismatch`, `scope_geometry_mismatch`, `scope_duration_over_bound` |
-| 3 | The request against the record: the same step, source and configuration, a duration within the record's | `scope_step_mismatch`, `scope_source_mismatch`, `scope_geometry_mismatch`, `scope_duration_over_record` |
+| 1 | The request: runner `camera_hud`, a known step and source that belong together, a positive finite duration, a layout that is one of the contract's objects (not a copy or a name), and a view that is well formed and belongs to that source and layout | `scope_runner_not_permitted`, `scope_source_not_permitted`, `scope_step_unknown`, `scope_step_source_mismatch`, `scope_duration_invalid`, `scope_geometry_mismatch`, `scope_region_invalid`, `scope_region_not_for_source`, `scope_alignment_invalid`, `scope_alignment_not_for_layout`, `scope_presence_watch_invalid`, `scope_presence_watch_not_for_source` |
+| 2 | The record: present, at most 4,096 bytes, no key written twice, of schema version 2, exactly the fields above, a known step with that step's source, a fixed layout with this checkout's digest for it, the view stated as the writer states it for that source and layout, a duration within the step's bound | `scope_record_missing`, `scope_record_schema_unsupported`, `scope_record_invalid`, `scope_step_unknown`, `scope_source_not_permitted` (the mirror, both cameras, anything else), `scope_step_source_mismatch`, `scope_geometry_mismatch`, the view's refusals of row 1, `scope_duration_over_bound` |
+| 3 | The request against the record, field by field: the same step and source; the same layout by id and digest; the same region, rotation, alignment and presence-watch requirement, compared exactly, number for number; a duration within the record's | `scope_step_mismatch`, `scope_source_mismatch`, `scope_layout_mismatch`, `scope_region_mismatch`, `scope_rotation_mismatch`, `scope_alignment_mismatch`, `scope_presence_watch_mismatch`, `scope_duration_over_record` |
 | 4 | The clock: the record was not created more than 60 s in the future, the deadline has not passed, it is not more than 240 minutes ahead, and the run would end before it | `scope_record_from_the_future`, `scope_record_expired`, `scope_deadline_too_far`, `scope_run_would_pass_deadline` |
 | 5 | The revision: the checkout's commit is the record's | `scope_revision_mismatch` |
-| 6 | The manifest: the file's digest is the record's; it carries the `camera_hud` group with the helper's digest, for all three steps; and `verify_manifest` reports `verified` (clean tree, every pinned file, binary, model and package as recorded) | `scope_manifest_digest_mismatch`, `scope_manifest_lacks_camera_group`, `scope_manifest_not_verified` |
+| 6 | The manifest: the file's digest is the record's; it is of schema version 4; it carries the `camera_hud` group with a digest for the helper and for the presence watcher, for all three steps; the digest it recorded for the record's layout is the record's; and `verify_manifest` reports `verified` (clean tree, every pinned file, binary, model and package as recorded) | `scope_manifest_digest_mismatch`, `scope_manifest_schema_unsupported`, `scope_manifest_lacks_camera_group`, `scope_manifest_layout_mismatch`, `scope_manifest_not_verified` |
 | 7 | The run id: unused, and marked used now by creating `artifacts/scope-ledger/<run_id>.json` exclusively | `scope_run_id_used`, `scope_ledger_unavailable` |
 
 Only then is the scope granted, for its source's uses: real HUD output, and
@@ -239,6 +268,31 @@ for the left camera also camera input to the display. The run id is consumed
 as the last step of the verification, inside the permission check, so before
 the bridge or the helper is launched. An exception anywhere in it is a
 refusal (`scope_verification_failed`).
+
+**Which refusals spend the record.** Rows 1 to 6 consume nothing. A run that
+differs from its record in any bound field (row 3), or whose record, clock,
+revision or manifest does not verify, is refused with the run id unused, and
+the same record still serves a run that asks for what it binds. The run id
+is spent by row 7 alone, when everything else verified; from then on it
+stays spent whatever happens: a start refused past the deadline, a bridge
+rewritten between the check and the launch, a run that fails before or
+after its bridge started. In both cases the refused or failed run gives its
+scope back (`ObservedFrameClient.withdraw` revokes it), so that scope object
+starts nothing later; that is item L10's rule, unchanged. A re-run after a
+spent record is a new approval and a new record.
+
+**The two sites compare what runs with what was asked.** A scope is granted
+for a request equal to its record; each permission site then requires the
+request to be what actually runs, before the record is consulted. The output
+site compares the layout the client is about to launch with the scope's and,
+once the record is read, with the record's id and digest
+([who may show it](box-panel.md#who-may-show-it)); it already compared the
+duration and the bridge. The camera site compares the view: the stage as it
+stands draws the strip from the whole frame, unturned, with no alignment and
+no presence watch, so it serves a scope that asks for exactly that and
+refuses any other with the record unspent (`stage_view_bound`). The stage
+that takes a region, the panel and the watch is the second part of item B5
+and compares its own values there.
 
 **What verification runs.** It hashes files and runs read-only queries: `git`
 for the commit and the tree's state, and, where no package database is

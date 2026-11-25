@@ -96,7 +96,7 @@ from sightcircuit.hud import camera_stage, synthetic_rows
 from sightcircuit.hud.camera import ORIENTATIONS
 from sightcircuit.hud.camera_stage import CAMERA_INPUT_REFUSAL, CameraHudStage
 from sightcircuit.hud.contract import BRIDGE_READY_WAIT_SECONDS
-from sightcircuit.observed_frames import FIXED_HUD_REFUSAL, ObservedFrameClient
+from sightcircuit.observed_frames import FIXED_HUD_REFUSAL, LAYOUT_REFUSAL, ObservedFrameClient
 from sightcircuit.overlay import DEFAULT_BRIDGE
 from sightcircuit.runtime import guard, manifest, scope
 from sightcircuit.sources import camera_helper
@@ -414,7 +414,7 @@ def run_camera(limits, *, run_scope=None, helper=None, bridge=None, detector=DEF
         try:
             stage.run(stop)
         except ValueError as error:
-            if str(error) in (FIXED_HUD_REFUSAL, CAMERA_INPUT_REFUSAL):
+            if str(error) in (FIXED_HUD_REFUSAL, LAYOUT_REFUSAL, CAMERA_INPUT_REFUSAL):
                 status = ("refused", str(error))  # A gate refused: nothing was launched.
                 refusal = scope_refusal(run_scope)
             elif str(error).startswith(REPORT_INVALID):
@@ -466,7 +466,7 @@ def run_synthetic_rows(seconds, *, stops=3, stop_seconds=3.0, run_scope=None, br
         except ValueError as error:
             if str(error).startswith(REPORT_INVALID):
                 pass  # The run happened; its report is asked for again below and replaced there.
-            elif str(error) != FIXED_HUD_REFUSAL:
+            elif str(error) not in (FIXED_HUD_REFUSAL, LAYOUT_REFUSAL):
                 raise
             else:
                 status = ("refused", str(error))  # The gate refused: the bridge was not launched.
