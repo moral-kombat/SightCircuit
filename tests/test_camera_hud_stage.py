@@ -50,10 +50,11 @@ class ScriptedDetector:
 
     def __init__(self, script=(BOTTLE,), delays=None, fail_on=None):
         self.script, self.delays, self.fail_on = list(script), dict(delays or {}), fail_on
-        self.called_ns, self.returned_ns = [], []
+        self.called_ns, self.returned_ns, self.shapes = [], [], []
 
     def detect(self, image, threshold):
         self.called_ns.append(time.monotonic_ns())
+        self.shapes.append(getattr(image, "shape", None))  # What the detector was given: the region, turned.
         call = len(self.called_ns)
         if call in self.delays:
             time.sleep(self.delays[call])
@@ -87,6 +88,34 @@ class StageCase(unittest.TestCase):
     """One stage per test on the camera stand-in; records the frames seen, the frames queued and the packets written."""
     LIMITS = {"fps": 5, "max_seconds": 5, "max_frames": 8}
     TWO = {"fps": 5, "max_seconds": 3, "max_frames": 5}  # The ``end:`` scenarios: two frames 200 ms apart, then the end.
+    # The layout the stage draws for, and what a stage for it needs beside the strip's defaults. The strip here;
+    # ``tests/test_camera_hud_stage_panel.py`` runs these same tests with the box panel (work-order item B5).
+    LAYOUT = HUD_CONFIG
+    STAGE_OPTIONS = {}
+
+    def smallest_frame(self):
+        """``(width, height, rgba)`` of the smallest frame the client takes: one pixel for the strip's client,
+        which checks no size, and the layout's own size for a client that names its layout."""
+        if self.LAYOUT is HUD_CONFIG:
+            return 1, 1, bytes(4)
+        return self.LAYOUT.width_px, self.LAYOUT.height_px, bytes(self.LAYOUT.width_px * self.LAYOUT.height_px * 4)
+
+    def expected_payload(self, result, mapping=None, **options):
+        """``(labels, rgba bytes)`` the stage must send for ``result``: drawn here from the detections alone.
+
+        ``mapping`` is the ``Mapping`` of the frame the detector saw (None: the whole 64 x 48 frame, unprepared).
+        For the strip: the rows of the mapped detections over the whole frame's shape, drawn and converted.
+        """
+        from sightcircuit.hud.camera import camera_rows
+        from sightcircuit.hud.render import draw_tile
+        from sightcircuit.overlay import rgba_from_bgr
+        mapped = result if mapping is None else mapping.result(result)
+        rows = camera_rows(list(mapped.detections), (48, 64), HUD_CONFIG, threshold=0.5, **options)
+        return tuple(dict.fromkeys(row.label for row in rows)), rgba_from_bgr(draw_tile(rows, HUD_CONFIG))[2]
+
+    def layout_options(self):
+        """What a client is given for ``LAYOUT``: nothing for the strip, whose client names no layout."""
+        return {} if self.LAYOUT is HUD_CONFIG else {"layout": self.LAYOUT}
 
     @classmethod
     def setUpClass(cls):
@@ -99,7 +128,7 @@ class StageCase(unittest.TestCase):
             self.addCleanup(signal.signal, number, signal.getsignal(number))
 
     def client(self, **options):
-        return ObservedFrameClient(**options)
+        return ObservedFrameClient(**self.layout_options(), **options)
 
     def stage(self, detector=None, scenario=None, limits=None, fake=(), client=None, **options):
         from sightcircuit.convert import to_bgr
@@ -114,7 +143,14 @@ class StageCase(unittest.TestCase):
             return to_bgr(frame)
         client = client or self.client()
         options.setdefault("max_fps", 10)
-        stage = self.the_stage = CameraHudStage(self.source, self.detector, client, convert=convert, **options)
+        for name, value in self.STAGE_OPTIONS.items():
+            options.setdefault(name, value)
+
+        def seen(frame):  # A frame the stage prepares itself (a region, the panel) never reaches ``convert``.
+            if stage._prepares:
+                self.frames.append(frame)
+        stage = self.the_stage = CameraHudStage(self.source, self.detector, client, convert=convert, on_frame=seen,
+                                                **options)
         queue, record, on_end = client.submit_observed, stage._on_packet, self.source._on_end
 
         def submit_observed(frame_id, observed_ns, expires_ns, width, height, rgba, *, token=None):
@@ -141,7 +177,9 @@ class StageCase(unittest.TestCase):
         from sightcircuit.hud import camera_stage
         stop = threading.Event()
         stage = self.stage(limits={"fps": 5, "max_seconds": 20, "max_frames": 100})
-        convert, calls = camera_stage.rgba_from_bgr, []
+        # Where the drawn image becomes the bytes that are sent: the strip's colour conversion, the panel's pack.
+        target, name = (camera_stage, "rgba_from_bgr") if self.LAYOUT is HUD_CONFIG else (stage, "_pack")
+        convert, calls = getattr(target, name), []
 
         def racing(image):
             calls.append(time.monotonic_ns())
@@ -153,7 +191,7 @@ class StageCase(unittest.TestCase):
                     time.sleep(0.001)
                 self.assertTrue(stage.client.final)
             return convert(image)
-        with mock.patch.object(camera_stage, "rgba_from_bgr", racing):
+        with mock.patch.object(target, name, racing):
             report = stage.run(stop)
         return report, calls
 
@@ -171,7 +209,7 @@ class StageCase(unittest.TestCase):
             self.assertLessEqual(item["expires_ns"] - item["observed_ns"], MAX_DISPLAY_AGE_NS)
             longest = item["observed_ns"] + MAX_DISPLAY_AGE_NS
             self.assertEqual(item["expires_ns"], longest if run_deadline_ns is None else min(longest, run_deadline_ns))
-            self.assertEqual(item["size"], (HUD_CONFIG.width_px, HUD_CONFIG.height_px))
+            self.assertEqual(item["size"], (self.LAYOUT.width_px, self.LAYOUT.height_px))
         for fields in self.named("frame_sent"):
             self.assertLess(fields["sent_ns"], fields["expires_ns"])
 
@@ -286,7 +324,7 @@ class CameraHudStageTests(StageCase):
         self.assertNotIn("definition", source["timings"]["exposure_minus_acquire_ms"])
         self.assertEqual((report["bridge"]["final_report"]["mode"], report["bridge"]["final_report"]["cleanup_ok"],
                           report["bridge"]["final_report"]["exit_code"]), ("--validate-stdin", True, 0))
-        self.assertEqual(report["config"]["hud_config_id"], "fixed-edge-hud-v1")
+        self.assertEqual(report["config"]["hud_config_id"], self.LAYOUT.layout_id)
 
     def test_empty_rows_take_the_tile_down_within_a_period_and_the_next_rows_show_it_again(self):
         detector = ScriptedDetector([BOTTLE, BOTTLE, (), (), BOTTLE])
@@ -527,6 +565,57 @@ class CameraHudStageTests(StageCase):
         stage._note_bridge_end()
         self.assertFalse(stage.bridge_ended_first)
 
+    def test_a_region_and_a_rotation_reach_the_detector_and_its_boxes_come_back_to_the_whole_frame(self):
+        # Work-order item L17, for whichever layout this class runs: the detector is given the region of the
+        # frame, turned; its boxes are taken back to the whole frame before anything is selected; and what is
+        # sent is drawn from those mapped boxes alone. The stand-in's frames are 64 x 48.
+        from sightcircuit.camera.region import FRAME_PIXELS, Mapping, Region
+        centre = (0.25, 0.25, 0.75, 0.75)  # 32 x 24 native pixels at (16, 12).
+        # In the detector's input pixels, inside its 24 x 24 corner so that they fit the input at every turn.
+        boxes = (("bottle", (0, 8, 6, 16)), ("cup", (14, 2, 22, 10)))
+        result = DetectionResult(tuple(Detection(label, 0.9, box) for label, box in boxes), 1.0)
+        payloads = {}
+        for rotation, shape in ((0, (24, 32, 3)), (90, (32, 24, 3)), (180, (24, 32, 3)), (270, (32, 24, 3))):
+            region = Region(*centre, rotation=rotation)
+            detector = ScriptedDetector([boxes])
+            report = self.stage(detector, limits=self.TWO, scenario="end:max_frames", region=region).run()
+            mapping = Mapping((64, 48), (16, 12, 48, 36), (32, 24), rotation, (64, 48))
+            labels, expected = self.expected_payload(result, mapping)
+            with self.subTest(rotation=rotation):
+                self.assertEqual((report["status"], detector.shapes), ("completed", [shape, shape]))
+                self.assertEqual([frame.sequence for frame in self.frames], [1, 2])
+                self.assertEqual([(item["token"], item["size"], item["rgba"] == expected) for item in self.queued],
+                                 [(labels, (self.LAYOUT.width_px, self.LAYOUT.height_px), True)] * 2)
+                self.assertEqual(labels, ("bottle", "cup"))
+                self.assertEqual(report["view"], {
+                    "region": dict(zip(("x0", "y0", "x1", "y1"), centre)), "rotation": rotation, "whole_frame": False,
+                    "prepared": True, "box_coordinate_space": FRAME_PIXELS, "source_space_px": [64, 48],
+                    "crop_native_xyxy": [16, 12, 48, 36], "resized_px": [32, 24], "geometry_constant": True})
+                self.assertEqual(self.the_stage.view(), {"region": list(centre), "rotation": rotation,
+                                                         "alignment": self.the_stage.config_alignment(),
+                                                         "presence_watch": False})
+                self.assertEqual(report["frames"]["acknowledged_presented"], 2)
+                self.assert_both_children_closed(report)
+            payloads[rotation] = expected
+        # A quarter turn changes what is sent for the same detector boxes. (How many of the four differ is the
+        # layout's: the strip's arrows follow the boxes round the whole frame, so all four; the panel shows the
+        # region as the detector saw it, so the two shapes of the detector's input.)
+        self.assertNotEqual(payloads[0], payloads[90])
+        self.assertNotEqual(payloads[180], payloads[270])
+        # By hand, unturned: the first box is 16..22 by 20..28 of the whole frame, the second 30..38 by 14..22.
+        unturned = Mapping((64, 48), (16, 12, 48, 36), (32, 24), 0, (64, 48)).result(result)
+        self.assertEqual([item.box_xyxy for item in unturned.detections], [(16, 20, 22, 28), (30, 14, 38, 22)])
+        # A region of the whole frame, unturned, is no region: the frame goes the way it always went on the strip.
+        whole = self.stage(limits=self.TWO, scenario="end:max_frames", region=Region())
+        report = whole.run()
+        self.assertEqual((report["view"]["whole_frame"], report["view"]["prepared"], whole._prepares),
+                         (True, self.LAYOUT is not HUD_CONFIG, self.LAYOUT is not HUD_CONFIG))
+        # The whole frame turned is a region like any other.
+        turned = self.stage(limits=self.TWO, scenario="end:max_frames", region=Region(rotation=90))
+        report = turned.run()
+        self.assertEqual((report["view"]["prepared"], report["view"]["crop_native_xyxy"], self.detector.shapes[0]),
+                         (True, [0, 0, 64, 48], (64, 48, 3)))
+
     def test_names_only_rows_and_each_orientation_render(self):
         import numpy as np
         from sightcircuit.hud.camera import ORIENTATIONS, camera_rows
@@ -567,7 +656,7 @@ class CameraHudStageTests(StageCase):
 
     def test_the_real_output_start_is_refused_by_the_gate_before_anything_is_launched(self):
         import subprocess
-        client = ObservedFrameClient(validation_only=False)
+        client = ObservedFrameClient(validation_only=False, **self.layout_options())
         stage = self.stage(client=client)
         with mock.patch.object(camera_helper, "run_export", wraps=camera_helper.run_export) as exported, \
                 mock.patch.object(subprocess, "Popen", wraps=subprocess.Popen) as launched, \
@@ -756,7 +845,7 @@ class CameraHudStageTests(StageCase):
         # The latch itself, directly: after ``end`` the client accepts nothing and a take-down cannot be undone.
         client = stage.client
         now = time.monotonic_ns()
-        self.assertFalse(client.submit_observed(99, now, now + MS, 1, 1, bytes(4)))
+        self.assertFalse(client.submit_observed(99, now, now + MS, *self.smallest_frame()))
         self.assert_both_children_closed(report)
 
     def test_a_bridge_that_dies_stops_the_helper_at_once_even_while_the_detector_is_busy(self):
@@ -944,7 +1033,7 @@ class FixedHudStageTests(StageCase):
     def client(self, keepalive_seconds=observed_frames.KEEPALIVE_SECONDS, **fake):
         FixedHudStageTests.runs += 1
         self.log = Path(self.directory.name) / f"calls-{FixedHudStageTests.runs}.jsonl"
-        return ObservedFrameClient(validation_only=False, keepalive_seconds=keepalive_seconds,
+        return ObservedFrameClient(validation_only=False, keepalive_seconds=keepalive_seconds, **self.layout_options(),
                                    env={**os.environ, **self.runtime_env, "FAKE_VR_LOG": str(self.log), **fake})
 
     def visible_spans(self):
@@ -975,7 +1064,7 @@ class FixedHudStageTests(StageCase):
             self.assertEqual(len(self.calls(name)), 1, name)
         self.assertEqual((report["validation_only"], report["bridge_mode"], report["bridge"]["mode"]),
                          (False, "--fixed-hud", "--fixed-hud"))
-        self.assertEqual(final["fixed_hud"]["config_id"], "fixed-edge-hud-v1")
+        self.assertEqual(final["fixed_hud"]["config_id"], self.LAYOUT.layout_id)
         self.assertEqual(final["fixed_hud"]["settings_accepted"], False)
         self.assert_no_gate_opened(report)  # Running on the fixture claims nothing.
 
@@ -1015,7 +1104,7 @@ class FixedHudStageTests(StageCase):
         detector = ScriptedDetector([BOTTLE, BOTTLE, (), (), BOTTLE])
         report = self.stage(detector).run()
         self.assertEqual((report["status"], report["reason"]), ("completed", "max_frames"))
-        self.permitted.assert_called_with(self.the_stage.client, None)  # The client and its layout value.
+        self.permitted.assert_called_with(self.the_stage.client, self.the_stage.client.layout)  # Its layout value.
         self.assertEqual([item["frame_id"] for item in self.queued], [1, 2, 5, 6, 7, 8])
         sent = self.named("frame_sent")
         self.assertEqual(len(self.calls("SetOverlayRaw")), len(sent))

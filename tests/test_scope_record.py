@@ -885,40 +885,80 @@ class CameraSiteTests(ScopeCase):
         self.assertEqual(seen, [])
 
     def test_the_stage_serves_only_the_view_it_has_and_refuses_every_other_with_the_record_unspent(self):
-        # Today's stage draws the strip from the whole frame, unturned, with no alignment and no watch. A scope
-        # that asks for anything else, with a record that binds exactly what it asks, is refused at the camera
-        # site's preconditions: the record is good, and it is not spent on a run that would not do what it says.
-        cases = (("a region", {"region": CENTRE}), ("a rotation", {"rotation": 90}),
-                 ("the presence watch", {"presence_watch": True}),
-                 ("the panel", {"hud_config": PANEL, "alignment": dict(NEUTRAL)}),
-                 ("E103's view on the panel", {"hud_config": PANEL, "alignment": dict(ALIGNED), "region": CENTRE,
-                                               "rotation": 90, "presence_watch": True}))
-        for name, bound in cases:
+        # A scope is granted for a request equal to its record; the camera site requires the request to be what
+        # the stage runs. Each case below is a record that verifies for the scope's request and a stage that
+        # differs from it in one thing: refused at the site's preconditions, the record unread and unspent.
+        from sightcircuit.camera.region import Region
+        from sightcircuit.hud.boxes import Alignment
+        centre = Region(*CENTRE, rotation=90)
+        e103 = {"region": CENTRE, "rotation": 90}
+        cases = (
+            ("the scope asks for a region, the stage has none", e103, {}, {}),
+            ("the stage has a region, the scope asks for none", {}, {"region": centre}, {}),
+            ("another region", e103, {"region": Region(0.2, 0.25, 0.75, 0.75, rotation=90)}, {}),
+            ("another rotation", e103, {"region": Region(*CENTRE, rotation=270)}, {}),
+            ("the scope asks for the presence watch, the stage holds none", {"presence_watch": True}, {}, {}),
+            ("the scope asks for the panel, the stage draws the strip",
+             {"hud_config": PANEL, "alignment": dict(NEUTRAL)}, {}, {"layout": PANEL}),
+            ("another alignment", {"hud_config": PANEL, "alignment": dict(ALIGNED)},
+             {"config": PANEL, "alignment": Alignment()}, {"layout": PANEL}),
+            ("the panel with another region", {"hud_config": PANEL, "alignment": dict(NEUTRAL), **e103},
+             {"config": PANEL, "alignment": Alignment()}, {"layout": PANEL}),
+        )
+        for name, bound, built, client_options in cases:
             path, record = self.staged("L-D4", **bound)
             run = self.run_scope(path, seconds=5, **bound)
-            stage = self.stage(self.client(run, layout=bound.get("hud_config")), seconds=5)
+            client = self.client(run, **client_options)
+            if client.layout is PANEL and "config" not in built:
+                # The stage draws the strip and its client names the panel: no such stage can be built.
+                with self.subTest(asked=name), self.assertRaisesRegex(ValueError, "camera_hud_layout_mismatch"):
+                    self.stage(client, seconds=5)
+                stage = self.stage(self.client(run), seconds=5)  # A strip stage on a strip client, the panel's scope.
+                reason = "^fixed_hud_layout_not_approved$"
+            else:
+                stage = self.stage(client, seconds=5, **built)
+                reason = "^fixed_hud_output_not_approved$"
             with self.subTest(asked=name), self.launches() as seen, \
                     mock.patch.object(camera_helper, "run_export", side_effect=AssertionError("exported")):
-                self.assertIs(camera_stage.stage_view_bound(run), False)
+                self.assertIs(camera_stage.stage_view_bound(run, stage), False)
                 self.assertIs(camera_stage.camera_display_input_preconditions(stage), False)
-                with self.assertRaisesRegex(ValueError, "^fixed_hud_output_not_approved$"):
+                with self.assertRaisesRegex(ValueError, reason):
                     stage.run()
                 self.assertEqual((seen, self.ledger(), run.consumed, run.status, run.record),
                                  ([], [], False, "revoked", None))
                 # The record itself verifies for that request: asked without the stage, the scope grants.
                 direct = self.run_scope(path, seconds=5, **bound)
                 self.assertIs(direct.permit(scope.HUD_OUTPUT, self), True)
-                self.assertIs(camera_stage.camera_display_input_permitted(
-                    SimpleNamespace(client=SimpleNamespace(scope=direct), source=self.source(), seconds=5)), False)
                 (self.root / scope.LEDGER / f"{record['run_id']}.json").unlink()
-        # The view it has, stated in full or left out, is served.
-        for given in ({}, {"region": WHOLE, "rotation": 0}, {"region": tuple(WHOLE)}, {"rotation": 0}):
-            run = self.run_scope(self.staged("L-D4")[0], seconds=5, **given)
-            stage = self.stage(self.client(run), seconds=5)
-            with self.subTest(given=given):
-                self.assertIs(camera_stage.stage_view_bound(run), True)
+        # What the stage runs, asked for exactly, is served: the strip from the whole frame (stated in full or
+        # left out), the strip through E103's view, and the panel through it with its alignment.
+        served = (({}, {}, {}), ({"region": WHOLE, "rotation": 0}, {}, {}), ({"region": tuple(WHOLE)}, {}, {}),
+                  ({"rotation": 0}, {}, {}), (e103, {"region": centre}, {}),
+                  ({"hud_config": PANEL, "alignment": dict(ALIGNED), **e103},
+                   {"config": PANEL, "alignment": Alignment(**ALIGNED), "region": centre}, {"layout": PANEL}),
+                  ({"hud_config": PANEL, "alignment": dict(NEUTRAL)}, {"config": PANEL, "alignment": Alignment()},
+                   {"layout": PANEL}))
+        for bound, built, client_options in served:
+            run = self.run_scope(self.staged("L-D4", **bound)[0], seconds=5, **bound)
+            stage = self.stage(self.client(run, **client_options), seconds=5, **built)
+            with self.subTest(served=sorted(bound)):
+                self.assertIs(camera_stage.stage_view_bound(run, stage), True)
                 self.assertIs(camera_stage.camera_display_input_preconditions(stage), True)
         self.assertEqual(self.ledger(), [])
+        # A stage is built for one of the contract's layouts, the one its client names, with an alignment exactly
+        # where the layout takes one.
+        strip_client, panel_client = self.client(None), self.client(None, layout=PANEL)
+        for client, options, reason in (
+                (strip_client, {"config": PANEL, "alignment": Alignment()}, "camera_hud_layout_mismatch"),
+                (panel_client, {}, "camera_hud_layout_mismatch"),
+                (panel_client, {"config": dataclasses.replace(PANEL), "alignment": Alignment()}, "camera_hud_config_not_fixed"),
+                (strip_client, {"config": dataclasses.replace(STRIP)}, "camera_hud_config_not_fixed"),
+                (panel_client, {"config": PANEL}, "camera_hud_alignment_invalid"),
+                (panel_client, {"config": PANEL, "alignment": dict(NEUTRAL)}, "camera_hud_alignment_invalid"),
+                (strip_client, {"alignment": Alignment()}, "camera_hud_alignment_invalid"),
+                (strip_client, {"region": CENTRE}, "camera_hud_region_invalid")):
+            with self.subTest(options=sorted(options), reason=reason), self.assertRaisesRegex(ValueError, reason):
+                self.stage(client, seconds=5, **options)
 
     def test_the_camera_site_reads_the_scope_once_and_compares_the_view_the_scope_verified(self):
         # A client that answers with another scope each time it is read: one asked for a view the stage does
@@ -1951,11 +1991,16 @@ class LayoutBindingTests(ScopeCase):
                  and getattr(node.func, "id", None) == "require_real_output"]
         self.assertEqual(sorted(calls), ["require_real_output(self, layout)", "require_real_output(self, self._layout)"])
         # And one launcher: nothing else in the package or the scripts builds a bridge command line with a layout.
-        for word in ("LAYOUT_ARGUMENT", "launch_arguments(", '"--layout"'):
+        # (The staging tool and the camera HUD command each have an option spelled ``--layout``; neither builds a
+        # bridge command line: the command hands the client a layout object and the client launches.)
+        options = {"scripts/stage_scope_record.py", "sightcircuit/commands/camera_hud.py"}
+        for word, allowed in (("LAYOUT_ARGUMENT", set()), ("launch_arguments(", set()), ('"--layout"', options)):
             users = [path.relative_to(ROOT).as_posix() for folder in ("sightcircuit", "scripts")
                      for path in sorted((ROOT / folder).rglob("*.py")) if word in path.read_text()]
-            self.assertLessEqual(set(users), {"sightcircuit/observed_frames.py", "scripts/stage_scope_record.py"}, word)
+            self.assertLessEqual(set(users), {"sightcircuit/observed_frames.py"} | allowed, word)
         self.assertNotIn("Popen", (ROOT / "scripts/stage_scope_record.py").read_text())
+        self.assertNotIn("--fixed-hud\"", (ROOT / "sightcircuit/commands/camera_hud.py").read_text().replace(
+            '("bridge_mode", "--fixed-hud")', ""))
 
 
 def require_calls(name):

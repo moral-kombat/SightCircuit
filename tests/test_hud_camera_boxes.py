@@ -503,7 +503,8 @@ class ReportTests(unittest.TestCase):
         camera_stage.check_report({"boxes": self.report}, blocks={"boxes": BOX_REPORT_KEYS})
         with self.assertRaisesRegex(ValueError, "camera_hud_report_field_invalid"):
             camera_stage.check_report({"boxes": {**self.report, "pixels": 1}}, blocks={"boxes": BOX_REPORT_KEYS})
-        self.assertNotIn("boxes", camera_stage.REPORT_BLOCKS)  # Not wired in: that is item B5.
+        # Wired in by item B5: the stage's report carries the block, summed over a run, with one count of its own.
+        self.assertEqual(camera_stage.REPORT_BLOCKS["boxes"], (*BOX_REPORT_KEYS, "results_counted"))
 
     def test_the_report_states_what_the_selection_was_made_with(self):
         # The region, the threshold and the alignment are the selection's own: the report cannot be handed others.
@@ -557,12 +558,23 @@ class BoundaryTests(unittest.TestCase):
                      "overlay", "gates", "open(", "numpy", "cv2"):
             self.assertNotIn(word, text, word)
 
-    def test_no_stage_command_or_script_uses_camera_boxes_yet(self):
+    def test_only_the_camera_stage_selects_boxes_and_only_its_command_builds_an_alignment(self):
+        # Since item B5 the camera stage is the one caller of ``camera_boxes`` and ``boxes_report``, and the
+        # ``camera_hud`` command the one module beside it that imports this one (for ``Alignment``, which it
+        # builds from the operator's five numbers). No script, source or other command reaches either.
+        users = {}
         for path in [*(ROOT / "sightcircuit").rglob("*.py"), *(ROOT / "scripts").rglob("*.py")]:
-            if path.relative_to(ROOT).as_posix() not in ("sightcircuit/hud/boxes.py", "sightcircuit/hud/__init__.py"):
+            name = path.relative_to(ROOT).as_posix()
+            if name not in ("sightcircuit/hud/boxes.py", "sightcircuit/hud/__init__.py"):
                 text = path.read_text()
-                for word in ("camera_boxes", "boxes_report", "hud.boxes", "hud import boxes"):
-                    self.assertNotIn(word, text, f"{path.name} names {word}")
+                found = [word for word in ("camera_boxes", "boxes_report", "hud.boxes", "hud import boxes",
+                                           "from .boxes import") if word in text]
+                if found:
+                    users[name] = found
+        self.assertEqual(users, {"sightcircuit/hud/camera_stage.py": ["camera_boxes", "boxes_report", "from .boxes import"],
+                                 "sightcircuit/commands/camera_hud.py": ["hud.boxes"]})
+        command = (ROOT / "sightcircuit/commands/camera_hud.py").read_text()
+        self.assertIn("from sightcircuit.hud.boxes import ALIGNMENT_FIELDS, Alignment\n", command)
 
 
 @unittest.skipUnless(DRAWING, "NumPy and OpenCV are required to draw the panel and prepare a frame")
