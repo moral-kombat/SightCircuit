@@ -49,8 +49,10 @@ class Run:
         Run.count += 1
         self.log = Path(case.directory.name) / f"calls-{Run.count}.jsonl"
         env = {**os.environ, **case.runtime_env, "FAKE_VR_LOG": str(self.log), **fake}
+        # Unbuffered, as the product's client opens it (``sightcircuit.overlay``): a refused packet's bytes then
+        # stay in no buffer, which ``close()`` would flush into the broken pipe and raise for (CPython 3.14).
         self.process = subprocess.Popen([str(DEFAULT_BRIDGE), "--fixed-hud"], stdin=subprocess.PIPE,
-                                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env)
+                                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, bufsize=0)
         case.addCleanup(self.kill)
         self.lines, self.arrived = [], threading.Condition()
         self.reader = threading.Thread(target=self.read, daemon=True)
@@ -75,8 +77,9 @@ class Run:
 
     def send(self, data, *, may_be_refused=False):
         try:
-            self.process.stdin.write(data)
-            self.process.stdin.flush()
+            view = memoryview(data)
+            while view:  # an unbuffered pipe may take a part; the rest still meets a broken pipe, as buffered
+                view = view[self.process.stdin.write(view):]
         except BrokenPipeError:
             if not may_be_refused:  # a packet refused on its header: the bridge is gone before the payload is
                 raise
