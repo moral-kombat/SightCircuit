@@ -287,8 +287,9 @@ class StopWakeup:
     sets every registered event on a stop signal's byte; it takes the event's
     lock on its own thread, where a main thread holding it is contention, not
     a deadlock. Bytes of other signals are ignored. One relay serves the
-    process; a forked child forgets it (``os.register_at_fork``), so it cannot
-    write into a pipe its parent's thread reads.
+    process; a forked child forgets it (``forget_stop_relays_after_fork``, the
+    module's one ``os.register_at_fork`` callback), so it cannot write into a
+    pipe its parent's thread reads.
     """
 
     def __init__(self):
@@ -300,7 +301,6 @@ class StopWakeup:
         self.thread = threading.Thread(target=self.relay, name="sightcircuit-stop-relay", daemon=True)
         self.thread.start()
         self.previous_wakeup_fd = signal.set_wakeup_fd(self.write_fd, warn_on_full_buffer=False)
-        os.register_at_fork(after_in_child=self.forget)
 
     def register(self, stop):
         with self.lock:
@@ -356,7 +356,7 @@ class StopWakeup:
                     event.set()
 
     def retire(self, timeout=2.0):
-        """End this relay in the process that made it; True once its thread has ended.
+        """End this relay in the process that made it; True once its thread has ended and its descriptors are closed.
 
         A worker never needs this: its relay lasts as long as its process. It
         is for a process that goes on after the stop it armed (a caller that
@@ -368,6 +368,12 @@ class StopWakeup:
         is inert (``handle`` on -1), so the caller restores the handlers it
         replaced. Closing the write end is what ends the thread (``relay``
         returns at end of file). A later ``stop_on`` makes a new relay.
+
+        The join is bounded, and it can be interrupted. Until the thread has
+        ended the relay is kept among the unfinished retirements with its read
+        end open (the thread may still read it), the answer is False, and a
+        later call (this method again, or ``retire_stop_relay``) joins again
+        and closes the read end once the thread is gone.
         """
         global _stop_wakeup
         write_fd = self.write_fd
@@ -378,6 +384,8 @@ class StopWakeup:
                 signal.set_wakeup_fd(restored, warn_on_full_buffer=False)
             except (ValueError, OSError):  # The earlier descriptor was closed meanwhile: none is left set.
                 pass
+        if self.read_fd >= 0 and self not in _unfinished_retirements:
+            _unfinished_retirements.append(self)  # Before anything that can fail or be interrupted.
         if _stop_wakeup is self:
             _stop_wakeup = None
         self.write_fd = -1
@@ -386,19 +394,22 @@ class StopWakeup:
                 os.close(write_fd)
         if self.thread is not threading.current_thread():
             self.thread.join(timeout)
+        if self.thread.is_alive():
+            return False
         read_fd, self.read_fd = self.read_fd, -1
         if read_fd >= 0:
             with contextlib.suppress(OSError):
                 os.close(read_fd)
-        return not self.thread.is_alive()
+        with contextlib.suppress(ValueError):
+            _unfinished_retirements.remove(self)
+        return True
 
     def forget(self):
         """In a forked child: no relay thread exists, and the parent's pipe is not ours to write.
 
         The handler stays installed in the child but becomes inert (``handle``
-        on -1), the descriptors are closed once and forgotten, and only the
-        process's current relay clears the module's reference, so a relay a
-        child made afterwards survives a grandchild's fork callbacks of both.
+        on -1), the descriptors are closed once and forgotten, and the
+        module's reference is cleared if it is this relay.
         """
         global _stop_wakeup
         if _stop_wakeup is self:
@@ -414,6 +425,21 @@ class StopWakeup:
 
 
 _stop_wakeup = None
+_unfinished_retirements = []  # Relays retired whose thread had not ended yet (``StopWakeup.retire``).
+_fork_callback_registered = False
+
+
+def forget_stop_relays_after_fork():
+    """In a forked child: forget the parent's relay and its unfinished retirements (``StopWakeup.forget``).
+
+    Registered once for the process, by the first ``stop_on`` (a registration
+    cannot be undone, so one per relay would keep every retired relay alive
+    and run once more in every child); a child inherits the registration.
+    """
+    relays = [relay for relay in (_stop_wakeup, *_unfinished_retirements) if relay is not None]
+    _unfinished_retirements.clear()
+    for relay in relays:
+        relay.forget()
 
 
 def stop_on(stop, numbers=STOP_SIGNALS):
@@ -424,11 +450,14 @@ def stop_on(stop, numbers=STOP_SIGNALS):
     Elsewhere (no wakeup pipe) the handler sets the event itself, as before.
     Call on the main thread, once per event; later calls add events.
     """
-    global _stop_wakeup
+    global _stop_wakeup, _fork_callback_registered
     if os.name != "posix":
         for number in numbers:
             signal.signal(number, lambda *_: stop.set())
         return stop
+    if not _fork_callback_registered:
+        os.register_at_fork(after_in_child=forget_stop_relays_after_fork)
+        _fork_callback_registered = True
     if _stop_wakeup is None:
         _stop_wakeup = StopWakeup()
     _stop_wakeup.register(stop)
@@ -438,9 +467,17 @@ def stop_on(stop, numbers=STOP_SIGNALS):
 
 
 def retire_stop_relay(timeout=2.0):
-    """End the process's stop relay, if ``stop_on`` made one (``StopWakeup.retire``); True when no relay thread is left."""
-    relay = _stop_wakeup
-    return True if relay is None else relay.retire(timeout)
+    """End the process's stop relay, if ``stop_on`` made one (``StopWakeup.retire``); True when no relay thread is left.
+
+    That includes relays an earlier call could not finish retiring (its join
+    timed out or was interrupted): each is joined again, for ``timeout`` each,
+    and the answer is True only when none of them has a live thread.
+    """
+    relays = [*_unfinished_retirements]
+    if _stop_wakeup is not None and _stop_wakeup not in relays:
+        relays.append(_stop_wakeup)
+    ended = [relay.retire(timeout) for relay in relays]
+    return all(ended)
 
 
 def enter_worker(number=signal.SIGTERM):
