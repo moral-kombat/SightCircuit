@@ -92,8 +92,9 @@ the operator releases it with ``touch PATH``. The path is checked before the
 window opens (``check_hold_path``): nothing may be there yet, and its
 directory must be a real directory that only the user can write to, or the
 report's own. The window looks for the file four times a second from its own
-timer (``os.lstat``; the file is never opened), says on the notice screen
-that it is waiting and then that the operator has said go, and a release
+timer (``os.lstat``; the file is never opened), says so in the notice
+screen's one line about Start (no line is added, so the export notice keeps
+its room), then that the operator has said go, and a release
 only enables the button: the wearer's click still starts the run, and the
 button is dead for the guard interval after the release as after any
 appearance. A hold nobody releases within ten minutes of the window opening
@@ -232,7 +233,10 @@ def check_report_path(path):
     made: a probe file is created there and removed, so a run is never held
     for a report that could not be saved.
     """
-    target = Path(path).expanduser()
+    try:
+        target = Path(path).expanduser()
+    except RuntimeError:  # A ``~name`` the system does not know.
+        raise ValueError("--report needs a path whose home directory exists") from None
     if target.suffix.lower() != ".json" or not target.parent.is_dir() or target.exists() or target.is_symlink():
         raise ValueError("--report needs a new .json path in an existing directory")
     try:
@@ -246,18 +250,28 @@ def check_report_path(path):
 def check_hold_path(path, report_path):
     """The start hold's release file as the window will look for it, or ``ValueError``. Nothing is created.
 
-    The path is taken as written (made absolute, no link followed). Nothing
-    may be at it yet, a dangling link included, so a file left by an earlier
-    run can never release this one. Its directory must exist and be a real
-    directory, not a link to one; and it must be either the report's own
-    directory, which ``check_report_path`` has just found writable, or a
-    directory the user owns and can write to with no write permission for
-    group or others, so that nobody else can say go. It may not be the
-    report's own path. Only the path and its directory are examined: a link
-    further up the path is the operator's to know about.
+    The path is taken as written (made absolute, no link followed) and may
+    not have a ``..`` in it: making ``link/..`` absolute would drop the
+    link, and the window would watch one place while the operator's
+    ``touch`` made a file in another. Nothing may be at it yet, a dangling
+    link included, so a file left by an earlier run can never release this
+    one. Its directory must exist and be a real directory, not a link to
+    one; and it must be either the report's own directory, which
+    ``check_report_path`` has just found writable, or a directory the user
+    owns and can write to with no write permission for group or others, so
+    that nobody else can say go. It may not be the report's own file, by
+    whatever name: the two are compared by their resolved directories and
+    their names. Only the path and its directory are examined otherwise: a
+    link further up the path is the operator's to know about.
     """
-    target = Path(os.path.abspath(Path(path).expanduser()))
-    if target == Path(os.path.abspath(Path(report_path).expanduser())):
+    try:
+        written, report = Path(path).expanduser(), Path(report_path).expanduser()
+    except RuntimeError:  # A ``~name`` the system does not know.
+        raise ValueError("--hold-start needs a path whose home directory exists") from None
+    if ".." in written.parts:
+        raise ValueError("--hold-start needs a path without '..' in it")
+    target = Path(os.path.abspath(written))
+    if (os.path.realpath(target.parent), target.name) == (os.path.realpath(report.parent), report.name):
         raise ValueError("--hold-start needs a path of its own, not the report's")
     try:
         directory = os.lstat(target.parent)
@@ -270,7 +284,7 @@ def check_hold_path(path, report_path):
     mode = stat.S_IMODE(directory.st_mode)
     private = directory.st_uid == os.geteuid() and mode & 0o300 == 0o300 and not mode & 0o022
     try:
-        beside_report = os.path.samefile(target.parent, Path(report_path).expanduser().parent)
+        beside_report = os.path.samefile(target.parent, report.parent)
     except OSError:
         beside_report = False
     if not private and not (beside_report and os.access(target.parent, os.W_OK | os.X_OK)):
@@ -843,20 +857,18 @@ def create_window(config, *, worker_factory=None, clock=time.monotonic_ns, size=
                        [self.next_button])
             # The notice.
             self.notice_label = label(export_notice_body(), "small", align=left_top)
+            self.notice_area = scrolling(self.notice_label)
             self.bounds_label = label(guidance.bounds_line(config.limits, config.camera), "small")
             self.target_label = label(f"Looking for: {config.target}. Guide: {config.script}.", "small")
             self.path_label = label(f"The report will be saved to: {config.report_path}", "small")
             self.start_note = label(START_NOTE, "small")
             self.reminder_label = label(guidance.start_reminder(config.script, config.target), "body")
-            self.dwell_label = label("", "body")
-            # Only a window asked to hold its Start has this line; any other window's notice is what it was.
-            self.hold_label = None if config.hold_start is None else label(guidance.TEXT_HOLD_WAITING, "big")
+            self.dwell_label = label("", "body")  # A held Start is said here too: no line is added for it.
             self.start_button, self.cancel_button = button(TEXT_START, "go"), button(TEXT_CANCEL)
             self.start_button.clicked.connect(self.guarded(self.start_run))
             self.cancel_button.clicked.connect(self.guarded(lambda: self.decline(guidance.ENDED_CANCEL)))
-            self._page(PHASE_NOTICE, [label("Please read", "title"), (scrolling(self.notice_label), 1), self.bounds_label,
+            self._page(PHASE_NOTICE, [label("Please read", "title"), (self.notice_area, 1), self.bounds_label,
                                       self.target_label, self.path_label, self.start_note, self.reminder_label,
-                                      *([] if self.hold_label is None else [self.hold_label]),
                                       self.dwell_label], [self.start_button, self.cancel_button])
             # The run.
             self.step_label = label("", "small", wrap=False, align=Qt.AlignmentFlag.AlignLeft)
@@ -981,11 +993,10 @@ def create_window(config, *, worker_factory=None, clock=time.monotonic_ns, size=
                 left = config.start_dwell_seconds - self.shown_for(now_ns)
                 self.start_button.setEnabled(live and left <= 0 and not self.start_held(now_ns))
                 self.cancel_button.setEnabled(live)
-                self.dwell_label.setText(f"You can start in {int(-(-left // 1))} s" if left > 0 else
-                                         guidance.TEXT_HOLD_DWELL if self.start_held(now_ns) else "You can start now")
-                if self.hold_label is not None:
-                    self.hold_label.setText(guidance.TEXT_HOLD_WAITING if self.hold_released_ns is None else
-                                            guidance.TEXT_HOLD_RELEASED)
+                held, released = config.hold_start is not None, self.hold_released_ns is not None
+                if released:  # The button is dead for the guard interval after the release: the count covers it.
+                    left = max(left, config.guard_seconds - (now_ns - self.hold_released_ns) / 1e9)
+                self.dwell_label.setText(guidance.start_line(left, held=held, released=released))
             elif self.phase == PHASE_WATCH:
                 self.render_watch(now_ns, live)
             elif self.phase == PHASE_RESULT:
@@ -1544,16 +1555,17 @@ def validate(helper=None):
         flow = Flow(config)
         window = flow.window
         held = (all(flow.click_when_offered(text) for text in (TEXT_COLOUR_STABLE, TEXT_NEXT))
-                and flow.wait(lambda: window.dwell_label.text() == guidance.TEXT_HOLD_DWELL)
-                and window.cancel_button.isEnabled())  # The dwell and the guard are over: only the hold is left.
+                and flow.wait(lambda: window.cancel_button.isEnabled()
+                              and window.shown_for(time.monotonic_ns()) > config.start_dwell_seconds)
+                and window.dwell_label.text() == guidance.TEXT_HOLD_WAITING)  # Only the hold is left.
         refused = held and not flow.click(TEXT_START)
         window.start_run()
         refused = (refused and window.workers_started == 0 and window.started_ns is None and window.phase == PHASE_NOTICE
-                   and window.hold_label.text() == guidance.TEXT_HOLD_WAITING)
+                   and window.dwell_label.text() == guidance.TEXT_HOLD_WAITING)
         config.hold_start.touch()  # The operator's one command.
         released = refused and flow.wait(lambda: window.hold_released_ns is not None)
         waiting_for_the_click = released and window.workers_started == 0  # The release started nothing.
-        said_so = released and flow.wait(lambda: window.hold_label.text() == guidance.TEXT_HOLD_RELEASED)
+        said_so = released and flow.wait(lambda: window.dwell_label.text().startswith(guidance.TEXT_HOLD_RELEASED))
         done = said_so and flow.click_when_offered(TEXT_START) and flow.finish_after_run()
         entry, final = base(flow, config, done)
         hold = (final.get("guide") or {}).get("start_hold") or {}
@@ -1769,7 +1781,7 @@ def main(argv=None):
         limits = run_limits(args.script, args.seconds, args.max_frames, args.fps)
     except ValueError as error:
         parser.error(str(error))
-    config = Config(script=args.script, helper=str(args.helper), report_path=Path(args.report).expanduser(), limits=limits,
+    config = Config(script=args.script, helper=str(args.helper), report_path=Path(args.report), limits=limits,
                     camera=args.camera, target=args.target_label, detector=args.detector, threshold=args.threshold,
                     helper_args=tuple(args.helper_arg), late_frame_limit_ms=args.late_frame_limit_ms,
                     removal_end_limit_ms=args.removal_end_limit_ms, region=region, rotation=args.rotation,

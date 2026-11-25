@@ -69,12 +69,15 @@ from the window's own size.
    5 seconds, counted down on the screen ("You can start in 3 s"). Clicking
    Start is the informed start of this one run. The report records
    `confirmation: operator_window`. The typed `yes` stays for the terminal
-   commands. When the window was opened with `--hold-start`, this screen
-   also says "Start is off until the Frame manager says go. Please wait" and
-   Start stays off, whatever the count says, until the Frame manager
-   [releases it](#running-a-companion-beside-the-window); then it says "The
-   Frame manager has said go. Start when you are ready". The release starts
-   nothing: the wearer's click does.
+   commands. When the window was opened with `--hold-start`, the line that
+   counts down says "Start is off until the Frame manager says go. Please
+   wait" instead, and Start stays off until the Frame manager
+   [releases it](#running-a-companion-beside-the-window); then the line
+   says "The Frame manager has said go. You can start in 2 s" and, when
+   Start is live, "The Frame manager has said go. You can start now". The
+   hold adds no line to this screen, so the notice above it is as fully
+   visible as in any other window. The release starts nothing: the wearer's
+   click does.
 4. **The run.** One instruction at a time with a drawn picture, a progress
    bar while a step is recorded, the step number, the time left, and
    **Stop**. Until the camera reader is ready the screen says "Starting the
@@ -455,9 +458,9 @@ the window and its report are what they were.
    touch artifacts/camera/guide-scan-02.go
    ```
 
-5. Within about a third of a second the screen says "The Frame manager has
-   said go. Start when you are ready"; 1.2 seconds later Start can be
-   clicked. The wearer clicks Start, and that click starts the run.
+5. Within about 0.3 seconds the screen says "The Frame manager has said go.
+   You can start in 2 s"; 1.2 seconds after the release Start can be clicked
+   and the line says "You can start now". The wearer clicks Start, and that click starts the run.
 
 What the hold does and does not do:
 
@@ -472,10 +475,15 @@ What the hold does and does not do:
   real directory, not a link to one, and must be either the report's own
   directory or one the user owns and can write to with no write permission
   for group or others (so `/tmp` itself is refused, and a private directory
-  under it is accepted). It cannot be the report's own path. A refused path
-  ends the command with `reason: hold_start_path_refused` and nothing shown.
-  Only the path and its directory are examined; a link further up the path
-  is not looked for.
+  under it is accepted). It cannot be the report's own file, by whatever
+  name: the two are compared by their resolved directories and their names.
+  It cannot have a `..` in it, because the window takes the path as written
+  and would drop a link before the `..` that the operator's `touch` follows,
+  so the two would mean different places. A `~name` the system does not
+  know is refused too (and for `--report`, as `report_path_refused`). A
+  refused path ends the command with `reason: hold_start_path_refused` and
+  nothing shown. Otherwise only the path and its directory are examined; a
+  link further up the path is not looked for.
 - **The window looks for the file four times a second** from the same timer
   that moves its counts; there is no thread and nothing that outlives the
   window. It asks only whether a regular file is at that path (`lstat`). A
@@ -495,8 +503,8 @@ What the hold does and does not do:
   bound: the wearer starts when ready, or cancels.
 - **Nothing camera-derived is involved.** The hold is the window's alone
   (the worker process is not told of it), it ends before anything is
-  launched, and the two lines it adds to the notice come from the release
-  file's presence and the clock.
+  launched, and what it puts in the notice screen's one line about Start
+  comes from the release file's presence and the clock.
 
 The report says what happened, under `guide.start_hold`
 ([below](#the-report)): whether the start was released, when, and how long
@@ -542,8 +550,8 @@ since the presence stop, 3 since the region of view):
   `release_monotonic_ns` and `release_utc_ns`, `release_to_start_click_ms`,
   `timed_out`, `timeout_seconds` (600), `poll_interval_ms` (250) and
   `release_file_read` (always `false`). The release time is the window's
-  tick that first saw the file, so it is later than the `touch` by up to a
-  quarter of a second. `release_utc_ns` is that time by the run's clock (the
+  tick that first saw the file, so it is later than the `touch` by up to
+  about 0.3 seconds (the poll interval and a tick). `release_utc_ns` is that time by the run's clock (the
   report's `timebase`), and is `null` when no run was launched, because
   there is then no run clock. The delay is `null` when Start was never
   clicked. Neither the file's path nor anything from inside it is recorded.
@@ -597,8 +605,11 @@ Qt's test tools (clicks sent to the top-level window at a point, including
 double clicks and second clicks 100 to 900 ms later on every transition, and
 button texts at 4:3, 5:4 and portrait sizes), the start hold (Start dead
 until the release and for the guard interval after it, the release starting
-nothing, the report's fields, the bound, the refused paths, and a window
-without the option never looking for a file), and `--validate`:
+nothing, the report's fields, the bound, the refused paths, the whole
+notice visible without scrolling at 1920 by 1080, 1600 by 900, 1366 by 768
+and 1280 by 800 for every script whether held or released, no open of the
+release file over a whole run (an audit hook), and a window without the
+option never looking for a file), and `--validate`:
 
 ```bash
 bash scripts/build_camera_helper.sh --fake

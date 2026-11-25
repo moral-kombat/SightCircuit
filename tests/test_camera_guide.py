@@ -52,6 +52,35 @@ CONTRACT_DIGEST = "f3afd174074dd70fcfde4cbdf4cd4f039bb4510c8da4fbc1785c0bebb0e60
 ALL_CLOSED = {name: False for name in gates.claims()}
 
 
+AUDITED = {"installed": False, "name": None, "opens": []}
+
+
+def _note_open(event, arguments):
+    """An audit hook cannot be removed, so this one does nothing unless a test has named a file to watch for."""
+    name = AUDITED["name"]
+    if name is None or event != "open" or not arguments:
+        return
+    try:
+        opened = os.fsdecode(arguments[0])
+    except TypeError:  # A descriptor, not a path.
+        return
+    if os.path.basename(opened) == name:
+        AUDITED["opens"].append(opened)
+
+
+@contextlib.contextmanager
+def opens_of(name):
+    """The list of every open, by this process and in any way, of a file called ``name`` while the block runs."""
+    if not AUDITED["installed"]:
+        sys.addaudithook(_note_open)
+        AUDITED["installed"] = True
+    AUDITED.update(name=name, opens=[])
+    try:
+        yield AUDITED["opens"]
+    finally:
+        AUDITED["name"] = None
+
+
 def run_main(arguments):
     """``main(arguments)``: ``(exit code, report or None, stderr)``."""
     out, err = io.StringIO(), io.StringIO()
@@ -1809,31 +1838,30 @@ class WindowTests(unittest.TestCase):
 
     def test_start_is_held_until_the_operator_releases_it_and_the_click_still_starts_the_run(self):
         window = self.held()
+        self.assertEqual((window.dwell_label.text(), self.offered()), (guidance.TEXT_HOLD_WAITING, []))
         self.assertIn(guidance.TEXT_HOLD_WAITING, self.visible_texts())
-        self.assertEqual((window.dwell_label.text(), self.offered()), ("You can start in 5 s", []))
         start = self.point("Start")
         for _ in range(12):  # Twelve seconds: the dwell and the guard are long over, and Start is on the screen, dead.
             self.advance(1000)
             self.click_at(start)
             window.start_run()  # However it is asked.
         self.assertEqual((window.phase, self.workers, window.started_ns, window.workers_started), ("notice", [], None, 0))
-        self.assertEqual((window.dwell_label.text(), window.hold_label.text(), self.offered()),
-                         (guidance.TEXT_HOLD_DWELL, guidance.TEXT_HOLD_WAITING, ["Cancel"]))
+        self.assertEqual((window.dwell_label.text(), self.offered()), (guidance.TEXT_HOLD_WAITING, ["Cancel"]))
         self.assertIsNone(window.hold_released_ns)
         self.release.write_text("anything: it is never read")  # The operator's touch.
         self.advance(250)
         released_ns = window.hold_released_ns
         self.assertGreater(released_ns, self.now - 300 * MS)
         self.assertLessEqual(released_ns, self.now)
-        self.assertIn(guidance.TEXT_HOLD_RELEASED, self.visible_texts())
         self.assertNotIn(guidance.TEXT_HOLD_WAITING, self.visible_texts())
-        # The release enabled nothing for the guard interval and started nothing at all.
-        self.assertEqual((self.offered(), window.dwell_label.text()), (["Cancel"], guidance.TEXT_HOLD_DWELL))
+        # The release enabled nothing for the guard interval, which the line counts, and started nothing at all.
+        self.assertEqual((self.offered(), window.dwell_label.text()),
+                         (["Cancel"], "The Frame manager has said go. You can start in 2 s"))
         self.click_at(start)
         window.start_run()
         self.advance(self.GUARD_MS)
         self.assertEqual((self.offered(), window.dwell_label.text(), self.workers, window.phase),
-                         (["Cancel", "Start"], "You can start now", [], "notice"))
+                         (["Cancel", "Start"], "The Frame manager has said go. You can start now", [], "notice"))
         self.advance(3000)  # The wearer takes their time: nothing starts by itself.
         self.assertEqual((self.workers, window.phase), ([], "notice"))
         self.click_at(start)
@@ -1865,9 +1893,10 @@ class WindowTests(unittest.TestCase):
         self.assertLessEqual(released_ns, T0 + 250 * MS)
         self.click("Colour, stable")
         self.press("Next")
-        self.assertIn(guidance.TEXT_HOLD_RELEASED, self.visible_texts())
+        self.assertEqual(window.dwell_label.text(), "The Frame manager has said go. You can start in 5 s")
         self.advance(4900)
-        self.assertEqual((self.offered(), window.dwell_label.text()), (["Cancel"], "You can start in 1 s"))
+        self.assertEqual((self.offered(), window.dwell_label.text()),
+                         (["Cancel"], "The Frame manager has said go. You can start in 1 s"))
         self.advance(100)
         self.click("Start")
         self.assertEqual((window.phase, len(self.workers)), ("run", 1))
@@ -1885,7 +1914,8 @@ class WindowTests(unittest.TestCase):
         self.advance(5000)
         self.release.unlink()
         self.advance(5000)
-        self.assertEqual((self.offered(), window.hold_label.text()), (["Cancel", "Start"], guidance.TEXT_HOLD_RELEASED))
+        self.assertEqual((self.offered(), window.dwell_label.text()),
+                         (["Cancel", "Start"], "The Frame manager has said go. You can start now"))
 
     def test_only_a_regular_file_at_the_path_itself_is_a_release(self):
         elsewhere = Path(self.directory.name) / "elsewhere"
@@ -1917,10 +1947,31 @@ class WindowTests(unittest.TestCase):
             self.click("Start")
             self.advance(2000)
             self.assertEqual((looked.call_count, window.phase), (looks, "run"))  # Not once more after the release.
-        self.release.write_text("contents")
-        with mock.patch("builtins.open", side_effect=AssertionError("the release file was opened")), \
-                mock.patch.object(os, "open", side_effect=AssertionError("the release file was opened")):
-            self.assertTrue(command.hold_released(self.release))
+
+    def test_no_open_of_the_release_file_is_made_over_a_whole_held_then_released_run(self):
+        # The report says ``release_file_read: false``. An audit hook sees every open this process makes, however
+        # it is made (``open``, ``io.open``, ``os.open``, ``Path.open``, ``Path.read_bytes``).
+        name = f"go-{os.getpid()}-audited"
+        with opens_of(name) as opens:
+            self.release = Path(self.directory.name) / name
+            window = self.to_notice(hold_start=self.release)
+            self.advance(6000)
+            os.mknod(self.release)  # The operator's touch, made without an open of this process's own.
+            self.advance(250 + self.GUARD_MS)
+            self.click("Start")
+            worker = self.workers[0]
+            worker.on_event(("ready", self.now))
+            self.advance(500)
+            self.end_run(worker, finished_report())
+            self.advance(30_000 + self.GUARD_MS)
+            self.click("Passthrough unchanged")
+            hold = self.saved()["guide"]["start_hold"]
+            self.assertEqual((window.phase, hold["released"], hold["release_file_read"]), ("result", True, False))
+            self.assertEqual(opens, [])
+            for read in (lambda: open(self.release).close(), self.release.read_bytes,
+                         lambda: os.close(os.open(self.release, os.O_RDONLY))):  # The hook does see an open.
+                read()
+            self.assertEqual(opens, [str(self.release)] * 3)
 
     def test_a_hold_nobody_releases_ends_the_window_unstarted_after_ten_minutes_with_nothing_launched(self):
         for name, clicks in (("on_the_first_screen", ()), ("on_the_notice", ("Colour, stable", "Next"))):
@@ -1962,6 +2013,36 @@ class WindowTests(unittest.TestCase):
         self.advance(60_000, step=250)  # Once released, the bound no longer applies: the wearer starts when ready.
         self.assertEqual((window.phase, self.offered()), ("notice", ["Cancel", "Start"]))
 
+    def test_the_whole_export_notice_is_visible_without_scrolling_held_or_released_at_every_size_and_script(self):
+        # The notice is the consent text. A held window has the widgets of any other, so the notice keeps its room:
+        # its scroll area's content is never taller than its viewport, and is as tall as an unheld window's.
+        def measure(script, size, **options):
+            window = self.to_notice(script, size=size, **options)
+            self.app.processEvents()
+            return window, (window.notice_area.viewport().height(), window.notice_area.verticalScrollBar().maximum(),
+                            window.notice_label.height(), window.dwell_label.height())
+        for size in ((1920, 1080), (1600, 900), (1366, 768), (1280, 800)):
+            for script in guidance.SCRIPTS:
+                with self.subTest(size=size, script=script):
+                    self.now = T0
+                    plain, unheld = measure(script, size)
+                    self.assertEqual((plain.size().width(), plain.size().height(), unheld[1]), (*size, 0))
+                    plain.hide()
+                    self.now = T0
+                    self.release = Path(self.directory.name) / f"go-{script}-{size[0]}"
+                    window, held = measure(script, size, hold_start=self.release)
+                    self.assertEqual((window.dwell_label.text(), held), (guidance.TEXT_HOLD_WAITING, unheld))
+                    self.assertLessEqual(window.notice_label.height(), window.notice_area.viewport().height())
+                    self.release.touch()
+                    for wait in (250, self.GUARD_MS, 5000):  # Just released, the count running, and Start live.
+                        self.advance(wait)
+                        self.assertTrue(window.dwell_label.text().startswith(guidance.TEXT_HOLD_RELEASED))
+                        self.assertEqual((window.notice_area.viewport().height(),
+                                          window.notice_area.verticalScrollBar().maximum(),
+                                          window.notice_label.height(), window.dwell_label.height()), unheld)
+                    self.assertEqual(self.offered(), ["Cancel", "Start"])
+                    window.hide()
+
     def test_cancel_under_a_hold_leaves_the_usual_report_with_the_hold_in_it(self):
         window = self.held()
         self.press("Cancel")
@@ -1975,9 +2056,7 @@ class WindowTests(unittest.TestCase):
     def test_without_the_option_the_window_never_looks_and_its_notice_and_report_are_what_they_were(self):
         with mock.patch.object(command, "hold_released", side_effect=AssertionError("looked for a release")):
             window = self.to_notice()
-            self.assertIsNone(window.hold_label)
-            self.assertFalse({guidance.TEXT_HOLD_WAITING, guidance.TEXT_HOLD_RELEASED, guidance.TEXT_HOLD_DWELL}
-                             & set(self.visible_texts()))
+            self.assertFalse([text for text in self.visible_texts() if "Frame manager" in text])
             self.advance(700_000, step=250)  # Far past the hold's bound: there is no hold, so nothing ends.
             self.assertEqual((window.phase, window.dwell_label.text(), self.offered()),
                              ("notice", "You can start now", ["Cancel", "Start"]))
@@ -2286,14 +2365,22 @@ class ValidateTests(unittest.TestCase):
         if built.returncode:
             raise AssertionError(built.stdout + built.stderr)
         cls.helper = Path(cls.directory.name) / "sightcircuit-camera-helper-fake"
+        cls.validate_run = None
 
     def setUp(self):
         for number in RECORD_AND_POLL.numbers:
             self.addCleanup(signal.signal, number, signal.getsignal(number))
 
+    def validated(self):
+        """``--validate``'s exit code and report: the mode is run once for the class, by whichever test asks first."""
+        if type(self).validate_run is None:
+            with mock.patch.dict(os.environ):
+                type(self).validate_run = run_main(["--validate", "--helper", self.helper])[:2]
+        code, report = type(self).validate_run
+        return code, json.loads(json.dumps(report))  # A copy: no test can change what another reads.
+
     def test_validate_clicks_through_every_flow_with_nothing_real_in_it(self):
-        with mock.patch.dict(os.environ):
-            code, report, _ = run_main(["--validate", "--helper", self.helper])
+        code, report = self.validated()
         self.assertEqual((code, report["report_kind"], report["status"], report["reason"], report["flows_failed"]),
                          (0, "camera_guide_validation", "validated", None, []), report)
         self.assertEqual({name: report[name] for name in gates.claims()}, ALL_CLOSED)
@@ -2317,6 +2404,24 @@ class ValidateTests(unittest.TestCase):
         self.assertEqual((flows["positions_to_the_bound"]["status"], flows["stop_during_the_run"]["ended_by"],
                           flows["window_closed_during_the_run"]["ended_by"], flows["launch_failed"]["watch"]),
                          ("recognized", "stop_button", "window_closed", "no_frame_read"))
+
+    def test_validate_holds_start_until_the_release_and_ends_an_unreleased_hold_unstarted(self):
+        code, report = self.validated()
+        self.assertEqual((code, report["status"], report["flows_failed"]), (0, "validated", []), report)
+        flows = report["start_hold_flows"]
+        self.assertEqual(list(flows), ["start_held_until_released", "start_hold_not_released", "hold_path_checked_first"])
+        self.assertEqual({name: entry["ok"] for name, entry in flows.items()}, dict.fromkeys(flows, True))
+        held, unreleased = flows["start_held_until_released"], flows["start_hold_not_released"]
+        self.assertEqual((held["start_refused_while_held"], held["release_started_nothing"], held["released"],
+                          held["timed_out"], held["release_file_read"], held["release_times_recorded"], held["status"],
+                          held["workers_started"], held["run_screen_only_scripted"]),
+                         (True, True, True, False, False, True, "recognized", 1, True))
+        self.assertGreaterEqual(held["release_to_start_click_ms"], command.VALIDATION_GUARD_SECONDS * 1000)
+        self.assertEqual((unreleased["status"], unreleased["reason"], unreleased["ended_by"], unreleased["workers_started"],
+                          unreleased["confirmation"], unreleased["released"], unreleased["timed_out"]),
+                         ("error", "start_hold_not_released", "start_hold_timeout", 0, None, False, True))
+        self.assertEqual(flows["hold_path_checked_first"]["refused"],
+                         ["exists", "link", "shared_directory", "unwritable_directory", "missing_directory", "the_report"])
 
 
 class HoldTests(unittest.TestCase):
@@ -2393,6 +2498,9 @@ class HoldTests(unittest.TestCase):
             "directory_is_a_link": self.root / "link-to-private" / "go",
             "group_writable_directory": self.place("group", 0o770) / "go",
             "world_writable_directory": self.place("world", 0o777) / "go",
+            "others_but_not_group_writable_directory": self.place("others", 0o702) / "go",
+            "others_writable_and_readable_directory": self.place("others-rwx", 0o707) / "go",
+            "group_but_not_others_writable_directory": self.place("group-only", 0o720) / "go",
             "sticky_shared_directory": self.place("sticky", 0o1777) / "go",
             "unwritable_directory": self.place("read-only", 0o500) / "go",
             "unsearchable_directory": self.place("no-search", 0o600) / "go",
@@ -2403,6 +2511,39 @@ class HoldTests(unittest.TestCase):
                     command.check_hold_path(path, self.report)
         self.assertFalse((private / "nowhere").exists())
         self.assertEqual((private / "there").read_text(), "left by an earlier run")
+
+    def test_a_path_with_dot_dot_in_it_is_refused_so_the_window_and_the_touch_cannot_mean_two_places(self):
+        private, elsewhere = self.place("private"), self.place("elsewhere")
+        (elsewhere / "inner").mkdir()
+        (private / "lnk").symlink_to(elsewhere / "inner", target_is_directory=True)
+        for name, path in (("through_a_link", private / "lnk" / ".." / "go"), ("plain", private / "sub" / ".." / "go"),
+                           ("leading", Path("..") / "go"), ("as_text", f"{private}/lnk/../go")):
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(ValueError, r"^--hold-start needs a path without '\.\.' in it$"):
+                    command.check_hold_path(path, self.report)
+        self.assertEqual(command.check_hold_path(private / "a..b", self.report), private / "a..b")  # A name, not a step.
+
+    def test_the_reports_own_file_is_refused_by_whatever_name_it_is_given(self):
+        shared = self.place("shared", 0o777)
+        report = shared / "report.json"
+        (self.root / "by-link").symlink_to(shared, target_is_directory=True)
+        for name, path, against in (("the_same_text", report, report),
+                                    ("the_hold_through_a_link", self.root / "by-link" / "report.json", report),
+                                    ("the_report_through_a_link", report, self.root / "by-link" / "report.json")):
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(ValueError, "a path of its own, not the report's"):
+                    command.check_hold_path(path, against)
+        # Another name reached through the link is refused for the link, and beside the report it is accepted.
+        with self.assertRaisesRegex(ValueError, "a real directory, not a link to one"):
+            command.check_hold_path(self.root / "by-link" / "go", report)
+        self.assertEqual(command.check_hold_path(shared / "go", self.root / "by-link" / "report.json"), shared / "go")
+
+    def test_a_home_directory_the_system_does_not_know_is_a_refusal_not_a_crash(self):
+        unknown = "~sightcircuit-no-such-user-for-the-checks"
+        with self.assertRaisesRegex(ValueError, "^--hold-start needs a path whose home directory exists$"):
+            command.check_hold_path(f"{unknown}/go", self.report)
+        with self.assertRaisesRegex(ValueError, "^--report needs a path whose home directory exists$"):
+            command.check_report_path(f"{unknown}/report.json")
 
     def test_a_directory_owned_by_someone_else_is_refused_unless_it_is_the_reports(self):
         private = self.place("private")
@@ -2489,45 +2630,45 @@ class HoldCommandLineTests(unittest.TestCase):
 
     def test_a_refused_report_path_is_reported_first_and_without_the_option_a_refusal_has_no_hold_block(self):
         self.report.touch()
-        code, report, _ = run_main(self.arguments("--hold-start", self.root / "go"))
-        self.assertEqual((code, report["reason"], report["guide"]["start_hold"]["requested"]),
-                         (1, "report_path_refused", True))
+        (self.root / "there").touch()
+        for name, hold in (("both_refused", self.root / "there"), ("hold_missing_directory", self.root / "missing" / "go"),
+                           ("only_the_report_refused", self.root / "go")):
+            with self.subTest(name=name):
+                code, report, _ = run_main(self.arguments("--hold-start", hold))
+                self.assertEqual((code, report["reason"], report["guide"]["start_hold"]["requested"]),
+                                 (1, "report_path_refused", True))
+                self.assertTrue(report["error"].startswith("--report needs "), report["error"])
+        self.report.unlink()  # With the report's path good, the same hold path is the refusal.
+        code, report, _ = run_main(self.arguments("--hold-start", self.root / "there"))
+        self.assertEqual((code, report["reason"]), (1, "hold_start_path_refused"))
+        self.report.touch()
         code, report, _ = run_main(self.arguments())
         self.assertEqual((code, report["reason"]), (1, "report_path_refused"))
         self.assertNotIn("start_hold", report["guide"])
 
 
-@unittest.skipUnless(PYSIDE and NUMPY_CV2 and sys.platform.startswith("linux") and shutil.which("g++"),
-                     "Needs Linux, PySide6, NumPy, OpenCV and g++ for the helper's fake build")
-class ValidateHoldTests(unittest.TestCase):
-    """``--validate``'s start-hold flows, in their own block of the validation report."""
+    def test_a_home_directory_the_system_does_not_know_is_a_named_refusal_for_either_path(self):
+        unknown = "~sightcircuit-no-such-user-for-the-checks"
+        for name, arguments, reason, said in (
+                ("hold", self.arguments("--hold-start", f"{unknown}/go"), "hold_start_path_refused", "--hold-start needs "),
+                ("report", ["--allow-camera-input", "--helper", self.helper, "--report", f"{unknown}/report.json",
+                            "--script", "removal"], "report_path_refused", "--report needs ")):
+            with self.subTest(name=name):
+                code, report, stderr = run_main(arguments)
+                self.assertEqual((code, report["status"], report["reason"], report["confirmation"]),
+                                 (1, "error", reason, None), stderr)
+                self.assertTrue(report["error"].startswith(said), report["error"])
+        self.run_window.assert_not_called()
 
-    def setUp(self):
-        for number in RECORD_AND_POLL.numbers:
-            self.addCleanup(signal.signal, number, signal.getsignal(number))
-
-    def test_validate_holds_start_until_the_release_and_ends_an_unreleased_hold_unstarted(self):
-        with tempfile.TemporaryDirectory() as directory:
-            built = subprocess.run(["bash", str(ROOT / "scripts/build_camera_helper.sh"), "--fake", "--out", directory],
-                                   cwd=ROOT, capture_output=True, text=True, timeout=600)
-            self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
-            with mock.patch.dict(os.environ):
-                code, report, _ = run_main(["--validate", "--helper", Path(directory) / "sightcircuit-camera-helper-fake"])
-        self.assertEqual((code, report["status"], report["flows_failed"]), (0, "validated", []), report)
-        flows = report["start_hold_flows"]
-        self.assertEqual(list(flows), ["start_held_until_released", "start_hold_not_released", "hold_path_checked_first"])
-        self.assertEqual({name: entry["ok"] for name, entry in flows.items()}, dict.fromkeys(flows, True))
-        held, unreleased = flows["start_held_until_released"], flows["start_hold_not_released"]
-        self.assertEqual((held["start_refused_while_held"], held["release_started_nothing"], held["released"],
-                          held["timed_out"], held["release_file_read"], held["release_times_recorded"], held["status"],
-                          held["workers_started"], held["run_screen_only_scripted"]),
-                         (True, True, True, False, False, True, "recognized", 1, True))
-        self.assertGreaterEqual(held["release_to_start_click_ms"], command.VALIDATION_GUARD_SECONDS * 1000)
-        self.assertEqual((unreleased["status"], unreleased["reason"], unreleased["ended_by"], unreleased["workers_started"],
-                          unreleased["confirmation"], unreleased["released"], unreleased["timed_out"]),
-                         ("error", "start_hold_not_released", "start_hold_timeout", 0, None, False, True))
-        self.assertEqual(flows["hold_path_checked_first"]["refused"],
-                         ["exists", "link", "shared_directory", "unwritable_directory", "missing_directory", "the_report"])
+    def test_a_dot_dot_path_and_the_report_named_through_a_link_are_refused_before_any_window(self):
+        (self.root / "by-link").symlink_to(self.root, target_is_directory=True)
+        for name, path in (("dot_dot", self.root / "sub" / ".." / "go"),
+                           ("the_report_through_a_link", self.root / "by-link" / "report.json")):
+            with self.subTest(name=name):
+                code, report, _ = run_main(self.arguments("--hold-start", path))
+                self.assertEqual((code, report["reason"]), (1, "hold_start_path_refused"))
+        self.run_window.assert_not_called()
+        self.assertFalse(self.report.exists())
 
 
 if __name__ == "__main__":

@@ -72,9 +72,23 @@ DECLINED, STARTING_STATE_NOT_STABLE = "confirmation_declined", "starting_state_n
 HOLD_NOT_RELEASED = "start_hold_not_released"
 HOLD_TIMEOUT_SECONDS = 600  # From the window's opening; a hold nobody releases is not left open for ever.
 HOLD_POLL_MS = 250  # How often the window looks for the release, on its own clock.
+# The hold's words take the place of the notice screen's one line about when Start can be clicked: a held window
+# has no widget another window lacks, so the export notice above keeps all of its room.
 TEXT_HOLD_WAITING = "Start is off until the Frame manager says go. Please wait"
-TEXT_HOLD_RELEASED = "The Frame manager has said go. Start when you are ready"
-TEXT_HOLD_DWELL = "You cannot start yet"
+TEXT_HOLD_RELEASED = "The Frame manager has said go"
+
+
+def start_line(seconds_left, *, held=False, released=False):
+    """The notice screen's line about Start: the wait that is left, in whole seconds, or that there is none.
+
+    ``held``: the window was asked to hold its Start. Until the release
+    the line says only that; after it, the same count as any window's with
+    the release said first.
+    """
+    if held and not released:
+        return TEXT_HOLD_WAITING
+    line = "You can start now" if seconds_left <= 0 else f"You can start in {int(-(-seconds_left // 1))} s"
+    return f"{TEXT_HOLD_RELEASED}. {line}" if held else line
 WATCH_SECONDS = 30  # The passthrough watch after a run (the accepted passthrough rule).
 # Pictures the window draws from shapes; none is an image and none comes from a camera.
 PICTURES = ("wait", "near", "far", "headset_off", "centre", "left", "right", "up", "down", "out_of_view", "done")
@@ -366,7 +380,7 @@ def hold_block(*, released_ns, started_ns, timed_out, timeout_seconds, clock=Non
 
     ``released_ns`` is the window's tick that first saw the release file,
     so it is later than the operator's ``touch`` by up to the poll interval
-    and a tick; ``release_utc_ns`` is that time by the run's clock (the
+    and a tick, about 0.3 s; ``release_utc_ns`` is that time by the run's clock (the
     report's timebase anchor) and is ``None`` for a launch that started no
     run, which has no such clock. The file's name and contents are not here:
     the contents are never read.
