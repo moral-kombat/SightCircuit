@@ -255,6 +255,7 @@ class StopRelayTests(unittest.TestCase):
         previous = {number: signal.getsignal(number) for number in supervision.STOP_SIGNALS}
         for number, handler in previous.items():
             self.addCleanup(signal.signal, number, handler)
+        self.addCleanup(supervision.retire_stop_relay)  # This process goes on: the relay must not outlive the test.
         first, second = threading.Event(), threading.Event()
         self.assertIs(supervision.stop_on(first), first)
         self.assertIs(supervision.stop_on(second), second)
@@ -277,6 +278,186 @@ class StopRelayTests(unittest.TestCase):
         time.sleep(0.1)
         fourth = supervision.stop_on(threading.Event())
         self.assertFalse(fourth.wait(0.3))
+
+    def test_a_retired_relay_ends_its_thread_and_gives_back_the_wakeup_descriptor(self):
+        # A worker's relay lasts as long as its process. A process that goes on after the stop it armed (a
+        # worker's function run in a test's own process) retires it: no thread or descriptor of it is left, the
+        # wakeup descriptor is what it was, its handler is inert, and the next stop_on makes a working relay.
+        for number in supervision.STOP_SIGNALS:
+            self.addCleanup(signal.signal, number, signal.getsignal(number))
+        self.addCleanup(supervision.retire_stop_relay)
+        self.assertIsNone(supervision._stop_wakeup, "an earlier test left the process's stop relay")
+        self.assertTrue(supervision.retire_stop_relay())  # With no relay there is nothing to end.
+        threads = threading.active_count()
+        before_read, before_write = os.pipe()
+        self.addCleanup(os.close, before_read)
+        self.addCleanup(os.close, before_write)
+        os.set_blocking(before_write, False)
+        self.addCleanup(signal.set_wakeup_fd, signal.set_wakeup_fd(before_write))
+        stop = supervision.stop_on(threading.Event())
+        relay = supervision._stop_wakeup
+        read_fd, write_fd = relay.read_fd, relay.write_fd
+        self.assertEqual((threading.active_count(), relay.thread.name), (threads + 1, "sightcircuit-stop-relay"))
+        self.assertTrue(supervision.retire_stop_relay())
+        self.assertFalse(relay.thread.is_alive())
+        self.assertEqual(threading.active_count(), threads)
+        self.assertIsNone(supervision._stop_wakeup)
+        self.assertEqual((relay.read_fd, relay.write_fd), (-1, -1))
+        for fd in (read_fd, write_fd):
+            with self.assertRaises(OSError):
+                os.fstat(fd)
+        self.assertEqual(signal.set_wakeup_fd(before_write), before_write)  # Given back, not left on a closed pipe.
+        relay.handle(signal.SIGTERM, None)  # Inert: it neither raises nor writes anywhere.
+        self.assertFalse(stop.is_set())
+        self.assertTrue(relay.retire())  # A second retirement closes nothing twice.
+        self.assertTrue(supervision.retire_stop_relay())
+        again = supervision.stop_on(threading.Event())
+        self.assertIsNot(supervision._stop_wakeup, relay)
+        signal.raise_signal(signal.SIGTERM)
+        self.assertTrue(again.wait(2))
+        self.assertFalse(stop.is_set())  # The retired relay's event is not the new relay's.
+        self.assertTrue(supervision.retire_stop_relay())
+        self.assertEqual(threading.active_count(), threads)
+
+    def arm_for_retirement(self):
+        """A relay armed in this process on a clean slate, with the handlers and any leftover relay cleaned up."""
+        for number in supervision.STOP_SIGNALS:
+            self.addCleanup(signal.signal, number, signal.getsignal(number))
+        self.addCleanup(supervision.retire_stop_relay)
+        self.assertIsNone(supervision._stop_wakeup, "an earlier test left the process's stop relay")
+        self.assertTrue(supervision.retire_stop_relay(), "an earlier test left a relay it could not retire")
+        stop = supervision.stop_on(threading.Event())
+        return stop, supervision._stop_wakeup
+
+    def test_a_retirement_whose_join_times_out_is_not_reported_done_until_the_thread_has_ended(self):
+        # The relay is blocked in Event.set() while this thread holds the event's lock, so the join times out.
+        # "No relay thread is left" must stay false for as long as the thread is alive, on every later call, and
+        # the read end must stay open under it; once the thread can end, the next call finishes the retirement.
+        threads = threading.active_count()
+        stop, relay = self.arm_for_retirement()
+        read_fd = relay.read_fd
+        with stop._cond:
+            signal.raise_signal(signal.SIGTERM)  # Its byte is in the pipe before the write end is closed.
+            self.assertFalse(supervision.retire_stop_relay(0.2))
+            self.assertTrue(relay.thread.is_alive())
+            self.assertIsNone(supervision._stop_wakeup)  # Not the process's relay any more: stop_on would make one.
+            self.assertFalse(supervision.retire_stop_relay(0.2))  # Still alive, so still not done.
+            self.assertTrue(relay.thread.is_alive())
+            self.assertEqual((relay.read_fd, relay.write_fd), (read_fd, -1))
+            os.fstat(read_fd)  # Open while the thread may still use it.
+        self.assertTrue(supervision.retire_stop_relay())
+        self.assertFalse(relay.thread.is_alive())
+        self.assertTrue(stop.is_set())  # The signal it had read was still relayed.
+        self.assertEqual(relay.read_fd, -1)
+        with self.assertRaises(OSError):
+            os.fstat(read_fd)
+        self.assertEqual(threading.active_count(), threads)
+        self.assertTrue(supervision.retire_stop_relay())
+
+    def test_a_retirement_interrupted_in_its_join_is_finished_by_the_next_call(self):
+        # A KeyboardInterrupt in the join (the caller had restored the default SIGINT handler) must not strand
+        # the read end: the relay stays reachable, and the next call closes it.
+        stop, relay = self.arm_for_retirement()
+        read_fd = relay.read_fd
+        with mock.patch.object(relay.thread, "join", side_effect=KeyboardInterrupt), \
+                self.assertRaises(KeyboardInterrupt):
+            supervision.retire_stop_relay()
+        self.assertIsNone(supervision._stop_wakeup)
+        self.assertEqual((relay.read_fd, relay.write_fd), (read_fd, -1))
+        os.fstat(read_fd)  # Not closed yet, and not forgotten either.
+        self.assertTrue(supervision.retire_stop_relay())
+        self.assertFalse(relay.thread.is_alive())
+        self.assertEqual(relay.read_fd, -1)
+        with self.assertRaises(OSError):
+            os.fstat(read_fd)
+        self.assertFalse(stop.is_set())
+
+    def test_a_real_interrupt_while_waiting_for_a_blocked_relay_does_not_make_it_look_ended(self):
+        # A SIGINT that raises KeyboardInterrupt out of the wait for a relay that cannot end yet. CPython 3.12's
+        # Thread.join answers that by marking the thread stopped (is_alive() False) while it still runs, so the
+        # relay's end is judged by what its own loop records, never by the threading module's view of it.
+        threads = threading.active_count()
+        stop, relay = self.arm_for_retirement()
+        read_fd = relay.read_fd
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+        interrupt = threading.Timer(0.4, os.kill, (os.getpid(), signal.SIGINT))
+        self.addCleanup(interrupt.join)
+        self.addCleanup(interrupt.cancel)
+        with stop._cond:  # The relay blocks in Event.set() for as long as this is held.
+            signal.raise_signal(signal.SIGTERM)
+            interrupt.start()
+            started = time.monotonic()
+            with self.assertRaises(KeyboardInterrupt):
+                supervision.retire_stop_relay(10)
+            self.assertLess(time.monotonic() - started, 5)
+            interrupt.join()
+            self.assertFalse(relay.ended.is_set())
+            self.assertFalse(supervision.retire_stop_relay(0.2))  # Its thread still runs, whatever is_alive() says.
+            self.assertEqual((relay.read_fd, relay.write_fd), (read_fd, -1))
+            os.fstat(read_fd)  # Still open under the running thread.
+            self.assertIn(relay, supervision._unfinished_retirements)
+        self.assertTrue(supervision.retire_stop_relay())
+        self.assertTrue(relay.ended.is_set() and stop.is_set())
+        self.assertEqual(relay.read_fd, -1)
+        with self.assertRaises(OSError):
+            os.fstat(read_fd)
+        self.assertEqual(supervision._unfinished_retirements, [])
+        self.assertEqual(threading.active_count(), threads)
+
+    def test_an_interrupt_during_the_retirement_bookkeeping_strands_no_descriptor(self):
+        # A stop signal that arrives while retire() is between recording and acting (here: as it closes the
+        # write end) is held until the bookkeeping is consistent, then delivered: the KeyboardInterrupt still
+        # reaches the caller, and the next call finishes with no descriptor of the relay left open.
+        _stop, relay = self.arm_for_retirement()
+        read_fd, write_fd = relay.read_fd, relay.write_fd
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+        real_close, interrupted = os.close, []
+
+        def close(fd):
+            if fd == write_fd and not interrupted:
+                interrupted.append(fd)
+                signal.raise_signal(signal.SIGINT)
+            real_close(fd)
+
+        with mock.patch.object(supervision.os, "close", close), self.assertRaises(KeyboardInterrupt):
+            supervision.retire_stop_relay()
+        self.assertEqual(interrupted, [write_fd])
+        self.assertEqual(relay.write_fd, -1)
+        with self.assertRaises(OSError):
+            os.fstat(write_fd)  # Closed before the interrupt was let through.
+        self.assertTrue(supervision.retire_stop_relay())
+        self.assertEqual(relay.read_fd, -1)
+        with self.assertRaises(OSError):
+            os.fstat(read_fd)
+        self.assertEqual(supervision._unfinished_retirements, [])
+
+    def test_arming_and_retiring_many_times_keeps_no_relay_alive(self):
+        # One at-fork callback serves the process, so a retired relay is not kept by a registration that cannot
+        # be undone: after 100 cycles no StopWakeup, thread or descriptor of them is left.
+        import gc
+
+        def relays():
+            gc.collect()
+            return sum(isinstance(thing, supervision.StopWakeup) for thing in gc.get_objects())
+
+        _stop, relay = self.arm_for_retirement()
+        self.assertTrue(supervision.retire_stop_relay())
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)  # The handlers are the last references to a retired relay.
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+        del _stop, relay
+        before, threads = relays(), threading.active_count()
+        descriptors = len(os.listdir("/proc/self/fd")) if os.path.isdir("/proc/self/fd") else None
+        for _ in range(100):
+            stop = supervision.stop_on(threading.Event())
+            self.assertFalse(stop.is_set())
+            self.assertTrue(supervision.retire_stop_relay())
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+        del stop
+        self.assertEqual(relays(), before)
+        self.assertEqual(threading.active_count(), threads)
+        if descriptors is not None:
+            self.assertEqual(len(os.listdir("/proc/self/fd")), descriptors)
 
 
 class WorkerSideTests(unittest.TestCase):

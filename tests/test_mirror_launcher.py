@@ -43,6 +43,7 @@ class StopOnSignalTests(unittest.TestCase):
 
     def test_worker_signals_set_its_stop_event(self):
         restore_handlers(self, signal.SIGINT, signal.SIGTERM)
+        self.addCleanup(supervision.retire_stop_relay)  # This process goes on: the relay must not outlive the test.
         self.assertFalse(guard.stop_on_signals().is_set())  # Before any signal: nothing is set unasked.
         for number in (signal.SIGINT, signal.SIGTERM):
             with self.subTest(signal=number):

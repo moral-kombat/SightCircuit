@@ -308,8 +308,9 @@ class PythonLimitSitesTests(unittest.TestCase):
         past_bound = object()  # Any outcome except the bound's own rejection.
 
         def worker(seconds):
-            # Stubs stop a worker that passed its bound before it installs handlers or starts a marker.
-            with patch.object(signal, "signal"), patch.object(
+            # Stubs stop a worker that passed its bound before it installs handlers, starts the process's stop
+            # relay (whose thread would outlive the test in this process) or starts a marker.
+            with patch.object(hud_marker_check, "stop_on_signals", return_value=threading.Event()), patch.object(
                     hud_marker_check, "MarkerClient", side_effect=RuntimeError("marker_run_not_started")):
                 return hud_marker_check.worker({"seconds": seconds, "validation_only": True})
 

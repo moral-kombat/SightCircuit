@@ -31,9 +31,13 @@ class MarkerGateTests(unittest.TestCase):
         client = Mock(mode="--validate-calibration-marker")
         client.process.poll.return_value = 0
         client.close.return_value = bridge
-        with patch.object(marker, "MarkerClient", return_value=client), patch.object(signal, "signal"), \
+        # The worker's function runs in this process, which goes on after it: the stop it arms is an event
+        # here, not the process's stop relay, whose thread and wakeup descriptor would outlive the test.
+        with patch.object(marker, "MarkerClient", return_value=client), \
+                patch.object(marker, "stop_on_signals", return_value=threading.Event()) as armed, \
                 contextlib.redirect_stderr(io.StringIO()):
             report = marker.worker({"seconds": 1, "validation_only": True})
+        armed.assert_called_once_with()
         self.assertEqual(report["status"], "native_failed")
         self.assertEqual(report["exit_code"], 1)
         self.assertEqual(report["reason"], "invalid_marker_visibility_evidence")
