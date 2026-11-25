@@ -128,8 +128,13 @@ constexpr bool layout_within_limits(const FixedLayout& layout) {
            layout.y_m >= contract::kPanelYMin && layout.y_m <= contract::kPanelYMax &&
            layout.opacity >= contract::kPanelOpacityMin && layout.opacity <= contract::kPanelOpacityMax;
 }
-// A layout outside the limits every settings packet is held to does not compile.
-static_assert(layout_within_limits(kFixedLayouts[0]) && layout_within_limits(kFixedLayouts[1]));
+constexpr bool every_layout_within_limits() {
+    for (const FixedLayout& layout : kFixedLayouts)
+        if (!layout_within_limits(layout)) return false;
+    return true;
+}
+// A table with any layout outside the limits every settings packet is held to does not compile.
+static_assert(every_layout_within_limits());
 // The index of the layout named `id`, or kNoLayout.
 inline int layout_index(const char* id) {
     for (int index = 0; index < kFixedLayoutCount; ++index)

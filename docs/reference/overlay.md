@@ -222,7 +222,8 @@ Frame's compositor does with that alpha, and which way up it shows row 0, is
 [unproven](box-panel.md#row-direction-and-alpha).
 
 **The megabyte.** One panel is 6.4 times the strip's bytes. On a cloud host
-the deadline is still acted on within one poll while a panel is arriving,
+the deadline is still acted on within one poll (0 to 20 ms after it, for
+either layout) while a panel is arriving,
 and writing and handing one over takes about 1.6 ms; the pipe is left at its
 default size. The figures, the machine and what they do not show are in the
 [box panel reference](box-panel.md#the-megabyte-measured-in-the-cloud).

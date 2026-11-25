@@ -166,28 +166,109 @@ class BoxPanelBridgeTests(unittest.TestCase):
     assert_retired = strip_suite.FixedHudRuntimeTests.assert_retired
 
     def test_a_megabyte_in_flight_cannot_hold_a_tile_past_its_deadline(self):
-        # The next panel is half written (well inside its megabyte, and at 16 pipe-fulls a frame the bridge is
-        # mid-read for most of an update's arrival) when the shown tile's deadline passes.
+        # The next panel is partly written (in its prefix, well inside its megabyte, and seven bytes short of its
+        # end) when the shown tile's deadline passes. The bridge notices a deadline on its next 20 ms input poll, so
+        # how late the hide is depends on where in a poll the deadline falls: anything from nothing to a whole poll.
+        # A life that is a whole number of polls always lands at the same place and measures only that place, so
+        # the lives here are spread across a poll and the bound is asserted over all of them.
+        late = []
         for split in (12 + 32 + 1, 300_000, UPDATE_BYTES - 7):
-            with self.subTest(split=split):
-                run = Run(self)
-                start = time.monotonic_ns()
-                run.send(tile(1, start, 200 * MS))
-                run.wait("frame_submitted")
-                following = tile(2, time.monotonic_ns(), 500 * MS, mark=2)
-                run.send(following[:split])
-                expired = run.wait("frame_expired")
-                self.assertEqual((expired["frame_id"], expired["outcome"], expired["hide_ok"],
-                                  expired["api_visible_after_hide"]), (1, "hidden", True, False))
-                self.assertLess(expired["observed_ns"] - expired["deadline_ns"], POLL_NS + MARGIN_NS)
-                self.assertLess(expired["hide_returned_ns"] - expired["deadline_ns"], POLL_NS + MARGIN_NS)
-                self.assertEqual(len(run.calls("SetOverlayRaw")), 1)  # the half-arrived panel was not uploaded
-                run.send(following[split:])
-                second = run.wait("frame_expired", 2)
-                self.assertEqual((second["frame_id"], second["outcome"]), (2, "hidden"))
-                code, report = run.finish()
-                self.assertEqual((code, report["frames_received"], report["expired_frames"]), (0, 2, 2))
-                self.assert_retired(run, report)
+            for phase_ns in (0, 5 * MS, 10 * MS + MS // 2, 16 * MS):
+                with self.subTest(split=split, phase_ms=phase_ns / MS):
+                    run = Run(self)
+                    start = time.monotonic_ns()
+                    run.send(tile(1, start, 200 * MS + phase_ns))
+                    run.wait("frame_submitted")
+                    following = tile(2, time.monotonic_ns(), 600 * MS, mark=2)
+                    run.send(following[:split])
+                    expired = run.wait("frame_expired")
+                    self.assertEqual((expired["frame_id"], expired["outcome"], expired["hide_ok"],
+                                      expired["api_visible_after_hide"]), (1, "hidden", True, False))
+                    self.assertGreaterEqual(expired["observed_ns"], expired["deadline_ns"])
+                    self.assertLess(expired["observed_ns"] - expired["deadline_ns"], POLL_NS + MARGIN_NS)
+                    self.assertLess(expired["hide_returned_ns"] - expired["deadline_ns"], POLL_NS + MARGIN_NS)
+                    late.append(expired["hide_returned_ns"] - expired["deadline_ns"])
+                    self.assertEqual(len(run.calls("SetOverlayRaw")), 1)  # the part-arrived panel was not uploaded
+                    run.send(following[split:])
+                    second = run.wait("frame_expired", 2)
+                    self.assertEqual((second["frame_id"], second["outcome"]), (2, "hidden"))
+                    code, report = run.finish()
+                    self.assertEqual((code, report["frames_received"], report["expired_frames"]), (0, 2, 2))
+                    self.assert_retired(run, report)
+        # More than one place in the poll was sampled: the latenesses differ by milliseconds, not by noise.
+        self.assertGreater(max(late) - min(late), 2 * MS, late)
+        if os.environ.get("SIGHTCIRCUIT_PRINT_MEASUREMENTS"):
+            print(f"\ndeadline to hide returned, a panel part-arrived, {len(late)} runs on this host: min "
+                  f"{min(late) / 1e6:.2f} ms, median {statistics.median(late) / 1e6:.2f} ms, max {max(late) / 1e6:.2f} ms",
+                  file=sys.stderr)
+
+    def test_a_writer_that_stalls_mid_panel_delays_nothing_but_its_own_panel(self):
+        # The sender stops for half a second in the middle of a megabyte. The tile that is up is hidden at its own
+        # deadline meanwhile, and the stalled panel, once whole, is presented because its own deadline still stands.
+        run = Run(self)
+        start = time.monotonic_ns()
+        run.send(tile(1, start, 250 * MS, mark=1))
+        run.wait("frame_presented")
+        observed = time.monotonic_ns()
+        following = tile(2, observed, 950 * MS, mark=2)
+        run.send(following[:400_000])
+        time.sleep(0.5)
+        expired = run.wait("frame_expired")
+        self.assertEqual((expired["frame_id"], expired["outcome"], expired["deadline_ns"]), (1, "hidden", start + 250 * MS))
+        self.assertLess(expired["hide_returned_ns"] - expired["deadline_ns"], POLL_NS + MARGIN_NS)
+        self.assertEqual(len(run.calls("SetOverlayRaw")), 1)
+        run.send(following[400_000:])
+        presented = run.wait("frame_presented", 2)
+        self.assertEqual((presented["frame_id"], presented["visible"]), (2, True))
+        self.assertLess(presented["presented_ns"], observed + 950 * MS)
+        second = run.wait("frame_expired", 2)
+        self.assertEqual((second["frame_id"], second["outcome"], second["deadline_ns"]), (2, "hidden", observed + 950 * MS))
+        code, report = run.finish()
+        self.assertEqual((code, report["frames_received"], report["expired_frames"]), (0, 2, 2))
+        self.assert_retired(run, report)
+
+    def test_a_panel_that_arrives_whole_only_after_its_deadline_is_refused_without_an_upload(self):
+        run = Run(self)
+        observed = time.monotonic_ns()
+        late = tile(1, observed, 250 * MS, mark=1)
+        run.send(late[:400_000])
+        time.sleep(0.5)
+        run.send(late[400_000:])
+        refused = run.wait("frame_refused")
+        self.assertEqual((refused["frame_id"], refused["reason"]), (1, "expired_on_arrival"))
+        code, report = run.finish()
+        self.assertEqual((code, report["frames_received"], report["stale_frames_dropped"], report["expired_frames"]),
+                         (0, 0, 1, 0))
+        self.assertEqual(run.calls("SetOverlayRaw", "ShowOverlay"), [])
+        self.assert_retired(run, report)
+
+    def test_thirty_panels_written_back_to_back_are_each_presented_in_order(self):
+        run = Run(self)
+        now = time.monotonic_ns()
+        run.send(b"".join(tile(frame_id, now + frame_id, 900 * MS, mark=frame_id) for frame_id in range(1, 31)))
+        run.wait("frame_presented", 30)
+        code, report = run.finish()
+        self.assertEqual([line["frame_id"] for line in run.named("frame_presented")], list(range(1, 31)))
+        self.assertEqual(run.named("frame_refused"), [])
+        self.assertEqual((code, report["frames_received"], report["frames_submitted"], report["stale_frames_dropped"]),
+                         (0, 30, 30, 0))
+        self.assertEqual([call["first"] for call in run.calls("SetOverlayRaw")], list(range(1, 31)))
+        self.assert_retired(run, report)
+
+    def test_input_that_ends_in_the_middle_of_a_panel_ends_the_run_with_the_tile_taken_down(self):
+        run = Run(self)
+        run.send(tile(1, time.monotonic_ns(), 900 * MS, mark=1))
+        run.wait("frame_presented")
+        self.assertTrue(run.calls("ShowOverlay")[0]["visible"])
+        run.send(tile(2, time.monotonic_ns(), 900 * MS, mark=2)[:600_000])
+        ended = time.monotonic_ns()
+        run.process.stdin.close()
+        code, report = run.finish(stop=False)
+        self.assertEqual((code, report["status"], report["error"], report["frames_received"]),
+                         (1, "error", "truncated_packet", 1))
+        self.assertEqual(len(run.calls("SetOverlayRaw")), 1)
+        self.assertLess(run.calls("HideOverlay")[-1]["end_ns"] - ended, POLL_NS + MARGIN_NS)
+        self.assert_retired(run, report, code=1)
 
     def test_a_hide_request_written_behind_a_megabyte_is_carried_out_once_the_frame_is_up(self):
         # In-band order: the frame, then the hide. The hide's delay behind the megabyte is the frame's read and
@@ -533,13 +614,16 @@ class BoxPanelClientTests(unittest.TestCase):
         self.assertIs(client.layout, PANEL)
         with self.assertRaises(AttributeError):
             client.layout = STRIP
-        self.assertEqual(client.bridge_arguments(), ("--validate-stdin", "--layout", PANEL.layout_id))
-        self.assertEqual(ObservedFrameClient(layout=PANEL, validation_only=False).bridge_arguments(),
-                         ("--fixed-hud", "--layout", PANEL.layout_id))
-        # Without a layout the command line is the one it has always been.
+        arguments = observed_frames.launch_arguments
+        self.assertEqual(arguments(True, PANEL), ("--validate-stdin", "--layout", PANEL.layout_id))
+        self.assertEqual(arguments(False, PANEL), ("--fixed-hud", "--layout", PANEL.layout_id))
+        # Without a layout the command line is the one it has always been, and only the literal True is validation.
         self.assertIsNone(ObservedFrameClient().layout)
-        self.assertEqual(ObservedFrameClient().bridge_arguments(), ("--validate-stdin",))
-        self.assertEqual(ObservedFrameClient(validation_only=False).bridge_arguments(), ("--fixed-hud",))
+        self.assertEqual((arguments(True, None), arguments(False, None)), (("--validate-stdin",), ("--fixed-hud",)))
+        self.assertEqual((arguments(1, None), arguments("yes", STRIP)),
+                         (("--fixed-hud",), ("--fixed-hud", "--layout", STRIP.layout_id)))
+        # The command line is a function of the mode and the layout value; the client has no method that builds it.
+        self.assertFalse(hasattr(ObservedFrameClient, "bridge_arguments"))
 
     def test_a_bridge_that_names_another_layout_or_none_fails_the_client(self):
         ready = {"event": "ready", "observed_frames_supported": True, "frame_expiry_supported": True}
@@ -614,7 +698,7 @@ class BoxPanelPermissionTests(unittest.TestCase):
 
     def test_real_output_with_the_box_panel_is_refused_even_where_real_output_is_permitted(self):
         client = ObservedFrameClient(layout=PANEL, validation_only=False, max_output_seconds=5)
-        self.assertIs(observed_frames.layout_output_permitted(client), False)
+        self.assertIs(observed_frames.layout_output_permitted(client.layout), False)
         with mock.patch.object(observed_frames, "fixed_hud_output_permitted", return_value=True) as permitted, \
                 mock.patch.object(subprocess, "Popen") as launched:
             for start in (client.check_start, client.start):
@@ -641,11 +725,18 @@ class BoxPanelPermissionTests(unittest.TestCase):
         (gate, permitted, reason), = [call.args for call in required.call_args_list]
         self.assertEqual((gate, permitted, reason), (gates.LIVE_HUD_OUTPUT, False, "fixed_hud_output_not_approved"))
         self.assertEqual(observed_frames.REAL_OUTPUT_LAYOUT_IDS, ("fixed-edge-hud-v1",))
-        self.assertIs(observed_frames.layout_output_permitted(ObservedFrameClient(layout=STRIP, validation_only=False)), True)
-        for other in (object(), None, types.SimpleNamespace(layout=None), types.SimpleNamespace(layout=PANEL.layout_id),
-                      types.SimpleNamespace(layout=STRIP.layout_id),
-                      types.SimpleNamespace(layout=types.SimpleNamespace(layout_id=STRIP.layout_id))):
+        import dataclasses
+        self.assertIs(observed_frames.layout_output_permitted(STRIP), True)
+        # It judges the layout value itself, by identity with the contract's object: not a name, a copy, a
+        # look-alike, a client or nothing.
+        for other in (PANEL, object(), None, STRIP.layout_id, PANEL.layout_id, dataclasses.replace(STRIP),
+                      types.SimpleNamespace(layout_id=STRIP.layout_id), ObservedFrameClient(layout=STRIP),
+                      types.SimpleNamespace(layout=STRIP)):
             self.assertIs(observed_frames.layout_output_permitted(other), False)
+        observed_frames.require_real_output_layout(None)  # no layout named: the strip's client, nothing to refuse
+        observed_frames.require_real_output_layout(STRIP)
+        with self.assertRaisesRegex(ValueError, "^fixed_hud_layout_not_approved$"):
+            observed_frames.require_real_output_layout(PANEL)
         # Only the literal True permits, and a named strip is still asked for its scope afterwards.
         with mock.patch.object(observed_frames, "layout_output_permitted", return_value=1), \
                 mock.patch.object(observed_frames, "fixed_hud_output_permitted", return_value=True):
@@ -683,25 +774,107 @@ class BoxPanelPermissionTests(unittest.TestCase):
                 launched.assert_not_called()
             self.assertEqual(PermittingScope.asked, 1)  # the start itself never reached the scope
 
+    @unittest.skipUnless(DEFAULT_BRIDGE.is_file(), "Run bash scripts/build_overlay_bridge.sh")
+    def test_the_layout_launched_is_the_layout_judged_whatever_a_subclass_overrides(self):
+        # The start reads the layout once, judges that value and builds the command line from it. Two subclasses
+        # try to part the two, each with the permission to drive real output patched to permit (a strip's record).
+        class SaysStrip(ObservedFrameClient):  # holds the panel, answers "the strip" to anyone who asks
+            layout = property(lambda self: STRIP)
+
+            def check_start(self):
+                pass
+
+        class ArguesPanel(ObservedFrameClient):  # holds no layout, would put the panel on the command line
+            def bridge_arguments(self):
+                return ("--fixed-hud", "--layout", PANEL.layout_id)
+
+            def bridge_mode(self):
+                return "--fixed-hud --layout " + PANEL.layout_id
+
+        launched_with = []
+
+        def launch(arguments, **options):
+            launched_with.append(list(arguments))
+            raise RuntimeError("stop")
+
+        with mock.patch.object(observed_frames, "fixed_hud_output_permitted", return_value=True), \
+                mock.patch.object(subprocess, "Popen", side_effect=launch):
+            tricked = SaysStrip(layout=PANEL, validation_only=False, max_output_seconds=5)
+            self.assertIs(tricked.layout, STRIP)
+            with self.assertRaisesRegex(ValueError, "^fixed_hud_layout_not_approved$"):
+                tricked.start()
+            self.assertEqual(launched_with, [])
+            for layout in (None, STRIP):
+                argued = ArguesPanel(layout=layout, validation_only=False, max_output_seconds=5)
+                with self.assertRaisesRegex(RuntimeError, "stop"):
+                    argued.start()
+            named = [str(DEFAULT_BRIDGE), "--fixed-hud", "--layout", STRIP.layout_id]
+            self.assertEqual(launched_with, [[str(DEFAULT_BRIDGE), "--fixed-hud"], named])
+            # A layout swapped in after construction is the one judged, and refused: nothing judges one value and
+            # launches another.
+            swapped = ObservedFrameClient(layout=STRIP, validation_only=False, max_output_seconds=5)
+            swapped._layout = PANEL
+            with self.assertRaisesRegex(ValueError, "^fixed_hud_layout_not_approved$"):
+                swapped.start()
+            self.assertEqual(len(launched_with), 2)
+        # In the source: one read of the layout in start, and the judgement and the command line both take that local.
+        source = (ROOT / "sightcircuit/observed_frames.py").read_text()
+        start = source.split("    def start(self):", 1)[1].split("\n    def ", 1)[0]
+        self.assertEqual(start.count("self._layout"), 1)
+        self.assertIn("layout, validation_only = self._layout, self.validation_only is True", start)
+        self.assertIn("require_real_output_layout(layout)", start)
+        self.assertIn("*launch_arguments(validation_only, layout)]", start)
+        self.assertLess(start.index("require_real_output_layout(layout)"), start.index("subprocess.Popen("))
+        self.assertNotIn("bridge_mode()", start)
+
     def test_nothing_that_can_drive_real_output_names_a_layout(self):
-        # Every construction of the client in the package and the scripts: none passes a layout, so each is the
-        # strip's client; and the scope record, the manifest, the stage and the command do not know the panel.
-        constructions = 0
+        # A static scan of the package and the scripts, and what it can and cannot see.
+        #
+        # Seen: any call at all that passes a keyword named ``layout`` (so a construction through an alias, through
+        # ``functools.partial`` or through a subclass's ``super().__init__`` is caught as well as a direct one); any
+        # ``**options`` handed to a call that names the client, to ``partial`` or to ``super().__init__`` of a
+        # subclass of it; any subclass of the client; in a file that names the client, any string "layout" that
+        # could be a key of such options; and any reach for ``_layout``. Only ``observed_frames.py`` may do any of it.
+        #
+        # Not seen: code that builds the keyword at run time under another spelling ("lay" + "out"), ``setattr``
+        # or ``getattr`` with computed names, ``exec``, and code outside these two folders. A scan is a tripwire for
+        # honest mistakes; the refusal in ``start`` is what holds.
+        owner = "sightcircuit/observed_frames.py"
+        constructions, scanned = 0, 0
         for folder in ("sightcircuit", "scripts"):
             for path in sorted((ROOT / folder).rglob("*.py")):
-                for node in ast.walk(ast.parse(path.read_text())):
-                    if isinstance(node, ast.Call) and getattr(node.func, "id", getattr(node.func, "attr", "")) == \
-                            "ObservedFrameClient":
-                        constructions += 1
-                        self.assertNotIn("layout", {keyword.arg for keyword in node.keywords}, path)
-                        self.assertFalse(any(keyword.arg is None for keyword in node.keywords), path)  # no **options
+                name = path.relative_to(ROOT).as_posix()
+                tree = ast.parse(path.read_text())
+                scanned += 1
+                names_client = "ObservedFrameClient" in path.read_text()
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Call):
+                        callee = getattr(node.func, "id", getattr(node.func, "attr", ""))
+                        constructions += callee == "ObservedFrameClient"
+                        if name != owner:
+                            self.assertNotIn("layout", {keyword.arg for keyword in node.keywords}, f"{name}:{node.lineno}")
+                            if callee in ("ObservedFrameClient", "partial") or (names_client and callee == "__init__"):
+                                self.assertFalse(any(keyword.arg is None for keyword in node.keywords),
+                                                 f"{name}:{node.lineno} passes **options")
+                    if name == owner:
+                        continue
+                    if isinstance(node, ast.ClassDef):
+                        bases = {getattr(base, "id", getattr(base, "attr", "")) for base in node.bases}
+                        self.assertNotIn("ObservedFrameClient", bases, f"{name}:{node.lineno} subclasses the client")
+                    if names_client and isinstance(node, ast.Constant) and node.value == "layout":
+                        self.fail(f'{name}:{node.lineno} holds the string "layout" beside the client')
+                    if isinstance(node, ast.Attribute) and node.attr == "_layout":
+                        self.fail(f"{name}:{node.lineno} reaches for _layout")
         self.assertGreaterEqual(constructions, 2)
+        self.assertGreater(scanned, 100)
+        # And by name: what may drive real output knows no word by which the panel or a layout can be reached.
         for name in ("sightcircuit/runtime/scope.py", "sightcircuit/runtime/manifest.py", "sightcircuit/hud/camera_stage.py",
                      "sightcircuit/hud/camera.py", "sightcircuit/hud/synthetic_rows.py", "sightcircuit/commands/camera_hud.py",
                      "sightcircuit/gates.py", "scripts/camera_hud.py", "scripts/stage_scope_record.py"):
             text = (ROOT / name).read_text()
             for word in ("FIXED_LAYOUTS", "fixed_layout", "BOX_PANEL", "BoxPanel", "box_panel", "box-panel", "box_scenes",
-                         "--layout", "layout_output_permitted", "bridge_arguments"):
+                         "orientation_scene", "--layout", "LAYOUT_ARGUMENT", "layout_output_permitted",
+                         "require_real_output_layout", "launch_arguments", "bridge_arguments", "REAL_OUTPUT_LAYOUT_IDS"):
                 self.assertNotIn(word, text, f"{name} names {word}")
 
     @unittest.skipUnless(RUNTIME, NEEDS_RUNTIME)
@@ -780,13 +953,41 @@ class OrientationSceneTests(unittest.TestCase):
         sizes = {name: (x1 - x0, y1 - y0) for name, (x0, y0, x1, y1) in by_name.items() if name != "centre"}
         self.assertEqual(len(set(sizes.values())), 4)
         self.assertEqual(max(sizes, key=lambda name: sizes[name][0] * sizes[name][1]), "top left")
-        # A flip or a quarter turn of the picture moves the largest box out of the top left: the scene has no symmetry.
+        width, height = sizes["top left"]
+        self.assertGreater(width, height)  # the largest box lies wider than tall
+        # All seven ways a square picture can be flipped or turned by quarter turns. The rule a wearer applies is
+        # "the largest box is at the top left and wider than tall"; it must hold for the picture as drawn and fail
+        # for every one of the seven. Both halves are needed: a flip about the main diagonal leaves the largest box
+        # at the top left but stands it taller than wide.
+        self.assertEqual(W, H)
+        changes = {"left-right flip": lambda x0, y0, x1, y1: (W - x1, y0, W - x0, y1),
+                   "top-bottom flip": lambda x0, y0, x1, y1: (x0, H - y1, x1, H - y0),
+                   "half turn": lambda x0, y0, x1, y1: (W - x1, H - y1, W - x0, H - y0),
+                   "quarter turn clockwise": lambda x0, y0, x1, y1: (H - y1, x0, H - y0, x1),
+                   "quarter turn anticlockwise": lambda x0, y0, x1, y1: (y0, W - x1, y1, W - x0),
+                   "flip about the main diagonal": lambda x0, y0, x1, y1: (y0, x0, y1, x1),
+                   "flip about the other diagonal": lambda x0, y0, x1, y1: (H - y1, W - x1, H - y0, W - x0)}
+
+        def reads_upright(rectangles):
+            x0, y0, x1, y1 = max(rectangles, key=lambda r: (r[2] - r[0]) * (r[3] - r[1]))
+            return x1 <= W // 2 and y1 <= H // 2 and (x1 - x0) > (y1 - y0)
+
+        corners = [rectangle for name, rectangle in by_name.items() if name != "centre"]
         rectangles = set(by_name.values())
-        for name, change in (("left-right", lambda x0, y0, x1, y1: (W - x1, y0, W - x0, y1)),
-                             ("top-bottom", lambda x0, y0, x1, y1: (x0, H - y1, x1, H - y0)),
-                             ("half turn", lambda x0, y0, x1, y1: (W - x1, H - y1, W - x0, H - y0)),
-                             ("quarter turn", lambda x0, y0, x1, y1: (H - y1, x0, H - y0, x1))):
-            self.assertNotEqual({change(*rectangle) for rectangle in rectangles}, rectangles, name)
+        self.assertTrue(reads_upright(corners))
+        self.assertEqual(len(changes), 7)
+        seen = []
+        for name, change in changes.items():
+            with self.subTest(change=name):
+                changed = [change(*rectangle) for rectangle in corners]
+                self.assertTrue(all(0 <= x0 < x1 <= W and 0 <= y0 < y1 <= H for x0, y0, x1, y1 in changed))
+                self.assertFalse(reads_upright(changed), name)
+                self.assertNotEqual({change(*rectangle) for rectangle in rectangles}, rectangles, name)
+                seen.append(frozenset(changed))
+        self.assertEqual(len(set(seen)), 7)  # seven different pictures, none of them the one drawn
+        diagonal = [changes["flip about the main diagonal"](*rectangle) for rectangle in corners]
+        x0, y0, x1, y1 = max(diagonal, key=lambda r: (r[2] - r[0]) * (r[3] - r[1]))
+        self.assertTrue(x1 <= W // 2 and y1 <= H // 2 and (x1 - x0) < (y1 - y0))  # still top left, now taller than wide
         for config in (STRIP, None):
             with self.assertRaisesRegex(ValueError, "box_panel_config_invalid"):
                 box_scenes.orientation_scene(config)

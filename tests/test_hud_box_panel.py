@@ -276,16 +276,22 @@ class BoxPanelContractTests(unittest.TestCase):
 
     def test_nothing_selects_the_box_panel(self):
         # Items B3 and B5 are where a bridge mode and a command take the geometry. B3 is in: the generated header
-        # and its generator name the panel, the bridge's table of fixed layouts reads its constants, and the
-        # synthetic scenes list boxes for it. The bridge's other units and the observed-frame client read a layout
-        # from that table or the contract's list and never name this one. Until B5 no stage, command, scope record
-        # or manifest may name it (tests/test_box_panel_bridge.py holds the rest).
+        # and its generator name the panel, the bridge's table of fixed layouts holds it, the entry point and the
+        # rendering and reporting units read a layout from that table, the observed-frame client takes one from the
+        # contract's list, and the synthetic scenes list boxes for it. The words below are every spelling by which
+        # the panel can be reached, by its own name or as "the second fixed layout". Until B5 no stage, command,
+        # scope record, manifest or script may use any of them (tests/test_box_panel_bridge.py holds the rest).
         allowed = {"sightcircuit/hud/contract.py", "sightcircuit/hud/box_render.py", "sightcircuit/hud/boxes.py",
                    "sightcircuit/hud/box_font.py", "sightcircuit/hud/__init__.py",
-                   "sightcircuit/hud/native.py", "sightcircuit/hud/box_scenes.py", "tools/hud_contract.hpp",
-                   "tools/overlay_frame.hpp"}
+                   "sightcircuit/hud/native.py", "sightcircuit/hud/box_scenes.py", "sightcircuit/observed_frames.py",
+                   "tools/hud_contract.hpp", "tools/overlay_frame.hpp", "tools/overlay_bridge.cpp",
+                   "tools/overlay_bridge.hpp", "tools/overlay_bridge_rendering.cpp", "tools/overlay_bridge_reporting.cpp"}
         words = ("BOX_PANEL_CONFIG", "BoxPanelConfig", "box_render", "draw_boxes", "camera_boxes", "PanelBox",
-                 "head-fixed-box-panel", "box_font")
+                 "head-fixed-box-panel", "box_font",
+                 # Since B3: the list the panel is the second entry of, the scenes, and the bridge's layout argument.
+                 "FIXED_LAYOUTS", "fixed_layout", "box_scenes", "orientation_scene", "kBoxPanel", "kFixedLayouts",
+                 "FixedLayout", "pinned_layout", "layout_index", "layout_in_force", "--layout", "LAYOUT_ARGUMENT",
+                 "launch_arguments", "layout_output_permitted", "REAL_OUTPUT_LAYOUT_IDS")
         paths = [path for folder in ("sightcircuit", "scripts", "tools")
                  for path in (ROOT / folder).rglob("*") if path.suffix in (".py", ".cpp", ".hpp", ".sh", ".json")]
         self.assertGreater(len(paths), 100)

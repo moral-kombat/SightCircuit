@@ -119,24 +119,44 @@ def fixed_hud_output_permitted(client):
     return client.scope.permit(HUD_OUTPUT, client) is True
 
 
-def layout_output_permitted(client):
-    """Whether the layout ``client`` names may be driven as real output: the strip's, and no other.
+def layout_output_permitted(layout):
+    """Whether ``layout``, the layout a client names, may be driven as real output: the strip's, and no other.
 
-    The one place that decides it, asked by ``ObservedFrameClient.check_start``
-    before the permission to drive real output at all
-    (``fixed_hud_output_permitted``), so a refused layout consumes no scope
-    record. It only ever narrows: a layout it lets pass still has to pass
-    that permission and the ``LIVE_HUD_OUTPUT`` gate.
-    ``fixed_hud_output_permitted`` and the scope record know nothing of
-    layouts: a record binds ``fixed-edge-hud-v1`` and its digest, so a record
-    that verifies says nothing about any other geometry, and without this
-    check a client naming the box panel would be let through on a strip's
-    record. The answer is the literal ``True`` or ``False``; no argument,
-    environment variable or bridge line changes it. Item B5, which makes the
-    record and the manifest bind the layout, is where this list may grow.
+    The one place that decides it. It judges the layout value itself, the
+    very object the launch arguments are then built from
+    (``launch_arguments``), never a client or anything a client could
+    answer differently the second time it is asked. It is asked before the
+    permission to drive real output at all (``fixed_hud_output_permitted``),
+    so a refused layout consumes no scope record, and it only ever narrows:
+    a layout it lets pass still has to pass that permission and the
+    ``LIVE_HUD_OUTPUT`` gate. ``fixed_hud_output_permitted`` and the scope
+    record know nothing of layouts: a record binds ``fixed-edge-hud-v1`` and
+    its digest, so a record that verifies says nothing about any other
+    geometry, and without this check a client naming the box panel would be
+    let through on a strip's record. The answer is the literal ``True`` or
+    ``False``; no argument, environment variable or bridge line changes it.
+    Item B5, which makes the record and the manifest bind the layout, is
+    where this list may grow.
     """
-    layout = getattr(client, "layout", None)
     return any(layout is known for known in FIXED_LAYOUTS) and layout.layout_id in REAL_OUTPUT_LAYOUT_IDS
+
+
+def require_real_output_layout(layout):
+    """Refuse (``ValueError(LAYOUT_REFUSAL)``) a named layout that may not be driven as real output; None is the strip."""
+    if layout is not None and layout_output_permitted(layout) is not True:
+        raise ValueError(LAYOUT_REFUSAL)
+
+
+def launch_arguments(validation_only, layout):
+    """What follows the binary on the bridge's command line: the mode, then the layout when one is named.
+
+    A plain function of its two arguments: ``ObservedFrameClient.start``
+    reads the client's layout once, judges that value and hands the same
+    value here, so what is launched is what was judged. No method of the
+    client lies between the two.
+    """
+    mode = VALIDATION_MODE if validation_only is True else FIXED_HUD_MODE
+    return (mode,) if layout is None else (mode, LAYOUT_ARGUMENT, layout.layout_id)
 
 
 class ObservedFrameClient(OverlayClient):
@@ -275,11 +295,6 @@ class ObservedFrameClient(OverlayClient):
     def bridge_mode(self):
         return VALIDATION_MODE if self.validation_only else FIXED_HUD_MODE
 
-    def bridge_arguments(self):
-        """What follows the binary on the command line: the mode, then the layout when one is named."""
-        named = () if self._layout is None else (LAYOUT_ARGUMENT, self._layout.layout_id)
-        return (self.bridge_mode(), *named)
-
     def check_start(self):
         """Refuse real output: validation starts freely, ``--fixed-hud`` only if the one permission check says so.
 
@@ -293,8 +308,7 @@ class ObservedFrameClient(OverlayClient):
             # A named layout is checked first, before the scope is asked, so a refused layout consumes nothing.
             # It is a plain refusal and not a second use of the gate: the gate's one ``require`` stays the
             # permission's, below, and every real-output start still has to pass it.
-            if self._layout is not None and layout_output_permitted(self) is not True:
-                raise ValueError(LAYOUT_REFUSAL)
+            require_real_output_layout(self._layout)
             LIVE_HUD_OUTPUT.require(fixed_hud_output_permitted(self), FIXED_HUD_REFUSAL)
 
     def withdraw(self):
@@ -313,8 +327,18 @@ class ObservedFrameClient(OverlayClient):
         In real output the permission is asked again here, right before the
         launch. What remains between that answer and the launch is the launch
         itself. The client's own bound on real output counts from this call.
+
+        The layout is read once, here. That one value is judged
+        (``require_real_output_layout``) and the command line is built from
+        it (``launch_arguments``); neither goes through a method or property
+        a subclass could answer differently, so the layout launched is the
+        layout judged, whatever ``check_start`` or ``layout`` have been made
+        to say.
         """
+        layout, validation_only = self._layout, self.validation_only is True
         self.check_start()
+        if not validation_only:
+            require_real_output_layout(layout)
         if self.validation_only is not True and self._started_real_output:
             raise ValueError("observed_frame_client_already_started")  # One permitted start, one bridge.
         self._started_real_output = self.validation_only is not True
@@ -322,7 +346,8 @@ class ObservedFrameClient(OverlayClient):
             self._output_deadline = time.monotonic() + self.max_output_seconds
         if not self.binary.is_file() or not os.access(self.binary, os.X_OK):
             raise RuntimeError("Overlay bridge missing; run bash scripts/build_overlay_bridge.sh")
-        self.process = subprocess.Popen([str(self.binary), *self.bridge_arguments()], stdin=subprocess.PIPE,
+        self.process = subprocess.Popen([str(self.binary), *launch_arguments(validation_only, layout)],
+                                        stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, env=self.env, bufsize=0)
         os.set_blocking(self.process.stdin.fileno(), False)
         self.reader = threading.Thread(target=self._read, daemon=True)

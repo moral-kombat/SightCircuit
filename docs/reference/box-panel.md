@@ -407,9 +407,30 @@ of them names it and that no construction of the client in the package
 passes a layout. Item B5, which makes the record and the manifest bind the
 layout, is where `layout_output_permitted` may come to permit more.
 
-So the panel reaches a runtime only in tests that patch both permission
-functions and point the bridge at the fake `vrclient.so`, and reaches the
-validation bridge freely. Neither displays anything.
+The layout launched is the layout judged. `start` reads the client's
+layout once, hands that value to `layout_output_permitted` (which judges the
+layout object itself, by identity with the contract's) and builds the
+command line from the same value with `launch_arguments`, a plain function.
+No method or property of the client lies between the two, so a subclass
+that answers "the strip" when asked, or that would put another layout on
+the command line, changes nothing; a test tries both.
+
+So, **through this repository's Python**, the panel reaches a runtime only
+in tests that patch both permission functions and point the bridge at the
+fake `vrclient.so`, and reaches the validation bridge freely. Neither
+displays anything.
+
+**The bridge binary itself has no gate for the layout, and never had one
+for anything.** Once a Frame's bridge is rebuilt from this source,
+`sightcircuit-overlay-bridge --fixed-hud --layout head-fixed-box-panel-v1`
+typed in a shell there would present whatever observed frames are piped to
+it, exactly as `--fixed-hud` and `--stdin` typed in a shell already would
+with the strip or a replay frame. "Only the fake runtime and the validation
+bridge" is a property of the callers in this repository and of the
+procedure, not of the binary: the rebuild and every launch of the bridge on
+the Frame happen inside approved device steps, and that procedural model is
+what stands between the binary and a headset, for the panel as for
+everything else it can show.
 
 ### The megabyte, measured in the cloud
 
@@ -426,19 +447,28 @@ compositor.
 | Writing it to the default 65,536-byte pipe | 0.44 ms median, 1.4 max | 1.49 ms median, 3.4 max |
 | From the start of the write to `frame_presented` | 0.56 ms median, 0.9 p95, 1.5 max | 1.57 ms median, 2.5 p95, 3.5 max |
 | A hide request written right behind a frame, to `hide_returned` | 0.78 ms median, 1.1 max | 2.10 ms median, 2.8 max |
-| A tile's deadline to its hide returning, nothing arriving (30 runs) | 2.0 ms median, 4.1 max | 4.3 ms median, 5.1 max |
-| The same with the next frame half arrived and still arriving | 4.4 ms median, 5.8 max | 1.8 ms median, 3.8 max |
+| A tile's deadline to its hide returning, nothing arriving (40 runs, lives spread over one poll) | 0.5 to 19.8 ms, median 10.0 | 1.0 to 20.1 ms, median 11.1 |
+| The same with the next frame one third arrived | 0.8 to 20.1 ms, median 10.3 | 1.2 to 20.1 ms, median 10.7 |
 | Drawing the panel (`draw_boxes`, five boxes) and `tobytes()` | | 0.67 ms and 0.07 ms median |
 
 What follows from them:
 
 - **The deadline is acted on within one 20 ms poll while a megabyte is
-  arriving.** The bridge reads a payload in pieces and re-checks the deadline
-  before every piece, as it always has; a frame of 16 pipe-fulls gives it
-  more pieces, not a longer wait. A tile's hide returned within 6 ms of its
-  deadline whether or not the next panel was mid-arrival, and
+  arriving, and no sooner than that on average.** The bridge notices a
+  deadline on its next input poll, so a hide comes anywhere from 0 to 20 ms
+  after its deadline, about 10 ms in the middle, depending only on where in
+  a poll the deadline falls. That is the same for the strip and the panel,
+  and the same whether or not a megabyte is mid-arrival: the bridge reads a
+  payload in pieces and re-checks the deadline before every piece, as it
+  always has, so a frame of 16 pipe-fulls gives it more pieces, not a longer
+  wait. The lives of the measured tiles are spread over 200 to 219.5 ms for
+  that reason. (A first version of this table used a 200 ms life in every
+  run, a whole number of polls, which always put the deadline just before a
+  wake-up and reported "within 6 ms" with differences between the layouts;
+  both were artefacts of the test's timing.)
   `test_a_megabyte_in_flight_cannot_hold_a_tile_past_its_deadline` asserts
-  one poll plus this host's scheduling margin at three split points.
+  one poll plus this host's scheduling margin at three split points, each at
+  four places in the poll, and that the latenesses differ.
 - **While a frame is being written to the overlay nothing can be hidden**,
   for either layout: `SetOverlayRaw` is synchronous and the bridge is one
   thread. The rule is the strip's and so is its bound: both deadlines are
@@ -491,10 +521,15 @@ tile, is opaque throughout).
 `box_scenes.orientation_scene(BOX_PANEL_CONFIG)` is the scene for a later
 synthetic displayed step to settle both. Its five boxes are named by where
 they are drawn in the image, `top left`, `top right`, `bottom left`,
-`bottom right` and `centre`, the four corner boxes differ in size (the
-largest is the image's top left) and the scene has no symmetry, so a flip
-or a turn is visible without reading. If the wearer sees `top left` at the
-top left with names reading left to right, row 0 is the top; if the room is
+`bottom right` and `centre`, and the four corner boxes differ in size and
+shape, so a flip or a turn is visible without reading: **the largest box,
+wider than tall, is the image's top left.** Both halves of that rule are
+needed. Of the seven ways a square picture can be flipped or turned by
+quarter turns, six move the largest box out of the top left, and the
+seventh, a flip about the diagonal, leaves it there but stands it taller
+than wide (160 × 96 pixels becomes 96 × 160); a test checks all seven. If
+the wearer sees the largest box at the top left, wider than tall, named
+`top left` with names reading left to right, row 0 is the top; if the room is
 visible between and inside the boxes, alpha is honoured. Its RGBA digest is
 pinned (`b4219d8d…8d0e`). The scene is boxes written in the module, not
 detections; showing it is device work that needs its own approval and is
@@ -524,11 +559,16 @@ suite (`tests/test_fixed_hud_runtime.py`, unedited) run a second time on the
 panel, a megabyte per tile, which is the evidence that expiry, renewal,
 refusals, slow and failing hides, stalled uploads, end of input, SIGTERM and
 the input timeout are one code path for both layouts; a megabyte in flight
-at a deadline; a hide request behind a megabyte; five updates a second; the
+at a deadline, at several places in the bridge's poll; a writer that stalls
+mid-panel within and beyond the panel's life; thirty panels back to back;
+input ending mid-panel; a hide request behind a megabyte; five updates a second; the
 bytes handed to the overlay call; the report block; the launch arguments and
 the validation stream's size rule; the bridge retiring the overlay when its
 launcher is killed; the client's layout, its refusals and a bridge killed
-under it; the refusal of real output; and the orientation scene.
+under it; the refusal of real output, also against a subclass that would
+part the layout judged from the layout launched; a static scan for anything
+else that could name a layout; and the orientation scene under all seven
+flips and turns.
 
 Unproven, all of it device work that needs its own approval: that names at
 7.5 pixels per degree (capitals 1.9°) are readable in the headset; that 0.75 m is a
