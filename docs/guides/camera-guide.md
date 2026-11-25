@@ -429,7 +429,7 @@ The console entry point of an editable install is `sightcircuit-camera-guide`.
 
 Some runs need another process running beside them from before the first
 frame: the presence watcher observing only, a temperature sampler. In
-the scan run of 2026-11-24 (evidence E103) the plan was to start the watcher once the wearer
+the scan run of 2026-11-24 ([E103](../evidence/e103.md)) the plan was to start the watcher once the wearer
 reached the Start screen, and the wearer, who sees only the window, clicked
 Start before the Frame manager had said go, so the watcher never ran.
 `--hold-start PATH` closes that gap. It is off unless given, and without it
