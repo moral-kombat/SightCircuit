@@ -945,6 +945,16 @@ class CameraSiteTests(ScopeCase):
                 self.assertIs(camera_stage.stage_view_bound(run, stage), True)
                 self.assertIs(camera_stage.camera_display_input_preconditions(stage), True)
         self.assertEqual(self.ledger(), [])
+        # The layout is compared as the contract's own object: a stage whose layout became an equal copy, or the
+        # other layout with the same view, after it was built is not what the scope's layout names.
+        run = self.run_scope(self.staged("L-D4")[0], seconds=5)
+        stage = self.stage(self.client(run), seconds=5)
+        for swapped in (dataclasses.replace(STRIP), PANEL):
+            with self.subTest(swapped=swapped.layout_id), mock.patch.object(stage, "config", swapped):
+                self.assertIs(camera_stage.stage_view_bound(run, stage), False)
+                self.assertIs(camera_stage.camera_display_input_preconditions(stage), False)
+        self.assertIs(camera_stage.stage_view_bound(run, stage), True)
+        self.assertEqual(self.ledger(), [])
         # A stage is built for one of the contract's layouts, the one its client names, with an alignment exactly
         # where the layout takes one.
         strip_client, panel_client = self.client(None), self.client(None, layout=PANEL)
@@ -1234,6 +1244,36 @@ class BindingTests(ScopeCase):
         self.assertEqual([layout.layout_id for layout in FIXED_LAYOUTS], ["fixed-edge-hud-v1", "head-fixed-box-panel-v1"])
         self.assertNotEqual(config_digest(STRIP), config_digest(PANEL))
         self.assertEqual(gates.claims(), ALL_CLOSED)
+
+    def test_the_scopes_report_states_what_the_record_binds_and_what_the_run_asked_for(self):
+        # Format metadata and identifiers only; the region is an object, because a report holds no list of fractions.
+        bound = {"hud_config": PANEL, "region": CENTRE, "rotation": 90, "alignment": dict(ALIGNED), "presence_watch": True}
+        path, record = self.staged("L-D5", **bound)
+        run = self.run_scope(path, seconds=60, **bound)
+        new = ("requested_layout", "hud_config_id", "hud_config_sha256", "region", "rotation", "alignment", "presence_watch")
+        before = run.report()
+        self.assertEqual({name: before[name] for name in new}, {**dict.fromkeys(new), "requested_layout": PANEL.layout_id})
+        self.assertIs(run.permit(scope.HUD_OUTPUT, self), True)
+        report = run.report()
+        self.assertEqual({name: report[name] for name in new}, {
+            "requested_layout": PANEL.layout_id, "hud_config_id": PANEL.layout_id,
+            "hud_config_sha256": config_digest(PANEL), "region": {"x0": 0.25, "y0": 0.25, "x1": 0.75, "y1": 0.75},
+            "rotation": 90, "alignment": ALIGNED, "presence_watch": True})
+        self.assertIsNot(report["alignment"], record["alignment"])
+        # The synthetic step's record has no view; a refused scope reports the record it read and what was asked.
+        rows, _ = self.staged("L-D3")
+        refused = self.run_scope(rows, source=scope.SYNTHETIC, hud_config=PANEL)
+        self.assertIs(refused.permit(scope.HUD_OUTPUT, self), False)
+        report = refused.report()
+        self.assertEqual((report["refusal"], report["requested_layout"], report["hud_config_id"], report["region"],
+                          report["rotation"], report["alignment"], report["presence_watch"]),
+                         ("scope_layout_mismatch", PANEL.layout_id, STRIP.layout_id, None, None, None, False))
+        copied = self.run_scope(rows, source=scope.SYNTHETIC, hud_config=dataclasses.replace(PANEL))
+        self.assertIsNone(copied.report()["requested_layout"])  # Not one of the contract's layouts: not named.
+        if NUMPY_CV2:  # The command's closed schema takes the block as it is.
+            from sightcircuit.commands import camera_hud
+            self.assertEqual(set(run.report()), set(camera_hud.SCOPE_KEYS))
+            camera_stage.check_report({"scope_record": run.report()}, {"scope_record": camera_hud.SCOPE_KEYS})
 
     def test_what_a_camera_record_states_when_no_region_or_rotation_is_given(self):
         # Absence is the whole frame, unturned, and the record says so in full; half an answer is completed.

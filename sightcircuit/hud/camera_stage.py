@@ -237,7 +237,7 @@ def check_report(report, blocks=None, max_bytes=None):
 
     So bytes, buffers, arrays, tuples, prose, paths and wide integers are
     refused wherever they sit, and no arrangement of fields can carry a tile
-    (163,840 bytes) or a camera frame: the total is a quarter of a tile.
+    (163,840 bytes), a panel update (1,048,576 bytes) or a camera frame: the total is a quarter of a tile.
     What is not enforced, because no check on shapes can: that a number or
     an identifier-shaped string means what its key says. A few kilobytes of
     data spelled as numbers inside the embedded source or bridge report

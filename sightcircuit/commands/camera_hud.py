@@ -841,8 +841,8 @@ def main(argv=None):
                 if args.synthetic_rows:
                     refusal = confirmation.confirm_synthetic_rows(args.seconds, synthetic_rows.UPDATE_HZ)
                 else:
-                    refusal = confirmation.confirm_on_terminal(limits, (camera_helper.LEFT_CAMERA,),
-                                                               notices=(confirmation.DISPLAY_NOTICE,))
+                    notice = confirmation.DISPLAY_NOTICE if layout is HUD_CONFIG else confirmation.BOX_DISPLAY_NOTICE
+                    refusal = confirmation.confirm_on_terminal(limits, (camera_helper.LEFT_CAMERA,), notices=(notice,))
                 if refusal is not None:  # Nothing is launched, loaded or consulted without the typed answer.
                     report = refused_before_start(mode, refusal, blocks, kind)
             except guard.CANCELLATION as error:
