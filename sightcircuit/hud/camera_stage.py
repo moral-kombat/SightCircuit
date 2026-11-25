@@ -1023,7 +1023,10 @@ class CameraHudStage:
                 self.last_frame_id = frame_id
                 self.max_deadline_span_ns = max(self.max_deadline_span_ns, expires_ns - observed_ns)
                 self.output_age.add((sent_ns - observed_ns) / 1e6)
-                if sent_ns >= expires_ns:  # Written too late: the bridge refuses it on arrival and nothing is shown.
+                # The write returned at or after the deadline by this side's clock. The bridge judges the frame
+                # on arrival by its own: it refuses one whose deadline has passed and nothing of it is shown;
+                # one it took just before the deadline it holds only until that deadline.
+                if sent_ns >= expires_ns:
                     self.counts["frames_written_past_deadline"] += 1
             elif event == "frame_not_sent":
                 self.counts["frames_not_sent"] += 1

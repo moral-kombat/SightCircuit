@@ -456,8 +456,11 @@ class ValidateTests(unittest.TestCase):
                           panel["region_rotation"], panel["frames_emitted"], panel["ok"], panel["source_cleanup_ok"],
                           panel["bridge_cleanup_ok"]),
                          ("completed", "--validate-stdin", "head-fixed-box-panel-v1", 1_048_576, 90, 6, True, True, True))
-        self.assertEqual((panel["acknowledged_presented"], panel["results_sent"], panel["boxes_sent"]),
-                         (panel["frames_sent"],) * 3)
+        self.assertEqual(panel["acknowledged_presented"], panel["frames_sent"])
+        # One box in every result the client accepted. (A result accepted as the run ends can be withdrawn
+        # unwritten by the final take-down, so that count is at least, not exactly, the frames written.)
+        self.assertEqual(panel["boxes_sent"], panel["results_sent"])
+        self.assertGreaterEqual(panel["results_sent"], panel["frames_sent"])
         self.assertGreater(panel["frames_sent"], 0)
         self.assertEqual(panel["labels"], [{"label": "bottle", "spells": panel["labels"][0]["spells"]}])
         self.assertEqual(report["schema_version"], 2)  # 2 since the panel's part.
@@ -1046,8 +1049,17 @@ class FixedHudCommandTests(DeviceModeCase):
         self.assertNotIn(confirmation.DISPLAY_NOTICE, shown)
         self.assertIn(contract.EXPORT_NOTICE, shown)
         self.assertGreater(report["frames"]["sent"], 0)
-        self.assertEqual((report["frames"]["acknowledged_presented"], report["boxes"]["boxes_sent"],
-                          report["boxes"]["results_sent"]), (report["frames"]["sent"],) * 3)
+        # Every frame written was answered by the bridge, and the boxes block agrees with the frames block:
+        # one box in every result the client accepted. (This run may end on its own bound, where the last
+        # frame's deadline is the run's end: a result accepted then can be withdrawn unwritten, and one written
+        # across the bound can be refused as expired. Neither is asserted away; at most that one frame is refused.)
+        frames = report["frames"]
+        self.assertEqual((frames["acknowledged_presented"] + frames["acknowledged_refused"], frames["unacknowledged"]),
+                         (frames["sent"], 0))
+        self.assertLessEqual(frames["acknowledged_refused"], 1)
+        self.assertEqual(frames["acknowledged_refused"], frames["refused_reasons"]["expired_on_arrival"]
+                         + frames["refused_reasons"]["expired_before_show"])
+        self.assertEqual((report["boxes"]["boxes_sent"], report["boxes"]["results_sent"]), (frames["submitted"],) * 2)
         self.assertEqual([row["label"] for row in report["labels"]["rows"]], ["bottle"])
         final = report["bridge"]["final_report"]
         self.assertEqual((final["mode"], final["fixed_hud"]["config_id"], final["fixed_hud"]["config_digest"],

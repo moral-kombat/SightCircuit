@@ -612,8 +612,10 @@ def validate(helper=None, bridge=None):
         and config.get("hud_config_id") == panel.layout_id
         and config.get("update_bytes") == panel.width_px * panel.height_px * 4
         and (frames.get("sent") or 0) > 0 and frames.get("acknowledged_presented") == frames.get("sent")
-        # The boxes block is there and says what was sent: every frame sent carried the one scripted box.
-        and _positive(counted.get("results_sent")) and counted.get("results_sent") == frames.get("sent")
+        # The boxes block is there and agrees with the frames block: every result the client accepted
+        # (``submitted``; the run's last may be withdrawn unwritten when the end comes, so not ``sent``)
+        # carried the one scripted box.
+        and _positive(counted.get("results_sent")) and counted.get("results_sent") == frames.get("submitted")
         and counted.get("boxes_sent") == counted.get("results_sent")
         and counted.get("boxes_selected") == counted.get("results_counted")
         and [row["label"] for row in camera_panel["labels"]] == ["bottle"])

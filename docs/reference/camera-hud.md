@@ -158,10 +158,16 @@ deadline from the camera frame's observation, sending every newer result,
 the acknowledgements and the ledger (fed from the rows' labels or from the
 selection's), the watcher, the end, the latch and the bridge-death path.
 `tests/test_camera_hud_stage_panel.py` runs the strip's stage suite with
-the panel: 26 of the 30 tests the strip had are run unedited, three through
-the harness's layout parameters (the frame size the client takes and the
-payload expected for a result), and one, the strip's names-only rows and
-orientations, does not apply to the panel and is left out there by name.
+the panel: of the 30 tests the strip had, 26 are run with nothing changed
+for the panel, three through the harness's layout parameters (the frame
+size the client takes and the payload expected for a result), and one, the
+strip's names-only rows and orientations, does not apply to the panel and
+is left out there by name. One assertion of that suite was restated for
+both layouts when the megabyte made it fail: that every frame's write
+returns before its deadline is not something the stage promises of a frame
+handed over just before the run's own end (`frames.written_past_deadline`
+counts exactly that), so the suite now asserts what is promised and forces
+the case on every run.
 
 **What the sites compare is read-only.** `config`, `region`, `alignment`
 and `presence_watch` are properties without setters, and whether a frame is
@@ -538,7 +544,7 @@ no key was removed or changed its meaning.
 | `steps_ms` | this side's own work per result: `map`, `select`, `draw` for every result drawn, `pack` for every result packed and `queue` for every result the client accepted (a submit it refused is not timed), each with count, p50, p95 and max on this host's `perf_counter` |
 | `identities` | the identity rule (`camera_frame_sequence`), the first and last frame identity written, the last result index and the source id |
 | `results` | results seen, with rows, without rows, too old, and after the end (on the panel "rows" reads "boxes": the keys are the strip's and are kept) |
-| `frames` | `submitted` (handed to the client), `sent` (written to the pipe), `not_sent` (replaced, withdrawn by a take-down or past its deadline before the write), `written_past_deadline`; the bridge's answers per frame: `acknowledged_presented`, `acknowledged_refused`, `refused_reasons`, `unacknowledged`; and the bridge's final counts: `bridge_received`, `bridge_accepted`, `retransmitted`, `refused` (stale or expired on arrival), `expired`, `expired_in_upload` |
+| `frames` | `submitted` (handed to the client), `sent` (written to the pipe), `not_sent` (replaced, withdrawn by a take-down or past its deadline before the write), `written_past_deadline` (the write returned at or after the frame's deadline by this side's clock: the writer looks at the deadline before it writes, and the bridge then judges the frame on arrival by its own clock, refusing it if the deadline has passed); the bridge's answers per frame: `acknowledged_presented`, `acknowledged_refused`, `refused_reasons`, `unacknowledged`; and the bridge's final counts: `bridge_received`, `bridge_accepted`, `retransmitted`, `refused` (stale or expired on arrival), `expired`, `expired_in_upload` |
 | `deadlines` | the cap, the longest deadline after its observation, `within_cap` |
 | `end` | `run_start_ns` (the bridge was ready), `ended_ns` (the watcher saw `stop`), `hide_written_ns` and `bridge_hide_returned_ns` for the final hide with each one's milliseconds after the end, `tile_already_down`, `bridge_ended_first` |
 | `timings` | below |
@@ -660,8 +666,10 @@ whole frame and once for the box panel through a region turned a quarter
 (`camera_panel` in its report, whose schema version is 2 since that part was
 added), then the synthetic rows on the validation bridge with one stop. The
 panel's pass is judged on its `boxes` block as well: the block must be
-there, with a positive `results_sent` equal to the frames sent, one box sent
-for each (`boxes_sent`) and one selected for each counted result; otherwise
+there, with a positive `results_sent` equal to the frames handed to the
+client (`frames.submitted`; the run's last may be withdrawn unwritten, so
+not the frames written), one box for each (`boxes_sent`) and one selected
+for each counted result; otherwise
 the validation fails with `camera_panel_path_failed`. Before asking the helper to export anything
 it reads the helper's `--describe` record (no connect, no camera) and refuses
 unless it says `backend: fake` with no SDK release. It needs no record and no

@@ -199,7 +199,27 @@ class StageCase(unittest.TestCase):
         """Every frame handed to the client carries its camera frame's observation and a deadline within the cap.
 
         The deadline is the observation plus the maximum display age, or the
-        run's own deadline (``seconds``) when that comes first.
+        run's own deadline (``seconds``) when that comes first. Returns the
+        ids of the frames whose write returned at or after their deadline.
+
+        The writer looks at a frame's deadline before it writes
+        (``tests/test_observed_frame_client.py`` pins that), and the write
+        then takes time, a megabyte more than a strip, so ``sent_ns``, read
+        when the write has returned, can lie past the deadline. With a
+        second of deadline ahead of every write that never happens here,
+        and without a run deadline the helper still says so. With one,
+        every frame's deadline is the run's end, and the run's last result
+        can be handed over a fraction of a millisecond before it. The helper
+        then asserts what the product promises of such a frame, none of it a
+        matter of timing: it is the last frame written and the only late
+        one, its deadline is the run's, the stage counted it
+        (``frames_written_past_deadline``), and the bridge answered for it
+        exactly once. Which answer is the bridge's own, by its own clock: it
+        usually refuses the frame as expired on arrival, and then it never
+        held it; or it took it just before the deadline while this side's
+        clock was read just after, and then it holds it under that same
+        deadline and expires it there. (Both answers are forced, on every
+        run, by the test of a slow write below.)
         """
         observed = {frame.sequence: frame.observed_ns for frame in self.frames}
         self.assertEqual([item["frame_id"] for item in self.queued], sorted({item["frame_id"] for item in self.queued}))
@@ -210,8 +230,68 @@ class StageCase(unittest.TestCase):
             longest = item["observed_ns"] + MAX_DISPLAY_AGE_NS
             self.assertEqual(item["expires_ns"], longest if run_deadline_ns is None else min(longest, run_deadline_ns))
             self.assertEqual(item["size"], (self.LAYOUT.width_px, self.LAYOUT.height_px))
-        for fields in self.named("frame_sent"):
-            self.assertLess(fields["sent_ns"], fields["expires_ns"])
+        handed = {item["frame_id"]: item["at_ns"] for item in self.queued}
+        sent = self.named("frame_sent")
+        for fields in sent:
+            self.assertLess(handed[fields["frame_id"]], fields["expires_ns"])  # Handed over before its deadline.
+        late = [fields for fields in sent if fields["sent_ns"] >= fields["expires_ns"]]
+        # Counted, always: this is the report's ``frames.written_past_deadline``.
+        self.assertEqual(self.the_stage.counts["frames_written_past_deadline"], len(late))
+        if run_deadline_ns is None:
+            self.assertEqual(late, [])  # A second of deadline ahead of every write: none returns late.
+            return []
+        self.assertLessEqual(len(late), 1)  # One writer, one shared deadline: after it nothing more is written.
+        for fields in late:
+            self.assertIs(fields, sent[-1])
+            self.assertEqual(fields["expires_ns"], run_deadline_ns)
+            answers = [line for line in self.bridge_lines
+                       if line["event"] in ("frame_presented", "frame_refused") and line["frame_id"] == fields["frame_id"]]
+            self.assertEqual(len(answers), 1, answers)  # The bridge answered for it, once.
+            answer, = answers
+            expired = [line["deadline_ns"] for line in self.bridge_lines
+                       if line["event"] == "frame_expired" and line.get("frame_id") == fields["frame_id"]]
+            if answer["event"] == "frame_refused":  # It reached the bridge after its deadline: refused, never held.
+                # (The validation bridge uploads nothing, so it has no refusal after an upload.)
+                self.assertIn(answer["reason"], ("expired_on_arrival",) if self.the_stage.client.validation_only
+                              else ("expired_on_arrival", "expired_before_show"))
+                self.assertGreaterEqual(answer["refused_ns"], fields["expires_ns"])
+                self.assertEqual(expired, [])
+            else:  # Taken before the deadline by the bridge's clock: held under that deadline and expired at it.
+                self.assertEqual(answer["deadline_ns"], fields["expires_ns"])
+                self.assertEqual(expired, [fields["expires_ns"]])
+        return [fields["frame_id"] for fields in late]
+
+    def hold_a_write(self, stage, *, write_first, run_bound=False):
+        """Hold one frame write of the stage's client across that frame's deadline; returns the list the hold
+        fills with ``(frame_id, deadline_ns, when the hold ended)``.
+
+        The frame held is the first one written or, with ``run_bound``, the first one written whose deadline
+        is the run's own bound. Which frame that is, and its deadline, are read from the packet being written:
+        on a loaded host the first frame handed over is not always the first one the writer reaches.
+
+        With ``write_first`` false the bytes go out only after the deadline, as behind a pipe that drains
+        slowly: the frame reaches the bridge too late. With it true the bytes go out at once and only the
+        write's return is held, as when the writer thread loses the processor after its last byte: the bridge
+        has the frame in time and this side's clock reads late. One sleep to an absolute time; nothing polls.
+        """
+        import struct
+        from sightcircuit.hud.contract import OBSERVED_FRAME_PREFIX_FORMAT, OPCODE_OBSERVED_FRAME, PACKET_HEADER_FORMAT
+        send, held, prefix_at = stage.client._send, [], struct.calcsize(PACKET_HEADER_FORMAT)
+
+        def slow(data):
+            if held or struct.unpack_from(PACKET_HEADER_FORMAT, data)[1] != OPCODE_OBSERVED_FRAME:
+                return send(data)
+            frame_id, _, deadline_ns = struct.unpack_from(OBSERVED_FRAME_PREFIX_FORMAT, data, prefix_at)[:3]
+            if run_bound and deadline_ns != int(stage.pipeline.deadline * 1e9):
+                return send(data)  # A frame with its own display age ahead of it: not the one to hold.
+            if write_first:
+                send(data)
+            time.sleep(max(0.0, (deadline_ns - time.monotonic_ns()) / 1e9) + 0.001)
+            held.append((frame_id, deadline_ns, time.monotonic_ns()))
+            if not write_first:
+                send(data)
+        stage.client._send = slow
+        return held
 
     def assert_both_children_closed(self, report, *, source_ok=True):
         """The helper is gone and reaped, the bridge exited through its cleanup, and the report says so."""
@@ -485,9 +565,83 @@ class CameraHudStageTests(StageCase):
         self.assertEqual((report["status"], report["reason"]), ("completed", "seconds"))
         self.assertEqual(len(self.named("taken_down")), 1)
         deadline_ns = int(self.the_stage.pipeline.deadline * 1e9)
-        self.assert_deadlines_within_the_cap(deadline_ns)
+        late = self.assert_deadlines_within_the_cap(deadline_ns)
+        frames = report["frames"]  # The report says so too, and every frame written was answered.
+        self.assertEqual((frames["written_past_deadline"], frames["sent"], frames["unacknowledged"]),
+                         (len(late), len(self.named("frame_sent")), 0))
+        self.assertEqual(frames["acknowledged_presented"] + frames["acknowledged_refused"], frames["sent"])
         self.assertLess(max(item["expires_ns"] for item in self.queued), max(item["observed_ns"] for item in self.queued)
                         + MAX_DISPLAY_AGE_NS)  # The run's end cut the last deadlines short; none outlives the run.
+        self.assert_both_children_closed(report)
+
+    def test_a_frame_whose_write_returns_past_its_deadline_is_counted_and_the_bridge_decides_by_its_own_clock(self):
+        # The writer checks a frame's deadline before it writes, and the write then takes time, so its return
+        # can lie past the deadline. Both ways that can happen are forced here on every run, for whichever
+        # layout this class runs.
+        def lines(event, frame_id=None):
+            return [line for line in self.bridge_lines
+                    if line["event"] == event and (frame_id is None or line.get("frame_id") == frame_id)]
+        roomy = {"fps": 5, "max_seconds": 20, "max_frames": 100}
+        # 1. The frame reaches the bridge after its deadline (a pipe that drains slowly). The stage counts it
+        #    as written past its deadline; the bridge refuses it on arrival; it is never presented, never held
+        #    and no label interval is opened for it; the frames that came meanwhile were replaced unsent, and
+        #    the run goes on.
+        stage = self.stage(limits=roomy, max_frames=12)
+        held = self.hold_a_write(stage, write_first=False)
+        report = stage.run()
+        self.assertEqual((report["status"], report["reason"]), ("completed", "max_frames"))
+        (late_id, deadline_ns, resumed_ns), = held
+        self.assertGreater(resumed_ns, deadline_ns)  # The construction: the write began after the deadline.
+        sent = self.named("frame_sent")
+        self.assertEqual((sent[0]["frame_id"], sent[0]["expires_ns"]), (late_id, deadline_ns))
+        self.assertGreaterEqual(sent[0]["sent_ns"], deadline_ns)
+        handed = {item["frame_id"]: item["at_ns"] for item in self.queued}
+        self.assertLess(handed[late_id], deadline_ns)  # Handed over, and checked by the writer, in time.
+        refused, = lines("frame_refused", late_id)
+        self.assertEqual(refused["reason"], "expired_on_arrival")
+        self.assertGreaterEqual(refused["refused_ns"], deadline_ns)
+        self.assertEqual((lines("frame_presented", late_id), lines("frame_expired", late_id)), ([], []))
+        presented = lines("frame_presented")
+        self.assertTrue(presented)  # Later frames were presented: the run went on.
+        frames = report["frames"]
+        late = [fields["frame_id"] for fields in sent if fields["sent_ns"] >= fields["expires_ns"]]
+        self.assertIn(late_id, late)
+        self.assertEqual((frames["written_past_deadline"], frames["acknowledged_refused"], frames["unacknowledged"]),
+                         (len(late), len(lines("frame_refused")), 0))
+        self.assertGreaterEqual(frames["refused_reasons"]["expired_on_arrival"], 1)
+        self.assertEqual((frames["sent"], frames["acknowledged_presented"]),
+                         (len(sent), len(sent) - len(lines("frame_refused"))))
+        # The frames that waited behind the slow write were replaced by newer ones without being sent.
+        self.assertGreaterEqual(frames["not_sent"], 1)
+        self.assertEqual(frames["submitted"], frames["sent"] + frames["not_sent"])
+        # No label interval was opened for the refused frame: the label's first interval starts with the first
+        # frame the bridge presented, which it read after the refused one, and so after that one's deadline.
+        row, = report["labels"]["rows"]
+        deadline_ms = (deadline_ns - report["labels"]["run_start_ns"]) / 1e6
+        first_presented_ms = (presented[0]["presented_ns"] - report["labels"]["run_start_ns"]) / 1e6
+        self.assertEqual(row["label"], "bottle")
+        self.assertGreater(first_presented_ms, deadline_ms)
+        self.assertAlmostEqual(row["intervals"][0]["start_ms"], first_presented_ms, delta=0.001)  # A microsecond's rounding.
+        self.assert_both_children_closed(report)
+        self.assert_no_gate_opened(report)
+        # 2. The bridge has the frame in time and only this side's clock reads late (the writer loses the
+        #    processor after its last byte), for a frame whose deadline is the run's own bound. The count is
+        #    this side's clock and not a verdict on what was shown: the bridge presented the frame, held it
+        #    under that deadline and expired it there, and the helper's rule for a run's bound takes it.
+        stage = self.stage(limits=roomy, seconds=2.0)
+        held = self.hold_a_write(stage, write_first=True, run_bound=True)
+        report = stage.run()
+        self.assertEqual((report["status"], report["reason"]), ("completed", "seconds"))
+        (late_id, deadline_ns, resumed_ns), = held
+        self.assertEqual(deadline_ns, int(stage.pipeline.deadline * 1e9))
+        self.assertGreater(resumed_ns, deadline_ns)
+        self.assertEqual(self.assert_deadlines_within_the_cap(deadline_ns), [late_id])  # The last written, and late.
+        self.assertEqual((len(lines("frame_presented", late_id)), lines("frame_refused", late_id)), (1, []))
+        frames = report["frames"]
+        self.assertEqual((frames["written_past_deadline"], frames["acknowledged_refused"], frames["unacknowledged"]),
+                         (1, len(lines("frame_refused")), 0))
+        self.assertEqual(frames["sent"], frames["acknowledged_presented"] + frames["acknowledged_refused"])
+        self.assertGreaterEqual(frames["expired"], 1)  # The bridge's own expiry of the frame it held, at least.
         self.assert_both_children_closed(report)
 
     def test_a_consumer_error_takes_the_tile_down_and_closes_both_children(self):
