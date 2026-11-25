@@ -1,7 +1,7 @@
 {
-  "_comment": "Suite time budget (work-order item B7): per-module wall-time ceilings in seconds, enforced by scripts/run_tests_no_skips.py --budget. Derived from the cloud runner's durations of 2026-11-07 (docs/reference/development-checks.md) with about three times margin for a loaded runner. A ceiling is never a reason to skip or shorten a test: raise it with the measurement that needs it.",
+  "_comment": "Suite time budget (work-order item B7): per-module wall-time ceilings in seconds, enforced by scripts/run_tests_no_skips.py --budget. Derived from the cloud runner's durations of 2026-11-07 (docs/reference/development-checks.md) with about three times margin for a loaded runner. A ceiling is never a reason to skip or shorten a test: raise it with the measurement that needs it. total_seconds raised from 900 to 1200 on 2026-11-25 (work-order item B3): the replay job's whole-suite run took 861 s and then 932 s on the cloud runner for the same 2064 tests, once tests/test_box_panel_bridge.py (about 40 s, the strip's fake-runtime suite run again on the box panel) had joined a suite that already ran within 40 s of the total.",
   "default_seconds": 30,
-  "total_seconds": 900,
+  "total_seconds": 1200,
   "modules": {
     "test_frame_agent": 180,
     "test_bounded_worker": 150,
