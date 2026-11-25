@@ -130,8 +130,29 @@ layout or view than the record names, a clock that reads earlier than the
 record's creation, and a start after the deadline. A record written before
 schema version 2 is refused by name. `camera_hud` as it stands shows the
 strip from the whole frame with no watch, so it runs only under a record
-that names `fixed-edge-hud-v1` and nothing more; its options for the box
-panel, the region and the watch are the second part of work-order item B5.
+that names `fixed-edge-hud-v1`, the whole frame and no watch; its options
+for the box panel, the region and the watch are the second part of
+work-order item B5.
+
+A camera step's record needs one option more than L-D3's: whether the
+presence watch is required, which has no default. For L-D4 as `camera_hud`
+runs it today (the same for L-D5 with its own step and file names):
+
+```bash
+.venv-replay/bin/python scripts/checkpoint_manifest.py \
+  --verify artifacts/camera-hud/checkpoint-manifest.json &&
+.venv-replay/bin/python scripts/stage_scope_record.py --step L-D4 \
+  --layout fixed-edge-hud-v1 --presence-watch none \
+  --approval OWNER-APPROVAL-IDENTIFIER --valid-minutes 60 \
+  --checkpoint-manifest artifacts/camera-hud/checkpoint-manifest.json \
+  --out artifacts/camera-hud/scope-L-D4.json
+```
+
+Without `--region` and `--rotation` the record states the whole frame,
+unturned. A record staged with a region, a rotation, `--presence-watch
+required` or the panel's layout (which also needs `--alignment`) is a valid
+record that today's `camera_hud` refuses, unspent, because it would not do
+what the record says.
 
 The duration is not only a number in the record. The command's client ends
 real output by itself when the run's seconds are over, whatever else is
@@ -174,7 +195,13 @@ refused after the `yes`, before the helper or the bridge is launched, with
 own reason in `command.refusal` (for example `scope_record_expired`,
 `scope_step_mismatch` or `scope_run_id_used`; `site_preconditions_failed`
 when a permission site refused before the record was consulted, which leaves
-the record unspent).
+the record unspent). A record that names another layout than the run shows
+ends `status: refused`, `reason: fixed_hud_layout_not_approved` and
+`command.refusal: scope_layout_mismatch`, also with the record unspent; a
+record that names another region, rotation or presence-watch requirement
+ends `reason: fixed_hud_output_not_approved` with `scope_region_mismatch`,
+`scope_rotation_mismatch` or `scope_presence_watch_mismatch`. Read
+`command.refusal` first.
 
 ## The passthrough watch
 

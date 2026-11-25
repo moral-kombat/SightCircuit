@@ -44,6 +44,7 @@ FRAME_PIXELS = "whole_frame_processing_pixels"  # The whole native frame, longes
 ROTATIONS = (0, 90, 180, 270)  # Degrees clockwise the region is turned before the detector sees it.
 WHOLE = (0.0, 0.0, 1.0, 1.0)
 MIN_FRACTION = 0.05  # A region is at least this much of the frame on each axis,
+MIN_FRACTION_TOLERANCE = 1e-9  # (less this, so that 0.75 - 0.70 is not refused for its last binary digit)
 MIN_PIXELS = 8  # and at least this many native pixels.
 ORIENTATION_STATEMENT = (
     "The region and the rotation are arguments, not findings: nothing here knows which way up the camera image is or "
@@ -57,7 +58,7 @@ def _check_fractions(values):
         raise ValueError("a region is four fractions of the frame: x0,y0,x1,y1") from None
     if not all(math.isfinite(value) for value in (x0, y0, x1, y1)) or not (0 <= x0 < x1 <= 1 and 0 <= y0 < y1 <= 1):
         raise ValueError("a region needs 0 <= x0 < x1 <= 1 and 0 <= y0 < y1 <= 1")
-    if x1 - x0 < MIN_FRACTION - 1e-9 or y1 - y0 < MIN_FRACTION - 1e-9:
+    if x1 - x0 < MIN_FRACTION - MIN_FRACTION_TOLERANCE or y1 - y0 < MIN_FRACTION - MIN_FRACTION_TOLERANCE:
         raise ValueError(f"a region is at least {MIN_FRACTION} of the frame on each axis")
     return x0, y0, x1, y1
 

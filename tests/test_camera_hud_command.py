@@ -319,11 +319,19 @@ class GuideAndTemplateTests(unittest.TestCase):
         earlier = camera_stage.window_verdict([(0.0, 40.0), (45.0, 90.0)], 90.0, **camera_hud.G10_WINDOW)
         self.assertFalse(earlier["found"])  # The schedule this replaced: a pause in the middle leaves no window.
         staged = self.commands("scripts/stage_scope_record.py")
-        self.assertEqual(len(staged), 1)
+        self.assertEqual(len(staged), 2)  # L-D3's, and a camera step's in full (it needs --presence-watch).
         args = stage_scope_record.build_parser().parse_args(staged[0])
         self.assertEqual((args.step, args.valid_minutes, args.layout), ("L-D3", 60, "fixed-edge-hud-v1"))
         # The synthetic step's record names no view: the camera is never opened.
         self.assertEqual((args.region, args.rotation, args.alignment, args.presence_watch), (None, None, None, None))
+        args = stage_scope_record.build_parser().parse_args(staged[1])
+        self.assertEqual((args.step, args.layout, args.presence_watch, args.region, args.rotation, args.alignment),
+                         ("L-D4", "fixed-edge-hud-v1", "none", None, None, None))
+        # What the guide's camera command stages is a record today's command runs under: the strip, the whole
+        # frame, no watch (the view ``stage_view_bound`` serves).
+        view, refusal = scope.view_value(scope.CAMERA_LEFT, camera_stage.HUD_CONFIG, args.region, args.rotation,
+                                         args.alignment, stage_scope_record.PRESENCE_WATCH[args.presence_watch])
+        self.assertEqual((view, refusal), (camera_stage.STAGE_VIEW, None))
         written = []
         for arguments in self.commands("scripts/checkpoint_manifest.py"):
             parsed = checkpoint_manifest.build_parser().parse_args(arguments)

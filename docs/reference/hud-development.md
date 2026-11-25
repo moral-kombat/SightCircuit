@@ -88,8 +88,10 @@ and local headers of its SDK build, the shader source, `build_camera_helper.sh`
 and the scope-record staging tool, so the manifest's digest, which a
 [one-run scope record](camera-hud.md#the-one-run-scope-record) names, covers
 the helper as well as the bridge and the models. A manifest carries the group
-when `--write` is given `--camera-hud` (a missing helper is then a problem)
-or when the helper exists; `groups` records what it carries, and `--verify`
+when `--write` is given `--camera-hud` (a missing helper is then a problem,
+and since schema version 4 a missing presence watcher too)
+or when the helper exists (the watcher's binary is then carried if it is
+built and left out, without a problem, if it is not); `groups` records what it carries, and `--verify`
 checks exactly those groups. So a machine without an SDK build of the helper
 still writes a manifest with no problems and verifies it, for the marker
 checkpoint and the fallback measurement, which never use the helper; the
@@ -103,8 +105,14 @@ pinned. Since schema version 4 (2026-11-25, work-order items B5 and L17) the
 (`artifacts/presence-watcher/sightcircuit-presence-watcher`), its unit
 `tools/presence_watcher.cpp` with `tools/presence_signals.hpp`, and
 `build_presence_watcher.sh`, so that a displayed run can launch only the
-watcher the manifest hashed; a carried group with no watcher built is a
-problem, as a missing helper is. Every manifest also records `layouts`: the
+watcher the manifest hashed. The watcher's binary is required only when the
+group was asked for with `--camera-hud`, which is what a scope record needs:
+then a watcher that is not built is a problem, as a missing helper is. A
+plain `--write` on a machine where the helper exists carries the group as
+before and adds the watcher's binary only if it is built, so the manifests
+of the marker checkpoint and the fallback measurement, which never use the
+watcher, are written and verified without it; `--verify` checks a manifest
+with the watcher exactly when the manifest recorded one. Every manifest also records `layouts`: the
 configuration digest of each fixed layout the bridge can be launched with
 (`fixed-edge-hud-v1`, `head-fixed-box-panel-v1`), as the checkout's contract
 computes it, which a scope record's layout digest is compared with. A

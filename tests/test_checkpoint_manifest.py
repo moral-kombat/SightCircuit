@@ -383,6 +383,54 @@ class VerifyTests(CheckoutCase):
         self.assertEqual((code, [(item["field"], item["reason"]) for item in json.loads(out)["problems"]]),
                          (0, [(f"camera_hud.{manifest.PRESENCE_WATCHER}", "file_missing")]))
         self.assertDiffers((f"camera_hud.{manifest.PRESENCE_WATCHER}", "file_missing"))
+        self.watcher.write_bytes(b"presence watcher built on this machine")
+        self.assertDiffers((f"camera_hud.{manifest.PRESENCE_WATCHER}", "changed"))  # Built after the pin: re-pin.
+
+    def test_the_helper_without_the_watcher_writes_and_verifies_a_plain_manifest(self):
+        # A machine with the SDK helper built and no presence watcher, running a procedure that uses neither
+        # (the marker checkpoint, the fallback measurement): a plain --write carries the camera group because
+        # the helper exists, as before schema 4, leaves the watcher's binary out, reports no problem and
+        # verifies. The watcher is required only where the group was asked for.
+        self.watcher.unlink()
+        result = self.write()
+        data = json.loads(self.path.read_text())
+        self.assertEqual((result["problems"], result["groups"]), ([], sorted(manifest.FILE_GROUPS)))
+        self.assertNotIn(manifest.PRESENCE_WATCHER, data[manifest.CAMERA_GROUP])
+        self.assertEqual(sorted(data[manifest.CAMERA_GROUP]),
+                         sorted(set(manifest.CAMERA_HUD_FILES) - {manifest.PRESENCE_WATCHER}))
+        self.assertIn(manifest.CAMERA_HELPER, data[manifest.CAMERA_GROUP])
+        self.assertVerifies()
+        # Building the watcher afterwards does not change what this manifest pins; the helper still does.
+        self.watcher.write_bytes(b"presence watcher built on this machine")
+        self.assertVerifies()
+        self.helper.write_bytes(b"camera helper rebuilt")
+        self.assertDiffers((f"camera_hud.{manifest.CAMERA_HELPER}", "changed"))
+        self.helper.write_bytes(b"camera helper built on this machine")
+        # With both built, the plain manifest carries the watcher and then pins it.
+        self.path = self.out / "plain-with-watcher.json"
+        self.write()
+        self.assertEqual(sorted(json.loads(self.path.read_text())[manifest.CAMERA_GROUP]), sorted(manifest.CAMERA_HUD_FILES))
+        self.watcher.write_bytes(b"presence watcher rebuilt")
+        self.assertDiffers((f"camera_hud.{manifest.PRESENCE_WATCHER}", "changed"))
+        self.watcher.unlink()
+        self.assertDiffers((f"camera_hud.{manifest.PRESENCE_WATCHER}", "changed"))
+        # The same machine under --camera-hud: the missing watcher is a problem, and it does not verify.
+        self.path = self.out / "asked-for.json"
+        code, out, _ = self.run_command("--write", str(self.path), "--camera-hud")
+        self.assertEqual((code, [(item["field"], item["reason"]) for item in json.loads(out)["problems"]]),
+                         (0, [(f"camera_hud.{manifest.PRESENCE_WATCHER}", "file_missing")]))
+        self.assertDiffers((f"camera_hud.{manifest.PRESENCE_WATCHER}", "file_missing"))
+        # Neither binary: no group at all, as before.
+        self.helper.unlink()
+        self.path = self.out / "neither.json"
+        self.assertEqual(self.write()["groups"], sorted(manifest.BASE_GROUPS))
+        self.assertVerifies()
+        # The command's help says what is required when.
+        import argparse
+        text = " ".join(command.build_parser().format_help().split())
+        self.assertIn("a missing helper or watcher is then a problem", text)
+        self.assertIn("without a problem, when it does not", text)
+        self.assertIsInstance(command.build_parser(), argparse.ArgumentParser)
 
     def test_a_manifest_of_the_schema_before_the_watcher_and_the_layouts_never_verifies(self):
         # What a schema 3 manifest held: no ``layouts``, and a camera group without the watcher, its sources and
@@ -397,8 +445,8 @@ class VerifyTests(CheckoutCase):
                             "scripts/build_presence_watcher.sh")}
         self.path = self.out / "schema-3.json"
         self.path.write_bytes(manifest.encode(old))
+        # (The watcher's binary is not among them: a group recorded without it is verified without it.)
         self.assertDiffers(("schema_version", "changed"), ("layouts", "unexpected"),
-                           (f"camera_hud.{manifest.PRESENCE_WATCHER}", "unexpected"),
                            ("camera_hud.tools/presence_watcher.cpp", "unexpected"),
                            ("camera_hud.tools/presence_signals.hpp", "unexpected"),
                            ("camera_hud.scripts/build_presence_watcher.sh", "unexpected"))

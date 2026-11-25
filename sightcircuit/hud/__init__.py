@@ -23,7 +23,8 @@
   panel boxes through the wearer's ``Alignment``. Imported from their
   modules, not from this package. Since item B3 the bridge can be launched
   with the geometry as a named layout (``contract.FIXED_LAYOUTS``); no stage
-  or command selects it, and nothing may drive it as real output.
+  or command selects it, and real output with it is admitted only under a
+  one-run scope record that names it (``runtime.scope``, item B5).
 * ``box_scenes``: synthetic scenes for the box panel, boxes written in the
   module; ``orientation_scene`` names each box by its corner.
 * ``camera_stage``: ``CameraHudStage``, the camera route's run (source,

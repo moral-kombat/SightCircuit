@@ -111,6 +111,7 @@ FIELDS = ("report_kind", "schema_version", "step", "runner", "source", "hud_conf
 ROTATIONS = (0, 90, 180, 270)
 WHOLE_FRAME = (0.0, 0.0, 1.0, 1.0)
 REGION_MIN_FRACTION = 0.05
+REGION_MIN_FRACTION_TOLERANCE = 1e-9
 ALIGNMENT_FIELDS = ("scale_x", "scale_y", "offset_x", "offset_y", "turn")
 ALIGNMENT_SCALE_LIMITS = (0.25, 4.0)
 ALIGNMENT_OFFSET_LIMIT = 1.0
@@ -219,7 +220,8 @@ def region_value(source, region, rotation):
         return None, "scope_region_invalid"
     x0, y0, x1, y1 = values
     if (not (0 <= x0 < x1 <= 1 and 0 <= y0 < y1 <= 1)
-            or x1 - x0 < REGION_MIN_FRACTION - 1e-9 or y1 - y0 < REGION_MIN_FRACTION - 1e-9):
+            or x1 - x0 < REGION_MIN_FRACTION - REGION_MIN_FRACTION_TOLERANCE
+            or y1 - y0 < REGION_MIN_FRACTION - REGION_MIN_FRACTION_TOLERANCE):
         return None, "scope_region_invalid"
     return (values, rotation), None
 

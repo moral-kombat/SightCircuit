@@ -26,6 +26,7 @@ The synthetic step opens no camera and takes none of the four.
 """
 import argparse
 import json
+import math
 from pathlib import Path
 import sys
 
@@ -44,9 +45,12 @@ def numbers(text, count):
     if len(parts) != count:
         raise argparse.ArgumentTypeError(f"needs {count} comma-separated numbers")
     try:
-        return [float(part) for part in parts]
+        values = [float(part) for part in parts]
     except ValueError:
         raise argparse.ArgumentTypeError(f"needs {count} comma-separated numbers") from None
+    if not all(math.isfinite(value) for value in values):  # inf, nan and a literal too large for a float.
+        raise argparse.ArgumentTypeError(f"needs {count} finite numbers")
+    return values
 
 
 def region(text):

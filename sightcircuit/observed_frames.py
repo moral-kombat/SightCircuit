@@ -87,7 +87,11 @@ def output_preconditions(client, layout=None):
     launch with (None is the strip), is the one the scope was asked for
     (``layout_bound``).
     """
-    scope = getattr(client, "scope", None)
+    return _output_preconditions(client, getattr(client, "scope", None), layout)
+
+
+def _output_preconditions(client, scope, layout):
+    """``output_preconditions`` on ``scope``, the one object the caller read from the client."""
     if not isinstance(client, ObservedFrameClient) or type(scope) is not RunScope or client.validation_only is not False:
         return False
     bound, permitted = client.max_output_seconds, scope.seconds
@@ -96,7 +100,7 @@ def output_preconditions(client, layout=None):
     return layout_bound(scope, layout) and pinned_binary(client.binary, PINNED_BRIDGE)
 
 
-def layout_bound(scope, layout):
+def layout_bound(scope, layout, granted=False):
     """Whether ``layout``, the value a start is about to launch with, is the layout ``scope`` binds; True or False.
 
     The comparison of work-order item B5, and all that is left of the
@@ -110,12 +114,17 @@ def layout_bound(scope, layout):
     the digest of its fields as this checkout computes it. It reads the
     record the scope already holds, consumes nothing and changes nothing,
     so it is asked before the scope is consulted (a difference then costs
-    no run id) and again after it.
+    no run id) and again after it. With ``granted`` the answer is for a scope
+    that has just permitted: it must be granted and hold the record it was
+    granted on, and that record is what is compared; a scope that has read
+    no record never satisfies it.
     """
     shown = HUD_CONFIG if layout is None else layout
     if type(scope) is not RunScope or not any(shown is known for known in FIXED_LAYOUTS) or scope.hud_config is not shown:
         return False
     record = scope.record
+    if granted and (scope.status != "granted" or record is None):
+        return False
     if record is None:  # Not read yet, or refused before it was accepted: the request is all there is to compare.
         return True
     return (type(record) is dict and record.get("hud_config_id") == shown.layout_id
@@ -139,6 +148,10 @@ def fixed_hud_output_permitted(client, layout=None):
     all before this returns and so before anything is launched
     (``runtime/scope.py`` lists the checks). Then the record the scope now
     holds is compared with the layout once more (``layout_bound``). The
+    client's ``scope`` is read once, and that one object is the scope whose
+    request is judged, the scope that is asked and the scope whose record
+    is compared, so a client that answers with different scopes from one
+    read to the next gains nothing. The
     client is the use's holder: when it asks again, at ``start``, the scope
     checks the deadline and the bridge's digest once more and consumes
     nothing; any other client is refused. No argument, environment
@@ -159,14 +172,15 @@ def fixed_hud_output_permitted(client, layout=None):
     it spent, and a refused or failed run revokes its scope either way
     (``ObservedFrameClient.withdraw``), so nothing starts under it later.
     """
-    if not output_preconditions(client, layout):
+    scope = getattr(client, "scope", None)  # Read once: the scope judged, the scope asked and the scope compared are one.
+    if not _output_preconditions(client, scope, layout):
         return False
     try:
         if not all(prerequisite() is True for prerequisite in client.prerequisites):
             return False
     except Exception:
         return False
-    return client.scope.permit(HUD_OUTPUT, client) is True and layout_bound(client.scope, layout)
+    return scope.permit(HUD_OUTPUT, client) is True and layout_bound(scope, layout, granted=True)
 
 
 def output_refusal(client, layout):

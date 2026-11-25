@@ -305,6 +305,27 @@ class WriterTests(ScopeCase):
                 code, record, shown = tool(*arguments)
                 self.assertEqual((code, record), (expected, None))
                 self.assertIn(said, shown)
+        # A number that is not finite, in any of the alignment's five places or the region's four: refused by
+        # the option's name, as nan is, never a traceback (an infinite turn used to reach ``int``).
+        for literal in ("inf", "-inf", "1e999", "-1e999", "nan", "Infinity"):
+            for place in range(5):
+                numbers = ["1", "1", "0", "0", "0"]
+                numbers[place] = literal
+                with self.subTest(alignment=place, literal=literal):
+                    code, record, shown = tool("--step", "L-D4", "--layout", PANEL.layout_id, "--presence-watch", "none",
+                                               f"--alignment={','.join(numbers)}")
+                    self.assertEqual((code, record), (2, None))
+                    self.assertIn("--alignment", shown)
+                    self.assertNotIn("Traceback", shown)
+            for place in range(4):
+                numbers = ["0.25", "0.25", "0.75", "0.75"]
+                numbers[place] = literal
+                with self.subTest(region=place, literal=literal):
+                    code, record, shown = tool("--step", "L-D4", "--layout", STRIP.layout_id, "--presence-watch", "none",
+                                               f"--region={','.join(numbers)}")
+                    self.assertEqual((code, record), (2, None))
+                    self.assertIn("--region", shown)
+                    self.assertNotIn("Traceback", shown)
         self.assertEqual(self.ledger(), [])
 
     def test_nothing_but_the_staging_tool_calls_the_writer(self):
@@ -899,6 +920,50 @@ class CameraSiteTests(ScopeCase):
                 self.assertIs(camera_stage.camera_display_input_preconditions(stage), True)
         self.assertEqual(self.ledger(), [])
 
+    def test_the_camera_site_reads_the_scope_once_and_compares_the_view_the_scope_verified(self):
+        # A client that answers with another scope each time it is read: one asked for a view the stage does
+        # not have (E103's region, with a record that binds it and is already granted for output), one asked
+        # for the stage's own view on a strip record. Whatever the order, camera input is permitted only on
+        # the scope whose view is the stage's, and that same scope is the one asked.
+        region_bound = {"region": CENTRE, "rotation": 90}
+        cropped = self.run_scope(self.staged("L-D4", **region_bound)[0], seconds=5, **region_bound)
+        plain = self.run_scope(self.staged("L-D4")[0], seconds=5)
+        holder = self.client(plain)
+        for run in (cropped, plain):
+            self.assertIs(run.permit(scope.HUD_OUTPUT, holder), True)
+        stage = SimpleNamespace(client=None, source=self.source(), seconds=5)  # One stage: a use has one holder.
+        for order in ((plain, cropped), (cropped, plain), (plain, cropped, plain), (cropped, plain, cropped),
+                      (plain, plain, cropped), (cropped, cropped, plain)):
+            reads = []
+
+            class Turning:
+                @property
+                def scope(self):
+                    reads.append(order[len(reads) % len(order)])
+                    return reads[-1]
+            stage.client = Turning()
+            with self.subTest(order=[run is plain for run in order]):
+                for _ in range(5):
+                    before = len(reads)
+                    answer = camera_stage.camera_display_input_permitted(stage)
+                    self.assertEqual(len(reads), before + 1)  # One read for one answer.
+                    self.assertIs(answer, reads[-1] is plain)
+        self.assertEqual(cropped._holders.get(scope.CAMERA_INPUT), None)  # The cropped scope was never asked.
+        # After the grant the view compared is the one the scope verified, not what its attributes say later.
+        stage.client = SimpleNamespace(scope=plain)
+        self.assertIs(camera_stage.camera_display_input_permitted(stage), True)
+        with mock.patch.dict(plain.view, {"rotation": 90}):
+            self.assertIs(camera_stage.camera_display_input_permitted(stage), False)
+        with mock.patch.object(plain, "view", None):
+            self.assertIs(camera_stage.camera_display_input_permitted(stage), False)
+        self.assertIs(camera_stage.camera_display_input_permitted(stage), True)
+        source = ast.parse((ROOT / "sightcircuit/hud/camera_stage.py").read_text())
+        permitted = next(node for node in ast.walk(source) if isinstance(node, ast.FunctionDef)
+                         and node.name == "camera_display_input_permitted")
+        self.assertEqual(len([node for node in ast.walk(permitted) if isinstance(node, ast.Constant)
+                              and node.value == "scope"]), 1)
+        self.assertFalse([node for node in ast.walk(permitted) if isinstance(node, ast.Attribute) and node.attr == "scope"])
+
     def test_the_clients_own_bound_ends_real_output_whatever_its_caller_does(self):
         from tests import fake_vrclient
         from sightcircuit.overlay import DEFAULT_BRIDGE
@@ -1184,6 +1249,23 @@ class BindingTests(ScopeCase):
         self.assertIn(f"{record['run_id']}.json", self.ledger())
         self.assertEqual(gates.claims(), ALL_CLOSED)
 
+    def test_the_presence_watch_is_matched_exactly_in_both_directions(self):
+        # A record that requires the watch refuses a run without it, and a record that does not require it
+        # refuses a run that holds it. The record says what the run does; "at least" is not the rule.
+        granted = 0
+        for layout, extra in ((STRIP, {}), (PANEL, {"alignment": dict(NEUTRAL)})):
+            for recorded in (False, True):
+                path, record = self.staged("L-D4", hud_config=layout, presence_watch=recorded, **extra)
+                self.assertIs(record["presence_watch"], recorded)
+                with self.subTest(layout=layout.layout_id, recorded=recorded):
+                    run = self.run_scope(path, hud_config=layout, presence_watch=not recorded, **extra)
+                    self.assert_refused(run, "scope_presence_watch_mismatch")
+                    self.assertEqual(len(self.ledger()), granted)  # The refusal spent nothing.
+                    self.assertIs(self.run_scope(path, hud_config=layout, presence_watch=recorded,
+                                                 **extra).permit(scope.HUD_OUTPUT), True)
+                    granted += 1
+        self.assertEqual((granted, len(self.ledger())), (4, 4))
+
     def test_a_request_whose_view_is_malformed_or_does_not_belong_is_refused_before_any_record_is_read(self):
         nan = float("nan")
         cases = [("L-D4", STRIP, {"region": value}, "scope_region_invalid") for value in (
@@ -1372,6 +1454,22 @@ class BindingTests(ScopeCase):
                                        checkpoint_manifest=other, hud_config=PANEL)
                 self.assertEqual(caught.exception.reason, reason)
                 self.assertFalse((self.out / f"against-{index}.json").exists())
+        # A plain manifest written where the helper exists and the watcher does not (it verifies, for the
+        # procedures that use neither): it has no digest for the watcher, so no record is staged or served on it.
+        built = self.watcher.read_bytes()
+        self.watcher.unlink()
+        plain = self.out / "plain-without-watcher.json"
+        code, _, _ = self.run_command("--write", str(plain))
+        self.assertEqual((code, manifest.verify_manifest(plain, self.root)["status"]), (0, "verified"))
+        with self.assertRaises(scope.ScopeError) as caught:
+            scope.write_record(self.out / "on-plain.json", step="L-D3", approval="a1", valid_minutes=5,
+                               checkpoint_manifest=plain, hud_config=STRIP)
+        self.assertEqual(caught.exception.reason, "scope_manifest_lacks_camera_group")
+        self.watcher.write_bytes(built)
+        self.watcher.chmod(0o755)
+        forged = self.edited("L-D3", manifest_sha256=scope._file_digest(plain))
+        self.assert_refused(self.run_scope(forged, source=scope.SYNTHETIC, checkpoint_manifest=plain),
+                            "scope_manifest_lacks_camera_group")
         # The watcher rebuilt or removed after the manifest: the manifest no longer verifies, for every step.
         path, _ = self.staged("L-D3")
         for change in (lambda: self.watcher.write_bytes(b"presence watcher rebuilt"), self.watcher.unlink):
@@ -1386,8 +1484,33 @@ class BindingTests(ScopeCase):
     def test_the_views_ranges_are_the_regions_and_the_alignments_own(self):
         from sightcircuit.camera import region
         from sightcircuit.hud import boxes
-        self.assertEqual((scope.ROTATIONS, scope.WHOLE_FRAME, scope.REGION_MIN_FRACTION),
-                         (region.ROTATIONS, region.WHOLE, region.MIN_FRACTION))
+        self.assertEqual((scope.ROTATIONS, scope.WHOLE_FRAME, scope.REGION_MIN_FRACTION, scope.REGION_MIN_FRACTION_TOLERANCE),
+                         (region.ROTATIONS, region.WHOLE, region.MIN_FRACTION, region.MIN_FRACTION_TOLERANCE))
+        self.assertEqual((region.MIN_FRACTION, region.MIN_FRACTION_TOLERANCE), (0.05, 1e-9))
+        # Widths just under, at and just over the smallest region, on each axis and from each side: the two
+        # rules agree on every one, and both outcomes occur.
+        tolerance, least = region.MIN_FRACTION_TOLERANCE, region.MIN_FRACTION
+        deltas = (-1e-3, -1e-6, -2 * tolerance, -1.5 * tolerance, -1.01 * tolerance, -0.99 * tolerance, -tolerance / 2,
+                  -1e-12, 0.0, 1e-12, tolerance / 2, tolerance, 2 * tolerance, 1e-6, 1e-3)
+        outcomes = set()
+        for delta in deltas:
+            width = least + delta
+            for start in (0.0, 0.25, 0.7, 1.0 - width):
+                for values in ((start, 0.25, start + width, 0.75), (0.25, start, 0.75, start + width),
+                               (start + width - width, 0.25, start + width, 0.75)):
+                    try:
+                        made = region.Region(*values)
+                    except ValueError:
+                        made = None
+                    stated, refusal = scope.region_value(scope.CAMERA_LEFT, values, 0)
+                    with self.subTest(width_minus_least=delta, region=values):
+                        self.assertEqual(made is None, refusal == "scope_region_invalid")
+                        self.assertEqual(made is None, stated is None)
+                    outcomes.add((delta < 0, made is None))
+        self.assertLessEqual({(True, True), (True, False), (False, False)}, outcomes)
+        self.assertEqual(scope.region_value(scope.CAMERA_LEFT, (0.0, 0.0, least - 2 * tolerance, 1.0), 0),
+                         (None, "scope_region_invalid"))
+        self.assertIsNone(scope.region_value(scope.CAMERA_LEFT, (0.0, 0.0, least - tolerance / 2, 1.0), 0)[1])
         self.assertEqual((scope.ALIGNMENT_FIELDS, scope.ALIGNMENT_SCALE_LIMITS, scope.ALIGNMENT_OFFSET_LIMIT),
                          (boxes.ALIGNMENT_FIELDS, boxes.SCALE_LIMITS, boxes.OFFSET_LIMIT))
         self.assertEqual(boxes.NEUTRAL.report(), NEUTRAL)
@@ -1614,6 +1737,70 @@ class LayoutBindingTests(ScopeCase):
                 client.start()
             self.assertEqual(seen, [])
 
+    def test_a_client_that_answers_with_another_scope_each_time_it_is_read_gains_nothing(self):
+        # The reviewer's case: a subclass whose ``scope`` is a property. It answers a scope asked for the panel
+        # (never consulted, so it holds no record) and a scope asked for the strip that verifies on a strip's
+        # record, in turn. Were the site to read the scope three times it could judge the first, be granted
+        # by the second and compare the first again, and launch the panel on a strip's record. It reads once.
+        def turning(order):
+            class Turning(ObservedFrameClient):
+                reads = 0
+
+                @property
+                def scope(self):
+                    Turning.reads += 1
+                    return order[(Turning.reads - 1) % len(order)]
+
+                @scope.setter
+                def scope(self, value):
+                    pass
+            return Turning
+
+        launched, refusals = [], set()
+        for phase in range(6):
+            strip_record, _ = self.staged("L-D3")
+            panel_asked, strip_asked = self.rows(strip_record, PANEL), self.rows(strip_record)
+            orders = ((panel_asked, strip_asked), (strip_asked, panel_asked), (panel_asked, strip_asked, panel_asked),
+                      (panel_asked, panel_asked, strip_asked), (strip_asked, strip_asked, panel_asked),
+                      (panel_asked, strip_asked, strip_asked))
+            client = turning(orders[phase])(self.bridge, layout=PANEL, validation_only=False, max_output_seconds=20)
+            with self.subTest(phase=phase), self.launches("stop") as seen:
+                for start in (client.check_start, client.start, client.start):
+                    try:
+                        start()
+                    except ValueError as error:
+                        refusals.add(str(error))
+                    except RuntimeError:
+                        pass
+                launched += [argv for argv, _ in seen]
+                self.assertEqual(seen, [])
+                # Called directly, at every phase of the turn: never True for the panel.
+                for _ in range(7):
+                    self.assertIs(observed_frames.fixed_hud_output_permitted(client, PANEL), False)
+        self.assertEqual(launched, [])
+        self.assertLessEqual(refusals, {"fixed_hud_layout_not_approved", "fixed_hud_output_not_approved"})
+        self.assertTrue(refusals)
+        # After a grant the comparison is against the record that was granted: a scope that has read no record
+        # satisfies the comparison before the grant and never the one after it.
+        path, _ = self.staged("L-D3", hud_config=PANEL)
+        unread, read = self.rows(path, PANEL), self.rows(path, PANEL)
+        self.assertEqual((observed_frames.layout_bound(unread, PANEL), observed_frames.layout_bound(unread, PANEL, granted=True)),
+                         (True, False))
+        self.assertIs(read.permit(scope.HUD_OUTPUT, self), True)
+        self.assertIs(observed_frames.layout_bound(read, PANEL, granted=True), True)
+        read.revoke()
+        self.assertIs(observed_frames.layout_bound(read, PANEL, granted=True), False)
+        refused = self.rows(path)  # Its record is the panel's, its request the strip's: read, and refused.
+        self.assertIs(refused.permit(scope.HUD_OUTPUT, self), False)
+        self.assertIs(observed_frames.layout_bound(refused, STRIP, granted=True), False)
+        # In the source: the permission reads the client's scope exactly once.
+        site = ast.parse((ROOT / "sightcircuit/observed_frames.py").read_text())
+        permitted = next(node for node in ast.walk(site) if isinstance(node, ast.FunctionDef)
+                         and node.name == "fixed_hud_output_permitted")
+        reads = [node for node in ast.walk(permitted) if (isinstance(node, ast.Attribute) and node.attr == "scope")
+                 or (isinstance(node, ast.Constant) and node.value == "scope")]
+        self.assertEqual(len(reads), 1)
+
     def test_which_refusals_spend_the_record_and_which_leave_it_for_the_right_run(self):
         # Unspent: every difference that can be seen without the ledger. The record then serves the right run.
         path, record = self.staged("L-D3", hud_config=PANEL)
@@ -1755,7 +1942,7 @@ class LayoutBindingTests(ScopeCase):
         self.assertEqual(compared & {"HUD_CONFIG", "FIXED_LAYOUTS", "BOX_PANEL_CONFIG"}, {"HUD_CONFIG", "FIXED_LAYOUTS"})
         constants = {node.value for node in ast.walk(functions["layout_bound"]) if isinstance(node, ast.Constant)
                      and isinstance(node.value, str) and node is not functions["layout_bound"].body[0].value}
-        self.assertEqual(constants, {"hud_config_id", "hud_config_sha256"})
+        self.assertEqual(constants, {"hud_config_id", "hud_config_sha256", "granted"})  # The last is a scope's status.
         # One site: the gate's one call, in one function, which every real-output start goes through.
         self.assertEqual(require_calls("sightcircuit/observed_frames.py"), {"LIVE_HUD_OUTPUT": ["fixed_hud_output_permitted"]})
         self.assertEqual(users_of("require_real_output("), ["sightcircuit/observed_frames.py"])

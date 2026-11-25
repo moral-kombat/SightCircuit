@@ -499,6 +499,10 @@ def bridge_retired_itself(report, client):
         "hide_returned_ok", "clear_texture_returned_ok", "destroy_returned_ok"))
 
 
+# The only view the stage has today, as a scope record states it (``runtime.scope.view_value``).
+STAGE_VIEW = {"region": list(WHOLE_FRAME), "rotation": 0, "alignment": None, "presence_watch": False}
+
+
 def stage_view_bound(scope):
     """Whether ``scope`` asks for the only view this stage has today; True or False, and it changes nothing.
 
@@ -517,8 +521,7 @@ def stage_view_bound(scope):
         return False
     view, refusal = view_value(scope.source, scope.hud_config, scope.region, scope.rotation, scope.alignment,
                                scope.presence_watch)
-    return refusal is None and view == {"region": list(WHOLE_FRAME), "rotation": 0, "alignment": None,
-                                        "presence_watch": False}
+    return refusal is None and view == STAGE_VIEW
 
 
 def camera_display_input_preconditions(stage):
@@ -533,7 +536,11 @@ def camera_display_input_preconditions(stage):
     ``max_frames`` at its frame rate; and the scope asks for the view this
     stage has (``stage_view_bound``).
     """
-    scope = getattr(getattr(stage, "client", None), "scope", None)
+    return _camera_preconditions(stage, getattr(getattr(stage, "client", None), "scope", None))
+
+
+def _camera_preconditions(stage, scope):
+    """``camera_display_input_preconditions`` on ``scope``, the one object the caller read from the client."""
     source = getattr(stage, "source", None)
     if (type(scope) is not RunScope or scope.source != CAMERA_LEFT or not isinstance(source, CameraHelperSource)
             or source.source_id != camera_contract.source_id(LEFT_CAMERA)
@@ -558,12 +565,15 @@ def camera_display_input_permitted(stage):
     source, the pinned helper, bounds within the scope's seconds) and the
     scope, already verified and consumed by the output check, permits camera
     input to this stage, checking the deadline and the helper's digest as it
-    answers. A record for the synthetic step, the mirror or both cameras
+    answers. The client's ``scope`` is read once and that one object is
+    judged and asked. A record for the synthetic step, the mirror or both cameras
     never does. The gate is not open.
     """
-    if not camera_display_input_preconditions(stage):
+    scope = getattr(getattr(stage, "client", None), "scope", None)  # Read once, as the output site reads it.
+    if not _camera_preconditions(stage, scope):
         return False
-    return stage.client.scope.permit(CAMERA_INPUT, stage) is True
+    # After the scope's answer the view it verified against its record must still be the stage's.
+    return scope.permit(CAMERA_INPUT, stage) is True and scope.view == STAGE_VIEW
 
 
 class CameraHudStage:

@@ -91,10 +91,12 @@ initialised a runtime, or a fixed-HUD bridge whose hide, texture clear and
 destroy all returned.
 
 **Real output is refused** unless a one-run scope record verifies. With
-`validation_only=False` the client would start `--fixed-hud`. `check_start()`,
-which `start()` calls before anything is launched, passes the answer of
-`fixed_hud_output_permitted(client)` to the `LIVE_HUD_OUTPUT` gate's
-`require`. That function is the one place that decides. It answers `True`
+`validation_only=False` the client would start `--fixed-hud`. `check_start()`
+and `start()` each call `require_real_output(client, layout)` before anything
+is launched (`start()` directly, on the layout value it then launches with,
+not through `check_start()`), and that passes the answer of
+`fixed_hud_output_permitted(client, layout)` to the `LIVE_HUD_OUTPUT` gate's
+one `require`. That function is the one place that decides. It answers `True`
 only for a client whose `scope` is a `RunScope` that permits real output
 ([below](#the-one-run-scope-record)); a client without one, with any other
 object in its place, or with a scope whose record does not verify is refused
@@ -276,10 +278,28 @@ the same record still serves a run that asks for what it binds. The run id
 is spent by row 7 alone, when everything else verified; from then on it
 stays spent whatever happens: a start refused past the deadline, a bridge
 rewritten between the check and the launch, a run that fails before or
-after its bridge started. In both cases the refused or failed run gives its
-scope back (`ObservedFrameClient.withdraw` revokes it), so that scope object
-starts nothing later; that is item L10's rule, unchanged. A re-run after a
-spent record is a new approval and a new record.
+after its bridge started. A run that is refused, or that fails before its
+bridge started, gives its scope back (`ObservedFrameClient.withdraw` revokes
+it), so that scope object starts nothing later; that is item L10's rule,
+unchanged ([revoking](#the-one-run-scope-record), below). Once the bridge
+has started `withdraw` does nothing: the scope stays `granted` for the rest
+of that run, its client can start no second bridge, and no other client can
+hold its use. A re-run after a spent record is a new approval and a new
+record.
+
+**Two names for one refusal, and which to read first.** A refused run
+carries the site's name in `reason` and the scope's own in
+`command.refusal`. Read `command.refusal` first: it says what the record
+check found (`scope_layout_mismatch`, `scope_step_mismatch`,
+`scope_record_expired`, ...), or `site_preconditions_failed` when a site
+refused before the record was consulted. `reason` only says which site
+refused and whether the layout differed: it is
+`fixed_hud_layout_not_approved` whenever the layout about to be launched is
+not the one the scope and the record it read bind, and that can be true
+while the scope stopped at an earlier check. A record for another step that
+also names another layout ends `reason: fixed_hud_layout_not_approved`,
+`command.refusal: scope_step_mismatch`: both are true, and the step is what
+to fix first.
 
 **The two sites compare what runs with what was asked.** A scope is granted
 for a request equal to its record; each permission site then requires the
@@ -287,7 +307,8 @@ request to be what actually runs, before the record is consulted. The output
 site compares the layout the client is about to launch with the scope's and,
 once the record is read, with the record's id and digest
 ([who may show it](box-panel.md#who-may-show-it)); it already compared the
-duration and the bridge. The camera site compares the view: the stage as it
+duration and the bridge. Each site reads the client's scope once and
+judges, asks and compares that one object. The camera site compares the view: the stage as it
 stands draws the strip from the whole frame, unturned, with no alignment and
 no presence watch, so it serves a scope that asks for exactly that and
 refuses any other with the record unspent (`stage_view_bound`). The stage
