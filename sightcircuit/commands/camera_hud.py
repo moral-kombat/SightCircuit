@@ -171,7 +171,8 @@ VALIDATION_BLOCKS = {
     "camera": ("status", "reason", "bridge_mode", "frames_emitted", "frames_sent", "acknowledged_presented",
                "labels", "expiries", "tile_already_down", "source_cleanup_ok", "bridge_cleanup_ok", "ok"),
     "camera_panel": ("status", "reason", "bridge_mode", "layout_id", "update_bytes", "region_rotation",
-                     "frames_emitted", "frames_sent", "acknowledged_presented", "boxes_shown", "labels", "expiries",
+                     "frames_emitted", "frames_sent", "acknowledged_presented", "results_sent", "boxes_sent", "labels",
+                     "expiries",
                      "tile_already_down", "source_cleanup_ok", "bridge_cleanup_ok", "ok"),
     "synthetic_rows": ("status", "reason", "bridge_mode", "requested", "acknowledged_presented", "stops_reached",
                        "stops_expired", "stops_within_bound", "bridge_cleanup_ok", "complete", "ok"),
@@ -528,6 +529,10 @@ def describe_helper(binary):
     return next((line for line in lines if isinstance(line, dict) and line.get("event") == "describe"), None)
 
 
+def _positive(value):
+    return type(value) is int and value > 0
+
+
 def validate(helper=None, bridge=None):
     """The whole path with nothing real in it: the fake helper, a scripted detector, the validation bridge.
 
@@ -559,7 +564,7 @@ def validate(helper=None, bridge=None):
         return finish(report, VALIDATION_BLOCKS, "validate")
     # The fake backend has no camera and no wearer: its parent's confirmation is this check that it is the fake.
     previous = os.environ.get("XDG_RUNTIME_DIR")
-    panel = FIXED_LAYOUTS[1]
+    panel = camera_stage.box_layout()  # By what it is, never by its place in the contract's list.
     with tempfile.TemporaryDirectory(prefix="sightcircuit-camera-hud-validate-") as runtime_directory:
         os.environ["XDG_RUNTIME_DIR"] = runtime_directory
         try:
@@ -589,13 +594,15 @@ def validate(helper=None, bridge=None):
                     and [row["label"] for row in camera["labels"]] == ["bottle"])
     report["camera"] = camera
     frames, cleanup, source = boxed.get("frames") or {}, boxed.get("cleanup") or {}, boxed.get("source") or {}
-    config, counted = boxed.get("config") or {}, boxed.get("boxes") or {}
+    config, counted = boxed.get("config") or {}, boxed.get("boxes")
+    counted = counted if isinstance(counted, dict) else {}  # A missing block is a failed part, not an empty one.
     camera_panel = {
         "status": boxed["status"], "reason": boxed["reason"], "bridge_mode": boxed.get("bridge_mode"),
         "layout_id": config.get("hud_config_id"), "update_bytes": config.get("update_bytes"),
         "region_rotation": (boxed.get("view") or {}).get("rotation"),
         "frames_emitted": source.get("frames_emitted"), "frames_sent": frames.get("sent"),
-        "acknowledged_presented": frames.get("acknowledged_presented"), "boxes_shown": counted.get("boxes_shown"),
+        "acknowledged_presented": frames.get("acknowledged_presented"),
+        "results_sent": counted.get("results_sent"), "boxes_sent": counted.get("boxes_sent"),
         "labels": [{"label": row["label"], "spells": row["spells"]} for row in (boxed.get("labels") or {}).get("rows", [])],
         "expiries": (boxed.get("frame_expired") or {}).get("count"),
         "tile_already_down": (boxed.get("end") or {}).get("tile_already_down"),
@@ -605,7 +612,10 @@ def validate(helper=None, bridge=None):
         and config.get("hud_config_id") == panel.layout_id
         and config.get("update_bytes") == panel.width_px * panel.height_px * 4
         and (frames.get("sent") or 0) > 0 and frames.get("acknowledged_presented") == frames.get("sent")
-        and counted.get("boxes_shown") == counted.get("results_counted")
+        # The boxes block is there and says what was sent: every frame sent carried the one scripted box.
+        and _positive(counted.get("results_sent")) and counted.get("results_sent") == frames.get("sent")
+        and counted.get("boxes_sent") == counted.get("results_sent")
+        and counted.get("boxes_selected") == counted.get("results_counted")
         and [row["label"] for row in camera_panel["labels"]] == ["bottle"])
     report["camera_panel"] = camera_panel
     rows = run_synthetic_rows(validation_only=True, bridge=bridge, mode="validate", **VALIDATION_ROWS)

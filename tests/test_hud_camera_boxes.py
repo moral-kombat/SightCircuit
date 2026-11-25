@@ -503,8 +503,11 @@ class ReportTests(unittest.TestCase):
         camera_stage.check_report({"boxes": self.report}, blocks={"boxes": BOX_REPORT_KEYS})
         with self.assertRaisesRegex(ValueError, "camera_hud_report_field_invalid"):
             camera_stage.check_report({"boxes": {**self.report, "pixels": 1}}, blocks={"boxes": BOX_REPORT_KEYS})
-        # Wired in by item B5: the stage's report carries the block, summed over a run, with one count of its own.
-        self.assertEqual(camera_stage.REPORT_BLOCKS["boxes"], (*BOX_REPORT_KEYS, "results_counted"))
+        # Wired in by item B5: the stage's report carries the block, summed over a run. There ``boxes_shown`` is
+        # named for what it counts, the boxes selected, beside the boxes in results that were sent.
+        renamed = tuple("boxes_selected" if name == "boxes_shown" else name for name in BOX_REPORT_KEYS)
+        self.assertEqual(camera_stage.REPORT_BLOCKS["boxes"], (*renamed, "boxes_sent", "results_counted", "results_sent"))
+        self.assertEqual(set(renamed) ^ set(BOX_REPORT_KEYS), {"boxes_shown", "boxes_selected"})
 
     def test_the_report_states_what_the_selection_was_made_with(self):
         # The region, the threshold and the alignment are the selection's own: the report cannot be handed others.

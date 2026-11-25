@@ -929,6 +929,12 @@ class CameraSiteTests(ScopeCase):
                 # The record itself verifies for that request: asked without the stage, the scope grants.
                 direct = self.run_scope(path, seconds=5, **bound)
                 self.assertIs(direct.permit(scope.HUD_OUTPUT, self), True)
+                # And a scope already granted for output is still refused camera input for an object that states
+                # no view: such an object is taken to be the strip from the whole frame with no watch, which is
+                # not what these scopes ask. (The one case whose scope asks for exactly that, with the difference
+                # on the stage's side, is the exception: for a view-less object there is no difference left.)
+                plain = SimpleNamespace(client=SimpleNamespace(scope=direct), source=self.source(), seconds=5)
+                self.assertIs(camera_stage.camera_display_input_permitted(plain), not bound)
                 (self.root / scope.LEDGER / f"{record['run_id']}.json").unlink()
         # What the stage runs, asked for exactly, is served: the strip from the whole frame (stated in full or
         # left out), the strip through E103's view, and the panel through it with its alignment.
@@ -950,7 +956,7 @@ class CameraSiteTests(ScopeCase):
         run = self.run_scope(self.staged("L-D4")[0], seconds=5)
         stage = self.stage(self.client(run), seconds=5)
         for swapped in (dataclasses.replace(STRIP), PANEL):
-            with self.subTest(swapped=swapped.layout_id), mock.patch.object(stage, "config", swapped):
+            with self.subTest(swapped=swapped.layout_id), mock.patch.object(stage, "_config", swapped):
                 self.assertIs(camera_stage.stage_view_bound(run, stage), False)
                 self.assertIs(camera_stage.camera_display_input_preconditions(stage), False)
         self.assertIs(camera_stage.stage_view_bound(run, stage), True)
@@ -1259,7 +1265,10 @@ class BindingTests(ScopeCase):
             "requested_layout": PANEL.layout_id, "hud_config_id": PANEL.layout_id,
             "hud_config_sha256": config_digest(PANEL), "region": {"x0": 0.25, "y0": 0.25, "x1": 0.75, "y1": 0.75},
             "rotation": 90, "alignment": ALIGNED, "presence_watch": True})
-        self.assertIsNot(report["alignment"], record["alignment"])
+        # The report's alignment is a copy: changing it changes neither the run's record nor a later report.
+        self.assertIsNot(report["alignment"], run.record["alignment"])
+        report["alignment"]["turn"] = 270
+        self.assertEqual((run.record["alignment"], run.report()["alignment"]), (ALIGNED, ALIGNED))
         # The synthetic step's record has no view; a refused scope reports the record it read and what was asked.
         rows, _ = self.staged("L-D3")
         refused = self.run_scope(rows, source=scope.SYNTHETIC, hud_config=PANEL)

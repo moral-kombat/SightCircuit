@@ -14,6 +14,7 @@ about the strip's rows and arrows are replaced here by the panel's.
 Nothing here is a device, a display or SteamVR, and no time is a Frame's.
 """
 import unittest
+from unittest import mock
 
 from sightcircuit.hud.contract import BOX_PANEL_CONFIG
 from tests import test_camera_hud_stage as strip
@@ -53,10 +54,13 @@ class PanelCase:
 class BoxPanelStageTests(PanelCase, strip.CameraHudStageTests):
     # The strip's rows, arrows and orientations: not the panel's. Its own drawing is tested below.
     test_names_only_rows_and_each_orientation_render = None
+    # The strip's arrows and their orientation: the panel has neither, and applies the rotation itself.
+    test_with_a_rotation_the_strips_arrows_stay_in_the_unturned_frame_unless_the_paired_orientation_is_given = None
 
     def test_boxes_are_drawn_where_the_mapping_puts_them_and_the_bytes_sent_are_the_renderers_alone(self):
         import numpy as np
         from sightcircuit.camera.region import FRAME_PIXELS
+        from sightcircuit.hud import camera_stage
         from sightcircuit.hud.boxes import Alignment
         from sightcircuit.hud.contract import config_digest
         script = (("bottle", strip.LEFT), ("cup", strip.LOW))
@@ -84,11 +88,19 @@ class BoxPanelStageTests(PanelCase, strip.CameraHudStageTests):
         self.assertEqual(report["view"], {
             "region": {"x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}, "rotation": 0, "whole_frame": True, "prepared": True,
             "box_coordinate_space": FRAME_PIXELS, "source_space_px": [64, 48], "crop_native_xyxy": [0, 0, 64, 48],
-            "resized_px": [64, 48], "geometry_constant": True})
-        # The boxes block: ``boxes_report`` of every counted result, summed. Counts and format metadata only.
+            "resized_px": [64, 48], "geometry_constant": True, "invalid_detections": 0})
+        # The boxes block: ``boxes_report`` of every counted result, summed, with what was sent beside what was
+        # selected. Counts and format metadata only.
         boxes = report["boxes"]
-        self.assertEqual((boxes["results_counted"], boxes["detections"], boxes["boxes_shown"], boxes["boxes_dropped"]),
-                         (8, 16, 16, 0))
+        self.assertEqual((boxes["results_counted"], boxes["detections"], boxes["boxes_selected"], boxes["boxes_dropped"],
+                          boxes["results_sent"], boxes["boxes_sent"]), (8, 16, 16, 0, 8, 16))
+        self.assertEqual(tuple(boxes), camera_stage.BOXES_BLOCK)
+        self.assertNotIn("boxes_shown", boxes)  # Named for what it counts: selected, and separately sent.
+        # The one layout drawn as boxes is found by what it is, so no caller picks it by its place in the list.
+        self.assertIs(camera_stage.box_layout(), PANEL)
+        with mock.patch.object(camera_stage, "FIXED_LAYOUTS", (PANEL, strip.HUD_CONFIG, PANEL)), \
+                self.assertRaisesRegex(ValueError, "camera_hud_box_layout_not_unique"):
+            camera_stage.box_layout()
         self.assertEqual((boxes["layout_id"], boxes["panel_px"], boxes["max_boxes"], boxes["alignment_neutral"],
                           boxes["source_space_px"], boxes["region_crop_native_xyxy"], boxes["region_rotation"],
                           set(boxes["dropped"].values())),
@@ -134,8 +146,8 @@ class BoxPanelStageTests(PanelCase, strip.CameraHudStageTests):
                          ["frame_sent", "taken_down", "frame_sent", "shown", "frame_sent", "frame_sent", "taken_down"])
         self.assertTrue(all(len(item["rgba"]) == UPDATE_BYTES and any(item["rgba"]) for item in self.queued))
         boxes = report["boxes"]
-        self.assertEqual((boxes["results_counted"], boxes["detections"], boxes["boxes_shown"], boxes["boxes_dropped"]),
-                         (6, 11, 8, 3))
+        self.assertEqual((boxes["results_counted"], boxes["detections"], boxes["boxes_selected"], boxes["boxes_dropped"],
+                          boxes["results_sent"], boxes["boxes_sent"]), (6, 11, 8, 3, 4, 8))
         self.assertEqual({name: count for name, count in boxes["dropped"].items() if count},
                          {"below_threshold": 1, "over_cap": 2})
         self.assertEqual(len(self.queued[2]["token"]), 5)  # The cap: five of the seven.

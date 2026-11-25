@@ -79,6 +79,7 @@ from ..camera import contract as camera_contract
 from ..camera import region as regions
 from ..convert import to_bgr
 from ..detection import POC_THRESHOLD
+from ..frame import Detection
 from ..gates import LIVE_CAMERA_INPUT
 from ..observed_frames import BRIDGE_COUNTS, MAX_ACKNOWLEDGEMENTS, ObservedFrameClient
 from ..overlay import BRIDGE_INPUT_POLL_NS, CLOSE_REPORT_FIELDS, rgba_from_bgr
@@ -88,7 +89,7 @@ from ..runtime.scope import CAMERA_INPUT, CAMERA_LEFT, WHOLE_FRAME, RunScope, pi
 from ..sources.camera_helper import LEFT_CAMERA, CameraHelperSource
 from .box_render import draw_boxes
 from .boxes import BOX_REPORT_KEYS, Alignment, boxes_report, camera_boxes
-from .camera import ORIENTATIONS, camera_rows
+from .camera import MAX_DETECTIONS, ORIENTATIONS, camera_rows
 from .contract import (FIXED_LAYOUTS, HUD_CONFIG, MAX_DISPLAY_AGE_MS, MAX_DISPLAY_AGE_NS, RGBA_BYTES, ROW_LABEL_CHARS,
                        BoxPanelConfig, config_digest, row_label)
 from .render import draw_tile
@@ -113,8 +114,10 @@ MAX_RECORD_LIST = 256  # Records (spell intervals, per-label rows, ``frame_expir
 MAX_KEYS = 48  # Keys of one object.
 MAX_DEPTH = 8
 INTEGER_RANGE = (-2 ** 63, 2 ** 64)  # What a 64-bit counter or nanosecond clock can hold; nothing wider.
-# The whole report, JSON-encoded: 9 to 10 kB of counts and metadata, up to MAX_SPELLS intervals (about 45
-# bytes each, 11.5 kB) and up to MAX_REPORTED_EXPIRIES expiry events (about 400 bytes each, 12.8 kB), plus margin.
+# The whole report, JSON-encoded: 10.2 to 10.9 kB of counts and metadata (the higher figure on the box panel), up
+# to MAX_SPELLS intervals (about 45 bytes each, 11.5 kB) and up to MAX_REPORTED_EXPIRIES expiry events (about 400
+# bytes each, 12.8 kB), plus margin. Measured in review of item B5 on full runs with 5 labels and every budget
+# filled: 35.9 kB on the strip and 36.7 kB on the panel.
 MAX_REPORT_BYTES = 40_960
 MAX_SPELLS = 256  # Display intervals kept over all labels; later ones are counted in ``spells_dropped``.
 # With a target label (the class a run's acceptance verdict is about) the budget is split, so that other labels
@@ -124,6 +127,8 @@ MAX_TARGET_SPELLS = 128
 MAX_REPORTED_EXPIRIES = 32  # ``frame_expired`` events repeated in the report; the count covers them all.
 # Keys of the embedded source and bridge reports that hold prose, paths or argument vectors: left out by name.
 WITHHELD_KEYS = ("error", "detail", "path", "arguments", "definition", "scope", "observed_ns_clock")
+BOXES_BLOCK = (*("boxes_selected" if name == "boxes_shown" else name for name in BOX_REPORT_KEYS),
+               "boxes_sent", "results_counted", "results_sent")
 # Every top-level field of the report, and for each block the keys it may hold (None: a scalar field).
 REPORT_BLOCKS = {
     "report_kind": None, "schema_version": None, "status": None, "reason": None, "error_type": None,
@@ -136,9 +141,12 @@ REPORT_BLOCKS = {
     # The region of view the detector was given (item L17): fractions of the native frame, the quarter turn, and
     # where that lay in the first frame. ``prepared`` says whether the frame went through ``region.prepare``.
     "view": ("region", "rotation", "whole_frame", "prepared", "box_coordinate_space", "source_space_px",
-             "crop_native_xyxy", "resized_px", "geometry_constant"),
-    # The box layout's counts (item B5): ``boxes.boxes_report`` of every counted result, summed; null on the strip.
-    "boxes": (*BOX_REPORT_KEYS, "results_counted"),
+             "crop_native_xyxy", "resized_px", "geometry_constant", "invalid_detections"),
+    # The box layout's counts (item B5), null on the strip: ``boxes.boxes_report`` of every counted result,
+    # summed. ``boxes_selected`` is that block's ``boxes_shown`` under the name of what it counts here: boxes
+    # selected and drawn, whether or not the result was then sent. ``results_sent`` and ``boxes_sent`` count the
+    # results the client accepted for the bridge and the boxes in them.
+    "boxes": BOXES_BLOCK,
     "identities": ("frame_identity", "first_frame_id", "last_frame_id", "last_result_index", "source_id"),
     "results": ("results", "results_with_rows", "results_without_rows", "results_too_old", "results_after_end"),
     "frames": ("submitted", "sent", "not_sent", "written_past_deadline", "acknowledged_presented",
@@ -538,6 +546,63 @@ def bridge_retired_itself(report, client):
 STAGE_VIEW = {"region": list(WHOLE_FRAME), "rotation": 0, "alignment": None, "presence_watch": False}
 
 
+# The strip's arrows and a rotation. The stage takes every box back to the unturned whole frame, so with a
+# rotation the strip's arrows still say where the object is in the camera image as the camera delivers it; the
+# rotation is not applied to them (the panel does apply it: it shows the region as the detector saw it). For
+# arrows that refer to the image as the detector saw it, ``orientation`` must be given as well, and this is the
+# one that pairs with each rotation. It is not applied for the caller: both are the operator's arguments.
+ROTATION_ORIENTATION = {0: "identity", 90: "rotate_90_cw", 180: "rotate_180", 270: "rotate_90_ccw"}
+
+
+def box_layout():
+    """The contract's fixed layout that is drawn as boxes. There is exactly one; any other number is an error
+    here and not a guess, so a caller never picks a layout by its place in the list."""
+    found = [layout for layout in FIXED_LAYOUTS if isinstance(layout, BoxPanelConfig)]
+    if len(found) != 1:
+        raise ValueError("camera_hud_box_layout_not_unique")
+    return found[0]
+
+
+def _coordinate(value, plain):
+    """Whether ``value`` is a box coordinate the layout's selector takes: the strip's rule or the panel's.
+
+    The strip's rows take a finite Python ``int`` or ``float`` (``plain``);
+    the panel's boxes take any finite real number that is not a boolean.
+    The two rules are the selectors' own, repeated here so that a detection
+    is judged before its box is mapped exactly as it is judged without a
+    mapping.
+    """
+    if plain:
+        return isinstance(value, int) or (isinstance(value, float) and math.isfinite(value))
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        return False
+    return isinstance(value, numbers.Integral) or math.isfinite(float(value))
+
+
+def valid_detections(detections, input_size, plain):
+    """``(valid, invalid count)``: the detections whose box lies in the detector's input, in their order.
+
+    A box is valid when it is a list or tuple of four coordinates the
+    layout's selector takes, with ``0 <= x0 < x1 <= width`` and
+    ``0 <= y0 < y1 <= height`` of ``input_size``, the image the detector was
+    given. This is judged before any box is mapped back to the whole frame:
+    ``Mapping.to_frame`` sorts, clamps and rounds, so a box outside the
+    input, inverted or not a box at all would otherwise come back as a valid
+    one, or raise and end the run. A region or a rotation therefore never
+    changes which detections count as valid. Score and label are the
+    selectors' to judge.
+    """
+    width, height = input_size
+    valid = []
+    for detection in detections:
+        box = getattr(detection, "box_xyxy", None)
+        if (isinstance(detection, Detection) and isinstance(box, (list, tuple)) and len(box) == 4
+                and all(_coordinate(value, plain) for value in box)
+                and 0 <= box[0] < box[2] <= width and 0 <= box[1] < box[3] <= height):
+            valid.append(detection)
+    return valid, len(detections) - len(valid)
+
+
 def stage_bound(stage):
     """``(layout, view)`` of what ``stage`` runs: the layout it draws for and its view as a scope record states it.
 
@@ -644,7 +709,12 @@ class CameraHudStage:
     pipeline is about to process, before its conversion. ``convert`` is the
     conversion of a frame that is not seen through a region; with a region
     (and always on the panel, whose boxes need the frame's ``Mapping``) the
-    stage prepares the frame itself. The
+    stage prepares the frame itself. ``config``, ``region``, ``alignment``
+    and ``presence_watch`` are what the permission sites compare with the
+    scope record, so they are read-only once the stage is built, and whether
+    a frame is prepared (``prepares``) is derived from them on every frame:
+    what the sites approved is what runs. ``presence_watch`` is whether the
+    stage holds a watch, not a flag; it holds none. The
     numbers are checked and turned into plain ``float`` and ``int`` here, so
     a NumPy scalar cannot fail the report at the end of a run.
     ``target_label``, when given, is the label a run's verdict is about: its
@@ -680,16 +750,15 @@ class CameraHudStage:
             raise ValueError("camera_hud_config_not_fixed")
         if (HUD_CONFIG if client.layout is None else client.layout) is not config:
             raise ValueError("camera_hud_layout_mismatch")  # The stage would draw one layout and the client send another.
-        self.boxed = isinstance(config, BoxPanelConfig)
+        boxed = isinstance(config, BoxPanelConfig)
         if region is not None and not isinstance(region, regions.Region):
             raise ValueError("camera_hud_region_invalid")
-        if (not isinstance(alignment, Alignment)) if self.boxed else alignment is not None:
+        if (not isinstance(alignment, Alignment)) if boxed else alignment is not None:
             raise ValueError("camera_hud_alignment_invalid")
-        self.region = regions.Region() if region is None else region
-        self.alignment, self.on_frame = alignment, on_frame
-        self.presence_watch = False  # The stage holds no presence watch (the displayed path's watch is item L17's).
-        # The strip from the whole frame, unturned, is converted as it always was; anything else is prepared here.
-        self._prepares = self.boxed or not self.region.whole
+        # What the permission sites compare with the scope record: set here, read through properties without setters.
+        self._config, self._region, self._alignment = config, regions.Region() if region is None else region, alignment
+        self._presence = None  # The presence watch the stage holds: none (the displayed path's watch is item L17's).
+        self.on_frame = on_frame
         if type(directions) is not bool:
             raise ValueError("hud_camera_directions_invalid")
         if type(orientation) is not str or orientation not in ORIENTATIONS:
@@ -703,7 +772,7 @@ class CameraHudStage:
             self.max_frames = -1
         if self.max_frames < 0:
             raise ValueError("camera_hud_limits_invalid")
-        self.source, self.detector, self.client, self.config = source, detector, client, config
+        self.source, self.detector, self.client = source, detector, client
         self.directions, self.orientation, self.convert = directions, orientation, convert
         self.pipeline = self.failure = None
         self.status, self.reason = "not_run", None
@@ -722,7 +791,8 @@ class CameraHudStage:
         self._geometry = None  # ``Mapping`` of the first prepared frame, and whether every later one equalled it.
         self._geometry_constant = True
         self._boxes = None  # ``boxes_report`` of the first counted result with the later ones' counts added.
-        self._boxes_counted = 0
+        self._boxes_counted = self._boxes_sent = self._results_sent = 0
+        self._invalid_detections = 0  # Detections dropped before mapping: no valid box in the detector's input.
         self.run_start_ns = None  # When the bridge was ready (``time.monotonic_ns()``).
         self.ended_ns = None  # When the watcher saw ``stop``.
         # The bridge ended or the client failed before the run had ended: the watcher saw it and set ``stop``, or
@@ -731,11 +801,46 @@ class CameraHudStage:
         self._stop_seen = None
         self._ended = threading.Event()
         self._lock = threading.Lock()
-        self._rendered = None  # (result, labels shown, the panel's selection or None) of what ``_tile`` drew last.
+        # (result, labels shown, the panel's selection or None, detections invalid before mapping) of the last tile.
+        self._rendered = None
         self._queued = {}  # frame_id -> (labels, observed_ns, expires_ns) until the bridge answers for it.
         self._bridge_report = None
         self._ran = False
         client.listener = self._on_packet
+
+    # -- what the permission sites compare: read-only ---------------------------------------------------------------
+
+    @property
+    def config(self):
+        """The fixed layout the stage draws for: one of the contract's own objects."""
+        return self._config
+
+    @property
+    def region(self):
+        """The ``Region`` the detector is given."""
+        return self._region
+
+    @property
+    def alignment(self):
+        """The panel's ``Alignment``, or None on the strip."""
+        return self._alignment
+
+    @property
+    def presence_watch(self):
+        """Whether the stage holds a presence watch: what it holds, not what it was told."""
+        return self._presence is not None
+
+    @property
+    def boxed(self):
+        """Whether the layout is the box panel."""
+        return isinstance(self._config, BoxPanelConfig)
+
+    @property
+    def prepares(self):
+        """Whether frames go through ``region.prepare``: always on the panel, and on the strip unless it sees the
+        whole frame unturned (which is converted as it always was). Derived from the layout and the region the
+        sites compare, on every frame."""
+        return self.boxed or not self._region.whole
 
     # -- the pipeline's hooks ------------------------------------------------------------------------------------
 
@@ -752,7 +857,7 @@ class CameraHudStage:
         """The pipeline's conversion: the frame as the detector sees it, through the region when there is one."""
         if self.on_frame is not None:
             self.on_frame(frame)
-        if not self._prepares:
+        if not self.prepares:
             self._mapping = None
             return self.convert(frame)
         image, mapping = regions.prepare(frame, self.region)
@@ -768,17 +873,23 @@ class CameraHudStage:
         them alone. No pixel of ``bgr`` reaches the image: the strip's and the panel's renderers take none."""
         mapping, timer, steps = self._mapping, time.perf_counter, self.steps
         started = timer()
-        mapped = result if mapping is None else mapping.result(result)  # Boxes back in the whole frame's space.
+        if len(result.detections) > MAX_DETECTIONS:  # The selectors' budget, on what the detector returned.
+            raise ValueError("hud_detection_budget_exceeded")
+        # Judged in the detector's input, before any box is mapped: mapping clamps, and must not make a box valid.
+        input_size = (bgr.shape[1], bgr.shape[0]) if mapping is None else mapping.input_size
+        valid, invalid = valid_detections(result.detections, input_size, plain=not self.boxed)
+        if mapping is not None:  # Boxes back in the whole frame's space.
+            valid = [Detection(item.label, item.confidence, mapping.to_frame(item.box_xyxy)) for item in valid]
         at_mapped = timer()
         if self.boxed:
-            selection = camera_boxes(list(mapped.detections), mapping, self.config, threshold=self.threshold,
+            selection = camera_boxes(valid, mapping, self.config, threshold=self.threshold,
                                      alignment=self.alignment)
             at_selected = timer()
             image = draw_boxes(selection.boxes, self.config)
             labels = tuple(dict.fromkeys(selection.labels))
         else:
             shape = bgr.shape if mapping is None else (mapping.space[1], mapping.space[0])
-            rows = camera_rows(list(mapped.detections), shape, self.config, threshold=self.threshold,
+            rows = camera_rows(valid, shape, self.config, threshold=self.threshold,
                                directions=self.directions, orientation=self.orientation)
             at_selected = timer()
             image = draw_tile(rows, self.config)
@@ -787,12 +898,16 @@ class CameraHudStage:
         steps["map"].add((at_mapped - started) * 1e3)
         steps["select"].add((at_selected - at_mapped) * 1e3)
         steps["draw"].add((at_drawn - at_selected) * 1e3)
-        self._rendered = (result, labels, selection)
+        self._rendered = (result, labels, selection, invalid)
         return image
 
-    def _count_boxes(self, selection):
-        """Add one result's ``boxes_report`` to the run's: metadata from the first, counts summed."""
+    def _count_boxes(self, selection, invalid):
+        """Add one result's ``boxes_report`` to the run's: metadata from the first, counts summed. The detections
+        dropped before mapping are counted with it, as detections dropped as ``invalid``."""
         block = boxes_report(selection, self.config)
+        block["detections"] += invalid
+        block["boxes_dropped"] += invalid
+        block["dropped"] = {**block["dropped"], "invalid": block["dropped"]["invalid"] + invalid}
         self._boxes_counted += 1
         if self._boxes is None:
             self._boxes = block
@@ -829,14 +944,15 @@ class CameraHudStage:
         if self.client.error:
             self._note_bridge_end()  # This thread can meet the dead bridge before the watcher's next look.
             raise RuntimeError(self.client.error)
-        labels, selection = rendered[1], rendered[2]
+        labels, selection, invalid = rendered[1:]
         frame = processed.frame
         counts = self.counts
         counts["results"] += 1
         self.last_result_index = processed.index
-        if selection is not None:
-            with self._lock:
-                self._count_boxes(selection)
+        with self._lock:
+            self._invalid_detections += invalid
+            if selection is not None:
+                self._count_boxes(selection, invalid)
         if self._ended.is_set():
             counts["results_after_end"] += 1
             return
@@ -863,9 +979,13 @@ class CameraHudStage:
             self._queued[frame.sequence] = (labels, frame.observed_ns, expires_ns)
         queued = self.client.submit_observed(frame.sequence, frame.observed_ns, expires_ns, width, height, rgba,
                                              token=labels)
-        self.steps["queue"].add((timer() - packed) * 1e3)
         if queued:
+            self.steps["queue"].add((timer() - packed) * 1e3)  # Only a submit the client accepted is a result sent.
             counts["frames_queued"] += 1
+            if selection is not None:
+                with self._lock:
+                    self._results_sent += 1
+                    self._boxes_sent += len(selection.boxes)
             return
         with self._lock:
             self._queued.pop(frame.sequence, None)
@@ -1125,17 +1245,23 @@ class CameraHudStage:
             run_end_ns = self.ended_ns if self.ended_ns is not None else self.run_start_ns
             labels = self.ledger.rows(self.run_start_ns, run_end_ns) if self.run_start_ns is not None else []
             spells_dropped, target_dropped = self.ledger.dropped, self.ledger.target_dropped
-            boxes = None if self._boxes is None else {**self._boxes, "dropped": dict(self._boxes["dropped"]),
-                                                      "results_counted": self._boxes_counted}
+            boxes = None
+            if self._boxes is not None:
+                boxes = {("boxes_selected" if name == "boxes_shown" else name): value
+                         for name, value in self._boxes.items()}
+                boxes.update(dropped=dict(self._boxes["dropped"]), boxes_sent=self._boxes_sent,
+                             results_counted=self._boxes_counted, results_sent=self._results_sent)
+            invalid_detections = self._invalid_detections
         geometry = self._geometry
         x0, y0, x1, y1 = self.region.fractions
         view = {"region": {"x0": x0, "y0": y0, "x1": x1, "y1": y1}, "rotation": self.region.rotation,
-                "whole_frame": self.region.whole, "prepared": self._prepares,
-                "box_coordinate_space": regions.FRAME_PIXELS if self._prepares else DETECTOR_INPUT_PIXELS,
+                "whole_frame": self.region.whole, "prepared": self.prepares,
+                "box_coordinate_space": regions.FRAME_PIXELS if self.prepares else DETECTOR_INPUT_PIXELS,
                 "source_space_px": None if geometry is None else list(geometry.space),
                 "crop_native_xyxy": None if geometry is None else list(geometry.crop),
                 "resized_px": None if geometry is None else list(geometry.resized),
-                "geometry_constant": None if geometry is None else self._geometry_constant}
+                "geometry_constant": None if geometry is None else self._geometry_constant,
+                "invalid_detections": invalid_detections}
         stats = pipeline.stats.report() if pipeline is not None else None
         native = (bridge or {}).get("native_report") or {}
         bridge_counts = {name: native.get(name) for name in BRIDGE_COUNTS}
@@ -1209,7 +1335,8 @@ class CameraHudStage:
                           "within_cap": self.max_deadline_span_ns <= MAX_DISPLAY_AGE_NS},
             "end": self._end(),
             "timings": self._timings(stats),
-            # ``pack`` and ``queue`` are timed only for results that were sent; the others for every result drawn.
+            # ``pack`` is timed for every result packed and ``queue`` for every one the client accepted; the
+            # others for every result drawn.
             "steps_ms": {"percentile_method": PERCENTILE_METHOD, "clock": "host_perf_counter", "unit": "ms",
                          **{name: self.steps[name].report() for name in STEPS}},
             "frame_expired": expiry,

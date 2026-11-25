@@ -643,11 +643,13 @@ class RunScope:
         layout's id and digest, the region (as ``{"x0", "y0", "x1", "y1"}``,
         because a report holds no list of fractions), the rotation, the
         alignment's five numbers and the presence-watch requirement; and
-        ``requested_layout``, the id of the layout the run asked for. All
-        are null until a record was accepted.
+        ``requested_layout``, the id of the layout the run asked for, which
+        is stated from the start. The record's fields are null until a
+        record was accepted. The alignment is a copy, never the record's
+        own object.
         """
         record = self.record or {}
-        region = record.get("region")
+        region, alignment = record.get("region"), record.get("alignment")
         layout = self.hud_config if any(self.hud_config is known for known in FIXED_LAYOUTS) else None
         return {"status": self.status, "refusal": self.refusal, "consumed": self.consumed,
                 "requested_runner": self.runner if type(self.runner) is str and APPROVAL.fullmatch(self.runner) else None,
@@ -656,7 +658,8 @@ class RunScope:
                 "requested_layout": None if layout is None else layout.layout_id,
                 **{name: record.get(name) for name in ("step", "source", "run_id", "revision", "manifest_sha256",
                                                        "deadline_utc", "max_seconds", "approval", "hud_config_id",
-                                                       "hud_config_sha256", "rotation", "alignment", "presence_watch")},
+                                                       "hud_config_sha256", "rotation", "presence_watch")},
+                "alignment": dict(alignment) if isinstance(alignment, dict) else None,
                 "region": None if region is None else dict(zip(("x0", "y0", "x1", "y1"), region))}
 
 

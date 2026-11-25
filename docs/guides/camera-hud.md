@@ -329,12 +329,26 @@ is read, and the record must name the same values.
   object, on a transparent 512 × 512 panel fixed in front of the head). The
   panel takes `--alignment` and refuses `--directions`, `--names-only` and
   `--orientation`, which are the strip's.
-- `--region X0,Y0,X1,Y1` gives the detector that rectangle of the frame, as
-  fractions; `--rotation` (0, 90, 180 or 270) turns it by quarter turns
-  first. They are [`camera_recognize`'s options](camera-recognize.md#a-region-of-view)
+- `--region X0,Y0,X1,Y1` gives the detector that rectangle of the frame.
+  The fractions are of the camera's frame as it is delivered, unturned. The
+  rectangle is cropped from that frame, resized, and only then turned
+  clockwise by `--rotation` (0, 90, 180 or 270), so a rotation never changes
+  which part of the frame is taken. They are
+  [`camera_recognize`'s options](camera-recognize.md#a-region-of-view)
   and mean the same. Both are arguments, not findings: which rotation is
   upright for the left camera is not established, so no value here is a
   default to copy.
+- **A rotation and the strip's arrows.** The panel applies the rotation: it
+  shows the region as the detector saw it. The strip does not: its arrows
+  are worked out in the unturned frame, so with `--rotation` alone they
+  point as in the camera's delivered image, a quarter turn off for the
+  wearer. With `--directions`, give the orientation that pairs with the
+  rotation as well: `--rotation 90` with `--orientation rotate_90_cw`,
+  `--rotation 270` with `--orientation rotate_90_ccw` (and 180 with
+  `rotate_180`, 0 with `identity`). The command does not pair them for you
+  and does not refuse another pairing: both stay the operator's arguments,
+  because neither value is a finding yet. With `--names-only` there are no
+  arrows and the orientation changes nothing shown.
 - `--alignment SX,SY,OX,OY,TURN` is the panel's placement of the boxes: the
   project's own five numbers (scale, offset in panel fractions, quarter
   turn), never the SDK's calibration. It has no default; the neutral value
@@ -388,7 +402,7 @@ labels, boxes, timings and format metadata.
 | --- | --- |
 | the stage's blocks | Everything in the [stage report](../reference/camera-hud.md#the-report): the helper's ready and end records, every `frame_expired` record with its hide times, per-label intervals, the timings with their timebases, the cleanup verdicts |
 | `command` | The mode, the exit code, `confirmation` (`operator_terminal`), the requested bounds, the detector, `refusal`, whether the report was saved |
-| `scope_record` | Identifiers only: the step, the source, the run id, the revision, the manifest digest, the deadline, the bound, the approval reference, whether it was granted and consumed, and the refusal |
+| `scope_record` | Identifiers and format metadata only: the step, the source, the run id, the revision, the manifest digest, the deadline, the bound, the approval reference, whether it was granted and consumed, and the refusal; and what the record binds since its schema version 2: the layout the run asked for (`requested_layout`), the record's layout id and digest, the region as `{x0, y0, x1, y1}`, the rotation, the alignment's five numbers and whether the presence watch is required |
 | `marks`, `timebase` | The cues and key marks with monotonic and UTC times (the first 32; the count covers all) |
 | `target` | Row G10's rule for `--target-label` |
 

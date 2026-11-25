@@ -157,8 +157,38 @@ Everything in the table of rules above is the same code for both: the
 deadline from the camera frame's observation, sending every newer result,
 the acknowledgements and the ledger (fed from the rows' labels or from the
 selection's), the watcher, the end, the latch and the bridge-death path.
-`tests/test_camera_hud_stage_panel.py` runs the strip's stage suite, its
-assertions unedited, with the panel.
+`tests/test_camera_hud_stage_panel.py` runs the strip's stage suite with
+the panel: 26 of the 30 tests the strip had are run unedited, three through
+the harness's layout parameters (the frame size the client takes and the
+payload expected for a result), and one, the strip's names-only rows and
+orientations, does not apply to the panel and is left out there by name.
+
+**What the sites compare is read-only.** `config`, `region`, `alignment`
+and `presence_watch` are properties without setters, and whether a frame is
+prepared (`prepares`) is derived from the layout and the region on every
+frame, so the sites cannot approve one view and the run use another.
+`presence_watch` is whether the stage holds a watch, not a flag beside it;
+the stage holds none.
+
+**A detection is judged in the detector's input, before its box is mapped.**
+Taking a box back to the whole frame sorts, clamps and rounds it
+(`Mapping.to_frame`), so `valid_detections` first drops every detection
+whose box is not a list or tuple of four coordinates the layout's selector
+takes with `0 <= x0 < x1 <= width` and `0 <= y0 < y1 <= height` of the image
+the detector was given: a box outside the input, inverted, empty, with a
+NaN or an infinity, of three numbers, `None` or text. They are counted
+(`view.invalid_detections`, and on the panel in `boxes.dropped.invalid`) and
+never raise, so a region or a rotation does not change which detections
+count as valid, and a malformed box cannot end a run and waste its record.
+
+**A rotation and the strip's arrows.** With a rotation the panel shows the
+region as the detector saw it. The strip's arrows do not follow the
+rotation: boxes are taken back to the unturned whole frame and the arrow is
+worked out there, so it refers to the camera's delivered image unless
+`orientation` is given as well. `ROTATION_ORIENTATION` is the pairing that
+makes the arrows refer to the image as the detector saw it (90 with
+`rotate_90_cw`, 270 with `rotate_90_ccw`, 180 with `rotate_180`); the stage
+does not apply it, because both are the operator's arguments.
 
 **The rule for nothing to show is one rule, kept.** A result with no rows, or
 with no boxes, takes the tile down at once with a hide request and nothing is
@@ -460,10 +490,14 @@ run stays the bounded recognition without display. Both sites take only a
 the mirror's HUD mode and `require_synthetic` are unchanged and never consult
 a record.
 
-`RunScope.report()` gives identifiers only (the requested and the recorded
-step and source, the run id, the revision, the manifest digest, the
-deadline, the bound, the approval reference, whether it was granted, revoked
-and consumed, and the refusal), for a command's report.
+`RunScope.report()` gives identifiers and format metadata only, for a
+command's report: the requested and the recorded step and source, the run
+id, the revision, the manifest digest, the deadline, the bound, the approval
+reference, whether it was granted, revoked and consumed, and the refusal;
+and, since the record's schema version 2, `requested_layout` (stated from
+the start) with what the accepted record binds: `hud_config_id`,
+`hud_config_sha256`, the region as `{x0, y0, x1, y1}`, the rotation, the
+alignment's five numbers (a copy) and `presence_watch`.
 
 **A stored report from before this change.** Reports that carry every gate
 claim (`gates.claims()`) gained `production_camera_input_enabled`. The
@@ -492,16 +526,16 @@ The records that verify there are test fixture records.
 ## The report
 
 `report()` returns kind `camera_hud_stage`, schema version 1. Three blocks
-and four keys of `config` were added with the box layout (items B5 and L17);
+and three keys of `config` (`max_boxes`, `alignment`, `update_bytes`) were added with the box layout (items B5 and L17);
 no key was removed or changed its meaning.
 
 | Block | Holds |
 | --- | --- |
 | top level | `status`, `reason`, `error_type`, the three gate claims (all false), `validation_only`, `bridge_mode`, `images_saved`, `pixels_in_report` and `physical_display_observed` (all false), `fields_withheld` |
 | `config` | the layout's id and digest, the tile size and `update_bytes` (its RGBA bytes: 163,840 or 1,048,576), `rows` (the strip) or `max_boxes` (the panel), the threshold, `directions` and `orientation` (null on the panel), `alignment` (the five numbers; null on the strip), the bounds, the maximum display age and the keepalive interval |
-| `view` | the region as `{x0, y0, x1, y1}` (a report holds no list of fractions), the rotation, `whole_frame`, `prepared` (whether frames went through `region.prepare`), the box space's name and size, where the region lay in the first frame (`crop_native_xyxy`, `resized_px`) and `geometry_constant` |
-| `boxes` | the panel only (null on the strip): [`boxes_report`](box-panel.md#the-report-block) of every counted result, the metadata from the first and the counts summed (`detections`, `boxes_shown`, `boxes_dropped`, `dropped` per reason), with `results_counted`. No label, score, box or pixel |
-| `steps_ms` | this side's own work per result: `map`, `select`, `draw` for every result drawn, `pack` and `queue` for every result sent, each with count, p50, p95 and max on this host's `perf_counter` |
+| `view` | the region as `{x0, y0, x1, y1}` (a report holds no list of fractions), the rotation, `whole_frame`, `prepared` (whether frames went through `region.prepare`), the box space's name and size, where the region lay in the first frame (`crop_native_xyxy`, `resized_px`), `geometry_constant`, and `invalid_detections`: detections dropped before mapping because their box was not a valid box in the detector's input |
+| `boxes` | the panel only (null on the strip): [`boxes_report`](box-panel.md#the-report-block) of every counted result, the metadata from the first and the counts summed (`detections`, `boxes_selected`, `boxes_dropped`, `dropped` per reason), with `results_counted`. `boxes_selected` is that block's `boxes_shown` under the name of what it counts here: boxes selected and drawn, whether or not the result was then sent (a result too old or after the end is drawn and not sent). `results_sent` and `boxes_sent` count the results the client accepted and the boxes in them. No label, score, box or pixel |
+| `steps_ms` | this side's own work per result: `map`, `select`, `draw` for every result drawn, `pack` for every result packed and `queue` for every result the client accepted (a submit it refused is not timed), each with count, p50, p95 and max on this host's `perf_counter` |
 | `identities` | the identity rule (`camera_frame_sequence`), the first and last frame identity written, the last result index and the source id |
 | `results` | results seen, with rows, without rows, too old, and after the end (on the panel "rows" reads "boxes": the keys are the strip's and are kept) |
 | `frames` | `submitted` (handed to the client), `sent` (written to the pipe), `not_sent` (replaced, withdrawn by a take-down or past its deadline before the write), `written_past_deadline`; the bridge's answers per frame: `acknowledged_presented`, `acknowledged_refused`, `refused_reasons`, `unacknowledged`; and the bridge's final counts: `bridge_received`, `bridge_accepted`, `retransmitted`, `refused` (stale or expired on arrival), `expired`, `expired_in_upload` |
@@ -624,7 +658,11 @@ is the only code that builds a `RunScope`, and it has three modes.
 scripted detector and the validation bridge, once for the strip from the
 whole frame and once for the box panel through a region turned a quarter
 (`camera_panel` in its report, whose schema version is 2 since that part was
-added), then the synthetic rows on the validation bridge with one stop. Before asking the helper to export anything
+added), then the synthetic rows on the validation bridge with one stop. The
+panel's pass is judged on its `boxes` block as well: the block must be
+there, with a positive `results_sent` equal to the frames sent, one box sent
+for each (`boxes_sent`) and one selected for each counted result; otherwise
+the validation fails with `camera_panel_path_failed`. Before asking the helper to export anything
 it reads the helper's `--describe` record (no connect, no camera) and refuses
 unless it says `backend: fake` with no SDK release. It needs no record and no
 terminal.

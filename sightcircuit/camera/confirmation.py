@@ -36,7 +36,9 @@ DISPLAY_NOTICE = (
     "--report. Stop with Ctrl-C at any passthrough change, any green input, or when the wearer asks. Typing yes "
     "starts this one run; it is not an approval and creates no scope record.")
 # The same for a run on the box panel (work-order item B5): what the wearer will see is a box and a name over the
-# scene, not a tile at the edge.
+# scene, not a tile at the edge. The owner accepted this wording as it stands on 2026-11-25 (owner decision C of
+# item B5, relayed by the coordinator: "Yes, accept it"); ``tests/test_camera_hud_command.py`` pins it sentence
+# for sentence, so a change to it is a change the owner is asked about.
 BOX_DISPLAY_NOTICE = (
     "camera_hud: draws a box with a name around each detected object, on a transparent panel in the middle of the "
     "view in the headset, for the bounds shown below. A box sits on its object only while the head is still; it "

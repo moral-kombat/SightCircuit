@@ -361,7 +361,9 @@ accepts it as a block, and since item B5 it is the `boxes` block of
 `camera_boxes(...)`, `draw_boxes(selection.boxes, config)`, and for the
 report `boxes_report(selection, config)`: the metadata from the first
 counted result and the four counts summed over all of them, with
-`results_counted`.
+`results_counted`. In the stage's block `boxes_shown` is named
+`boxes_selected` (a result can be selected and drawn and then not sent),
+beside `results_sent` and `boxes_sent`.
 
 ## The bridge and the panel (item B3)
 

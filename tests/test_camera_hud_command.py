@@ -129,10 +129,28 @@ class BoundaryTests(unittest.TestCase):
                                                            notices=(confirmation.DISPLAY_NOTICE,)))
         self.assertEqual(shown.getvalue(), contract.EXPORT_NOTICE + "\n" + confirmation.DISPLAY_NOTICE + "\n" +
                          "Bounds: 150 frames, 30 seconds, 5 frames a second, cameras 0.\nType yes to continue: ")
-        for notice in (confirmation.DISPLAY_NOTICE, confirmation.SYNTHETIC_NOTICE):
+        for notice in (confirmation.DISPLAY_NOTICE, confirmation.BOX_DISPLAY_NOTICE, confirmation.SYNTHETIC_NOTICE):
             self.assertIn("it is not an approval and creates no scope record", notice)
             self.assertIn("Ctrl-C", notice)
             self.assertIn("green input", notice)
+        # The box panel's notice, as the owner accepted it on 2026-11-25 (owner decision C of item B5), sentence
+        # for sentence: a change to any of them is a change the owner is asked about.
+        self.assertEqual([sentence.strip() for sentence in confirmation.BOX_DISPLAY_NOTICE.split(". ")], [
+            "camera_hud: draws a box with a name around each detected object, on a transparent panel in the middle "
+            "of the view in the headset, for the bounds shown below",
+            "A box sits on its object only while the head is still; it trails when the head turns",
+            "A box is taken down about one second after the camera frame it came from unless a newer frame shows "
+            "it again",
+            "The panel shows no camera image",
+            "The command saves no image; its report holds counts, labels, timings and format metadata, printed on "
+            "this terminal and written to a file only if you named --report",
+            "Stop with Ctrl-C at any passthrough change, any green input, or when the wearer asks",
+            "Typing yes starts this one run; it is not an approval and creates no scope record."])
+        shown = io.StringIO()
+        self.assertIsNone(confirmation.confirm_on_terminal(limits, (0,), stdin=Terminal(), output=shown,
+                                                           notices=(confirmation.BOX_DISPLAY_NOTICE,)))
+        self.assertEqual(shown.getvalue(), contract.EXPORT_NOTICE + "\n" + confirmation.BOX_DISPLAY_NOTICE + "\n" +
+                         "Bounds: 150 frames, 30 seconds, 5 frames a second, cameras 0.\nType yes to continue: ")
         # The helper's notice is true of a display command that is given --report (revised with this command).
         self.assertIn("a display command shows labels and approximate arrows in the headset and saves only the report "
                       "you name (counts, labels, boxes and timings)", contract.EXPORT_NOTICE)
@@ -438,7 +456,8 @@ class ValidateTests(unittest.TestCase):
                           panel["region_rotation"], panel["frames_emitted"], panel["ok"], panel["source_cleanup_ok"],
                           panel["bridge_cleanup_ok"]),
                          ("completed", "--validate-stdin", "head-fixed-box-panel-v1", 1_048_576, 90, 6, True, True, True))
-        self.assertEqual((panel["acknowledged_presented"], panel["boxes_shown"]), (panel["frames_sent"],) * 2)
+        self.assertEqual((panel["acknowledged_presented"], panel["results_sent"], panel["boxes_sent"]),
+                         (panel["frames_sent"],) * 3)
         self.assertGreater(panel["frames_sent"], 0)
         self.assertEqual(panel["labels"], [{"label": "bottle", "spells": panel["labels"][0]["spells"]}])
         self.assertEqual(report["schema_version"], 2)  # 2 since the panel's part.
@@ -473,6 +492,38 @@ class ValidateTests(unittest.TestCase):
         self.assertEqual((report["status"], report["reason"], report["camera"]["ok"], report["command"]["exit_code"]),
                          ("validation_failed", "camera_path_failed", False, 1))
         self.assertEqual({name: report[name] for name in gates.claims()}, ALL_CLOSED)
+
+    def test_validate_fails_its_panel_part_by_name_when_the_boxes_block_is_missing_or_says_nothing_was_sent(self):
+        # The panel's pass is judged on its boxes block: without the block, or with one that counts nothing
+        # sent, the validation is not ``validated``, whatever else the pass reports. The strip's pass and the
+        # synthetic rows are untouched, so the reason is the panel's own.
+        run_camera = camera_hud.run_camera
+
+        def spoiled(change):
+            def run(*arguments, **options):
+                report = run_camera(*arguments, **options)
+                if options.get("layout") is not None:  # The panel's pass.
+                    change(report)
+                return report
+            return run
+
+        def emptied(report):
+            report["boxes"].update(results_sent=0, boxes_sent=0)
+
+        def unsent(report):
+            report["boxes"].update(boxes_sent=report["boxes"]["boxes_sent"] - 1)
+        for name, change in (("no block", lambda report: report.update(boxes=None)),
+                             ("no block at all", lambda report: report.pop("boxes")),
+                             ("nothing sent", emptied), ("a box short", unsent)):
+            with self.subTest(spoiled=name), mock.patch.object(camera_hud, "run_camera", spoiled(change)):
+                report = camera_hud.validate(self.helper)
+            with self.subTest(spoiled=name):
+                self.assertEqual((report["status"], report["reason"], report["command"]["exit_code"]),
+                                 ("validation_failed", "camera_panel_path_failed", 1))
+                self.assertEqual((report["camera"]["ok"], report["camera_panel"]["ok"], report["synthetic_rows"]["ok"]),
+                                 (True, False, True))
+                self.assertEqual(report["camera_panel"]["status"], "completed")  # The pass ran; its count failed it.
+                camera_stage.check_report(report, camera_hud.VALIDATION_BLOCKS, camera_hud.MAX_REPORT_BYTES)
 
 
 @unittest.skipUnless(RUNNABLE, NEEDS)
@@ -995,8 +1046,8 @@ class FixedHudCommandTests(DeviceModeCase):
         self.assertNotIn(confirmation.DISPLAY_NOTICE, shown)
         self.assertIn(contract.EXPORT_NOTICE, shown)
         self.assertGreater(report["frames"]["sent"], 0)
-        self.assertEqual((report["frames"]["acknowledged_presented"], report["boxes"]["boxes_shown"]),
-                         (report["frames"]["sent"], report["boxes"]["results_counted"]))
+        self.assertEqual((report["frames"]["acknowledged_presented"], report["boxes"]["boxes_sent"],
+                          report["boxes"]["results_sent"]), (report["frames"]["sent"],) * 3)
         self.assertEqual([row["label"] for row in report["labels"]["rows"]], ["bottle"])
         final = report["bridge"]["final_report"]
         self.assertEqual((final["mode"], final["fixed_hud"]["config_id"], final["fixed_hud"]["config_digest"],

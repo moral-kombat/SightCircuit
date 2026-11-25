@@ -147,7 +147,7 @@ class StageCase(unittest.TestCase):
             options.setdefault(name, value)
 
         def seen(frame):  # A frame the stage prepares itself (a region, the panel) never reaches ``convert``.
-            if stage._prepares:
+            if stage.prepares:
                 self.frames.append(frame)
         stage = self.the_stage = CameraHudStage(self.source, self.detector, client, convert=convert, on_frame=seen,
                                                 **options)
@@ -406,6 +406,12 @@ class CameraHudStageTests(StageCase):
         stage._tile(np.zeros((48, 64, 3), np.uint8), result)
         stage.submit(Processed(frame, result, tile, 2, 1000.0, 1.0, expires_ns=time.monotonic_ns() + MAX_DISPLAY_AGE_NS))
         self.assertEqual((stage.counts["results"], stage.counts["results_too_old"], self.queued), (2, 2, []))
+        # Drawn and counted, never sent: nothing here is reported as sent (the queue step, and on the panel the
+        # boxes, which are counted as selected and not as sent).
+        self.assertEqual((stage.steps["queue"].report()["count"], stage.steps["pack"].report()["count"],
+                          stage._results_sent, stage._boxes_sent), (0, 0, 0, 0))
+        if stage.boxed:
+            self.assertEqual((stage._boxes_counted, stage._boxes["boxes_shown"]), (2, 2))
         # A tile drawn for another result is refused rather than paired with this frame.
         stage._tile(np.zeros((48, 64, 3), np.uint8), ScriptedDetector().detect(None, 0.5))
         with self.assertRaisesRegex(ValueError, "camera_hud_result_identity_mismatch"):
@@ -590,7 +596,8 @@ class CameraHudStageTests(StageCase):
                 self.assertEqual(report["view"], {
                     "region": dict(zip(("x0", "y0", "x1", "y1"), centre)), "rotation": rotation, "whole_frame": False,
                     "prepared": True, "box_coordinate_space": FRAME_PIXELS, "source_space_px": [64, 48],
-                    "crop_native_xyxy": [16, 12, 48, 36], "resized_px": [32, 24], "geometry_constant": True})
+                    "crop_native_xyxy": [16, 12, 48, 36], "resized_px": [32, 24], "geometry_constant": True,
+                    "invalid_detections": 0})
                 self.assertEqual(self.the_stage.view(), {"region": list(centre), "rotation": rotation,
                                                          "alignment": self.the_stage.config_alignment(),
                                                          "presence_watch": False})
@@ -608,13 +615,127 @@ class CameraHudStageTests(StageCase):
         # A region of the whole frame, unturned, is no region: the frame goes the way it always went on the strip.
         whole = self.stage(limits=self.TWO, scenario="end:max_frames", region=Region())
         report = whole.run()
-        self.assertEqual((report["view"]["whole_frame"], report["view"]["prepared"], whole._prepares),
+        self.assertEqual((report["view"]["whole_frame"], report["view"]["prepared"], whole.prepares),
                          (True, self.LAYOUT is not HUD_CONFIG, self.LAYOUT is not HUD_CONFIG))
         # The whole frame turned is a region like any other.
         turned = self.stage(limits=self.TWO, scenario="end:max_frames", region=Region(rotation=90))
         report = turned.run()
         self.assertEqual((report["view"]["prepared"], report["view"]["crop_native_xyxy"], self.detector.shapes[0]),
                          (True, [0, 0, 64, 48], (64, 48, 3)))
+
+    def test_a_box_that_is_not_one_in_the_detectors_input_is_dropped_before_mapping_whatever_the_view(self):
+        # Taking a box back to the whole frame sorts, clamps and rounds it, so a box outside the detector's input,
+        # inverted, or not a box at all must be judged before that: otherwise a region or a turn would show an
+        # object the whole-frame run does not, or end the run as an error and waste its record. Each shape below
+        # is dropped and counted, with every view, and what is sent is drawn from the one valid box alone.
+        from sightcircuit.camera.region import Mapping, Region
+        from sightcircuit.hud import camera_stage
+        good = ("bottle", (2, 4, 14, 16))  # Inside the detector's input at every view below (the smallest is 24 x 32).
+        bad = (("cup", (60, 40, 70, 50)),  # Outside the input (and partly outside the largest, 64 x 48).
+               ("cup", (14, 16, 2, 4)),  # Inverted.
+               ("cup", (-4, 2, 6, 10)),  # Negative.
+               ("cup", (5, 5, 5, 9)),  # No width.
+               ("cup", (float("nan"), 2, 6, 10)), ("cup", (2, 2, float("inf"), 10)), ("cup", (2, 4, 14)),
+               ("cup", None), ("cup", "a box"))
+        only = DetectionResult((Detection(good[0], 0.9, good[1]),), 1.0)
+        centre = (0.25, 0.25, 0.75, 0.75)
+        views = ((None, None), (Region(*centre), Mapping((64, 48), (16, 12, 48, 36), (32, 24), 0, (64, 48))),
+                 (Region(*centre, rotation=90), Mapping((64, 48), (16, 12, 48, 36), (32, 24), 90, (64, 48))),
+                 (Region(rotation=270), Mapping((64, 48), (0, 0, 64, 48), (64, 48), 270, (64, 48))))
+        for region, mapping in views:
+            report = self.stage(ScriptedDetector([(good, *bad)]), limits=self.TWO, scenario="end:max_frames",
+                                region=region).run()
+            labels, expected = self.expected_payload(only, mapping)
+            with self.subTest(region=None if region is None else (region.fractions, region.rotation)):
+                self.assertEqual((report["status"], report["reason"], labels), ("completed", "max_frames", ("bottle",)))
+                self.assertEqual([(item["token"], item["rgba"] == expected) for item in self.queued],
+                                 [(("bottle",), True)] * 2)
+                self.assertEqual(report["view"]["invalid_detections"], 2 * len(bad))
+                self.assertEqual([row["label"] for row in report["labels"]["rows"]], ["bottle"])
+                if report["boxes"] is not None:  # The panel's block counts them as detections dropped as invalid.
+                    boxes = report["boxes"]
+                    self.assertEqual((boxes["detections"], boxes["dropped"]["invalid"], boxes["boxes_dropped"],
+                                      boxes["boxes_selected"], boxes["boxes_sent"], boxes["results_sent"]),
+                                     (2 * (1 + len(bad)), 2 * len(bad), 2 * len(bad), 2, 2, 2))
+                self.assert_both_children_closed(report)
+        # The rule is the selector's own, so the whole frame without a mapping judges as it always did: the
+        # strip's rows take plain Python numbers (a boolean is one), the panel's boxes any real number but a
+        # boolean. An integer too large for a float is judged, not raised on.
+        import numpy as np
+        plain = self.LAYOUT is HUD_CONFIG
+        edge = [Detection("bottle", 0.9, box) for box in (
+            (False, False, True, True), (np.float32(2), np.float32(4), np.float32(14), np.float32(16)),
+            (2, 4, 10 ** 400, 16), (2.0, 4.0, 64.0, 48.0), (0, 0, 64, 48), (0, 0, 65, 48))]
+        valid, invalid = camera_stage.valid_detections(edge, (64, 48), plain)
+        self.assertEqual(([edge.index(item) for item in valid], invalid), ([0, 3, 4] if plain else [1, 3, 4], 3))
+        self.assertEqual(camera_stage.valid_detections([None, "text", Detection("cup", 0.9, [1, 2, 3, 4])], (64, 48),
+                                                       plain)[1], 2)
+        # More detections than the selectors' budget is still the error it was, on what the detector returned.
+        stage = self.stage()
+        crowd = DetectionResult(tuple(Detection("cup", 0.9, None) for _ in range(129)), 1.0)
+        with self.assertRaisesRegex(ValueError, "hud_detection_budget_exceeded"):
+            stage._tile(np.zeros((48, 64, 3), np.uint8), crowd)
+
+    def test_what_the_sites_compare_cannot_be_assigned_and_is_what_every_frame_uses(self):
+        # The layout, the region, the alignment and the watch are what the permission sites compare with the
+        # record. None can be assigned once the stage is built, and whether a frame is prepared is derived from
+        # the same values on every frame, so the sites cannot approve one view and the run use another.
+        from sightcircuit.camera.region import Region
+        from sightcircuit.hud.camera_stage import CameraHudStage
+        centre = (0.25, 0.25, 0.75, 0.75)
+        stage = self.stage()
+        for name, value in (("config", HUD_CONFIG), ("region", Region(*centre)), ("alignment", None),
+                            ("presence_watch", True), ("boxed", True), ("prepares", True)):
+            with self.subTest(assigned=name), self.assertRaises(AttributeError):
+                setattr(stage, name, value)
+            self.assertIsNone(getattr(CameraHudStage, name).fset)
+        self.assertIs(stage.presence_watch, False)  # What the stage holds: no watch.
+        self.assertNotIn("presence_watch", vars(stage))  # Not a flag that could be set beside it.
+        self.assertEqual((stage.view()["region"], stage.view()["rotation"], stage.prepares),
+                         ([0.0, 0.0, 1.0, 1.0], 0, self.LAYOUT is not HUD_CONFIG))
+        # Even with the private field forced, the sites' view and the per-frame path are one value: the view
+        # states the region, and the detector is given it.
+        stage = self.stage(limits=self.TWO, scenario="end:max_frames")
+        stage._region = Region(*centre, rotation=90)
+        self.assertEqual((stage.view()["region"], stage.view()["rotation"], stage.prepares), (list(centre), 90, True))
+        report = stage.run()
+        self.assertEqual((self.detector.shapes, report["view"]["rotation"], report["view"]["crop_native_xyxy"],
+                          report["view"]["prepared"]), ([(32, 24, 3)] * 2, 90, [16, 12, 48, 36], True))
+
+    def test_with_a_rotation_the_strips_arrows_stay_in_the_unturned_frame_unless_the_paired_orientation_is_given(self):
+        # The stage takes boxes back to the unturned whole frame, so a rotation alone does not turn the strip's
+        # arrows: they refer to the camera's delivered image. ``ROTATION_ORIENTATION`` is the orientation that
+        # makes them refer to the image as the detector saw it; the operator gives both.
+        from sightcircuit.camera.region import Mapping, Region
+        from sightcircuit.hud.camera import camera_rows
+        from sightcircuit.hud.camera_stage import ROTATION_ORIENTATION
+
+        def arrow(box, shape, **options):
+            row, = camera_rows([Detection("bottle", 0.9, box)], shape, HUD_CONFIG, threshold=0.5, **options)
+            return row.direction
+        self.assertEqual(ROTATION_ORIENTATION, {0: "identity", 90: "rotate_90_cw", 180: "rotate_180",
+                                                270: "rotate_90_ccw"})
+        for rotation, orientation in ROTATION_ORIENTATION.items():
+            mapping = Mapping((64, 48), (0, 0, 64, 48), (64, 48), rotation, (64, 48))
+            width, height = mapping.input_size
+            for box in ((1, 1, 9, 9), (width - 10, 1, width - 1, 9), (1, height - 10, 9, height - 1)):  # Three corners.
+                seen = arrow(box, (height, width))  # Where the detector saw it, in its own input.
+                mapped = mapping.to_frame(box)
+                with self.subTest(rotation=rotation, box=box):
+                    self.assertEqual(arrow(mapped, (48, 64), orientation=orientation), seen)
+                    if rotation:
+                        self.assertNotEqual(arrow(mapped, (48, 64)), seen)  # The rotation alone does not turn it.
+        # Through the stage: the same detector box, the whole frame turned a quarter, with and without the pair.
+        box = (("bottle", (1, 1, 9, 9)),)
+        result = DetectionResult((Detection("bottle", 0.9, box[0][1]),), 1.0)
+        mapping = Mapping((64, 48), (0, 0, 64, 48), (64, 48), 90, (64, 48))
+        sent = {}
+        for orientation in ("identity", "rotate_90_cw"):
+            self.stage(ScriptedDetector([box]), limits=self.TWO, scenario="end:max_frames", region=Region(rotation=90),
+                       orientation=orientation).run()
+            sent[orientation] = self.queued[0]["rgba"]
+            self.assertEqual(sent[orientation], self.expected_payload(result, mapping, orientation=orientation)[1])
+        self.assertNotEqual(sent["identity"], sent["rotate_90_cw"])
 
     def test_names_only_rows_and_each_orientation_render(self):
         import numpy as np
@@ -840,6 +961,13 @@ class CameraHudStageTests(StageCase):
         self.assertEqual([line["frame_id"] for line in self.bridge_lines if line["event"] == "frame_presented"], [1, 2])
         after = self.bridge_lines[[line["event"] for line in self.bridge_lines].index("hide_returned"):]
         self.assertEqual([line["event"] for line in after], ["hide_returned"])  # Nothing presented or shown after it.
+        # The third was packed and offered, and the client refused it: it is not a result sent. The queue step
+        # times two, and on the panel three boxes were selected and two sent.
+        self.assertEqual([report["steps_ms"][name]["count"] for name in ("draw", "pack", "queue")], [3, 3, 2])
+        if report["boxes"] is not None:
+            boxes = report["boxes"]
+            self.assertEqual((boxes["results_counted"], boxes["boxes_selected"], boxes["results_sent"], boxes["boxes_sent"]),
+                             (3, 3, 2, 2))
         row, = report["labels"]["rows"]
         self.assertEqual(row["spells"], 1)  # One spell, ended by the hide: no second one is booked.
         # The latch itself, directly: after ``end`` the client accepts nothing and a take-down cannot be undone.

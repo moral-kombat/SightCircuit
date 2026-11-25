@@ -69,7 +69,8 @@
     "source_space_px": null,
     "crop_native_xyxy": null,
     "resized_px": null,
-    "geometry_constant": null
+    "geometry_constant": null,
+    "invalid_detections": null
   },
   "boxes": {
     "layout_id": null,
@@ -78,8 +79,10 @@
     "alignment_neutral": null,
     "threshold": null,
     "results_counted": null,
+    "results_sent": null,
     "detections": null,
-    "boxes_shown": null,
+    "boxes_selected": null,
+    "boxes_sent": null,
     "boxes_dropped": null,
     "dropped": {"invalid": null, "below_threshold": null, "unnamed": null, "outside_region": null, "off_panel": null,
                 "duplicate": null, "over_cap": null}
