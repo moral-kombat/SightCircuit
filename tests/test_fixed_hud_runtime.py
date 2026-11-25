@@ -85,14 +85,20 @@ class Run:
                 raise
 
     def wait(self, event, count=1, timeout=8):
-        """The ``count``-th line named ``event``; fails when the bridge ends or the time runs out first."""
+        """The ``count``-th line named ``event``; fails when the bridge ends or the time runs out first.
+
+        A bridge that has exited is judged only once the reader has read all it wrote: the awaited line may be
+        its last, written just before it exited and not yet appended. The lock is held from the search to the
+        check, so a reader found ended there had appended every line before the search.
+        """
         end = time.monotonic() + timeout
         with self.arrived:
             while True:
                 found = [line for line in self.lines if line["event"] == event]
                 if len(found) >= count:
                     return found[count - 1]
-                self.case.assertIsNone(self.process.poll(), self.lines[-1:])
+                if not self.reader.is_alive():
+                    self.case.assertIsNone(self.process.poll(), self.lines[-1:])
                 self.case.assertGreater(end - time.monotonic(), 0, f"no {event} #{count}: {self.lines}")
                 self.arrived.wait(0.05)
 
