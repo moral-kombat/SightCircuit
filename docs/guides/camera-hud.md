@@ -128,11 +128,13 @@ them). Any rebuild, edit or new commit after staging makes the record
 refuse; so do a second run, a run for another step, a run with another
 layout or view than the record names, a clock that reads earlier than the
 record's creation, and a start after the deadline. A record written before
-schema version 2 is refused by name. `camera_hud` as it stands shows the
-strip from the whole frame with no watch, so it runs only under a record
-that names `fixed-edge-hud-v1`, the whole frame and no watch; its options
-for the box panel, the region and the watch are the second part of
-work-order item B5.
+schema version 2 is refused by name. `camera_hud --camera` takes the same
+four things as options (`--layout`, `--region`, `--rotation`,
+`--alignment`; [below](#the-layout-and-the-view)) and runs only under a
+record that names exactly what it was asked to show. It holds no presence
+watch yet, so it runs only under a record staged with `--presence-watch
+none`; the watch on the displayed path, and with it the panel's steps, is
+the last part of work-order item L17.
 
 A camera step's record needs one option more than L-D3's: whether the
 presence watch is required, which has no default. For L-D4 as `camera_hud`
@@ -149,10 +151,12 @@ runs it today (the same for L-D5 with its own step and file names):
 ```
 
 Without `--region` and `--rotation` the record states the whole frame,
-unturned. A record staged with a region, a rotation, `--presence-watch
-required` or the panel's layout (which also needs `--alignment`) is a valid
-record that today's `camera_hud` refuses, unspent, because it would not do
-what the record says.
+unturned. A record staged with a region, a rotation or the panel's layout
+(which also needs `--alignment`) serves only a run given the same options;
+any difference is refused with the record unspent, because the run would
+not do what the record says. A record staged with `--presence-watch
+required` is a valid record that today's `camera_hud` refuses, unspent, for
+the same reason: it holds no watch.
 
 The duration is not only a number in the record. The command's client ends
 real output by itself when the run's seconds are over, whatever else is
@@ -314,6 +318,49 @@ What the options mean:
   from the same closed vocabulary. A turn away is marked `out_of_view`, the
   return `in_view`, the removal `remove`.
 
+### The layout and the view
+
+Four more options say what a camera run shows and through which view. Each
+is checked by the parser, before the informed start and before any record
+is read, and the record must name the same values.
+
+- `--layout` is `fixed-edge-hud-v1` (the strip, the default) or
+  `head-fixed-box-panel-v1` (the box panel: a box with a name around each
+  object, on a transparent 512 × 512 panel fixed in front of the head). The
+  panel takes `--alignment` and refuses `--directions`, `--names-only` and
+  `--orientation`, which are the strip's.
+- `--region X0,Y0,X1,Y1` gives the detector that rectangle of the frame.
+  The fractions are of the camera's frame as it is delivered, unturned. The
+  rectangle is cropped from that frame, resized, and only then turned
+  clockwise by `--rotation` (0, 90, 180 or 270), so a rotation never changes
+  which part of the frame is taken. They are
+  [`camera_recognize`'s options](camera-recognize.md#a-region-of-view)
+  and mean the same. Both are arguments, not findings: which rotation is
+  upright for the left camera is not established, so no value here is a
+  default to copy.
+- **A rotation and the strip's arrows.** The panel applies the rotation: it
+  shows the region as the detector saw it. The strip does not: its arrows
+  are worked out in the unturned frame, so with `--rotation` alone they
+  point as in the camera's delivered image, a quarter turn off for the
+  wearer. With `--directions`, give the orientation that pairs with the
+  rotation as well: `--rotation 90` with `--orientation rotate_90_cw`,
+  `--rotation 270` with `--orientation rotate_90_ccw` (and 180 with
+  `rotate_180`, 0 with `identity`). The command does not pair them for you
+  and does not refuse another pairing: both stay the operator's arguments,
+  because neither value is a finding yet. With `--names-only` there are no
+  arrows and the orientation changes nothing shown.
+- `--alignment SX,SY,OX,OY,TURN` is the panel's placement of the boxes: the
+  project's own five numbers (scale, offset in panel fractions, quarter
+  turn), never the SDK's calibration. It has no default; the neutral value
+  is `1,1,0,0,0`.
+
+No command block for a camera run on the panel is given here yet. Such a
+run is to be staged with the presence watch required, and the watch on the
+displayed path is not built; the staging command and the run command for
+each of the panel's steps are added, tested against the tools, with it.
+`--validate` runs the panel through a region on the fake path in the
+meantime (`camera_panel` in its report).
+
 Expect `report_kind: camera_hud_stage`. A run that ends on its bound is
 `status: completed` (reason `output_bound` when the client's own bound ended
 it); a run ended by the headset's removal is
@@ -355,7 +402,7 @@ labels, boxes, timings and format metadata.
 | --- | --- |
 | the stage's blocks | Everything in the [stage report](../reference/camera-hud.md#the-report): the helper's ready and end records, every `frame_expired` record with its hide times, per-label intervals, the timings with their timebases, the cleanup verdicts |
 | `command` | The mode, the exit code, `confirmation` (`operator_terminal`), the requested bounds, the detector, `refusal`, whether the report was saved |
-| `scope_record` | Identifiers only: the step, the source, the run id, the revision, the manifest digest, the deadline, the bound, the approval reference, whether it was granted and consumed, and the refusal |
+| `scope_record` | Identifiers and format metadata only: the step, the source, the run id, the revision, the manifest digest, the deadline, the bound, the approval reference, whether it was granted and consumed, and the refusal; and what the record binds since its schema version 2: the layout the run asked for (`requested_layout`), the record's layout id and digest, the region as `{x0, y0, x1, y1}`, the rotation, the alignment's five numbers and whether the presence watch is required |
 | `marks`, `timebase` | The cues and key marks with monotonic and UTC times (the first 32; the count covers all) |
 | `target` | Row G10's rule for `--target-label` |
 

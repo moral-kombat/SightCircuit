@@ -240,7 +240,8 @@ jobs:
             tests/test_observed_frame_client.py tests/test_camera_hud_stage.py tests/test_scope_record.py \
             tests/test_camera_hud_command.py tests/test_camera_guide.py \
             tests/test_presence_watch.py tests/test_camera_guide_presence.py tests/test_presence_watcher_native.py \
-            tests/test_hud_box_panel.py tests/test_hud_camera_boxes.py tests/test_box_panel_bridge.py
+            tests/test_hud_box_panel.py tests/test_hud_camera_boxes.py tests/test_box_panel_bridge.py \
+            tests/test_camera_hud_stage_panel.py
       - name: Verify links, compatibility anchors and generated summaries
         run: |
           python scripts/check_docs.py

@@ -7,13 +7,16 @@ the head-fixed box panel (Level 1 of the
 A box and a name are drawn around each recognised object on a transparent
 panel fixed in front of the head.
 
-**Status: cloud-checked only, and selected by no stage or command.** These
+**Status: cloud-checked only.** These
 are a contract, a pure renderer, a pure mapping and, since item B3, a second
 fixed layout of the bridge's `--fixed-hud` mode, tested on generated boxes
 against a fake runtime. Since the first part of item B5 a one-run scope
 record can name the panel, and the one permission site admits a client
-with the panel if and only if such a record verifies; no stage or command
-names the panel yet (that is B5's second part), no record exists on any
+with the panel if and only if such a record verifies. Since its second
+part `CameraHudStage` draws the panel and `camera_hud --camera --layout
+head-fixed-box-panel-v1` names it
+([two layouts](camera-hud.md#two-layouts-and-a-region-of-view-items-b5-and-l17)).
+No record exists on any
 device, and every gate is closed, so its callers can show it only to the
 fake runtime of the tests and to the validation bridge, which displays
 nothing. That is a property of the repository's callers and of the
@@ -352,12 +355,15 @@ than the one the selection was made for is refused
 | `detections`, `boxes_shown`, `boxes_dropped`, `dropped` (a count per reason) | counts |
 
 It holds no label, score, box or pixel. The camera stage's `check_report`
-accepts it as a block (`blocks={"boxes": BOX_REPORT_KEYS}`); it is **not**
-part of `CameraHudStage`'s report. Item B5 wires it in: per processed frame,
+accepts it as a block, and since item B5 it is the `boxes` block of
+`CameraHudStage`'s report on the panel: per processed frame,
 `region.prepare(frame, region)`, the detector, `mapping.result(result)`,
 `camera_boxes(...)`, `draw_boxes(selection.boxes, config)`, and for the
-report `boxes_report(selection, config)`, with the run's totals summed from each frame's
-`dropped`.
+report `boxes_report(selection, config)`: the metadata from the first
+counted result and the four counts summed over all of them, with
+`results_counted`. In the stage's block `boxes_shown` is named
+`boxes_selected` (a result can be selected and drawn and then not sent),
+beside `results_sent` and `boxes_sent`.
 
 ## The bridge and the panel (item B3)
 
@@ -444,8 +450,9 @@ So, **through this repository's Python**, the panel reaches a runtime only
 under a scope record that names it. The tests do exactly that on the fake
 `vrclient.so`, with a record written in a temporary checkout and no
 permission patched; the validation bridge needs no record and displays
-nothing. `camera_hud` and `CameraHudStage` do not name the panel yet, and
-the stage as it stands refuses a scope that asks for it
+nothing. `CameraHudStage` draws the panel when it is built with it, and
+its camera site refuses a scope whose layout, region, rotation, alignment
+or presence-watch requirement is not the stage's own
 ([the two sites](camera-hud.md#the-one-run-scope-record)).
 
 **The bridge binary itself has no gate for the layout, and never had one

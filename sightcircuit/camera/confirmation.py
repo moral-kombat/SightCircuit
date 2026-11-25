@@ -35,6 +35,18 @@ DISPLAY_NOTICE = (
     "counts, labels, timings and format metadata, printed on this terminal and written to a file only if you named "
     "--report. Stop with Ctrl-C at any passthrough change, any green input, or when the wearer asks. Typing yes "
     "starts this one run; it is not an approval and creates no scope record.")
+# The same for a run on the box panel (work-order item B5): what the wearer will see is a box and a name over the
+# scene, not a tile at the edge. The owner accepted this wording as it stands on 2026-11-25 (owner decision C of
+# item B5, relayed by the coordinator: "Yes, accept it"); ``tests/test_camera_hud_command.py`` pins it sentence
+# for sentence, so a change to it is a change the owner is asked about.
+BOX_DISPLAY_NOTICE = (
+    "camera_hud: draws a box with a name around each detected object, on a transparent panel in the middle of the "
+    "view in the headset, for the bounds shown below. A box sits on its object only while the head is still; it "
+    "trails when the head turns. A box is taken down about one second after the camera frame it came from unless "
+    "a newer frame shows it again. The panel shows no camera image. The command saves no image; its report holds "
+    "counts, labels, timings and format metadata, printed on this terminal and written to a file only if you named "
+    "--report. Stop with Ctrl-C at any passthrough change, any green input, or when the wearer asks. Typing yes "
+    "starts this one run; it is not an approval and creates no scope record.")
 SYNTHETIC_NOTICE = (
     "camera_hud --synthetic-rows: shows a counter row on a small tile at the edge of the view in the headset, "
     "for the bounds shown below, with scheduled pauses in which the tile must go blank within about a second. "

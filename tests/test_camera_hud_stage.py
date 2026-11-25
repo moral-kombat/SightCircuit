@@ -50,10 +50,11 @@ class ScriptedDetector:
 
     def __init__(self, script=(BOTTLE,), delays=None, fail_on=None):
         self.script, self.delays, self.fail_on = list(script), dict(delays or {}), fail_on
-        self.called_ns, self.returned_ns = [], []
+        self.called_ns, self.returned_ns, self.shapes = [], [], []
 
     def detect(self, image, threshold):
         self.called_ns.append(time.monotonic_ns())
+        self.shapes.append(getattr(image, "shape", None))  # What the detector was given: the region, turned.
         call = len(self.called_ns)
         if call in self.delays:
             time.sleep(self.delays[call])
@@ -87,6 +88,34 @@ class StageCase(unittest.TestCase):
     """One stage per test on the camera stand-in; records the frames seen, the frames queued and the packets written."""
     LIMITS = {"fps": 5, "max_seconds": 5, "max_frames": 8}
     TWO = {"fps": 5, "max_seconds": 3, "max_frames": 5}  # The ``end:`` scenarios: two frames 200 ms apart, then the end.
+    # The layout the stage draws for, and what a stage for it needs beside the strip's defaults. The strip here;
+    # ``tests/test_camera_hud_stage_panel.py`` runs these same tests with the box panel (work-order item B5).
+    LAYOUT = HUD_CONFIG
+    STAGE_OPTIONS = {}
+
+    def smallest_frame(self):
+        """``(width, height, rgba)`` of the smallest frame the client takes: one pixel for the strip's client,
+        which checks no size, and the layout's own size for a client that names its layout."""
+        if self.LAYOUT is HUD_CONFIG:
+            return 1, 1, bytes(4)
+        return self.LAYOUT.width_px, self.LAYOUT.height_px, bytes(self.LAYOUT.width_px * self.LAYOUT.height_px * 4)
+
+    def expected_payload(self, result, mapping=None, **options):
+        """``(labels, rgba bytes)`` the stage must send for ``result``: drawn here from the detections alone.
+
+        ``mapping`` is the ``Mapping`` of the frame the detector saw (None: the whole 64 x 48 frame, unprepared).
+        For the strip: the rows of the mapped detections over the whole frame's shape, drawn and converted.
+        """
+        from sightcircuit.hud.camera import camera_rows
+        from sightcircuit.hud.render import draw_tile
+        from sightcircuit.overlay import rgba_from_bgr
+        mapped = result if mapping is None else mapping.result(result)
+        rows = camera_rows(list(mapped.detections), (48, 64), HUD_CONFIG, threshold=0.5, **options)
+        return tuple(dict.fromkeys(row.label for row in rows)), rgba_from_bgr(draw_tile(rows, HUD_CONFIG))[2]
+
+    def layout_options(self):
+        """What a client is given for ``LAYOUT``: nothing for the strip, whose client names no layout."""
+        return {} if self.LAYOUT is HUD_CONFIG else {"layout": self.LAYOUT}
 
     @classmethod
     def setUpClass(cls):
@@ -99,7 +128,7 @@ class StageCase(unittest.TestCase):
             self.addCleanup(signal.signal, number, signal.getsignal(number))
 
     def client(self, **options):
-        return ObservedFrameClient(**options)
+        return ObservedFrameClient(**self.layout_options(), **options)
 
     def stage(self, detector=None, scenario=None, limits=None, fake=(), client=None, **options):
         from sightcircuit.convert import to_bgr
@@ -114,7 +143,14 @@ class StageCase(unittest.TestCase):
             return to_bgr(frame)
         client = client or self.client()
         options.setdefault("max_fps", 10)
-        stage = self.the_stage = CameraHudStage(self.source, self.detector, client, convert=convert, **options)
+        for name, value in self.STAGE_OPTIONS.items():
+            options.setdefault(name, value)
+
+        def seen(frame):  # A frame the stage prepares itself (a region, the panel) never reaches ``convert``.
+            if stage.prepares:
+                self.frames.append(frame)
+        stage = self.the_stage = CameraHudStage(self.source, self.detector, client, convert=convert, on_frame=seen,
+                                                **options)
         queue, record, on_end = client.submit_observed, stage._on_packet, self.source._on_end
 
         def submit_observed(frame_id, observed_ns, expires_ns, width, height, rgba, *, token=None):
@@ -141,7 +177,9 @@ class StageCase(unittest.TestCase):
         from sightcircuit.hud import camera_stage
         stop = threading.Event()
         stage = self.stage(limits={"fps": 5, "max_seconds": 20, "max_frames": 100})
-        convert, calls = camera_stage.rgba_from_bgr, []
+        # Where the drawn image becomes the bytes that are sent: the strip's colour conversion, the panel's pack.
+        target, name = (camera_stage, "rgba_from_bgr") if self.LAYOUT is HUD_CONFIG else (stage, "_pack")
+        convert, calls = getattr(target, name), []
 
         def racing(image):
             calls.append(time.monotonic_ns())
@@ -153,7 +191,7 @@ class StageCase(unittest.TestCase):
                     time.sleep(0.001)
                 self.assertTrue(stage.client.final)
             return convert(image)
-        with mock.patch.object(camera_stage, "rgba_from_bgr", racing):
+        with mock.patch.object(target, name, racing):
             report = stage.run(stop)
         return report, calls
 
@@ -161,7 +199,27 @@ class StageCase(unittest.TestCase):
         """Every frame handed to the client carries its camera frame's observation and a deadline within the cap.
 
         The deadline is the observation plus the maximum display age, or the
-        run's own deadline (``seconds``) when that comes first.
+        run's own deadline (``seconds``) when that comes first. Returns the
+        ids of the frames whose write returned at or after their deadline.
+
+        The writer looks at a frame's deadline before it writes
+        (``tests/test_observed_frame_client.py`` pins that), and the write
+        then takes time, a megabyte more than a strip, so ``sent_ns``, read
+        when the write has returned, can lie past the deadline. With a
+        second of deadline ahead of every write that never happens here,
+        and without a run deadline the helper still says so. With one,
+        every frame's deadline is the run's end, and the run's last result
+        can be handed over a fraction of a millisecond before it. The helper
+        then asserts what the product promises of such a frame, none of it a
+        matter of timing: it is the last frame written and the only late
+        one, its deadline is the run's, the stage counted it
+        (``frames_written_past_deadline``), and the bridge answered for it
+        exactly once. Which answer is the bridge's own, by its own clock: it
+        usually refuses the frame as expired on arrival, and then it never
+        held it; or it took it just before the deadline while this side's
+        clock was read just after, and then it holds it under that same
+        deadline and expires it there. (Both answers are forced, on every
+        run, by the test of a slow write below.)
         """
         observed = {frame.sequence: frame.observed_ns for frame in self.frames}
         self.assertEqual([item["frame_id"] for item in self.queued], sorted({item["frame_id"] for item in self.queued}))
@@ -171,9 +229,69 @@ class StageCase(unittest.TestCase):
             self.assertLessEqual(item["expires_ns"] - item["observed_ns"], MAX_DISPLAY_AGE_NS)
             longest = item["observed_ns"] + MAX_DISPLAY_AGE_NS
             self.assertEqual(item["expires_ns"], longest if run_deadline_ns is None else min(longest, run_deadline_ns))
-            self.assertEqual(item["size"], (HUD_CONFIG.width_px, HUD_CONFIG.height_px))
-        for fields in self.named("frame_sent"):
-            self.assertLess(fields["sent_ns"], fields["expires_ns"])
+            self.assertEqual(item["size"], (self.LAYOUT.width_px, self.LAYOUT.height_px))
+        handed = {item["frame_id"]: item["at_ns"] for item in self.queued}
+        sent = self.named("frame_sent")
+        for fields in sent:
+            self.assertLess(handed[fields["frame_id"]], fields["expires_ns"])  # Handed over before its deadline.
+        late = [fields for fields in sent if fields["sent_ns"] >= fields["expires_ns"]]
+        # Counted, always: this is the report's ``frames.written_past_deadline``.
+        self.assertEqual(self.the_stage.counts["frames_written_past_deadline"], len(late))
+        if run_deadline_ns is None:
+            self.assertEqual(late, [])  # A second of deadline ahead of every write: none returns late.
+            return []
+        self.assertLessEqual(len(late), 1)  # One writer, one shared deadline: after it nothing more is written.
+        for fields in late:
+            self.assertIs(fields, sent[-1])
+            self.assertEqual(fields["expires_ns"], run_deadline_ns)
+            answers = [line for line in self.bridge_lines
+                       if line["event"] in ("frame_presented", "frame_refused") and line["frame_id"] == fields["frame_id"]]
+            self.assertEqual(len(answers), 1, answers)  # The bridge answered for it, once.
+            answer, = answers
+            expired = [line["deadline_ns"] for line in self.bridge_lines
+                       if line["event"] == "frame_expired" and line.get("frame_id") == fields["frame_id"]]
+            if answer["event"] == "frame_refused":  # It reached the bridge after its deadline: refused, never held.
+                # (The validation bridge uploads nothing, so it has no refusal after an upload.)
+                self.assertIn(answer["reason"], ("expired_on_arrival",) if self.the_stage.client.validation_only
+                              else ("expired_on_arrival", "expired_before_show"))
+                self.assertGreaterEqual(answer["refused_ns"], fields["expires_ns"])
+                self.assertEqual(expired, [])
+            else:  # Taken before the deadline by the bridge's clock: held under that deadline and expired at it.
+                self.assertEqual(answer["deadline_ns"], fields["expires_ns"])
+                self.assertEqual(expired, [fields["expires_ns"]])
+        return [fields["frame_id"] for fields in late]
+
+    def hold_a_write(self, stage, *, write_first, run_bound=False):
+        """Hold one frame write of the stage's client across that frame's deadline; returns the list the hold
+        fills with ``(frame_id, deadline_ns, when the hold ended)``.
+
+        The frame held is the first one written or, with ``run_bound``, the first one written whose deadline
+        is the run's own bound. Which frame that is, and its deadline, are read from the packet being written:
+        on a loaded host the first frame handed over is not always the first one the writer reaches.
+
+        With ``write_first`` false the bytes go out only after the deadline, as behind a pipe that drains
+        slowly: the frame reaches the bridge too late. With it true the bytes go out at once and only the
+        write's return is held, as when the writer thread loses the processor after its last byte: the bridge
+        has the frame in time and this side's clock reads late. One sleep to an absolute time; nothing polls.
+        """
+        import struct
+        from sightcircuit.hud.contract import OBSERVED_FRAME_PREFIX_FORMAT, OPCODE_OBSERVED_FRAME, PACKET_HEADER_FORMAT
+        send, held, prefix_at = stage.client._send, [], struct.calcsize(PACKET_HEADER_FORMAT)
+
+        def slow(data):
+            if held or struct.unpack_from(PACKET_HEADER_FORMAT, data)[1] != OPCODE_OBSERVED_FRAME:
+                return send(data)
+            frame_id, _, deadline_ns = struct.unpack_from(OBSERVED_FRAME_PREFIX_FORMAT, data, prefix_at)[:3]
+            if run_bound and deadline_ns != int(stage.pipeline.deadline * 1e9):
+                return send(data)  # A frame with its own display age ahead of it: not the one to hold.
+            if write_first:
+                send(data)
+            time.sleep(max(0.0, (deadline_ns - time.monotonic_ns()) / 1e9) + 0.001)
+            held.append((frame_id, deadline_ns, time.monotonic_ns()))
+            if not write_first:
+                send(data)
+        stage.client._send = slow
+        return held
 
     def assert_both_children_closed(self, report, *, source_ok=True):
         """The helper is gone and reaped, the bridge exited through its cleanup, and the report says so."""
@@ -286,7 +404,7 @@ class CameraHudStageTests(StageCase):
         self.assertNotIn("definition", source["timings"]["exposure_minus_acquire_ms"])
         self.assertEqual((report["bridge"]["final_report"]["mode"], report["bridge"]["final_report"]["cleanup_ok"],
                           report["bridge"]["final_report"]["exit_code"]), ("--validate-stdin", True, 0))
-        self.assertEqual(report["config"]["hud_config_id"], "fixed-edge-hud-v1")
+        self.assertEqual(report["config"]["hud_config_id"], self.LAYOUT.layout_id)
 
     def test_empty_rows_take_the_tile_down_within_a_period_and_the_next_rows_show_it_again(self):
         detector = ScriptedDetector([BOTTLE, BOTTLE, (), (), BOTTLE])
@@ -368,6 +486,12 @@ class CameraHudStageTests(StageCase):
         stage._tile(np.zeros((48, 64, 3), np.uint8), result)
         stage.submit(Processed(frame, result, tile, 2, 1000.0, 1.0, expires_ns=time.monotonic_ns() + MAX_DISPLAY_AGE_NS))
         self.assertEqual((stage.counts["results"], stage.counts["results_too_old"], self.queued), (2, 2, []))
+        # Drawn and counted, never sent: nothing here is reported as sent (the queue step, and on the panel the
+        # boxes, which are counted as selected and not as sent).
+        self.assertEqual((stage.steps["queue"].report()["count"], stage.steps["pack"].report()["count"],
+                          stage._results_sent, stage._boxes_sent), (0, 0, 0, 0))
+        if stage.boxed:
+            self.assertEqual((stage._boxes_counted, stage._boxes["boxes_shown"]), (2, 2))
         # A tile drawn for another result is refused rather than paired with this frame.
         stage._tile(np.zeros((48, 64, 3), np.uint8), ScriptedDetector().detect(None, 0.5))
         with self.assertRaisesRegex(ValueError, "camera_hud_result_identity_mismatch"):
@@ -441,9 +565,83 @@ class CameraHudStageTests(StageCase):
         self.assertEqual((report["status"], report["reason"]), ("completed", "seconds"))
         self.assertEqual(len(self.named("taken_down")), 1)
         deadline_ns = int(self.the_stage.pipeline.deadline * 1e9)
-        self.assert_deadlines_within_the_cap(deadline_ns)
+        late = self.assert_deadlines_within_the_cap(deadline_ns)
+        frames = report["frames"]  # The report says so too, and every frame written was answered.
+        self.assertEqual((frames["written_past_deadline"], frames["sent"], frames["unacknowledged"]),
+                         (len(late), len(self.named("frame_sent")), 0))
+        self.assertEqual(frames["acknowledged_presented"] + frames["acknowledged_refused"], frames["sent"])
         self.assertLess(max(item["expires_ns"] for item in self.queued), max(item["observed_ns"] for item in self.queued)
                         + MAX_DISPLAY_AGE_NS)  # The run's end cut the last deadlines short; none outlives the run.
+        self.assert_both_children_closed(report)
+
+    def test_a_frame_whose_write_returns_past_its_deadline_is_counted_and_the_bridge_decides_by_its_own_clock(self):
+        # The writer checks a frame's deadline before it writes, and the write then takes time, so its return
+        # can lie past the deadline. Both ways that can happen are forced here on every run, for whichever
+        # layout this class runs.
+        def lines(event, frame_id=None):
+            return [line for line in self.bridge_lines
+                    if line["event"] == event and (frame_id is None or line.get("frame_id") == frame_id)]
+        roomy = {"fps": 5, "max_seconds": 20, "max_frames": 100}
+        # 1. The frame reaches the bridge after its deadline (a pipe that drains slowly). The stage counts it
+        #    as written past its deadline; the bridge refuses it on arrival; it is never presented, never held
+        #    and no label interval is opened for it; the frames that came meanwhile were replaced unsent, and
+        #    the run goes on.
+        stage = self.stage(limits=roomy, max_frames=12)
+        held = self.hold_a_write(stage, write_first=False)
+        report = stage.run()
+        self.assertEqual((report["status"], report["reason"]), ("completed", "max_frames"))
+        (late_id, deadline_ns, resumed_ns), = held
+        self.assertGreater(resumed_ns, deadline_ns)  # The construction: the write began after the deadline.
+        sent = self.named("frame_sent")
+        self.assertEqual((sent[0]["frame_id"], sent[0]["expires_ns"]), (late_id, deadline_ns))
+        self.assertGreaterEqual(sent[0]["sent_ns"], deadline_ns)
+        handed = {item["frame_id"]: item["at_ns"] for item in self.queued}
+        self.assertLess(handed[late_id], deadline_ns)  # Handed over, and checked by the writer, in time.
+        refused, = lines("frame_refused", late_id)
+        self.assertEqual(refused["reason"], "expired_on_arrival")
+        self.assertGreaterEqual(refused["refused_ns"], deadline_ns)
+        self.assertEqual((lines("frame_presented", late_id), lines("frame_expired", late_id)), ([], []))
+        presented = lines("frame_presented")
+        self.assertTrue(presented)  # Later frames were presented: the run went on.
+        frames = report["frames"]
+        late = [fields["frame_id"] for fields in sent if fields["sent_ns"] >= fields["expires_ns"]]
+        self.assertIn(late_id, late)
+        self.assertEqual((frames["written_past_deadline"], frames["acknowledged_refused"], frames["unacknowledged"]),
+                         (len(late), len(lines("frame_refused")), 0))
+        self.assertGreaterEqual(frames["refused_reasons"]["expired_on_arrival"], 1)
+        self.assertEqual((frames["sent"], frames["acknowledged_presented"]),
+                         (len(sent), len(sent) - len(lines("frame_refused"))))
+        # The frames that waited behind the slow write were replaced by newer ones without being sent.
+        self.assertGreaterEqual(frames["not_sent"], 1)
+        self.assertEqual(frames["submitted"], frames["sent"] + frames["not_sent"])
+        # No label interval was opened for the refused frame: the label's first interval starts with the first
+        # frame the bridge presented, which it read after the refused one, and so after that one's deadline.
+        row, = report["labels"]["rows"]
+        deadline_ms = (deadline_ns - report["labels"]["run_start_ns"]) / 1e6
+        first_presented_ms = (presented[0]["presented_ns"] - report["labels"]["run_start_ns"]) / 1e6
+        self.assertEqual(row["label"], "bottle")
+        self.assertGreater(first_presented_ms, deadline_ms)
+        self.assertAlmostEqual(row["intervals"][0]["start_ms"], first_presented_ms, delta=0.001)  # A microsecond's rounding.
+        self.assert_both_children_closed(report)
+        self.assert_no_gate_opened(report)
+        # 2. The bridge has the frame in time and only this side's clock reads late (the writer loses the
+        #    processor after its last byte), for a frame whose deadline is the run's own bound. The count is
+        #    this side's clock and not a verdict on what was shown: the bridge presented the frame, held it
+        #    under that deadline and expired it there, and the helper's rule for a run's bound takes it.
+        stage = self.stage(limits=roomy, seconds=2.0)
+        held = self.hold_a_write(stage, write_first=True, run_bound=True)
+        report = stage.run()
+        self.assertEqual((report["status"], report["reason"]), ("completed", "seconds"))
+        (late_id, deadline_ns, resumed_ns), = held
+        self.assertEqual(deadline_ns, int(stage.pipeline.deadline * 1e9))
+        self.assertGreater(resumed_ns, deadline_ns)
+        self.assertEqual(self.assert_deadlines_within_the_cap(deadline_ns), [late_id])  # The last written, and late.
+        self.assertEqual((len(lines("frame_presented", late_id)), lines("frame_refused", late_id)), (1, []))
+        frames = report["frames"]
+        self.assertEqual((frames["written_past_deadline"], frames["acknowledged_refused"], frames["unacknowledged"]),
+                         (1, len(lines("frame_refused")), 0))
+        self.assertEqual(frames["sent"], frames["acknowledged_presented"] + frames["acknowledged_refused"])
+        self.assertGreaterEqual(frames["expired"], 1)  # The bridge's own expiry of the frame it held, at least.
         self.assert_both_children_closed(report)
 
     def test_a_consumer_error_takes_the_tile_down_and_closes_both_children(self):
@@ -527,6 +725,172 @@ class CameraHudStageTests(StageCase):
         stage._note_bridge_end()
         self.assertFalse(stage.bridge_ended_first)
 
+    def test_a_region_and_a_rotation_reach_the_detector_and_its_boxes_come_back_to_the_whole_frame(self):
+        # Work-order item L17, for whichever layout this class runs: the detector is given the region of the
+        # frame, turned; its boxes are taken back to the whole frame before anything is selected; and what is
+        # sent is drawn from those mapped boxes alone. The stand-in's frames are 64 x 48.
+        from sightcircuit.camera.region import FRAME_PIXELS, Mapping, Region
+        centre = (0.25, 0.25, 0.75, 0.75)  # 32 x 24 native pixels at (16, 12).
+        # In the detector's input pixels, inside its 24 x 24 corner so that they fit the input at every turn.
+        boxes = (("bottle", (0, 8, 6, 16)), ("cup", (14, 2, 22, 10)))
+        result = DetectionResult(tuple(Detection(label, 0.9, box) for label, box in boxes), 1.0)
+        payloads = {}
+        for rotation, shape in ((0, (24, 32, 3)), (90, (32, 24, 3)), (180, (24, 32, 3)), (270, (32, 24, 3))):
+            region = Region(*centre, rotation=rotation)
+            detector = ScriptedDetector([boxes])
+            report = self.stage(detector, limits=self.TWO, scenario="end:max_frames", region=region).run()
+            mapping = Mapping((64, 48), (16, 12, 48, 36), (32, 24), rotation, (64, 48))
+            labels, expected = self.expected_payload(result, mapping)
+            with self.subTest(rotation=rotation):
+                self.assertEqual((report["status"], detector.shapes), ("completed", [shape, shape]))
+                self.assertEqual([frame.sequence for frame in self.frames], [1, 2])
+                self.assertEqual([(item["token"], item["size"], item["rgba"] == expected) for item in self.queued],
+                                 [(labels, (self.LAYOUT.width_px, self.LAYOUT.height_px), True)] * 2)
+                self.assertEqual(labels, ("bottle", "cup"))
+                self.assertEqual(report["view"], {
+                    "region": dict(zip(("x0", "y0", "x1", "y1"), centre)), "rotation": rotation, "whole_frame": False,
+                    "prepared": True, "box_coordinate_space": FRAME_PIXELS, "source_space_px": [64, 48],
+                    "crop_native_xyxy": [16, 12, 48, 36], "resized_px": [32, 24], "geometry_constant": True,
+                    "invalid_detections": 0})
+                self.assertEqual(self.the_stage.view(), {"region": list(centre), "rotation": rotation,
+                                                         "alignment": self.the_stage.config_alignment(),
+                                                         "presence_watch": False})
+                self.assertEqual(report["frames"]["acknowledged_presented"], 2)
+                self.assert_both_children_closed(report)
+            payloads[rotation] = expected
+        # A quarter turn changes what is sent for the same detector boxes. (How many of the four differ is the
+        # layout's: the strip's arrows follow the boxes round the whole frame, so all four; the panel shows the
+        # region as the detector saw it, so the two shapes of the detector's input.)
+        self.assertNotEqual(payloads[0], payloads[90])
+        self.assertNotEqual(payloads[180], payloads[270])
+        # By hand, unturned: the first box is 16..22 by 20..28 of the whole frame, the second 30..38 by 14..22.
+        unturned = Mapping((64, 48), (16, 12, 48, 36), (32, 24), 0, (64, 48)).result(result)
+        self.assertEqual([item.box_xyxy for item in unturned.detections], [(16, 20, 22, 28), (30, 14, 38, 22)])
+        # A region of the whole frame, unturned, is no region: the frame goes the way it always went on the strip.
+        whole = self.stage(limits=self.TWO, scenario="end:max_frames", region=Region())
+        report = whole.run()
+        self.assertEqual((report["view"]["whole_frame"], report["view"]["prepared"], whole.prepares),
+                         (True, self.LAYOUT is not HUD_CONFIG, self.LAYOUT is not HUD_CONFIG))
+        # The whole frame turned is a region like any other.
+        turned = self.stage(limits=self.TWO, scenario="end:max_frames", region=Region(rotation=90))
+        report = turned.run()
+        self.assertEqual((report["view"]["prepared"], report["view"]["crop_native_xyxy"], self.detector.shapes[0]),
+                         (True, [0, 0, 64, 48], (64, 48, 3)))
+
+    def test_a_box_that_is_not_one_in_the_detectors_input_is_dropped_before_mapping_whatever_the_view(self):
+        # Taking a box back to the whole frame sorts, clamps and rounds it, so a box outside the detector's input,
+        # inverted, or not a box at all must be judged before that: otherwise a region or a turn would show an
+        # object the whole-frame run does not, or end the run as an error and waste its record. Each shape below
+        # is dropped and counted, with every view, and what is sent is drawn from the one valid box alone.
+        from sightcircuit.camera.region import Mapping, Region
+        from sightcircuit.hud import camera_stage
+        good = ("bottle", (2, 4, 14, 16))  # Inside the detector's input at every view below (the smallest is 24 x 32).
+        bad = (("cup", (60, 40, 70, 50)),  # Outside the input (and partly outside the largest, 64 x 48).
+               ("cup", (14, 16, 2, 4)),  # Inverted.
+               ("cup", (-4, 2, 6, 10)),  # Negative.
+               ("cup", (5, 5, 5, 9)),  # No width.
+               ("cup", (float("nan"), 2, 6, 10)), ("cup", (2, 2, float("inf"), 10)), ("cup", (2, 4, 14)),
+               ("cup", None), ("cup", "a box"))
+        only = DetectionResult((Detection(good[0], 0.9, good[1]),), 1.0)
+        centre = (0.25, 0.25, 0.75, 0.75)
+        views = ((None, None), (Region(*centre), Mapping((64, 48), (16, 12, 48, 36), (32, 24), 0, (64, 48))),
+                 (Region(*centre, rotation=90), Mapping((64, 48), (16, 12, 48, 36), (32, 24), 90, (64, 48))),
+                 (Region(rotation=270), Mapping((64, 48), (0, 0, 64, 48), (64, 48), 270, (64, 48))))
+        for region, mapping in views:
+            report = self.stage(ScriptedDetector([(good, *bad)]), limits=self.TWO, scenario="end:max_frames",
+                                region=region).run()
+            labels, expected = self.expected_payload(only, mapping)
+            with self.subTest(region=None if region is None else (region.fractions, region.rotation)):
+                self.assertEqual((report["status"], report["reason"], labels), ("completed", "max_frames", ("bottle",)))
+                self.assertEqual([(item["token"], item["rgba"] == expected) for item in self.queued],
+                                 [(("bottle",), True)] * 2)
+                self.assertEqual(report["view"]["invalid_detections"], 2 * len(bad))
+                self.assertEqual([row["label"] for row in report["labels"]["rows"]], ["bottle"])
+                if report["boxes"] is not None:  # The panel's block counts them as detections dropped as invalid.
+                    boxes = report["boxes"]
+                    self.assertEqual((boxes["detections"], boxes["dropped"]["invalid"], boxes["boxes_dropped"],
+                                      boxes["boxes_selected"], boxes["boxes_sent"], boxes["results_sent"]),
+                                     (2 * (1 + len(bad)), 2 * len(bad), 2 * len(bad), 2, 2, 2))
+                self.assert_both_children_closed(report)
+        # The rule is the selector's own, so the whole frame without a mapping judges as it always did: the
+        # strip's rows take plain Python numbers (a boolean is one), the panel's boxes any real number but a
+        # boolean. An integer too large for a float is judged, not raised on.
+        import numpy as np
+        plain = self.LAYOUT is HUD_CONFIG
+        edge = [Detection("bottle", 0.9, box) for box in (
+            (False, False, True, True), (np.float32(2), np.float32(4), np.float32(14), np.float32(16)),
+            (2, 4, 10 ** 400, 16), (2.0, 4.0, 64.0, 48.0), (0, 0, 64, 48), (0, 0, 65, 48))]
+        valid, invalid = camera_stage.valid_detections(edge, (64, 48), plain)
+        self.assertEqual(([edge.index(item) for item in valid], invalid), ([0, 3, 4] if plain else [1, 3, 4], 3))
+        self.assertEqual(camera_stage.valid_detections([None, "text", Detection("cup", 0.9, [1, 2, 3, 4])], (64, 48),
+                                                       plain)[1], 2)
+        # More detections than the selectors' budget is still the error it was, on what the detector returned.
+        stage = self.stage()
+        crowd = DetectionResult(tuple(Detection("cup", 0.9, None) for _ in range(129)), 1.0)
+        with self.assertRaisesRegex(ValueError, "hud_detection_budget_exceeded"):
+            stage._tile(np.zeros((48, 64, 3), np.uint8), crowd)
+
+    def test_what_the_sites_compare_cannot_be_assigned_and_is_what_every_frame_uses(self):
+        # The layout, the region, the alignment and the watch are what the permission sites compare with the
+        # record. None can be assigned once the stage is built, and whether a frame is prepared is derived from
+        # the same values on every frame, so the sites cannot approve one view and the run use another.
+        from sightcircuit.camera.region import Region
+        from sightcircuit.hud.camera_stage import CameraHudStage
+        centre = (0.25, 0.25, 0.75, 0.75)
+        stage = self.stage()
+        for name, value in (("config", HUD_CONFIG), ("region", Region(*centre)), ("alignment", None),
+                            ("presence_watch", True), ("boxed", True), ("prepares", True)):
+            with self.subTest(assigned=name), self.assertRaises(AttributeError):
+                setattr(stage, name, value)
+            self.assertIsNone(getattr(CameraHudStage, name).fset)
+        self.assertIs(stage.presence_watch, False)  # What the stage holds: no watch.
+        self.assertNotIn("presence_watch", vars(stage))  # Not a flag that could be set beside it.
+        self.assertEqual((stage.view()["region"], stage.view()["rotation"], stage.prepares),
+                         ([0.0, 0.0, 1.0, 1.0], 0, self.LAYOUT is not HUD_CONFIG))
+        # Even with the private field forced, the sites' view and the per-frame path are one value: the view
+        # states the region, and the detector is given it.
+        stage = self.stage(limits=self.TWO, scenario="end:max_frames")
+        stage._region = Region(*centre, rotation=90)
+        self.assertEqual((stage.view()["region"], stage.view()["rotation"], stage.prepares), (list(centre), 90, True))
+        report = stage.run()
+        self.assertEqual((self.detector.shapes, report["view"]["rotation"], report["view"]["crop_native_xyxy"],
+                          report["view"]["prepared"]), ([(32, 24, 3)] * 2, 90, [16, 12, 48, 36], True))
+
+    def test_with_a_rotation_the_strips_arrows_stay_in_the_unturned_frame_unless_the_paired_orientation_is_given(self):
+        # The stage takes boxes back to the unturned whole frame, so a rotation alone does not turn the strip's
+        # arrows: they refer to the camera's delivered image. ``ROTATION_ORIENTATION`` is the orientation that
+        # makes them refer to the image as the detector saw it; the operator gives both.
+        from sightcircuit.camera.region import Mapping, Region
+        from sightcircuit.hud.camera import camera_rows
+        from sightcircuit.hud.camera_stage import ROTATION_ORIENTATION
+
+        def arrow(box, shape, **options):
+            row, = camera_rows([Detection("bottle", 0.9, box)], shape, HUD_CONFIG, threshold=0.5, **options)
+            return row.direction
+        self.assertEqual(ROTATION_ORIENTATION, {0: "identity", 90: "rotate_90_cw", 180: "rotate_180",
+                                                270: "rotate_90_ccw"})
+        for rotation, orientation in ROTATION_ORIENTATION.items():
+            mapping = Mapping((64, 48), (0, 0, 64, 48), (64, 48), rotation, (64, 48))
+            width, height = mapping.input_size
+            for box in ((1, 1, 9, 9), (width - 10, 1, width - 1, 9), (1, height - 10, 9, height - 1)):  # Three corners.
+                seen = arrow(box, (height, width))  # Where the detector saw it, in its own input.
+                mapped = mapping.to_frame(box)
+                with self.subTest(rotation=rotation, box=box):
+                    self.assertEqual(arrow(mapped, (48, 64), orientation=orientation), seen)
+                    if rotation:
+                        self.assertNotEqual(arrow(mapped, (48, 64)), seen)  # The rotation alone does not turn it.
+        # Through the stage: the same detector box, the whole frame turned a quarter, with and without the pair.
+        box = (("bottle", (1, 1, 9, 9)),)
+        result = DetectionResult((Detection("bottle", 0.9, box[0][1]),), 1.0)
+        mapping = Mapping((64, 48), (0, 0, 64, 48), (64, 48), 90, (64, 48))
+        sent = {}
+        for orientation in ("identity", "rotate_90_cw"):
+            self.stage(ScriptedDetector([box]), limits=self.TWO, scenario="end:max_frames", region=Region(rotation=90),
+                       orientation=orientation).run()
+            sent[orientation] = self.queued[0]["rgba"]
+            self.assertEqual(sent[orientation], self.expected_payload(result, mapping, orientation=orientation)[1])
+        self.assertNotEqual(sent["identity"], sent["rotate_90_cw"])
+
     def test_names_only_rows_and_each_orientation_render(self):
         import numpy as np
         from sightcircuit.hud.camera import ORIENTATIONS, camera_rows
@@ -567,7 +931,7 @@ class CameraHudStageTests(StageCase):
 
     def test_the_real_output_start_is_refused_by_the_gate_before_anything_is_launched(self):
         import subprocess
-        client = ObservedFrameClient(validation_only=False)
+        client = ObservedFrameClient(validation_only=False, **self.layout_options())
         stage = self.stage(client=client)
         with mock.patch.object(camera_helper, "run_export", wraps=camera_helper.run_export) as exported, \
                 mock.patch.object(subprocess, "Popen", wraps=subprocess.Popen) as launched, \
@@ -751,12 +1115,19 @@ class CameraHudStageTests(StageCase):
         self.assertEqual([line["frame_id"] for line in self.bridge_lines if line["event"] == "frame_presented"], [1, 2])
         after = self.bridge_lines[[line["event"] for line in self.bridge_lines].index("hide_returned"):]
         self.assertEqual([line["event"] for line in after], ["hide_returned"])  # Nothing presented or shown after it.
+        # The third was packed and offered, and the client refused it: it is not a result sent. The queue step
+        # times two, and on the panel three boxes were selected and two sent.
+        self.assertEqual([report["steps_ms"][name]["count"] for name in ("draw", "pack", "queue")], [3, 3, 2])
+        if report["boxes"] is not None:
+            boxes = report["boxes"]
+            self.assertEqual((boxes["results_counted"], boxes["boxes_selected"], boxes["results_sent"], boxes["boxes_sent"]),
+                             (3, 3, 2, 2))
         row, = report["labels"]["rows"]
         self.assertEqual(row["spells"], 1)  # One spell, ended by the hide: no second one is booked.
         # The latch itself, directly: after ``end`` the client accepts nothing and a take-down cannot be undone.
         client = stage.client
         now = time.monotonic_ns()
-        self.assertFalse(client.submit_observed(99, now, now + MS, 1, 1, bytes(4)))
+        self.assertFalse(client.submit_observed(99, now, now + MS, *self.smallest_frame()))
         self.assert_both_children_closed(report)
 
     def test_a_bridge_that_dies_stops_the_helper_at_once_even_while_the_detector_is_busy(self):
@@ -944,7 +1315,7 @@ class FixedHudStageTests(StageCase):
     def client(self, keepalive_seconds=observed_frames.KEEPALIVE_SECONDS, **fake):
         FixedHudStageTests.runs += 1
         self.log = Path(self.directory.name) / f"calls-{FixedHudStageTests.runs}.jsonl"
-        return ObservedFrameClient(validation_only=False, keepalive_seconds=keepalive_seconds,
+        return ObservedFrameClient(validation_only=False, keepalive_seconds=keepalive_seconds, **self.layout_options(),
                                    env={**os.environ, **self.runtime_env, "FAKE_VR_LOG": str(self.log), **fake})
 
     def visible_spans(self):
@@ -975,7 +1346,7 @@ class FixedHudStageTests(StageCase):
             self.assertEqual(len(self.calls(name)), 1, name)
         self.assertEqual((report["validation_only"], report["bridge_mode"], report["bridge"]["mode"]),
                          (False, "--fixed-hud", "--fixed-hud"))
-        self.assertEqual(final["fixed_hud"]["config_id"], "fixed-edge-hud-v1")
+        self.assertEqual(final["fixed_hud"]["config_id"], self.LAYOUT.layout_id)
         self.assertEqual(final["fixed_hud"]["settings_accepted"], False)
         self.assert_no_gate_opened(report)  # Running on the fixture claims nothing.
 
@@ -1015,7 +1386,7 @@ class FixedHudStageTests(StageCase):
         detector = ScriptedDetector([BOTTLE, BOTTLE, (), (), BOTTLE])
         report = self.stage(detector).run()
         self.assertEqual((report["status"], report["reason"]), ("completed", "max_frames"))
-        self.permitted.assert_called_with(self.the_stage.client, None)  # The client and its layout value.
+        self.permitted.assert_called_with(self.the_stage.client, self.the_stage.client.layout)  # Its layout value.
         self.assertEqual([item["frame_id"] for item in self.queued], [1, 2, 5, 6, 7, 8])
         sent = self.named("frame_sent")
         self.assertEqual(len(self.calls("SetOverlayRaw")), len(sent))

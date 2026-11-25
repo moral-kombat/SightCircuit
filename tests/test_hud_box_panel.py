@@ -281,14 +281,15 @@ class BoxPanelContractTests(unittest.TestCase):
         # words of the stopgap it replaced are gone from the list because the stopgap is gone. What the lists
         # still hold is the shape: the scope record, the manifest and the staging tool reach layouts only as
         # "one of the contract's fixed layouts" and never name the panel; one module builds a bridge command
-        # line with a layout; and no stage or command selects the panel yet (the stage's layout is B5's second
-        # change, which will move these lists).
+        # line with a layout; and since B5's second part exactly one stage draws the panel, while its command
+        # reaches layouts only through the contract's list and never names the panel either.
         #
         # The panel by name: its contract, font, renderer, selector and scenes, the header generator and the
         # generated header, and the bridge's table of fixed layouts, which reads the header's constants.
         panel_files = {"sightcircuit/hud/contract.py", "sightcircuit/hud/box_render.py", "sightcircuit/hud/boxes.py",
                        "sightcircuit/hud/box_font.py", "sightcircuit/hud/__init__.py", "sightcircuit/hud/native.py",
-                       "sightcircuit/hud/box_scenes.py", "tools/hud_contract.hpp", "tools/overlay_frame.hpp"}
+                       "sightcircuit/hud/box_scenes.py", "tools/hud_contract.hpp", "tools/overlay_frame.hpp",
+                       "sightcircuit/hud/camera_stage.py"}  # Since B5's second part: the stage draws the panel.
         panel_words = ("BOX_PANEL_CONFIG", "BoxPanelConfig", "box_render", "draw_boxes", "camera_boxes", "PanelBox",
                        "head-fixed-box-panel", "box_font", "kBoxPanel", "box_scenes", "orientation_scene")
         # The panel as "the second fixed layout": the contract's list, the bridge's table and the units that read
@@ -297,6 +298,8 @@ class BoxPanelContractTests(unittest.TestCase):
         layout_files = {"sightcircuit/hud/contract.py", "sightcircuit/hud/__init__.py", "sightcircuit/observed_frames.py",
                         "sightcircuit/runtime/scope.py", "sightcircuit/runtime/manifest.py",
                         "scripts/stage_scope_record.py",
+                        # Since B5's second part: the stage is built for a layout and the command takes one.
+                        "sightcircuit/hud/camera_stage.py", "sightcircuit/commands/camera_hud.py",
                         "tools/overlay_frame.hpp", "tools/overlay_bridge.cpp", "tools/overlay_bridge.hpp",
                         "tools/overlay_bridge_rendering.cpp", "tools/overlay_bridge_reporting.cpp"}
         layout_words = ("FIXED_LAYOUTS", "fixed_layout", "kFixedLayouts", "FixedLayout", "pinned_layout", "layout_index",
