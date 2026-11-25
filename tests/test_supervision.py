@@ -255,6 +255,7 @@ class StopRelayTests(unittest.TestCase):
         previous = {number: signal.getsignal(number) for number in supervision.STOP_SIGNALS}
         for number, handler in previous.items():
             self.addCleanup(signal.signal, number, handler)
+        self.addCleanup(supervision.retire_stop_relay)  # This process goes on: the relay must not outlive the test.
         first, second = threading.Event(), threading.Event()
         self.assertIs(supervision.stop_on(first), first)
         self.assertIs(supervision.stop_on(second), second)
@@ -277,6 +278,46 @@ class StopRelayTests(unittest.TestCase):
         time.sleep(0.1)
         fourth = supervision.stop_on(threading.Event())
         self.assertFalse(fourth.wait(0.3))
+
+    def test_a_retired_relay_ends_its_thread_and_gives_back_the_wakeup_descriptor(self):
+        # A worker's relay lasts as long as its process. A process that goes on after the stop it armed (a
+        # worker's function run in a test's own process) retires it: no thread or descriptor of it is left, the
+        # wakeup descriptor is what it was, its handler is inert, and the next stop_on makes a working relay.
+        for number in supervision.STOP_SIGNALS:
+            self.addCleanup(signal.signal, number, signal.getsignal(number))
+        self.addCleanup(supervision.retire_stop_relay)
+        self.assertIsNone(supervision._stop_wakeup, "an earlier test left the process's stop relay")
+        self.assertTrue(supervision.retire_stop_relay())  # With no relay there is nothing to end.
+        threads = threading.active_count()
+        before_read, before_write = os.pipe()
+        self.addCleanup(os.close, before_read)
+        self.addCleanup(os.close, before_write)
+        os.set_blocking(before_write, False)
+        self.addCleanup(signal.set_wakeup_fd, signal.set_wakeup_fd(before_write))
+        stop = supervision.stop_on(threading.Event())
+        relay = supervision._stop_wakeup
+        read_fd, write_fd = relay.read_fd, relay.write_fd
+        self.assertEqual((threading.active_count(), relay.thread.name), (threads + 1, "sightcircuit-stop-relay"))
+        self.assertTrue(supervision.retire_stop_relay())
+        self.assertFalse(relay.thread.is_alive())
+        self.assertEqual(threading.active_count(), threads)
+        self.assertIsNone(supervision._stop_wakeup)
+        self.assertEqual((relay.read_fd, relay.write_fd), (-1, -1))
+        for fd in (read_fd, write_fd):
+            with self.assertRaises(OSError):
+                os.fstat(fd)
+        self.assertEqual(signal.set_wakeup_fd(before_write), before_write)  # Given back, not left on a closed pipe.
+        relay.handle(signal.SIGTERM, None)  # Inert: it neither raises nor writes anywhere.
+        self.assertFalse(stop.is_set())
+        self.assertTrue(relay.retire())  # A second retirement closes nothing twice.
+        self.assertTrue(supervision.retire_stop_relay())
+        again = supervision.stop_on(threading.Event())
+        self.assertIsNot(supervision._stop_wakeup, relay)
+        signal.raise_signal(signal.SIGTERM)
+        self.assertTrue(again.wait(2))
+        self.assertFalse(stop.is_set())  # The retired relay's event is not the new relay's.
+        self.assertTrue(supervision.retire_stop_relay())
+        self.assertEqual(threading.active_count(), threads)
 
 
 class WorkerSideTests(unittest.TestCase):

@@ -50,7 +50,9 @@ supervisor follow (architecture decision D4). It offers:
   signal landed inside ``Event.wait()``'s own critical section, and was not run
   at all while the main thread blocked, uninterrupted, in the wait's lock
   acquire (the lane B flake; see the checks reference). Neither can happen to
-  a relay thread.
+  a relay thread. The relay lasts as long as its process, which is all a
+  worker needs; a process that goes on after the stop it armed ends the relay
+  itself (``retire_stop_relay``).
 - **A caller's stop.** ``supervise_owned(stop=event)`` ends the worker the
   way a cancellation does once another thread of the caller sets the event
   (the camera helper source stops its helper that way when its reader refuses the
@@ -353,6 +355,43 @@ class StopWakeup:
                 for event in events:
                     event.set()
 
+    def retire(self, timeout=2.0):
+        """End this relay in the process that made it; True once its thread has ended.
+
+        A worker never needs this: its relay lasts as long as its process. It
+        is for a process that goes on after the stop it armed (a caller that
+        runs a worker's function in its own process, as tests do), so the
+        relay's thread and descriptors do not outlive that use. Call on the
+        main thread (``signal.set_wakeup_fd`` requires it). The wakeup
+        descriptor goes back to what it was before the relay if it is still
+        the relay's; the handler stays installed where the caller left it but
+        is inert (``handle`` on -1), so the caller restores the handlers it
+        replaced. Closing the write end is what ends the thread (``relay``
+        returns at end of file). A later ``stop_on`` makes a new relay.
+        """
+        global _stop_wakeup
+        write_fd = self.write_fd
+        if write_fd >= 0:
+            current = signal.set_wakeup_fd(-1)
+            restored = self.previous_wakeup_fd if current == write_fd else current
+            try:
+                signal.set_wakeup_fd(restored, warn_on_full_buffer=False)
+            except (ValueError, OSError):  # The earlier descriptor was closed meanwhile: none is left set.
+                pass
+        if _stop_wakeup is self:
+            _stop_wakeup = None
+        self.write_fd = -1
+        if write_fd >= 0:
+            with contextlib.suppress(OSError):
+                os.close(write_fd)
+        if self.thread is not threading.current_thread():
+            self.thread.join(timeout)
+        read_fd, self.read_fd = self.read_fd, -1
+        if read_fd >= 0:
+            with contextlib.suppress(OSError):
+                os.close(read_fd)
+        return not self.thread.is_alive()
+
     def forget(self):
         """In a forked child: no relay thread exists, and the parent's pipe is not ours to write.
 
@@ -396,6 +435,12 @@ def stop_on(stop, numbers=STOP_SIGNALS):
     for number in numbers:
         signal.signal(number, _stop_wakeup.handle)
     return stop
+
+
+def retire_stop_relay(timeout=2.0):
+    """End the process's stop relay, if ``stop_on`` made one (``StopWakeup.retire``); True when no relay thread is left."""
+    relay = _stop_wakeup
+    return True if relay is None else relay.retire(timeout)
 
 
 def enter_worker(number=signal.SIGTERM):
