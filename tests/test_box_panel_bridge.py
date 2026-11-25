@@ -449,7 +449,14 @@ class BoxPanelBridgeTests(unittest.TestCase):
         process.kill()
         process.wait(5)
         end = time.monotonic() + 5
-        while Path(f"/proc/{bridge}/stat").exists() and Path(f"/proc/{bridge}/stat").read_text().split()[2] != "Z":
+        def bridge_running():
+            # Gone, or a zombie waiting to be reaped, is over. The process can vanish between any two looks at
+            # /proc, so a read that finds it gone answers the question and is not an error.
+            try:
+                return Path(f"/proc/{bridge}/stat").read_text().split()[2] != "Z"
+            except (FileNotFoundError, ProcessLookupError):
+                return False
+        while bridge_running():
             self.assertLess(time.monotonic(), end, "the bridge outlived its launcher")
             time.sleep(0.01)
         drawing = [call for call in fake_vrclient.calls(log) if call["call"] in strip_suite.DRAWING]
