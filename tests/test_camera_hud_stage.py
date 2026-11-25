@@ -131,8 +131,18 @@ class StageCase(unittest.TestCase):
 
     def watch(self, scenario=None, seconds=20, binary=None, **options):
         """A presence watch on the watcher's stand-in (``tests/fake_presence_watcher.py``, never SteamVR), scripted
-        by ``scenario``. Its stop event is the run's. The stand-in's process id is in ``self.watcher_pid()``."""
+        by ``scenario``. Its stop event is the run's. The stand-in's process id is in ``self.watcher_pid()``.
+
+        A stage takes only a watch with the module's default waits, so ``ready_wait`` and ``heartbeat_timeout``
+        here shorten those defaults themselves for the test (the watch and the stage then agree), instead of
+        giving one watch waits of its own."""
+        from sightcircuit.camera import presence
         from sightcircuit.camera.presence import PresenceWatch
+        for option, default in (("ready_wait", "READY_WAIT_SECONDS"), ("heartbeat_timeout", "HEARTBEAT_TIMEOUT_SECONDS")):
+            if option in options:
+                shorter = mock.patch.object(presence, default, options.pop(option))
+                shorter.start()
+                self.addCleanup(shorter.stop)
         self.pid_file = Path(self.directory.name) / f"watcher-{self.id().rsplit('.', 1)[1][:60]}-{time.monotonic_ns()}.pid"
         values = {"FAKE_PRESENCE_PID_FILE": str(self.pid_file)}
         if scenario is not None:
@@ -618,12 +628,14 @@ class CameraHudStageTests(StageCase):
         # Fail closed: a run that holds a watch does not start without it. Each case is a watcher that cannot
         # be armed; the run ends ``presence_watch_not_armed`` with the watcher's own refusal in the report.
         absent = Path(self.directory.name) / "no-such-watcher"
-        cases = (("noready", {"ready_wait": 0.4}, "watcher_not_ready_in_time"),
-                 ("error=vrserver_not_running", {}, None),
+        # (The case that shortens the ready wait is last: the stage takes a watch only with the module's own
+        # waits, so the test shortens the default, and the cases before it keep the real one.)
+        cases = (("error=vrserver_not_running", {}, None),
                  ("activity=standby", {}, None),
                  ("camera", {}, None),
                  (None, {"binary": absent}, None),
-                 (None, {"pinned": "0" * 64}, "watcher_not_pinned"))
+                 (None, {"pinned": "0" * 64}, "watcher_not_pinned"),
+                 ("noready", {"ready_wait": 0.4}, "watcher_not_ready_in_time"))
         for scenario, options, refusal in cases:
             with self.subTest(scenario=scenario, options=sorted(options)):
                 pinned = options.pop("pinned", None)
@@ -644,6 +656,83 @@ class CameraHudStageTests(StageCase):
                 self.assert_nothing_was_launched(stage, report)
                 self.assertLess(time.monotonic() - started, 4)
         self.assertEqual(len(cases), 6)
+
+    def test_the_stage_runs_only_on_an_unused_watch_that_is_then_armed_with_a_running_watcher(self):
+        # The stage is the guarded object (review of #116): what it is handed directly must be a watch that can
+        # end the run. Each probe below once ran to the end with ``armed: true`` and no watcher behind it.
+        from sightcircuit.camera import presence
+        from sightcircuit.camera.presence import PresenceWatch
+
+        class SaysArmed(PresenceWatch):  # Probe 1: arms without launching anything.
+            def start(self, abort=None):
+                self.armed = True
+                return None
+        used = {"closed": PresenceWatch.close, "run_ended": PresenceWatch.run_ended}
+        for name, build in (("subclass", lambda: SaysArmed(self.watcher, 20, threading.Event())),
+                            ("heartbeat_timeout", lambda: PresenceWatch(self.watcher, 20, threading.Event(),
+                                                                        heartbeat_timeout=3600)),
+                            ("ready_wait", lambda: PresenceWatch(self.watcher, 20, threading.Event(), ready_wait=600)),
+                            *((name, lambda use=use: [watch := self.watch(), use(watch)][0]) for name, use in used.items())):
+            with self.subTest(refused_at_construction=name), \
+                    self.assertRaisesRegex(ValueError, "^camera_hud_presence_watch_invalid$"):
+                self.stage(watch=build())
+        self.assertIsNone(self.watcher_pid())  # None of them launched a watcher.
+        # Probes 2 and 3: closed, or told its run had ended, after the stage took it and before the run. A
+        # scripted standby would then end nothing. Probe 4: waits changed after the stage took it. And a watch
+        # started by someone else. Each run ends by name with nothing launched and nothing sent.
+        def started_elsewhere(watch):
+            self.assertIsNone(watch.start())
+        cases = (("closed", PresenceWatch.close), ("run_ended", PresenceWatch.run_ended),
+                 ("heartbeat_timeout", lambda watch: setattr(watch, "heartbeat_timeout", 3600)),
+                 ("started", started_elsewhere))
+        for name, use in cases:
+            with self.subTest(used_before_the_run=name):
+                watch = self.watch("300:enter_standby_event")
+                stage = self.stage(limits={"fps": 5, "max_seconds": 20, "max_frames": 30}, watch=watch)
+                self.assertIs(stage.watch_sound, True)
+                use(watch)
+                self.assertIs(stage.watch_sound, False)
+                report = stage.run()
+                self.assertEqual((report["status"], report["reason"]), ("error", "presence_watch_not_armed"))
+                block = report["presence_watch"]
+                self.assertEqual((block["requested"], block["armed"], block["refusal"], block["ended_run"],
+                                  block["cleanup_ok"]), (True, False, "watch_not_unused", False, True))
+                self.assert_nothing_was_launched(stage, report)
+                self.assertTrue(watch.closed)
+        # A watch whose ``start`` answers "armed" with no watcher running (the method replaced on the instance,
+        # which the type check cannot see): not taken on trust.
+        watch = self.watch()
+        stage = self.stage(watch=watch)
+        with mock.patch.object(watch, "start", side_effect=lambda abort=None: setattr(watch, "armed", True)) as started:
+            report = stage.run()
+        started.assert_called_once()
+        self.assertEqual((report["status"], report["reason"]), ("error", "presence_watch_not_armed"))
+        block = report["presence_watch"]
+        self.assertEqual((block["armed"], block["refusal"], block["cleanup_ok"]), (False, "watch_not_live", True))
+        self.assertIs(stage.watch_sound, False)
+        self.assert_nothing_was_launched(stage, report)
+        self.assertEqual(presence.HEARTBEAT_TIMEOUT_SECONDS, 3.0)  # Nothing here changed the defaults.
+
+    def test_an_exception_while_arming_ends_as_a_reported_error_with_everything_closed(self):
+        # Arming is inside the run's guarded part: the watcher's file unreadable when it is hashed raised out of
+        # ``run`` once, with no report. Now it is the run's error, by name, with the client withdrawn.
+        from sightcircuit.sources import camera_helper
+        for error in (PermissionError("denied"), RuntimeError("anything"), OSError("gone")):
+            with self.subTest(raised=type(error).__name__):
+                watch = self.watch()
+                stage = self.stage(watch=watch)
+                with mock.patch.object(camera_helper, "helper_digest", side_effect=error), \
+                        mock.patch.object(stage.client, "withdraw", wraps=stage.client.withdraw) as withdrawn:
+                    report = stage.run()
+                self.assertEqual((report["status"], report["reason"]), ("error", "presence_watch_not_armed"))
+                block = report["presence_watch"]
+                self.assertEqual((block["requested"], block["armed"], block["refusal"], block["cleanup_ok"]),
+                                 (True, False, "watch_start_failed", True))
+                withdrawn.assert_called()
+                self.assertTrue(watch.closed)
+                self.assert_nothing_was_launched(stage, report)
+                with self.assertRaisesRegex(ValueError, "^camera_hud_stage_already_run$"):
+                    stage.run()
 
     def test_a_stop_or_a_signal_while_the_watch_is_arming_ends_the_run_with_nothing_launched(self):
         # The caller's stop during the arming is the caller's stop, not a refusal: the run ends ``stopped``.
@@ -672,10 +761,14 @@ class CameraHudStageTests(StageCase):
     def test_a_watch_lost_during_the_run_ends_it_by_name_and_takes_the_tile_down(self):
         # A watcher that dies, or goes silent past the heartbeat bound, is no watch: the run ends
         # ``presence_watch_lost`` with the tile hidden at once, never left up on a watch that is not there.
-        for scenario, options in (("1000:die", {}), ("1000:silent", {"heartbeat_timeout": 0.5})):
+        for scenario, options in (("1200:die", {}), ("700:silent", {"heartbeat_timeout": 0.5})):
             with self.subTest(scenario=scenario):
                 watch = self.watch(scenario, **options)
-                stage = self.stage(limits={"fps": 5, "max_seconds": 20, "max_frames": 100}, watch=watch)
+                # The slow detector, as for the signal: in its third call, for 2.5 s, when the loss comes about
+                # 1.2 s after the watch armed. Only the end's own hide can then take the tile down before the
+                # detector returns; a hide left to the close would come after it.
+                detector = ScriptedDetector(delays={3: 2.5})
+                stage = self.stage(detector, limits={"fps": 5, "max_seconds": 20, "max_frames": 100}, watch=watch)
                 started = time.monotonic()
                 report = stage.run()
                 self.assertEqual(report["status"], "presence_watch_lost")
@@ -689,6 +782,9 @@ class CameraHudStageTests(StageCase):
                 self.assertEqual(report["end"]["hide_written_ns"], down["sent_ns"])
                 self.assertLess(down["sent_ns"] - watch.lost["monotonic_ns"], MARGIN_NS)
                 self.assertGreaterEqual(len(self.queued), 1)
+                # Hidden at once: the hide was written while the detector was still in its call.
+                self.assertIs(report["end"]["bridge_ended_first"], False)
+                self.assertLess(down["sent_ns"], detector.returned_ns[2] - 500 * MS)
                 self.assert_deadlines_within_the_cap()
                 self.assert_both_children_closed(report)
                 self.assert_no_gate_opened(report)

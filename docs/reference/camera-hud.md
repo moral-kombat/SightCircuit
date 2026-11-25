@@ -297,14 +297,21 @@ refuse a watch on any path but the pinned watcher's beforehand.
 | What happens | `status`, `reason` | What ran |
 | --- | --- | --- |
 | The watcher cannot be launched, has another digest than the manifest's (`watcher_not_pinned`), does not say `ready` in time, reports an error or a headset already in standby, or is lost again before the launch | `error`, `presence_watch_not_armed`; the watcher's own word is in `presence_watch.refusal` | nothing: no bridge, no helper |
+| The stage's watch is not one it may run with: used before the stage armed it (`watch_not_unused`), not armed with a running watcher after its start answered (`watch_not_live`), or its arming raised (`watch_start_failed`) | `error`, `presence_watch_not_armed`; the stage's word is in `presence_watch.refusal` and `armed` is false | nothing: no bridge, no helper |
 | A stop or a signal while the watch is arming | `stopped`, `stopped_before_launch`, or `cancelled`, `signal` | nothing |
 | The watcher's ending signal (SteamVR's standby event) during the run | `presence_ended`, `standby` | the tile is hidden at once; both children are stopped |
 | The watcher dies, or is silent past its heartbeat bound, during the run | `presence_watch_lost`, the loss's reason | the same: a watch that is not there holds nothing up |
+| The watcher's signal, a loss or a stop while the helper is still starting (the watch armed, no frame yet) | the run ends with `cleanup.ok: false` and exit code 1: the helper is ended by its supervision before it has started (`helper_exit`) and its cleanup is not confirmed | nothing was shown. The helper's cleanup rule is older than the watch and is not changed here |
 
 The end is the one every other end takes: the stop event wakes the stage's
 end thread, which latches the client and writes the in-band hide without
-waiting for the detector. No thread, timer or polling loop was added for
-the watch; its reader blocks on the watcher's pipe. After the run's end a
+waiting for the detector. The stage adds no thread, timer or polling loop
+for the watch, but the watch brings its own: every displayed camera run now
+has the watch's reader thread, which waits on the watcher's pipe with a
+50 ms timeout and checks the age of the last heartbeat on every pass. The
+stage takes only a watch of the exact type, not yet started or closed and
+with the default waits, and after arming it requires a running watcher and
+a live reader. After the run's end a
 signal or a loss is recorded and ends nothing, and the watcher is always
 ended with the run (SIGTERM, a bounded wait, then SIGKILL).
 
@@ -727,7 +734,9 @@ were added (2 since the panel's). The presence watcher needs a running
 SteamVR, which a validation has not, so the camera passes hold their watch
 on a stand-in (`sightcircuit/camera/presence_standin.py`): the watcher's
 protocol spoken by a process that asks nothing of anyone, with one scripted
-standby signal for the third pass. No device mode can launch it, because a
+standby signal for the third pass. That signal is asked for by the run
+itself, when the detector is given the frame after the first it answered,
+so the part does not depend on how fast the host starts the helper. No device mode can launch it, because a
 device run launches only the watcher at the manifest's path with the
 manifest's digest. Each camera pass must report its watch armed
 (`presence_armed`); the third must end `presence_ended` with reason

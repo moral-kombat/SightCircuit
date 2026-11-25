@@ -51,17 +51,6 @@ ALIGNED = {"scale_x": 1.25, "scale_y": 0.8, "offset_x": 0.1, "offset_y": -0.2, "
 WHOLE, CENTRE = [0.0, 0.0, 1.0, 1.0], [0.25, 0.25, 0.75, 0.75]  # The centre half is E103's region.
 
 
-class ArmedWatch(PresenceWatch):
-    """A presence watch that arms without a watcher process: for tests about the record and the permission
-    sites, which every displayed camera run reaches with a watch held (owner decision of 2026-11-25). The
-    watch itself is tested with a watcher stand-in in ``tests/test_presence_watch.py`` and through the stage and
-    the command."""
-
-    def start(self, abort=None):
-        self.armed = True
-        return None
-
-
 class ScopeCase(checkpoint.CheckoutCase):
     """A clean checkout with a verified manifest; ``scope.ROOT`` is that checkout for the test alone."""
 
@@ -134,6 +123,8 @@ class ScopeCase(checkpoint.CheckoutCase):
             if arguments[0] == "git":
                 return real(arguments, *more, **options)
             seen.append((list(map(str, arguments)), self.ledger()))
+            if str(arguments[0]) == str(self.watcher) and getattr(self, "WATCHER_RUNS", False):
+                return real(arguments, *more, **options)  # Recorded like any launch, and really started.
             raise RuntimeError(stop or "a process was launched")
         with mock.patch.object(subprocess, "Popen", side_effect=launch):
             yield seen
@@ -802,7 +793,38 @@ class OutputSiteTests(ScopeCase):
 
 @unittest.skipUnless(NUMPY_CV2, "The camera HUD stage needs NumPy and OpenCV")
 class CameraSiteTests(ScopeCase):
-    """The camera-input site and the stage's order: both checks, then the first launch."""
+    """The camera-input site and the stage's order: both checks, then the first launch.
+
+    Every displayed camera run holds a presence watch (owner decision of 2026-11-25), and a stage runs only on
+    a real one, armed with a running watcher. So the fixture's pinned watcher is here the scripted fake
+    (``tests/fake_presence_watcher.py``, never SteamVR), and ``launches`` lets that one file start while it
+    records it: a run that reaches the arming shows the watcher's launch, after the record was spent, and
+    nothing else.
+    """
+    WATCHER_RUNS = True
+
+    def install_binaries(self):
+        from tests import fake_presence_watcher
+        self.watcher.write_text(fake_presence_watcher.SHEBANG_INSTALL.format(
+            python=sys.executable, root=str(Path(__file__).resolve().parents[1])))
+        super().install_binaries()
+
+    def setUp(self):
+        super().setUp()
+        scenario = mock.patch.dict(os.environ)
+        scenario.start()
+        self.addCleanup(scenario.stop)
+        for name in ("FAKE_PRESENCE_SCENARIO", "FAKE_PRESENCE_PID_FILE"):
+            os.environ.pop(name, None)
+
+    def watch(self, binary=None, seconds=5):
+        watch = PresenceWatch(binary or self.watcher, seconds, threading.Event())
+        self.addCleanup(watch.close)
+        return watch
+
+    def assert_only_the_watcher_ran(self, seen, record):
+        """The one process a run launched is the pinned watcher, with the record already in the ledger."""
+        self.assertEqual(seen, [([str(self.watcher), "--watch", "--seconds", mock.ANY], [f"{record['run_id']}.json"])])
 
     def source(self, binary=None):
         return CameraHelperSource(binary or self.helper, LIMITS, confirmed=True)
@@ -815,7 +837,7 @@ class CameraSiteTests(ScopeCase):
     def stage(self, client, **options):
         options.setdefault("seconds", LIMITS["max_seconds"])
         # The stage holds a watch on the checkout's pinned watcher unless a test says otherwise (``watch=None``).
-        options.setdefault("watch", ArmedWatch(self.watcher, options["seconds"], threading.Event()))
+        options.setdefault("watch", self.watch(seconds=options["seconds"]))
         return camera_stage.CameraHudStage(self.source(), synthetic.FixtureDetector(), client, **options)
 
     def test_a_truthy_answer_that_is_not_true_is_refused_at_both_sites(self):
@@ -885,7 +907,7 @@ class CameraSiteTests(ScopeCase):
             client = self.client(run)
             stage = camera_stage.CameraHudStage(CameraHelperSource(self.helper, limits, confirmed=True),
                                                 synthetic.FixtureDetector(), client,
-                                                watch=ArmedWatch(self.watcher, 5, threading.Event()), **options)
+                                                watch=self.watch(), **options)
             self.assertIs(camera_stage.stage_view_bound(run, stage), True)  # The bound is the one thing wrong.
             with self.subTest(case=name), self.launches() as seen, \
                     mock.patch.object(stage.source, "drive", side_effect=AssertionError("driven")), \
@@ -901,7 +923,8 @@ class CameraSiteTests(ScopeCase):
         self.assertIs(camera_stage.camera_display_input_preconditions(stage), True)
         with mock.patch.object(stage.source, "drive", side_effect=RuntimeError("stop")), self.launches() as seen:
             stage.run()
-        self.assertEqual((seen, self.ledger(), run.consumed), ([], [f"{record['run_id']}.json"], True))
+        self.assert_only_the_watcher_ran(seen, record)  # The watch was armed; neither the bridge nor the helper ran.
+        self.assertEqual((self.ledger(), run.consumed), ([f"{record['run_id']}.json"], True))
         self.assertEqual(run.status, "revoked")  # It failed before the bridge started: nothing can start later.
         with self.launches() as seen, self.assertRaisesRegex(ValueError, "^fixed_hud_output_not_approved$"):
             stage.client.start()
@@ -1087,7 +1110,7 @@ class CameraSiteTests(ScopeCase):
         elsewhere.chmod(0o755)
         for binary in (elsewhere, Path(sys.executable), self.helper, self.out / "absent"):
             run = self.run_scope(path, seconds=5)
-            stage = self.stage(self.client(run), seconds=5, watch=ArmedWatch(binary, 5, threading.Event()))
+            stage = self.stage(self.client(run), seconds=5, watch=self.watch(binary))
             with self.subTest(watcher=binary.name), self.launches() as seen:
                 self.assertIs(camera_stage.stage_view_bound(run, stage), True)  # The watcher is the one thing wrong.
                 self.assertIs(camera_stage.camera_display_input_preconditions(stage), False)
@@ -1130,7 +1153,7 @@ class CameraSiteTests(ScopeCase):
         for binary in (elsewhere, Path(sys.executable), self.bridge, self.out / "absent"):
             run = self.run_scope(path, seconds=5)
             stage = camera_stage.CameraHudStage(self.source(binary), synthetic.FixtureDetector(), self.client(run),
-                                                seconds=5, watch=ArmedWatch(self.watcher, 5, threading.Event()))
+                                                seconds=5, watch=self.watch())
             self.assertIs(camera_stage.stage_view_bound(run, stage), True)  # The helper is the one thing wrong.
             with self.subTest(helper=binary.name), self.launches() as seen:
                 with self.assertRaisesRegex(ValueError, "^fixed_hud_output_not_approved$"):
@@ -1154,7 +1177,7 @@ class CameraSiteTests(ScopeCase):
         with mock.patch.object(stage.source, "drive", side_effect=rewrite_then_export) as driven, self.launches() as seen:
             stage.run()
         driven.assert_called_once()
-        self.assertEqual(seen, [])  # Neither the helper nor the bridge was launched.
+        self.assert_only_the_watcher_ran(seen, record)  # The watch was armed; neither the helper nor the bridge ran.
         self.helper.write_bytes(b"camera helper built on this machine")
         report = camera_helper.run_export(self.helper, LIMITS, (0,), on_frame=lambda frame: None, confirmed=True,
                                           expected_sha256="0" * 64)
@@ -1178,7 +1201,8 @@ class CameraSiteTests(ScopeCase):
                          [(gates.LIVE_HUD_OUTPUT, True), (gates.LIVE_CAMERA_INPUT, True)])
         self.assertEqual(order, [("drive", [f"{record['run_id']}.json"])])  # Both checks, then the first launch.
         exported.assert_not_called()
-        self.assertEqual(seen, [])
+        self.assert_only_the_watcher_ran(seen, record)  # After both checks and the record: the watch, then the drive.
+        self.assertEqual((report["presence_watch"]["armed"], report["presence_watch"]["cleanup_ok"]), (True, True))
         self.assertEqual((report["status"], report["reason"]), ("error", "camera_hud_run_failed"))
         self.assertEqual({name: report[name] for name in gates.claims()}, ALL_CLOSED)
         self.assertEqual(client.scope.status, "revoked")  # It failed before the bridge started.
@@ -1448,6 +1472,15 @@ class BindingTests(ScopeCase):
                     self.assertIs(self.run_scope(path, hud_config=layout, **extra).permit(scope.HUD_OUTPUT), True)
                     granted += 1
         self.assertEqual((granted, len(self.ledger())), (4, 4))
+        # The second line, asserted and not only said: with the record's own check out of the way (the one thing
+        # patched), a record that says no watch against a request that asks for it is refused by the comparison,
+        # by its name, with nothing spent. Unpatched, the same pair is refused by the record's check first.
+        without = self.edited("L-D4", presence_watch=False)
+        with mock.patch.object(scope, "check_record", return_value=None) as checked:
+            self.assert_refused(self.run_scope(without, presence_watch=True), "scope_presence_watch_mismatch")
+        checked.assert_called_once()
+        self.assert_refused(self.run_scope(without, presence_watch=True), "scope_presence_watch_required")
+        self.assertEqual(len(self.ledger()), 4)
         # The synthetic step opens no camera and is unaffected: its record says no watch, and one that says
         # otherwise, or a request that does, is refused as before.
         for layout in (STRIP, PANEL):

@@ -401,29 +401,30 @@ class PresenceWatch:
             except (OSError, ValueError):
                 break
             now = time.monotonic_ns()
-            if not readable:
-                last = self.last_line_ns
-                if self.armed and last is not None and now - last > self.heartbeat_timeout * 1e9:
-                    self._lose("heartbeat_missed", now)
-                continue
-            try:
-                chunk = os.read(descriptor, 65536)
-            except InterruptedError:
-                continue
-            except OSError:
-                break
-            if not chunk:
-                break
-            pending.extend(chunk)
-            while True:
-                line, newline, rest = pending.partition(b"\n")
-                if not newline:
+            if readable:
+                try:
+                    chunk = os.read(descriptor, 65536)
+                except InterruptedError:
+                    continue
+                except OSError:
                     break
-                pending = bytearray(rest)
-                self._line(bytes(line), time.monotonic_ns())
-            if len(pending) > MAX_LINE_BYTES:
-                pending = bytearray()
-                self._lose("line_too_long", now)
+                if not chunk:
+                    break
+                pending.extend(chunk)
+                while True:
+                    line, newline, rest = pending.partition(b"\n")
+                    if not newline:
+                        break
+                    pending = bytearray(rest)
+                    self._line(bytes(line), time.monotonic_ns())
+                if len(pending) > MAX_LINE_BYTES:
+                    pending = bytearray()
+                    self._lose("line_too_long", now)
+            # On every pass, after the lines just read, and not only when the pipe is quiet: bytes that complete
+            # no line are not a heartbeat, so a watcher that trickles them is lost as soon as a silent one.
+            last = self.last_line_ns
+            if self.armed and last is not None and now - last > self.heartbeat_timeout * 1e9:
+                self._lose("heartbeat_missed", now)
         now = time.monotonic_ns()
         if pending:
             self._lose("line_unterminated", now)

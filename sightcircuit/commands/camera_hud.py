@@ -151,10 +151,12 @@ SCOPE_KEYS = ("status", "refusal", "consumed", "requested_runner", "requested_st
 # stand-in's frames have no right way up) and the neutral alignment.
 VALIDATION_REGION = regions.Region(0.25, 0.25, 0.75, 0.75, rotation=90)
 # The validate mode's presence end: a longer run of the stand-in camera, and the watcher stand-in's standby signal
-# 1.2 s after it armed, which is inside that run with a second to spare on either side on an unloaded host (a
-# signal that comes before the first frame still ends the run by name, and is accepted).
+# asked for by the run itself, when the detector is given the frame after the first one it answered
+# (``PresenceEndDetector``): the helper is then running and a tile has been sent, whatever the host's speed. A
+# signal, a loss or a stop that lands while the helper is still starting is another case and not a clean end: the
+# helper is ended by its supervision (``helper_exit``), the run's cleanup is not confirmed and its exit code is 1.
 VALIDATION_PRESENCE_LIMITS = {"fps": 5, "max_seconds": 4, "max_frames": 15}
-VALIDATION_STANDBY_MS = 1200
+VALIDATION_STANDBY_AFTER_DETECTIONS = 1
 VALIDATION_BOXES = {"seconds": 4, "stops": 1, "stop_seconds": 2.0}
 COMMAND_BLOCKS = {"command": COMMAND_KEYS, "scope_record": SCOPE_KEYS}
 ERROR_BLOCKS.update(COMMAND_BLOCKS)
@@ -199,6 +201,26 @@ class ValidationDetector:
     def detect(self, image, threshold):
         height, width = image.shape[:2]
         return DetectionResult((Detection("bottle", 0.9, (width // 8, height // 8, width // 2, height // 2)),), 0.0)
+
+
+class PresenceEndDetector(ValidationDetector):
+    """The validation's detector for the pass its watch must end: it asks the watcher stand-in for the standby.
+
+    ``trigger`` is the file the stand-in looks for at each heartbeat
+    (``presence_standin.install(standby_trigger=...)``). It is created when
+    a frame arrives after ``VALIDATION_STANDBY_AFTER_DETECTIONS`` were
+    answered, so the signal follows the run's own progress: no delay is
+    guessed and nothing polls.
+    """
+
+    def __init__(self, trigger):
+        self.trigger, self.answered = Path(trigger), 0
+
+    def detect(self, image, threshold):
+        if self.answered == VALIDATION_STANDBY_AFTER_DETECTIONS:
+            self.trigger.touch()
+        self.answered += 1
+        return super().detect(image, threshold)
 
 
 def pinned(path):
@@ -632,8 +654,10 @@ def validate(helper=None, bridge=None):
             boxed = run_camera(VALIDATION_LIMITS, presence_watcher=standin, layout=panel, region=VALIDATION_REGION,
                                alignment=Alignment(), **common)
             # And a run the watch ends: the stand-in writes SteamVR's standby signal, the tile comes down.
+            trigger = Path(watcher_directory) / "standby-now"
             ended = run_camera(VALIDATION_PRESENCE_LIMITS, presence_watcher=presence_standin.install(
-                watcher_directory, standby_after_ms=VALIDATION_STANDBY_MS), **common)
+                watcher_directory, standby_trigger=trigger),
+                **dict(common, detector_factory=lambda: PresenceEndDetector(trigger)))
         finally:
             if previous is None:
                 os.environ.pop("XDG_RUNTIME_DIR", None)
@@ -693,7 +717,8 @@ def validate(helper=None, bridge=None):
         "watcher_cleanup_ok": watch.get("cleanup_ok"), "source_cleanup_ok": cleanup.get("source_ok"),
         "bridge_cleanup_ok": cleanup.get("bridge_ok")}
     # The end is the watch's, by name, and everything is cleaned up. How long the hide took is reported and is
-    # not a pass criterion on a loaded runner; a signal that came before the first frame has no hide to time.
+    # not a pass criterion on a loaded runner. The stand-in is asked for the signal only after a frame was
+    # answered, so the part does not depend on how long the helper took to start.
     presence_end["ok"] = ((ended["status"], ended["reason"]) == (presence.STATUS_PRESENCE_ENDED, "standby")
                           and ended.get("validation_only") is True and watch.get("armed") is True
                           and watch.get("ended_run") is True and watch.get("ending_signal") == "enter_standby_event"
@@ -887,6 +912,10 @@ def main(argv=None):
                 parser.error(f"--seconds must be 1..{MAX_SYNTHETIC_SECONDS} for {synthetic}: its record allows "
                              f"{synthetic_rows.MAX_SECONDS} s and {SYNTHETIC_ALLOWANCE_SECONDS} s are the bridge's start")
             stops = 3 if args.stops is None else args.stops
+            if args.synthetic_boxes and stops < 1:
+                # The centre box counts only after the first stop: without one a frozen picture looks live.
+                parser.error(f"{synthetic_boxes.STOPS_REFUSAL}: --synthetic-boxes needs --stops 1 or more; the "
+                             "counter that tells a live picture from a frozen one starts after the first stop")
             stop_seconds = 3.0 if args.stop_seconds is None else args.stop_seconds
             try:
                 synthetic_rows.schedule(args.seconds, stops, stop_seconds)

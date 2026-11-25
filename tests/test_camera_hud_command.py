@@ -266,6 +266,12 @@ class SyntheticBoxesTests(unittest.TestCase):
             synthetic_boxes.SyntheticBoxes(ObservedFrameClient(), seconds=4, stops=1, stop_seconds=2.0)
         with self.assertRaisesRegex(ValueError, "^synthetic_rows_config_not_fixed$"):
             synthetic_rows.SyntheticRows(ObservedFrameClient(layout=PANEL), seconds=4, stops=1, stop_seconds=2.0, config=PANEL)
+        # No stop, no counter: a frozen picture could not be told from a live one, so the boxes refuse it by
+        # name. The rows count from their first update and still run without a stop.
+        with self.assertRaisesRegex(ValueError, "^synthetic_boxes_need_a_stop$"):
+            synthetic_boxes.SyntheticBoxes(ObservedFrameClient(layout=PANEL), seconds=4, stops=0, stop_seconds=2.0)
+        self.assertEqual(synthetic_rows.SyntheticRows(ObservedFrameClient(), seconds=4, stops=0, stop_seconds=2.0).plan,
+                         [("rows", 20)])
 
     def test_a_stop_ends_the_synthetic_boxes_at_once_with_the_bridge_closed(self):
         import threading
@@ -283,6 +289,7 @@ class SyntheticBoxesTests(unittest.TestCase):
         self.assertIsNotNone(driver.client.process.poll())  # The bridge is gone with the run.
 
 
+@unittest.skipUnless(RUNNABLE, NEEDS)
 class ArgumentTests(unittest.TestCase):
     """The parser refuses a device mode that lacks its opt-ins, its record or its explicit choices."""
     DEVICE = ("--allow-hud-output", "--scope-record", "record.json", "--manifest", "manifest.json", "--seconds", "20")
@@ -303,6 +310,8 @@ class ArgumentTests(unittest.TestCase):
             (("--synthetic-boxes", *self.DEVICE, "--step", "L-D4"), "never opens the camera"),
             (("--synthetic-boxes", *self.DEVICE[:-1], "111"), "--seconds must be 1..110 for --synthetic-boxes"),
             (("--synthetic-boxes", *self.DEVICE[:-1], "8"), "synthetic_rows_schedule_too_short"),
+            # Without a stop the boxes' counter never appears: refused by name. The rows keep their own rule.
+            (("--synthetic-boxes", *self.DEVICE, "--stops", "0"), "synthetic_boxes_need_a_stop"),
             (("--synthetic-boxes", *self.DEVICE, "--helper", "x"), "--helper is for --validate"),
             (("--validate", "--camera"), "not allowed with"),
             (("--validate", "--seconds", "5"), "--validate takes no run arguments"),
@@ -465,6 +474,24 @@ class GuideAndTemplateTests(unittest.TestCase):
             parsed = checkpoint_manifest.build_parser().parse_args(arguments)
             written += [parsed.camera_hud] if parsed.write is not None else []
         self.assertEqual(written, [True])  # The manifest is written with the camera HUD's group asked for.
+        # The preflight (review of #116): the run without display arms the same watcher and asks for no record.
+        # Its one documented command goes through ``camera_recognize``'s own parser and argument checks up to
+        # the typed answer, which is refused here, so nothing is launched.
+        from sightcircuit.camera import presence
+        from sightcircuit.commands import camera_recognize
+        preflight, = self.commands("scripts/camera_recognize.py")
+        self.assertFalse([argument for argument in preflight if "scope" in argument or "manifest" in argument])
+        printed = io.StringIO()
+        with mock.patch.object(camera_recognize, "confirm_on_terminal", return_value="confirmation_refused") as asked, \
+                mock.patch.object(camera_recognize, "recognize", side_effect=AssertionError("run")), \
+                contextlib.redirect_stdout(printed), contextlib.redirect_stderr(io.StringIO()):
+            code = camera_recognize.main(preflight)
+        asked.assert_called_once_with({"fps": 5, "max_seconds": 2, "max_frames": 5}, (0,))
+        report = json.loads(printed.getvalue())
+        self.assertEqual((code, report["status"], report["reason"], report["cameras_requested"],
+                          report["presence_watch"]), (1, "error", "confirmation_refused", [0], presence.unstarted_report()))
+        self.assertEqual((preflight[preflight.index("--helper") + 1], preflight[preflight.index("--presence-watcher") + 1]),
+                         (manifest.CAMERA_HELPER, manifest.PRESENCE_WATCHER))  # The pinned files, at their paths.
         text = " ".join(self.GUIDE.read_text().split())
         for sentence in ("This guide is a procedure, not an approval.", "Nothing here has run on the Frame.",
                          "not a cryptographic one", "No screen showing the Frame's desktop, the replay window or the "
@@ -660,6 +687,9 @@ class ValidateTests(unittest.TestCase):
             {"status": "presence_ended", "reason": "standby", "bridge_mode": "--validate-stdin", "watcher": "stand_in",
              "armed": True, "ended_run": True, "ending_signal": "enter_standby_event", "watcher_cleanup_ok": True,
              "source_cleanup_ok": True, "bridge_cleanup_ok": True, "ok": True})
+        # The stand-in was asked for the signal by the run itself, after a frame had been answered: a tile had
+        # been sent, however long this host took to start the helper.
+        self.assertGreater(ended["frames_sent"], 0)
         if ended["frames_sent"] and not ended["tile_already_down"]:  # A tile was up: its hide is timed from the signal.
             self.assertGreater(ended["hide_written_after_signal_ms"], 0)
             self.assertGreaterEqual(ended["bridge_hide_after_signal_ms"], 0)

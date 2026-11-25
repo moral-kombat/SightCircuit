@@ -77,6 +77,7 @@ import types
 
 from .. import gates
 from ..camera import contract as camera_contract
+from ..camera import presence as presence_defaults
 from ..camera.presence import PROTOCOL as PRESENCE_PROTOCOL
 from ..camera.presence import REASON_NOT_ARMED, STATUS_PRESENCE_ENDED, STATUS_WATCH_LOST, STOPPED_WHILE_ARMING, PresenceWatch
 from ..camera import region as regions
@@ -614,6 +615,36 @@ def valid_detections(detections, input_size, plain):
     return valid, len(detections) - len(valid)
 
 
+# What the stage itself refuses of the watch it holds; the watcher's own refusals are the watch's words.
+WATCH_NOT_UNUSED, WATCH_NOT_LIVE, WATCH_START_FAILED = "watch_not_unused", "watch_not_live", "watch_start_failed"
+
+
+def watch_unused(watch):
+    """Whether ``watch`` is a watch a stage may hold and arm; True or False, and it changes nothing.
+
+    A ``PresenceWatch`` of that exact type (a subclass could arm without a
+    watcher), never started, never closed, never told its run had ended
+    (either would leave its signal ending nothing), and with the module's
+    own waits (a longer heartbeat bound would not notice a silent watcher).
+    """
+    return (type(watch) is PresenceWatch and watch.process is None and watch.reader is None
+            and watch.launched_ns is None and watch.armed is False and watch.closing is False
+            and watch.closed is False and watch.run_over_ns is None and watch.refusal is None and watch.lost is None
+            and watch.ending is None and type(watch.ready_wait) in (int, float)
+            and type(watch.heartbeat_timeout) in (int, float)
+            and watch.ready_wait == presence_defaults.READY_WAIT_SECONDS
+            and watch.heartbeat_timeout == presence_defaults.HEARTBEAT_TIMEOUT_SECONDS)
+
+
+def watch_live(watch):
+    """Whether ``watch`` is armed with a watcher that is running and a reader that is listening, its run not ended."""
+    process, reader = watch.process, watch.reader
+    return (type(watch) is PresenceWatch and watch.armed is True and watch.closing is False and watch.closed is False
+            and watch.run_over_ns is None and watch.refusal is None and process is not None
+            and process.poll() is None and reader is not None and reader.is_alive()
+            and watch.heartbeat_timeout == presence_defaults.HEARTBEAT_TIMEOUT_SECONDS)
+
+
 def stage_bound(stage):
     """``(layout, view)`` of what ``stage`` runs: the layout it draws for and its view as a scope record states it.
 
@@ -671,6 +702,9 @@ def _camera_preconditions(stage, scope):
     # The watch the stage holds launches the checkout's own watcher, at the path the manifest hashes.
     watcher = getattr(stage, "watcher_binary", None)
     if watcher is not None and not pinned_binary(watcher, PINNED_WATCHER):
+        return False
+    # And it is a watch that can end the run: not yet used before the arming, armed and running after it.
+    if getattr(stage, "watch_sound", True) is not True:
         return False
     permitted, seconds, limits = scope.seconds, getattr(stage, "seconds", None), source.limits
     if type(permitted) not in (int, float) or type(seconds) not in (int, float) or not 0 < seconds <= permitted:
@@ -737,10 +771,12 @@ class CameraHudStage:
     ``signalled``, when given, is a callable that says whether the caller
     recorded a stop signal for this run; with the source's own
     ``cancelled`` it is how the stage knows a signal ended the run.
-    ``watch``, when given, is the run's ``PresenceWatch``, not started: the
+    ``watch``, when given, is the run's ``PresenceWatch`` (that exact type,
+    never started or closed, with the default waits: ``watch_unused``); the
     stage arms it on the main thread after the permission checks and before
     the bridge or the helper is launched, runs with the watch's stop event
-    as its own, and closes it at the end. A watch that cannot be armed ends
+    as its own, and closes it at the end. A watch that cannot be armed, or
+    is not armed with a running watcher once ``start`` has answered, ends
     the run there with nothing launched (``presence_watch_not_armed``); its
     ending signal ends the run ``presence_ended`` and a watch lost while
     armed ends it ``presence_watch_lost``, in both cases through the same
@@ -767,7 +803,7 @@ class CameraHudStage:
                  signalled=None, region=None, alignment=None, on_frame=None, watch=None):
         if not isinstance(source, CameraHelperSource):
             raise ValueError("camera_hud_requires_camera_helper_source")
-        if watch is not None and not isinstance(watch, PresenceWatch):
+        if watch is not None and not watch_unused(watch):  # That exact type, unused, with the default waits.
             raise ValueError("camera_hud_presence_watch_invalid")
         if not isinstance(client, ObservedFrameClient):
             raise ValueError("camera_hud_requires_observed_frame_client")
@@ -784,6 +820,8 @@ class CameraHudStage:
         self._config, self._region, self._alignment = config, regions.Region() if region is None else region, alignment
         self._presence = watch  # The presence watch the stage holds, or None: what ``presence_watch`` answers from.
         self._watch_end = None  # "signal" or "lost" when the watch is what ended the run.
+        self._watch_armed = False  # ``_arm`` armed the watch and found it live.
+        self._watch_refusal = None  # The stage's own word for a watch it would not run with (``WATCH_NOT_LIVE``, ...).
         self._nothing_launched = False  # The run ended while arming the watch: no bridge and no helper to clean up.
         self.on_frame = on_frame
         if type(directions) is not bool:
@@ -856,6 +894,12 @@ class CameraHudStage:
     def presence_watch(self):
         """Whether the stage holds a presence watch: what it holds, not what it was told."""
         return self._presence is not None
+
+    @property
+    def watch_sound(self):
+        """Whether the held watch can end this run: unused until the stage arms it, live from then; True without one."""
+        watch = self._presence
+        return watch is None or (watch_live(watch) if self._watch_armed else watch_unused(watch))
 
     @property
     def watcher_binary(self):
@@ -1176,19 +1220,31 @@ class CameraHudStage:
         launched, is not the pinned one, does not say ``ready`` in time,
         reports no headset or one already in standby, or is lost again
         before the launch, is no watch, and a run that holds one does not
-        start without it. A stop, a recorded signal or SteamVR's own signal
+        start without it. Nor does it start on a watch that was used before
+        the stage armed it, that says it is armed without a running watcher,
+        or whose arming raised: each is ``presence_watch_not_armed`` with
+        the stage's own word as the refusal. A stop, a recorded signal or SteamVR's own signal
         during the arming ends the run here too. Nothing was launched: no
         bridge, no helper; the scope is given back.
         """
-        refusal = watch.start(abort=types.SimpleNamespace(is_set=lambda: stop.is_set() or self._signalled()))
-        if refusal is None and not stop.is_set() and not self._signalled():
+        try:
+            refusal = self._start_watch(watch, stop)
+        except Exception:  # Whatever arming raised (the watcher unreadable, ...): no watch, and a reported end.
+            refusal = WATCH_START_FAILED
+        if refusal is None:
+            self._watch_armed = True
             return True
-        watch.run_ended()
-        watch.close()
+        try:
+            watch.run_ended()
+            watch.close()
+        except Exception:  # The watch's ``cleanup_ok`` says what is known of the watcher.
+            pass
         self.client.withdraw()
         self.close()
         self._nothing_launched = True
-        if refusal is not None and refusal != STOPPED_WHILE_ARMING:
+        if refusal != STOPPED_WHILE_ARMING and watch.refusal is None:
+            self._watch_refusal = refusal  # The stage's refusal, not the watcher's: the report gives it by name.
+        if refusal != STOPPED_WHILE_ARMING:
             self.status, self.reason = "error", REASON_NOT_ARMED
         elif self._signalled():
             self.status, self.reason = "cancelled", "signal"
@@ -1201,6 +1257,22 @@ class CameraHudStage:
         else:
             self.status, self.reason = "stopped", "stopped_before_launch"
         return False
+
+    def _start_watch(self, watch, stop):
+        """Start ``watch``; None when it is armed, live and nothing asked to stop, else the refusal.
+
+        Only a watch not used before is started, and what ``start`` says is
+        not taken on trust: the watch must then be armed with its watcher
+        running and its reader listening.
+        """
+        if not watch_unused(watch):  # Started, closed or changed since the stage took it.
+            return WATCH_NOT_UNUSED
+        refusal = watch.start(abort=types.SimpleNamespace(is_set=lambda: stop.is_set() or self._signalled()))
+        if refusal is not None:
+            return refusal
+        if stop.is_set() or self._signalled():
+            return STOPPED_WHILE_ARMING
+        return None if watch_live(watch) else WATCH_NOT_LIVE
 
     def _client_reason(self):
         """A code for the client's error: the bridge's own word when it is one, else which side failed."""
@@ -1338,7 +1410,8 @@ class CameraHudStage:
         if watch is None:
             return block
         ending, lost = watch.ending, watch.lost
-        block.update(armed=watch.armed, refusal=_identifier(watch.refusal, None), watcher_sha256=watch.sha256,
+        block.update(armed=watch.armed is True and self._watch_refusal is None,
+                     refusal=_identifier(watch.refusal, None) or self._watch_refusal, watcher_sha256=watch.sha256,
                      ended_run=self._watch_end == "signal", lost_ended_run=self._watch_end == "lost",
                      lost=None if lost is None else _identifier(lost["reason"], "watcher_lost"),
                      event_count=watch.event_count, heartbeats=watch.heartbeats, exit_code=watch.exit_code,

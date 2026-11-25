@@ -394,15 +394,44 @@ running. Its standby signal ends the run and takes the tile down at once.
 | The watcher's standby signal arrives during the run | `status: presence_ended`, `reason: standby`; `presence_watch.ended_run: true`, with `hide_written_after_signal_ms` and `bridge_hide_after_signal_ms`, the hide's times from the signal | 0 |
 | The watcher dies or goes silent during the run | `status: presence_watch_lost` and the loss's reason; the tile is hidden and the run ends | 1 |
 | The watch cannot be armed: the watcher reports no SteamVR or a headset already in standby, does not say ready in time, cannot be launched, or was changed between the record's check and its launch | `status: error`, `reason: presence_watch_not_armed`; `presence_watch.refusal` has the watcher's own word. Neither the bridge nor the helper was launched and nothing was shown | 1 |
+| The headset comes off, the watcher is lost or the run is stopped while the helper is still starting, before the first frame | `cleanup.ok: false`: the helper was ended before it had started and its cleanup is not confirmed. Nothing was shown | 1 |
 
-The watch is armed after the record's check and before anything else is
-launched. **A run whose watch cannot be armed has therefore spent its
-record**: it is a run that ended, and a re-run is a new approval with a new
-record. Check before the wearer puts the headset on that SteamVR is running
-and the headset is not in standby. A watcher file that is missing is found
-before the record is consulted (`presence_watcher_not_found`), and one that
-is not the file the manifest hashes is refused with the record unspent;
-neither costs a record.
+**The order, as it is accepted for now: the record is verified and used up
+first, and only then is the watch armed. A run whose watch cannot be armed
+has therefore spent its record**, and it shows nothing. That is so whatever
+the cause: SteamVR not running, the headset asleep, the watcher changed
+since the record's check. It is a run that ended, and a re-run is a new
+approval with a new record.
+
+So start the run only with SteamVR running and **the headset worn and
+awake**. A headset nobody wears is the likely standby case: the watcher
+then reports `headset_in_standby_at_start`, and that refusal uses up the
+one-run record like any other. The wearer puts the headset on first; the
+operator types the `yes` afterwards. A watcher file that is missing is
+found before the record is consulted (`presence_watcher_not_found`), and
+one that is not the file the manifest hashes is refused with the record
+unspent; neither costs a record.
+
+A preflight that costs no record: `camera_recognize`, the
+[run without display](camera-recognize.md#the-presence-stop---presence-watcher),
+arms the same watcher the same way and asks for no scope record. Run just
+before the typed `yes` of the displayed run, with the headset already worn,
+it shows whether the watch can be armed now:
+
+```bash
+.venv-replay/bin/python scripts/camera_recognize.py --allow-camera-input \
+  --helper artifacts/camera-helper/sightcircuit-camera-helper \
+  --presence-watcher artifacts/presence-watcher/sightcircuit-presence-watcher \
+  --seconds 2 --max-frames 5 --fps 5 --cameras 0
+```
+
+Its report must say `presence_watch.armed: true`; otherwise
+`presence_watch.refusal` has the watcher's word and no record was touched.
+**It is a camera run of its own, not a free check**: it asks for its own
+typed `yes`, reads the left camera for at most 2 seconds and shows nothing,
+so it needs whatever approval a run without display needs, and nothing here
+gives it. It proves the watch could be armed a moment earlier, not that it
+will be: the headset must stay worn and awake until the displayed run.
 
 ### The removal sub-step
 

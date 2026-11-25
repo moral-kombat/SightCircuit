@@ -408,6 +408,24 @@ class PresenceWatchTests(WatchCase):
         watch.close()
         self.assertFalse(alive(pid))
 
+    def test_a_watcher_that_trickles_bytes_without_a_line_is_lost_on_its_heartbeat_like_a_silent_one(self):
+        # Bytes that end no line are not a heartbeat. The age of the last line is checked on every pass of the
+        # reader, not only when the pipe is quiet: one byte every 30 ms keeps the pipe readable at every 50 ms
+        # poll, and would otherwise hold the watch until 8192 bytes had come, about four minutes.
+        watch = self.watch("200:trickle", heartbeat_timeout=0.5)
+        self.assertIsNone(watch.start())
+        self.assertTrue(self.stop.wait(3.0))
+        lost_s = (watch.lost["monotonic_ns"] - watch.last_line_ns) / 1e9
+        self.assertEqual((watch.lost["reason"], watch.stop_set_by, watch.lost_ended_run()),
+                         ("heartbeat_missed", "lost", True))
+        # Within the timeout plus one poll of the last line (and this host's margin for one more pass).
+        self.assertGreater(lost_s, 0.5)
+        self.assertLess(lost_s, 0.5 + presence.POLL_SECONDS + 0.15)
+        self.assertTrue(alive(self.watcher_pid()))  # Still running and still writing: the close ends it.
+        watch.close()
+        self.assertTrue(watch.cleanup_ok)
+        self.assert_no_watcher_left()
+
     def test_a_loss_after_the_run_ended_sets_no_stop(self):
         watch = self.watch("200:die")
         self.assertIsNone(watch.start())
@@ -1085,6 +1103,23 @@ class StandInTests(unittest.TestCase):
         self.assertEqual((watch.exit_code, watch.forced_kill, watch.cleanup_ok), (0, False, True))
         # It takes the watcher's arguments and nothing else, and no argument makes it do more.
         from sightcircuit.camera import presence_standin
+        # Scripted by a trigger instead of a delay: nothing until the file exists, then the signal within a
+        # heartbeat; the two scripts are not combined.
+        trigger = self.directory / "standby-now"
+        watch = self.watch(standby_trigger=trigger)
+        self.assertIsNone(watch.start())
+        self.assertFalse(watch.stop.wait(0.6))
+        trigger.write_bytes(b"")
+        asked = time.monotonic_ns()
+        self.assertTrue(watch.stop.wait(3.0))
+        self.assertEqual((watch.stop_set_by, watch.ending["signal"], watch.signal_counts["enter_standby_event"]),
+                         ("signal", "enter_standby_event", 1))
+        self.assertGreaterEqual(watch.ending["received_monotonic_ns"], asked)
+        watch.run_ended()
+        watch.close()
+        self.assertEqual((watch.exit_code, watch.forced_kill, watch.cleanup_ok), (0, False, True))
+        with self.assertRaisesRegex(ValueError, "^presence_standin_one_standby_script$"):
+            presence_standin.install(self.directory, standby_after_ms=1, standby_trigger=trigger)
         for argv in ((), ("--watch",), ("--watch", "--seconds", "x"), ("--describe",), ("--watch", "--seconds", "5", "--more")):
             self.assertEqual(presence_standin.main(list(argv)), 64)
         self.assertEqual((presence_standin.install(self.directory).parent, presence_standin.NAME),
