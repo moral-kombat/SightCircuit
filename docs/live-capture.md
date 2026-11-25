@@ -109,13 +109,13 @@ each a new approval; the displayed path waits for L17.
 
 Progress (2026-11-24): the owner made boxes over the scene this phase's
 product ([the scope change](#box-display-scope-change-adopted-2026-11-24));
-lane B's B1 and B2 are merged (#106) and B3 is in review (#107). On the
+lane B's B1 and B2 (#106) and B3 (#107) are merged, so the box panel exists in the contract, the renderer, the mapping and the bridge, shown so far only to the test runtime. On the
 Frame, after an OS update to 0.5.10, two SteamVR session crashes and a power
 loss, the probes were clean ([E102](evidence/e102.md)) and the scan found
 the bottle ([E103](evidence/e103.md)): the left camera's image is a quarter
 turn from upright, and the centre half turned 90 degrees is the view for
 L-D1's two runs. The device's offline tests are from now on run on the
-charger, one module at a time on two cores. New from that evening: L18
+charger, one module at a time on two cores. New from that evening: L18 and L19. The owner approved L-D1's positions and removal runs on 2026-11-24 for a later sitting
 
 | Item | Work | Kind | Depends on |
 | --- | --- | --- | --- |
@@ -137,6 +137,7 @@ charger, one module at a time on two cores. New from that evening: L18
 | L16 | Done for runs without display (#100, 2026-11-20), independently reviewed, on the owner's decision of that day after [E100](evidence/e100.md) (N1's presence source brought forward for the stop only; resume stays in lane N): `sightcircuit-presence-watcher` joins a running SteamVR as a background application, reads presence events only (no overlay, no setting, no camera interface) and `--presence-watcher` on `camera_recognize` and `camera_guide` ends the run on SteamVR's standby event. A run that names the watcher does not read the camera unless the watch is armed, and stops if it is lost; a click made after the signal, or a helper that reached its bound, is never a presence stop. The faster signals (proximity, activity level) are recorded, not acted on, until seen on the Frame. Nothing has run against SteamVR. `camera_hud` is not wired (L17) | M, cloud | E100, decision of 2026-11-20 |
 | L17 | Open, after L-D1b's result, and landing on the box panel's layout (B5) since 2026-11-24: the region of view and the presence watch on the displayed path. `CameraHudStage` takes a region and passes the mapped box space to `camera_rows`; `camera_hud --camera` runs the watch beside the bridge and the helper, and a watch-ended run hides the tile and reports the signal-to-hide time; the watcher's binary and sources join the manifest's `camera_hud` group; the scope record binds the region and rotation if the owner so decides; `--validate` gets a watcher stand-in | M, cloud and decision | L14, L16, L-D1b |
 | L18 | Open, small: the guided window's Start stays disabled until the operator releases it (a signal or a file the Frame manager writes once a run's companions are up), with the release recorded in the report; so a run cannot begin before its watcher and samplers. From [E103](evidence/e103.md), where the owner clicked Start before the operator's word and the observing watcher never ran | S, cloud | E103 |
+| L19 | Open, small: the Frame's baseline recorder reads the Camera Switch hash from a directory that Arcturus 26826366 no longer uses (it installs under `~/.local/share/ArcturusVisionCamera/<hash>/`), so the baseline logs `unknown`; teach the recorder both locations. From [E102](evidence/e102.md) | S, cloud | E102 |
 
 #### Lane L device steps
 
@@ -303,11 +304,11 @@ need the region and orientation from L-D1b and L-D1.
 
 | Item | Work | Kind | Depends on |
 | --- | --- | --- | --- |
-| B1 | A second geometry in the HUD contract, the box panel: its size and head-fixed placement, per-pixel transparency, a thin outline and a name per box, a cap on the number of boxes; its renderer and digests; the strip's geometry and digests unchanged | M, cloud | the decision of 2026-11-24 |
-| B2 | `camera_boxes` beside `camera_rows`: mapped boxes in the whole-frame space to panel pixels through an alignment (scale and offset on each axis and the quarter turn, at most five numbers); boxes outside the region dropped; the alignment a validated, reported value | S, cloud | B1, L14 |
-| B3 | The bridge shows the box panel as a second fixed geometry of its real-output mode, with the same observed-frame protocol, expiry, acknowledgements and hide; tested on the fake runtime | M, cloud, native | B1 |
+| B1 | Done (#106, 2026-11-24), independently reviewed: `head-fixed-box-panel-v1`, 512 x 512 with binary alpha, 0.9 m wide at 0.75 m, at most five boxes, names drawn from a bitmap font the project owns so one digest holds on every build. A second geometry in the HUD contract, the box panel: its size and head-fixed placement, per-pixel transparency, a thin outline and a name per box, a cap on the number of boxes; its renderer and digests; the strip's geometry and digests unchanged | M, cloud | the decision of 2026-11-24 |
+| B2 | Done (#106, 2026-11-24), independently reviewed. `camera_boxes` beside `camera_rows`: mapped boxes in the whole-frame space to panel pixels through an alignment (scale and offset on each axis and the quarter turn, at most five numbers); boxes outside the region dropped; the alignment a validated, reported value | S, cloud | B1, L14 |
+| B3 | Done (#107, 2026-11-25), reviewed in three independent rounds: `--fixed-hud --layout`, the safety loop untouched and shared, expiry within one 20 ms poll for either layout in the cloud; real output is refused for any layout but the strip before the scope record is consulted, which closed a gap where a strip's record would have admitted another layout; the bridge binary itself has no gate for the layout, so the control stays procedural. Unproven on the Frame: row direction, per-pixel alpha, and the time of a one-megabyte update. The bridge shows the box panel as a second fixed geometry of its real-output mode, with the same observed-frame protocol, expiry, acknowledgements and hide; tested on the fake runtime | M, cloud, native | B1 |
 | B4 | The alignment step: the wearer sets the alignment in a guided, displayed run with the bottle held still; its numbers are saved on the Frame and reported as format metadata (the owner, 2026-11-24). A displayed step, so it runs under a scope record and its own approval | M, cloud and decision | B2, B3, L-D1b, L-D1 |
-| B5 | `camera_hud` takes the layout; the scope record and the manifest bind the layout and the alignment; L17 (the region and the presence watch on the displayed path) lands on this | M, cloud | B2, B3, L17 |
+| B5 | Carries from #107: the permission site must compare the record's layout with the client's (`layout_output_permitted` is a stopgap that admits the strip only); `camera_hud` must treat `fixed_hud_layout_not_approved` as a refusal; `SyntheticRows.run` must withdraw on a refused start; the static scans that prove nothing else selects the panel have known blind spots (aliased subclasses that do not name the client, keyword writes of `_layout`, re-exports by annotated or tuple assignment) and are replaced by the binding. `camera_hud` takes the layout; the scope record and the manifest bind the layout and the alignment; L17 (the region and the presence watch on the displayed path) lands on this | M, cloud | B2, B3, L17 |
 | B6 | Rows G8 to G10 and steps L-D2 to L-D5 restated for the box panel with the owner's numbers; L13's lift names the box geometry | S, docs and decision | L-D1b, B1 to B5 |
 
 Later, for Level 2 and not in this lane: the pose history, then placement in
