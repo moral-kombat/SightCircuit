@@ -61,6 +61,11 @@ Settings hud_settings() {
     return Settings{contract::kHudPanelWidthM, contract::kHudDistanceM, contract::kHudXM, contract::kHudYM,
                     contract::kHudOpacity, true};
 }
+Settings layout_settings(const sightcircuit_overlay::FixedLayout& layout) {
+    // A named layout's placement (item B3): the contract's values, visible, and its own opacity. The pixels of a
+    // frame are handed to SetOverlayRaw as they arrive, four bytes each, so their alpha is the sender's.
+    return Settings{layout.panel_width_m, layout.distance_m, layout.x_m, layout.y_m, layout.opacity, true};
+}
 Settings marker_settings() {
     // The marker is shown at the fixed HUD placement and never takes settings from stdin.
     return hud_settings();

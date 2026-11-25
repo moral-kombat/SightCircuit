@@ -21,7 +21,11 @@
   ``box_render.draw_boxes`` draws outlines and names on a transparent RGBA
   image from boxes alone, the names from ``box_font``'s own glyph bitmaps; ``boxes.camera_boxes`` maps camera detections to
   panel boxes through the wearer's ``Alignment``. Imported from their
-  modules, not from this package, and selected by nothing yet.
+  modules, not from this package. Since item B3 the bridge can be launched
+  with the geometry as a named layout (``contract.FIXED_LAYOUTS``); no stage
+  or command selects it, and nothing may drive it as real output.
+* ``box_scenes``: synthetic scenes for the box panel, boxes written in the
+  module; ``orientation_scene`` names each box by its corner.
 * ``camera_stage``: ``CameraHudStage``, the camera route's run (source,
   detector, ``camera_rows``, tile, one observed frame per result on the
   bridge) and its report. Imported from its module, not from this package:

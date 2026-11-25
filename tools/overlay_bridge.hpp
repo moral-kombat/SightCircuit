@@ -137,6 +137,8 @@ void watchdog(const std::string& mode, const char* phase, unsigned seconds);
 // Rendering (overlay_bridge_rendering.cpp).
 Settings settings(const std::vector<std::uint8_t>& b);
 Settings hud_settings();
+// The placement of a named fixed layout, from the generated contract alone (item B3).
+Settings layout_settings(const sightcircuit_overlay::FixedLayout& layout);
 Settings marker_settings();
 std::vector<std::uint8_t> pattern();
 std::vector<std::uint8_t> calibration_marker(Json::Value& description, const Settings& applied);
@@ -150,8 +152,14 @@ std::string usage_text();
 Json::Value closed_report(const std::string& mode);
 void describe_marker_run(Json::Value& report, int seconds, std::uint64_t start_ns, std::uint64_t deadline_ns);
 void describe_connect(Json::Value& report, bool view_record, bool validate, bool background_only);
-void describe_fixed_hud(Json::Value& report, const Settings& applied);
-void emit_ready(const std::string& mode, bool validate, bool marker, std::uint64_t marker_deadline_ns);
+// The fixed_hud block: the layout the run is pinned to (its name, digest and tile size) and the placement applied.
+void describe_fixed_hud(Json::Value& report, const sightcircuit_overlay::FixedLayout& layout, const Settings& applied);
+// The validation_layout block of a validation run that named a layout: the name, digest and tile size alone,
+// since validation places nothing.
+void describe_validation_layout(Json::Value& report, const sightcircuit_overlay::FixedLayout& layout);
+// layout is the layout named at launch, or null; the ready line then carries its name as layout_id.
+void emit_ready(const std::string& mode, bool validate, bool marker, std::uint64_t marker_deadline_ns,
+                const sightcircuit_overlay::FixedLayout* layout = nullptr);
 void emit_test_panel_submitted(int seconds, bool api_visible);
 void emit_frame_expired(const ExpiryRecord& record);
 void emit_first_frame(bool validate, std::uint32_t width, std::uint32_t height);

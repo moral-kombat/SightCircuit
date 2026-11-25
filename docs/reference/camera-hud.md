@@ -38,6 +38,16 @@ validation layout's expiring frame: `set_settings`, `freeze_settings`,
 `submit_frame`, `submit_bgr` and `request_visibility` raise
 `observed_frame_client_refuses_<what>`, and it never retransmits a frame.
 
+**A named layout (item B3).** `ObservedFrameClient(layout=...)` takes one of
+the bridge's [fixed layouts](overlay.md#fixed-layouts-work-order-item-b3-2026-11-24)
+(`hud.contract.FIXED_LAYOUTS`, the contract's own objects and nothing else):
+the bridge is launched with `--layout`, must repeat the name on its `ready`
+line, and only frames of exactly that layout's size are queued. Without the
+argument the client is the strip's, as described here, with the command line
+it has always had. The stage and the command on this page pass no layout.
+Real output with the box panel's layout is refused before the scope is asked
+([who may show it](box-panel.md#who-may-show-it)).
+
 **The keepalive repeats the request in force.** The
 [overlay reference](overlay.md#expiry) describes the keepalive as a show
 request, which with nothing presented is answered `no_image` and displays

@@ -51,7 +51,9 @@ PLATE, NAME = (*CONFIG.plate_rgb, 255), (*CONFIG.name_rgb, 255)
 STRIP_FIELDS = {"layout_id": "fixed-edge-hud-v1", "width_px": 320, "height_px": 128, "rows": 3, "panel_width_m": 0.32,
                 "distance_m": 1.25, "x_m": 0.55, "y_m": -0.35, "opacity": 1.0, "inference_max_side": 960}
 STRIP_CONFIG_DIGEST = "82f3f630a37c07eda5094ccc38e99b2e022ba732003fb1a76ee4cc9e60d5f392"
-HEADER_CONTRACT_DIGEST = "70663bdcb8b2fecb0f653666852142b2eaf2ff342e24874b53e11c66b04f6c98"
+# Moved once, deliberately, by item B3, which put the box panel into the generated header in the change that made
+# the bridge use it: before it this was 70663bdcb8b2fecb0f653666852142b2eaf2ff342e24874b53e11c66b04f6c98.
+HEADER_CONTRACT_DIGEST = "8192f6451d50b1966cca48e0f3a1b580fc2db6c0610661170a742b13b5860531"
 STRIP_TILES = {
     "empty": ((), "fb77fdb76eb6451cee6fed944e8f380ded14ef2c5ae114e153c5668ceb425f53"),
     "arrows": ((HudRow("chair", .93, (1, 1)), HudRow("person", .81, (-1, 0)), HudRow("tv", .7, (0, 0))),
@@ -142,14 +144,18 @@ class StripUnchangedTests(unittest.TestCase):
         self.assertEqual([field.name for field in dataclasses.fields(HUD_CONFIG)], list(STRIP_FIELDS))
         self.assertEqual(config_digest(HUD_CONFIG), STRIP_CONFIG_DIGEST)
 
-    def test_the_generated_header_is_unchanged_and_does_not_hold_the_box_panel(self):
+    def test_the_generated_header_holds_the_box_panel_since_item_b3_and_the_strips_digest_is_unchanged(self):
         header = (ROOT / "tools/hud_contract.hpp").read_text()
         self.assertEqual(header, native.header_text())
         self.assertEqual(native.contract_digest(), HEADER_CONTRACT_DIGEST)
         self.assertIn(f'kContractDigest[] = "{HEADER_CONTRACT_DIGEST}";', header)
         self.assertIn(f'kHudConfigDigest[] = "{STRIP_CONFIG_DIGEST}";', header)
-        for word in ("BoxPanel", "box-panel", "box_panel", CONFIG.layout_id, box_font.FONT_ID):
-            self.assertNotIn(word, header, word)
+        # Item B3: the panel's name, its digest and its font's are in the header, under names of their own.
+        for line in (f'constexpr char kBoxPanelLayoutId[] = "{CONFIG.layout_id}";',
+                     f'constexpr char kBoxPanelConfigDigest[] = "{BOX_PANEL_CONFIG_DIGEST}";',
+                     f'constexpr char kBoxPanelNameFont[] = "{box_font.FONT_ID}";'):
+            self.assertEqual(header.count(line), 1, line)
+        self.assertNotIn("BoxPanel", header.split("// BoxPanelConfig:", 1)[0])  # nothing of it inside the strip's block
 
     @unittest.skipUnless(TILES, "NumPy and OpenCV are required for the strip's tile")
     def test_the_strip_renderer_draws_the_pinned_tiles(self):
@@ -269,27 +275,55 @@ class BoxPanelContractTests(unittest.TestCase):
         self.assertEqual(select_boxes((), 5), ((), 0, 0))
 
     def test_nothing_selects_the_box_panel(self):
-        # Items B3 and B5 are where a bridge mode and a command take the geometry; until then only the contract,
-        # the font, the renderer and the selector may name it.
-        allowed = {"sightcircuit/hud/contract.py", "sightcircuit/hud/box_render.py", "sightcircuit/hud/boxes.py",
-                   "sightcircuit/hud/box_font.py", "sightcircuit/hud/__init__.py"}
-        words = ("BOX_PANEL_CONFIG", "BoxPanelConfig", "box_render", "draw_boxes", "camera_boxes", "PanelBox",
-                 "head-fixed-box-panel", "box_font")
+        # Items B3 and B5 are where a bridge mode and a command take the geometry. B3 is in, and there are now two
+        # ways to reach the panel, each with its own words and its own list of files, so that a file allowed one
+        # is still forbidden the other. Until B5 no stage, command, scope record, manifest or script may use either
+        # (tests/test_box_panel_bridge.py holds the rest).
+        #
+        # The panel by name: its contract, font, renderer, selector and scenes, the header generator and the
+        # generated header, and the bridge's table of fixed layouts, which reads the header's constants.
+        panel_files = {"sightcircuit/hud/contract.py", "sightcircuit/hud/box_render.py", "sightcircuit/hud/boxes.py",
+                       "sightcircuit/hud/box_font.py", "sightcircuit/hud/__init__.py", "sightcircuit/hud/native.py",
+                       "sightcircuit/hud/box_scenes.py", "tools/hud_contract.hpp", "tools/overlay_frame.hpp"}
+        panel_words = ("BOX_PANEL_CONFIG", "BoxPanelConfig", "box_render", "draw_boxes", "camera_boxes", "PanelBox",
+                       "head-fixed-box-panel", "box_font", "kBoxPanel", "box_scenes", "orientation_scene")
+        # The panel as "the second fixed layout": the contract's list, the bridge's table and the units that read
+        # a layout from it, and the observed-frame client. None of the bridge's other units or the client names
+        # the panel itself.
+        layout_files = {"sightcircuit/hud/contract.py", "sightcircuit/hud/__init__.py", "sightcircuit/observed_frames.py",
+                        "tools/overlay_frame.hpp", "tools/overlay_bridge.cpp", "tools/overlay_bridge.hpp",
+                        "tools/overlay_bridge_rendering.cpp", "tools/overlay_bridge_reporting.cpp"}
+        layout_words = ("FIXED_LAYOUTS", "fixed_layout", "kFixedLayouts", "FixedLayout", "pinned_layout", "layout_index",
+                        "layout_in_force", "--layout", "LAYOUT_ARGUMENT", "launch_arguments", "layout_output_permitted",
+                        "require_real_output_layout", "REAL_OUTPUT_LAYOUT_IDS")
         paths = [path for folder in ("sightcircuit", "scripts", "tools")
                  for path in (ROOT / folder).rglob("*") if path.suffix in (".py", ".cpp", ".hpp", ".sh", ".json")]
         self.assertGreater(len(paths), 100)
+        used = {"panel": set(), "layout": set()}
         for path in paths:
             name = path.relative_to(ROOT).as_posix()
-            if name not in allowed:
-                text = path.read_text()
-                for word in words:
-                    self.assertNotIn(word, text, f"{name} names {word}")
-        # The package describes the modules but imports none of the box panel's names.
+            text = path.read_text()
+            for kind, files, words in (("panel", panel_files, panel_words), ("layout", layout_files, layout_words)):
+                found = [word for word in words if word in text]
+                if name in files:
+                    used[kind].update([name] if found else [])
+                else:
+                    self.assertEqual(found, [], f"{name} uses the {kind} words {found}")
+        # Each list is exact: every file on it uses a word of its kind, so neither list is wider than it needs to be.
+        self.assertEqual((used["panel"], used["layout"]), (panel_files, layout_files))
+        # The package describes the modules but re-exports none of the box panel's names and nothing of the layout
+        # mechanism, under any alias: a stage or command cannot reach either through ``sightcircuit.hud``.
         package = ast.parse((ROOT / "sightcircuit/hud/__init__.py").read_text())
-        imported = {alias.name for node in ast.walk(package) if isinstance(node, ast.ImportFrom) for alias in node.names}
+        imported = {alias.name for node in ast.walk(package) if isinstance(node, (ast.ImportFrom, ast.Import))
+                    for alias in node.names}
         imported |= {node.module for node in ast.walk(package) if isinstance(node, ast.ImportFrom)}
         self.assertFalse(imported & {"BOX_PANEL_CONFIG", "BoxPanelConfig", "PanelBox", "box_render", "boxes",
-                                     "box_font", "draw_boxes", "camera_boxes"})
+                                     "box_font", "draw_boxes", "camera_boxes", "box_scenes", "orientation_scene",
+                                     "FIXED_LAYOUTS", "fixed_layout", "BOX_PANEL_LIMITS", "BOX_PANEL_PIXELS",
+                                     "panel_box_valid", "select_boxes", "observed_frames", "*"})
+        assigned = {target.id for node in ast.walk(package) if isinstance(node, ast.Assign)
+                    for target in node.targets if isinstance(target, ast.Name)}
+        self.assertEqual(assigned, {"__all__"})  # nothing is rebound under another name either
 
 
 class BoxFontTests(unittest.TestCase):
