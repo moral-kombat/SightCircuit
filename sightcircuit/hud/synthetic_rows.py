@@ -137,6 +137,10 @@ class SyntheticRows:
     bridge, not an error.
     """
 
+    # The layout the driver draws for, its report's kind and the name of its picture: a subclass that draws
+    # another picture on another fixed layout (``synthetic_boxes``) changes these and ``_tile``, nothing else.
+    LAYOUT, KIND, PICTURE = HUD_CONFIG, REPORT_KIND, "names_only_counter"
+
     def __init__(self, client, *, seconds, stops=3, stop_seconds=3.0, config=HUD_CONFIG,
                  hide_called_within_ms=HIDE_CALLED_WITHIN_MS, hide_returned_allowance_ms=HIDE_RETURNED_ALLOWANCE_MS):
         if not isinstance(client, ObservedFrameClient):
@@ -146,7 +150,7 @@ class SyntheticRows:
                 raise ValueError("synthetic_rows_expiry_bound_invalid")
         self.hide_called_within_ms = float(hide_called_within_ms)
         self.hide_returned_allowance_ms = float(hide_returned_allowance_ms)
-        if config != HUD_CONFIG:
+        if config != self.LAYOUT:
             raise ValueError("synthetic_rows_config_not_fixed")
         self.plan = schedule(seconds, stops, stop_seconds)
         self.client, self.config = client, config
@@ -322,7 +326,7 @@ class SyntheticRows:
                     and client.frames_replaced == 0 and client.refused_count == 0 and stops["reached"] == self.stops
                     and stops["within_bound"])
         report = {
-            "report_kind": REPORT_KIND, "schema_version": 1, "status": self.status, "reason": self.reason,
+            "report_kind": self.KIND, "schema_version": 1, "status": self.status, "reason": self.reason,
             "error_type": _identifier(type(self.failure).__name__, None) if self.failure is not None else None,
             **gates.claims(), "validation_only": client.validation_only, "bridge_mode": client.bridge_mode(),
             "images_saved": False, "pixels_in_report": False, "physical_display_observed": False,
@@ -331,7 +335,7 @@ class SyntheticRows:
                        "tile_px": [self.config.width_px, self.config.height_px], "update_hz": UPDATE_HZ,
                        "seconds": self.seconds, "stops": self.stops, "stop_seconds": self.stop_seconds,
                        "max_display_age_ms": MAX_DISPLAY_AGE_MS, "keepalive_seconds": client.keepalive_seconds,
-                       "row": "names_only_counter"},
+                       "row": self.PICTURE},
             "updates": {"requested": self.requested, "submitted": self.submitted, "sent": sent,
                         "replaced": client.frames_replaced, "expired_before_send": client.frames_expired_before_send,
                         "acknowledged_presented": client.presented_count, "acknowledged_refused": client.refused_count,
