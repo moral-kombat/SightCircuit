@@ -19,8 +19,8 @@ does.
 2026-11-19 ([E100](../evidence/e100.md)): the wearer found, started and
 finished it unaided with the `removal` script, the bottle was detected in
 none of 150 frames, and the run ended on its bound, not on a presence stop.
-Everything else here, the `positions` and `scan` scripts and the region
-options included, has been checked in the cloud only: offscreen, against the
+Everything else here, the `positions` and `scan` scripts, the region
+options and the start hold included, has been checked in the cloud only: offscreen, against the
 camera stand-in and the helper's fake backend. No time or count on this page
 is a Frame measurement unless it says so.
 
@@ -69,7 +69,15 @@ from the window's own size.
    5 seconds, counted down on the screen ("You can start in 3 s"). Clicking
    Start is the informed start of this one run. The report records
    `confirmation: operator_window`. The typed `yes` stays for the terminal
-   commands.
+   commands. When the window was opened with `--hold-start`, the line that
+   counts down says "Start is off until the Frame manager says go. Please
+   wait" instead, and Start stays off until the Frame manager
+   [releases it](#running-a-companion-beside-the-window); then the line
+   says "The Frame manager has said go. You can start in 2 s" and, when
+   Start is live, "The Frame manager has said go. You can start now". The
+   hold adds no line to this screen, so the notice above it is as fully
+   visible as in any other window. The release starts nothing: the wearer's
+   click does.
 4. **The run.** One instruction at a time with a drawn picture, a progress
    bar while a step is recorded, the step number, the time left, and
    **Stop**. Until the camera reader is ready the screen says "Starting the
@@ -141,6 +149,12 @@ launch, a second notice and a second Start.
   helper is launched launches nothing. One that arrives during the launch is
   passed on once the helper is ready (or after 3 seconds), so the helper
   stops cleanly.
+- **A held Start is never released** (`--hold-start` was given and no
+  release file appeared within 10 minutes of the window opening). The window
+  ends as a cancelled one does, on whichever screen it was: `status: error`,
+  `reason: start_hold_not_released`, `guide.ended_by: start_hold_timeout`,
+  nothing launched, and the result says "Not started: the Frame manager did
+  not say go in time. Nothing was launched. Tell the Frame manager."
 
 ## The three scripts
 
@@ -414,6 +428,89 @@ rules as the recognition command's. `--target-label` (default `bottle`),
 bounds. `--windowed` gives a 1280 by 800 window in place of a maximized one.
 The console entry point of an editable install is `sightcircuit-camera-guide`.
 
+### Running a companion beside the window
+
+Some runs need another process running beside them from before the first
+frame: the presence watcher observing only, a temperature sampler. In
+the scan run of 2026-11-24 ([E103](../evidence/e103.md)) the plan was to start the watcher once the wearer
+reached the Start screen, and the wearer, who sees only the window, clicked
+Start before the Frame manager had said go, so the watcher never ran.
+`--hold-start PATH` closes that gap. It is off unless given, and without it
+the window and its report are what they were.
+
+1. The Frame manager opens the window with the hold, naming a release file
+   that does not exist yet, beside the report:
+
+   ```bash
+   .venv-replay/bin/python scripts/camera_guide.py --allow-camera-input \
+     --helper /path/outside/the/checkout/sightcircuit-camera-helper \
+     --script scan --report artifacts/camera/guide-scan-02.json \
+     --hold-start artifacts/camera/guide-scan-02.go
+   ```
+
+2. The wearer goes through the screens as usual. On the notice screen Start
+   is shown but off, with "Start is off until the Frame manager says go.
+   Please wait".
+3. The Frame manager starts the companion and sees that it is up.
+4. The Frame manager releases the start with one command:
+
+   ```bash
+   touch artifacts/camera/guide-scan-02.go
+   ```
+
+5. Within about 0.3 seconds the screen says "The Frame manager has said go.
+   You can start in 2 s"; 1.2 seconds after the release Start can be clicked
+   and the line says "You can start now". The wearer clicks Start, and that click starts the run.
+
+What the hold does and does not do:
+
+- **The release never starts the run.** It only lets Start be clicked. The
+  notice's own 5-second wait still applies, and Start is dead for the usual
+  1.2 seconds after the release, so a click already on its way when the
+  button comes alive lands on nothing. A click made while Start is held
+  does nothing and is not recorded as a start.
+- **The path is checked before the window opens**, after the report's path.
+  Nothing may be at it yet, not even a dangling link, so a file left by an
+  earlier run cannot release this one. Its directory must exist and be a
+  real directory, not a link to one, and must be either the report's own
+  directory or one the user owns and can write to with no write permission
+  for group or others (so `/tmp` itself is refused, and a private directory
+  under it is accepted). It cannot be the report's own file, by whatever
+  name: the two are compared by their resolved directories and their names.
+  It cannot have a `..` in it, because the window takes the path as written
+  and would drop a link before the `..` that the operator's `touch` follows,
+  so the two would mean different places. A `~name` the system does not
+  know is refused too (and for `--report`, as `report_path_refused`). A
+  refused path ends the command with `reason: hold_start_path_refused` and
+  nothing shown. Otherwise only the path and its directory are examined; a
+  link further up the path is not looked for.
+- **The window looks for the file four times a second** from the same timer
+  that moves its counts; there is no thread and nothing that outlives the
+  window. It asks only whether a regular file is at that path (`lstat`). A
+  link or a directory put there is not a release. The file is never opened,
+  so what is in it does not matter, and the command neither creates nor
+  removes it: the Frame manager removes it afterwards, or names another path
+  for the next run.
+- **The release is kept once seen.** Removing the file afterwards does not
+  hold Start again. To call a run off after releasing it, close the window
+  or send it a signal, as before.
+- **The release can come early.** A file made while the wearer is still on
+  the first two screens counts; Start is then held only by the notice's own
+  wait.
+- **An unreleased hold ends by itself** 10 minutes after the window opened,
+  with the report and the result screen of a run that was not started
+  ([above](#when-a-run-does-not-go-as-scripted)). Once released, there is no
+  bound: the wearer starts when ready, or cancels.
+- **Nothing camera-derived is involved.** The hold is the window's alone
+  (the worker process is not told of it), it ends before anything is
+  launched, and what it puts in the notice screen's one line about Start
+  comes from the release file's presence and the clock.
+
+The report says what happened, under `guide.start_hold`
+([below](#the-report)): whether the start was released, when, and how long
+after the release Start was clicked. That delay is how a reader checks that
+the companion had the time it needed.
+
 The command prints its report on stdout when the window closes and exits with
 the recognition report's code: 0 for `recognized`, 1 otherwise, which
 includes a run that ended `helper_ended_early` with `headset_removed`, the
@@ -433,8 +530,8 @@ track, and "Something changed", confirmed, is how the wearer says so.
 since the presence stop, 3 since the region of view):
 
 - `script`, `confirmation`, `started_by_start_button`, and `ended_by`
-  (`helper`, `stop_button`, `window_closed`, `cancel_button`, `signal` or
-  `not_started`);
+  (`helper`, `stop_button`, `window_closed`, `cancel_button`, `signal`,
+  `not_started` or, for a held Start nobody released, `start_hold_timeout`);
 - `start_click_monotonic_ns` and `reader_ready_monotonic_ns`;
 - `steps`: per step its label, how it begins, whether it was reached, the
   time of its mark and the index of that mark among the recorded marks;
@@ -446,12 +543,24 @@ since the presence stop, 3 since the region of view):
   `not_asked`), `passthrough_after` (`unchanged` or `changed`), the seconds
   the watch had run when it was answered and whether it was complete. An
   answer that was never given is `null`. There is no free text anywhere;
-- `removal_limits_ms`, the two limits the removal entries were compared with.
+- `removal_limits_ms`, the two limits the removal entries were compared with;
+- `start_hold`, only when the window was opened with `--hold-start` (the
+  block's `schema_version` stays 3, and a report without the option has no
+  such key): `requested` (always `true`), `released`,
+  `release_monotonic_ns` and `release_utc_ns`, `release_to_start_click_ms`,
+  `timed_out`, `timeout_seconds` (600), `poll_interval_ms` (250) and
+  `release_file_read` (always `false`). The release time is the window's
+  tick that first saw the file, so it is later than the `touch` by up to
+  about 0.3 seconds (the poll interval and a tick). `release_utc_ns` is that time by the run's clock (the
+  report's `timebase`), and is `null` when no run was launched, because
+  there is then no run clock. The delay is `null` when Start was never
+  clicked. Neither the file's path nor anything from inside it is recorded.
 
 A launch that started no run (Cancel, "Something else", a window closed
-before Start) still leaves the report: `status: error`, reason
-`confirmation_declined` or `starting_state_not_stable`, `confirmation: null`
-and no `capture` block, because nothing was launched.
+before Start, a held Start nobody released) still leaves the report:
+`status: error`, reason `confirmation_declined`, `starting_state_not_stable`
+or `start_hold_not_released`, `confirmation: null` and no `capture` block,
+because nothing was launched.
 
 ## How nothing camera-derived reaches the run screen
 
@@ -494,7 +603,13 @@ from the contract (standard library), the worker's handshake and its
 refusals, the worker against the stand-in helper, the window offscreen with
 Qt's test tools (clicks sent to the top-level window at a point, including
 double clicks and second clicks 100 to 900 ms later on every transition, and
-button texts at 4:3, 5:4 and portrait sizes), and `--validate`:
+button texts at 4:3, 5:4 and portrait sizes), the start hold (Start dead
+until the release and for the guard interval after it, the release starting
+nothing, the report's fields, the bound, the refused paths, the whole
+notice visible without scrolling at 1920 by 1080, 1600 by 900, 1366 by 768
+and 1280 by 800 for every script whether held or released, no open of the
+release file over a whole run (an audit hook), and a window without the
+option never looking for a file), and `--validate`:
 
 ```bash
 bash scripts/build_camera_helper.sh --fake
@@ -505,7 +620,12 @@ bash scripts/build_camera_helper.sh --fake
 fake backend with a scripted detector: the removal and positions scripts and
 the scan, a run that reaches its bound, a presence end, Stop, the window closed mid-run, a launch that fails,
 Cancel, a declined start, a run too short for its script, the refused report
-paths and the worker refusing a launch by hand. Its guard and dwell times
-are shortened so that it runs in about half a minute. It refuses any helper
+paths and the worker refusing a launch by hand. The start hold's flows are in
+their own block of the validation report, `start_hold_flows`, and count
+towards `flows_failed` like the rest: Start refused while held and the run
+started by the click after the release file is made, a hold nobody releases,
+and the release paths that are refused before a window exists. Its guard and
+dwell times are shortened so that it runs in about three quarters of a
+minute. It refuses any helper
 that does not describe itself as the fake before a window is made, so it can
 never open a camera. These are cloud and CI results; none is a Frame result.

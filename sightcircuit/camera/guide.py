@@ -35,6 +35,13 @@ as a mark is never accepted. Results are put into words (``result_lines``)
 only from the finished report, which the window receives after the helper has
 ended; the words give measured values and judge nothing.
 
+The start hold (work-order item L18, after E103) is an option of the window:
+Start stays off until the operator, who is outside the headset, releases it
+by creating a file the command was given the name of. This module holds its
+words, its bounds and its part of the report (``hold_block``): whether it was
+asked for, when the release was seen and how long after it Start was
+clicked. The file is never opened; nothing about it but its presence is used.
+
 Nothing here opens a camera, lifts a gate or approves a run.
 """
 from dataclasses import dataclass
@@ -56,10 +63,32 @@ HEADSET_REMOVED_AND_BACK, HEADSET_NOT_REMOVED, HEADSET_NOT_ASKED = HEADSET_ANSWE
 # Whether the 30-second watch was held, and if not why.
 WATCH_HELD, WATCH_NOT_STARTED, WATCH_NO_FRAME_READ = WATCH_STATES = ("held", "run_not_started", "no_frame_read")
 # How a run's guidance ended.
-ENDED_BY = (ENDED_HELPER, ENDED_STOP, ENDED_WINDOW_CLOSED, ENDED_CANCEL, ENDED_SIGNAL, ENDED_NOT_STARTED) = (
-    "helper", "stop_button", "window_closed", "cancel_button", "signal", "not_started")
+ENDED_BY = (ENDED_HELPER, ENDED_STOP, ENDED_WINDOW_CLOSED, ENDED_CANCEL, ENDED_SIGNAL, ENDED_NOT_STARTED,
+            ENDED_HOLD_TIMEOUT) = (
+    "helper", "stop_button", "window_closed", "cancel_button", "signal", "not_started", "start_hold_timeout")
 # Reasons of a run that never launched anything.
 DECLINED, STARTING_STATE_NOT_STABLE = "confirmation_declined", "starting_state_not_stable"
+# The start hold (item L18): an unreleased hold ends the window with this reason once its bound has passed.
+HOLD_NOT_RELEASED = "start_hold_not_released"
+HOLD_TIMEOUT_SECONDS = 600  # From the window's opening; a hold nobody releases is not left open for ever.
+HOLD_POLL_MS = 250  # How often the window looks for the release, on its own clock.
+# The hold's words take the place of the notice screen's one line about when Start can be clicked: a held window
+# has no widget another window lacks, so the export notice above keeps all of its room.
+TEXT_HOLD_WAITING = "Start is off until the Frame manager says go. Please wait"
+TEXT_HOLD_RELEASED = "The Frame manager has said go"
+
+
+def start_line(seconds_left, *, held=False, released=False):
+    """The notice screen's line about Start: the wait that is left, in whole seconds, or that there is none.
+
+    ``held``: the window was asked to hold its Start. Until the release
+    the line says only that; after it, the same count as any window's with
+    the release said first.
+    """
+    if held and not released:
+        return TEXT_HOLD_WAITING
+    line = "You can start now" if seconds_left <= 0 else f"You can start in {int(-(-seconds_left // 1))} s"
+    return f"{TEXT_HOLD_RELEASED}. {line}" if held else line
 WATCH_SECONDS = 30  # The passthrough watch after a run (the accepted passthrough rule).
 # Pictures the window draws from shapes; none is an image and none comes from a camera.
 PICTURES = ("wait", "near", "far", "headset_off", "centre", "left", "right", "up", "down", "out_of_view", "done")
@@ -346,13 +375,33 @@ def presence_end(report):
     return report.get("status") == marks.STATUS_PRESENCE_ENDED and report.get("helper_launched") is not False
 
 
+def hold_block(*, released_ns, started_ns, timed_out, timeout_seconds, clock=None):
+    """The ``guide`` block's ``start_hold``: present only when the hold was asked for. Times and closed values only.
+
+    ``released_ns`` is the window's tick that first saw the release file,
+    so it is later than the operator's ``touch`` by up to the poll interval
+    and a tick, about 0.3 s; ``release_utc_ns`` is that time by the run's clock (the
+    report's timebase anchor) and is ``None`` for a launch that started no
+    run, which has no such clock. The file's name and contents are not here:
+    the contents are never read.
+    """
+    return {"requested": True, "released": released_ns is not None, "release_monotonic_ns": released_ns,
+            "release_utc_ns": None if clock is None or released_ns is None else clock.utc(released_ns),
+            "release_to_start_click_ms": None if released_ns is None or started_ns is None
+            else round((started_ns - released_ns) / MS, 3),
+            "timed_out": bool(timed_out), "timeout_seconds": timeout_seconds, "poll_interval_ms": HOLD_POLL_MS,
+            "release_file_read": False}
+
+
 def guide_block(guide, *, script, started, ended_by, observations, limits_ms, watch, validation_only=False, clock=None,
-                recorded_marks=(), started_ns=None):
+                recorded_marks=(), started_ns=None, hold=None):
     """The report's ``guide`` block: the script, the steps with their marks, the wearer's closed answers.
 
     ``recorded_marks`` are the run's recorded marks (the report's
     ``marks.recorded``): a step's ``mark_index`` is the window mark made at
-    its time, or ``None`` when the run recorded none for it.
+    its time, or ``None`` when the run recorded none for it. ``hold`` is
+    ``hold_block``'s result for a launch that asked for the start hold; the
+    block of any other launch has no ``start_hold`` key and is what it was.
     """
     by_time = {mark["monotonic_ns"]: mark["index"] for mark in recorded_marks if mark.get("source") == marks.SOURCE_WINDOW}
     steps = guide.steps_report() if guide is not None else [
@@ -361,23 +410,26 @@ def guide_block(guide, *, script, started, ended_by, observations, limits_ms, wa
     for entry in steps:
         entry["mark_index"] = by_time.get(entry["monotonic_ns"])
         entry["utc_ns"] = None if clock is None or entry["monotonic_ns"] is None else clock.utc(entry["monotonic_ns"])
-    return {"schema_version": GUIDE_SCHEMA_VERSION, "script": script,
-            "confirmation": OPERATOR_WINDOW if started else None, "started_by_start_button": bool(started),
-            "ended_by": ended_by, "validation_only": bool(validation_only),
-            "scale": 1.0 if guide is None else guide.scale,
-            "start_click_monotonic_ns": started_ns,
-            "reader_ready_monotonic_ns": None if guide is None else guide.ready_ns,
-            "steps": steps,
-            "steps_not_reached": [{"step": entry["step"], "label": entry["label"]} for entry in steps
-                                  if not entry["reached"]],
-            "out_of_time": bool(guide is not None and guide.out_of_time),
-            "watch": watch, "watch_states": list(WATCH_STATES),
-            "observations": dict(observations), "observation_choices": {
-                "starting_state": list(STARTING_STATES), "passthrough_after": list(PASSTHROUGH_ANSWERS),
-                "headset": list(HEADSET_ANSWERS)},
-            "removal_limits_ms": dict(limits_ms), "watch_seconds_required": WATCH_SECONDS,
-            "run_screen_inputs": ["script", "clock", "click", "start_click_time", "reader_ready_time"],
-            "shown_during_run": "scripted_instructions_progress_and_time_only"}
+    block = {"schema_version": GUIDE_SCHEMA_VERSION, "script": script,
+             "confirmation": OPERATOR_WINDOW if started else None, "started_by_start_button": bool(started),
+             "ended_by": ended_by, "validation_only": bool(validation_only),
+             "scale": 1.0 if guide is None else guide.scale,
+             "start_click_monotonic_ns": started_ns,
+             "reader_ready_monotonic_ns": None if guide is None else guide.ready_ns,
+             "steps": steps,
+             "steps_not_reached": [{"step": entry["step"], "label": entry["label"]} for entry in steps
+                                   if not entry["reached"]],
+             "out_of_time": bool(guide is not None and guide.out_of_time),
+             "watch": watch, "watch_states": list(WATCH_STATES),
+             "observations": dict(observations), "observation_choices": {
+                 "starting_state": list(STARTING_STATES), "passthrough_after": list(PASSTHROUGH_ANSWERS),
+                 "headset": list(HEADSET_ANSWERS)},
+             "removal_limits_ms": dict(limits_ms), "watch_seconds_required": WATCH_SECONDS,
+             "run_screen_inputs": ["script", "clock", "click", "start_click_time", "reader_ready_time"],
+             "shown_during_run": "scripted_instructions_progress_and_time_only"}
+    if hold is not None:
+        block["start_hold"] = dict(hold)
+    return block
 
 
 # ---- the result in plain words ------------------------------------------------------------------------------------
@@ -420,6 +472,9 @@ def status_line(report):
         return "The run was stopped."
     if status == "cancelled":
         return "The run was cancelled."
+    if reason == HOLD_NOT_RELEASED:
+        return ("Not started: the Frame manager did not say go in time. Nothing was launched. "
+                "Tell the Frame manager.")
     if reason == DECLINED:
         return "Not started. Nothing was launched."
     if reason == STARTING_STATE_NOT_STABLE:
