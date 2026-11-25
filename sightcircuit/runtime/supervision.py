@@ -266,6 +266,24 @@ def report_armed():
 STOP_SIGNALS = tuple(getattr(signal, name) for name in ("SIGINT", "SIGTERM") if hasattr(signal, name))
 
 
+@contextlib.contextmanager
+def signals_held(numbers=STOP_SIGNALS):
+    """Hold ``numbers`` (the stop signals) pending for the block, in this thread; they are delivered after it.
+
+    For the few statements in which a record and the act it describes must not
+    be separated by a handler that raises. Without ``pthread_sigmask`` the
+    block simply runs.
+    """
+    if not hasattr(signal, "pthread_sigmask"):
+        yield
+        return
+    previous = signal.pthread_sigmask(signal.SIG_BLOCK, numbers)
+    try:
+        yield
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+
+
 class StopWakeup:
     """The process's stop relay: a stop signal's delivery wakes a thread that sets every registered event.
 
@@ -298,7 +316,8 @@ class StopWakeup:
         os.set_blocking(self.read_fd, False)  # The relay drains the pipe after each wakeup (``drain``).
         self.events = weakref.WeakSet()
         self.lock = threading.Lock()
-        self.thread = threading.Thread(target=self.relay, name="sightcircuit-stop-relay", daemon=True)
+        self.ended = threading.Event()  # Set by the relay's own thread as its last act (``run``).
+        self.thread = threading.Thread(target=self.run, name="sightcircuit-stop-relay", daemon=True)
         self.thread.start()
         self.previous_wakeup_fd = signal.set_wakeup_fd(self.write_fd, warn_on_full_buffer=False)
 
@@ -338,6 +357,18 @@ class StopWakeup:
             if len(chunk) < 4096:
                 return bytes(data)
 
+    def run(self):
+        """The relay thread: ``relay``, then the record that it is over.
+
+        ``ended`` is what a retirement judges by. ``Thread.is_alive()`` is not
+        enough: CPython 3.12 marks a thread stopped when a join of it is
+        interrupted (KeyboardInterrupt), while the thread still runs.
+        """
+        try:
+            self.relay()
+        finally:
+            self.ended.set()
+
     def relay(self):
         while True:
             try:
@@ -369,39 +400,49 @@ class StopWakeup:
         replaced. Closing the write end is what ends the thread (``relay``
         returns at end of file). A later ``stop_on`` makes a new relay.
 
-        The join is bounded, and it can be interrupted. Until the thread has
-        ended the relay is kept among the unfinished retirements with its read
-        end open (the thread may still read it), the answer is False, and a
-        later call (this method again, or ``retire_stop_relay``) joins again
-        and closes the read end once the thread is gone.
+        The wait is bounded, and it can be interrupted. Until the relay's own
+        loop has recorded its end (``ended``) the relay is kept among the
+        unfinished retirements with its read end open (the thread may still
+        read it), the answer is False, and a later call (this method again, or
+        ``retire_stop_relay``) waits again and closes the read end once the
+        thread is over. The stop signals are held while the bookkeeping is
+        between recording and acting, so a handler that raises (the default
+        SIGINT handler) cannot strand a descriptor; it runs once the state is
+        consistent, and during the wait.
         """
         global _stop_wakeup
-        write_fd = self.write_fd
-        if write_fd >= 0:
-            current = signal.set_wakeup_fd(-1)
-            restored = self.previous_wakeup_fd if current == write_fd else current
-            try:
-                signal.set_wakeup_fd(restored, warn_on_full_buffer=False)
-            except (ValueError, OSError):  # The earlier descriptor was closed meanwhile: none is left set.
-                pass
-        if self.read_fd >= 0 and self not in _unfinished_retirements:
-            _unfinished_retirements.append(self)  # Before anything that can fail or be interrupted.
-        if _stop_wakeup is self:
-            _stop_wakeup = None
-        self.write_fd = -1
-        if write_fd >= 0:
-            with contextlib.suppress(OSError):
-                os.close(write_fd)
+        deadline = None if timeout is None else time.monotonic() + timeout
+        with signals_held():
+            write_fd = self.write_fd
+            if write_fd >= 0:
+                current = signal.set_wakeup_fd(-1)
+                restored = self.previous_wakeup_fd if current == write_fd else current
+                try:
+                    signal.set_wakeup_fd(restored, warn_on_full_buffer=False)
+                except (ValueError, OSError):  # The earlier descriptor was closed meanwhile: none is left set.
+                    pass
+            if self.read_fd >= 0 and self not in _unfinished_retirements:
+                _unfinished_retirements.append(self)
+            if _stop_wakeup is self:
+                _stop_wakeup = None
+            self.write_fd = -1
+            if write_fd >= 0:
+                with contextlib.suppress(OSError):
+                    os.close(write_fd)
         if self.thread is not threading.current_thread():
-            self.thread.join(timeout)
-        if self.thread.is_alive():
+            if not self.ended.wait(timeout):
+                return False
+            # Over already; this only lets the thread finish exiting, so no thread of the relay is counted after.
+            self.thread.join(None if deadline is None else max(deadline - time.monotonic(), 0.1))
+        if not self.ended.is_set():
             return False
-        read_fd, self.read_fd = self.read_fd, -1
-        if read_fd >= 0:
-            with contextlib.suppress(OSError):
-                os.close(read_fd)
-        with contextlib.suppress(ValueError):
-            _unfinished_retirements.remove(self)
+        with signals_held():
+            read_fd, self.read_fd = self.read_fd, -1
+            if read_fd >= 0:
+                with contextlib.suppress(OSError):
+                    os.close(read_fd)
+            with contextlib.suppress(ValueError):
+                _unfinished_retirements.remove(self)
         return True
 
     def forget(self):
