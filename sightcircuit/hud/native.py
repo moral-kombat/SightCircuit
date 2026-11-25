@@ -2,7 +2,8 @@
 
 The bridge's units (through ``tools/overlay_bridge.hpp``) and
 ``tools/overlay_frame.hpp`` include the header instead of repeating Python
-values: ``HudConfig``, the calibration marker, the packet layout and opcodes,
+values: ``HudConfig``, the box panel (``BoxPanelConfig``, the second fixed
+geometry, item B3), the calibration marker, the packet layout and opcodes,
 the panel limits and defaults, the marker duration, display age and frame-size
 limits, and the bridge's connect budget. ``scripts/hud_contract_header.py``
 writes or checks it. ``kContractDigest`` pins every generated value, so a built
@@ -64,6 +65,11 @@ def _sections():
         ("HudConfig: sightcircuit.hud.contract.HUD_CONFIG",
          _record("Hud", contract.HUD_CONFIG) +
          [("kHudConfigDigest", "char[]", contract.config_digest(contract.HUD_CONFIG))]),
+        # The second fixed geometry (work-order item B3). The bridge reads its name, size, placement and digest;
+        # the drawing fields are carried so that kContractDigest pins the whole record, as it does the strip's.
+        ("BoxPanelConfig: sightcircuit.hud.contract.BOX_PANEL_CONFIG",
+         _record("BoxPanel", contract.BOX_PANEL_CONFIG) +
+         [("kBoxPanelConfigDigest", "char[]", contract.config_digest(contract.BOX_PANEL_CONFIG))]),
         ("Calibration marker: sightcircuit.hud.contract.MARKER", _record("Marker", contract.MARKER)),
         ("Pipe packets: sightcircuit.hud.contract layouts and opcodes",
          [("kPacketMagic", "char[]", contract.PACKET_MAGIC.decode("ascii"))] +

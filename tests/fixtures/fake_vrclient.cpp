@@ -5,6 +5,7 @@
 //   FAKE_VR_<Call>_DELAY_MS  comma-separated milliseconds, one per call of that name in order (then none)
 //   FAKE_VR_<Call>_FAIL      comma-separated 1-based call numbers that return VROverlayError_RequestFailed
 //   FAKE_VR_STICKY_VISIBLE   when set, HideOverlay returns success and the overlay stays visible
+//   FAKE_VR_RAW_DUMP         a path: each SetOverlayRaw writes the bytes it was handed there (the last upload stays)
 // For the presence watcher's tests (tools/presence_watcher.cpp), all relative to the first Init:
 //   FAKE_VR_EVENTS           comma-separated ms:eventType[:device[:button]] entries PollNextEvent hands out when due
 //   FAKE_VR_ACTIVITY         comma-separated ms:level entries: the HMD's activity level from that time on (first: 0:1)
@@ -143,6 +144,13 @@ struct Overlay final : FakeOverlayStubs {
                                       uint32_t depth) override {
         Call call("SetOverlayRaw");
         if (!call.fail) textured = true;
+        // On request, the bytes handed over, exactly: the last upload replaces the file. Test images only.
+        if (const char* path = std::getenv("FAKE_VR_RAW_DUMP")) {
+            if (std::FILE* file = std::fopen(path, "wb")) {
+                std::fwrite(buffer, 1, std::size_t(width) * height * depth, file);
+                std::fclose(file);
+            }
+        }
         // The first pixel's red byte tells one test tile from another in the log.
         return call.done(visible, ",\"width\":" + std::to_string(width) + ",\"height\":" + std::to_string(height) +
                                   ",\"depth\":" + std::to_string(depth) + ",\"first\":" +

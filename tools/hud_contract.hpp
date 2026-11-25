@@ -19,6 +19,30 @@ constexpr float kHudOpacity = 1.0f;
 constexpr std::uint32_t kHudInferenceMaxSide = 960;
 constexpr char kHudConfigDigest[] = "82f3f630a37c07eda5094ccc38e99b2e022ba732003fb1a76ee4cc9e60d5f392";
 
+// BoxPanelConfig: sightcircuit.hud.contract.BOX_PANEL_CONFIG
+constexpr char kBoxPanelLayoutId[] = "head-fixed-box-panel-v1";
+constexpr std::uint32_t kBoxPanelWidthPx = 512;
+constexpr std::uint32_t kBoxPanelHeightPx = 512;
+constexpr std::uint32_t kBoxPanelMaxBoxes = 5;
+constexpr float kBoxPanelPanelWidthM = 0.9f;
+constexpr float kBoxPanelDistanceM = 0.75f;
+constexpr float kBoxPanelXM = 0.0f;
+constexpr float kBoxPanelYM = 0.0f;
+constexpr float kBoxPanelOpacity = 1.0f;
+constexpr std::uint32_t kBoxPanelOutlinePx = 2;
+constexpr std::uint32_t kBoxPanelCasingPx = 1;
+constexpr std::uint32_t kBoxPanelMinBoxPx = 12;
+constexpr char kBoxPanelNameFont[] = "sightcircuit-cell-5x9-v1";
+constexpr char kBoxPanelNameFontSha256[] = "0e0e1588623f0dca0c67a5227d1e6b5270e7d981c8311853f8585df439dc4c39";
+constexpr std::uint32_t kBoxPanelNameScale = 2;
+constexpr std::uint32_t kBoxPanelNamePadPx = 3;
+constexpr std::uint32_t kBoxPanelNameMaxPx = 190;
+constexpr std::uint32_t kBoxPanelOutlineRgb[] = {130, 230, 70};
+constexpr std::uint32_t kBoxPanelCasingRgb[] = {16, 16, 16};
+constexpr std::uint32_t kBoxPanelPlateRgb[] = {16, 16, 16};
+constexpr std::uint32_t kBoxPanelNameRgb[] = {235, 235, 235};
+constexpr char kBoxPanelConfigDigest[] = "fdf848dd3c31b8ee80f3b165b0fc997bcee34e5dfd2aa70861d1028ac3c6c9c2";
+
 // Calibration marker: sightcircuit.hud.contract.MARKER
 constexpr std::uint32_t kMarkerBackgroundValue = 32;
 constexpr std::uint32_t kMarkerBorderPx = 4;
@@ -103,5 +127,5 @@ constexpr float kPanelDefaultOpacity = 0.95f;
 constexpr bool kPanelDefaultVisible = true;
 
 // SHA-256 of every value above; --render-calibration-marker reports it.
-constexpr char kContractDigest[] = "70663bdcb8b2fecb0f653666852142b2eaf2ff342e24874b53e11c66b04f6c98";
+constexpr char kContractDigest[] = "8192f6451d50b1966cca48e0f3a1b580fc2db6c0610661170a742b13b5860531";
 } // namespace sightcircuit_contract

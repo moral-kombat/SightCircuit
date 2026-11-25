@@ -47,6 +47,12 @@ std::string usage_text() {
                  "which keeps the Background client and never connects as Overlay (device check, opt-in).\n"
                  "--fixed-hud takes 320x128 observed frames (opcode 6), visibility requests and stop; it hides the tile\n"
                  "itself at each frame's deadline and refuses settings and every other frame.\n"
+                 "--fixed-hud and --validate-stdin may be followed by --layout ID, one of:";
+    for (const auto& layout : sightcircuit_overlay::kFixedLayouts)
+        usage << " " << layout.id << " (" << layout.width << "x" << layout.height << ")";
+    usage << ".\n"
+                 "A named layout takes frames of exactly its size; --fixed-hud places the overlay as the layout says\n"
+                 "and without the argument is the first. A frame's four bytes per pixel reach the overlay unchanged.\n"
                  "The marker modes accept only the visibility request (opcode 5) on stdin, beside their display\n"
                  "timer, which end of input never ends; the stream modes take the whole pipe protocol.\n";
     return usage.str();
@@ -92,11 +98,11 @@ void describe_connect(Json::Value& report, bool view_record, bool validate, bool
         connect["background_only_requested"]=background_only;
     }
 }
-void describe_fixed_hud(Json::Value& report, const Settings& applied) {
-    // The placement and tile size this run is pinned to; no packet can change either.
+void describe_fixed_hud(Json::Value& report, const sightcircuit_overlay::FixedLayout& layout, const Settings& applied) {
+    // The layout, placement and tile size this run is pinned to; no packet can change any of them.
     auto& hud=report["fixed_hud"];
-    hud["config_id"]=contract::kHudLayoutId; hud["config_digest"]=contract::kHudConfigDigest;
-    hud["width"]=contract::kHudWidthPx; hud["height"]=contract::kHudHeightPx;
+    hud["config_id"]=layout.id; hud["config_digest"]=layout.digest;
+    hud["width"]=layout.width; hud["height"]=layout.height;
     hud["panel_width_m"]=applied.width; hud["distance_m"]=applied.distance;
     hud["x_m"]=applied.x; hud["y_m"]=applied.y; hud["opacity"]=applied.alpha;
     hud["max_display_age_ns"]=Json::UInt64(contract::kMaxDisplayAgeNs);
@@ -104,13 +110,20 @@ void describe_fixed_hud(Json::Value& report, const Settings& applied) {
     hud["settings_accepted"]=false; hud["frames_without_deadline_accepted"]=false;
     hud["frames_without_observation_accepted"]=false;
 }
-void emit_ready(const std::string& mode, bool validate, bool marker, std::uint64_t marker_deadline_ns) {
+void describe_validation_layout(Json::Value& report, const sightcircuit_overlay::FixedLayout& layout) {
+    auto& block=report["validation_layout"];
+    block["config_id"]=layout.id; block["config_digest"]=layout.digest;
+    block["width"]=layout.width; block["height"]=layout.height;
+}
+void emit_ready(const std::string& mode, bool validate, bool marker, std::uint64_t marker_deadline_ns,
+                const sightcircuit_overlay::FixedLayout* layout) {
     Json::Value ready;
     ready["event"]="ready"; ready["validation_only"]=validate;
     // Expiry is honoured where the bridge clears the tile itself: validation and the fixed HUD, no other mode.
     ready["frame_expiry_supported"]=mode=="--validate-stdin" || mode=="--fixed-hud";
     ready["observed_frames_supported"]=mode=="--validate-stdin" || mode=="--fixed-hud";
     if (mode=="--fixed-hud") ready["fixed_hud"]=true;
+    if (layout) ready["layout_id"]=layout->id;  // Only a run that named its layout says which it took.
     ready["runtime_initialized"]=!validate; ready["overlay_interface"]=vr::IVROverlay_Version;
     if (marker) ready["display_deadline_ns"]=Json::UInt64(marker_deadline_ns);
     emit(ready);
