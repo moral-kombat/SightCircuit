@@ -86,6 +86,22 @@ never overwritten. Stop, closing the window or a signal (SIGINT, SIGTERM or
 SIGHUP) ends the helper and still leaves the report. One launch is one run:
 a second run is a second launch, a second notice and a second Start.
 
+``--hold-start PATH`` (item L18, after E103, where the wearer clicked Start
+before the operator had a companion process running) keeps Start off until
+the operator releases it with ``touch PATH``. The path is checked before the
+window opens (``check_hold_path``): nothing may be there yet, and its
+directory must be a real directory that only the user can write to, or the
+report's own. The window looks for the file four times a second from its own
+timer (``os.lstat``; the file is never opened), says on the notice screen
+that it is waiting and then that the operator has said go, and a release
+only enables the button: the wearer's click still starts the run, and the
+button is dead for the guard interval after the release as after any
+appearance. A hold nobody releases within ten minutes of the window opening
+ends as an unstarted run does (``start_hold_not_released``), with nothing
+launched. The ``guide`` block's ``start_hold`` has the release time and the
+delay to the Start click. Without the option nothing here applies and the
+window and its report are what they were.
+
 Camera Data and gates are as ``camera_recognize`` states them: the report
 holds counts, closed labels, boxes, timings and format metadata, never a
 pixel; every gate stays closed and none is lifted (``gates.claims()`` is in
@@ -194,6 +210,9 @@ class Config:
     region: tuple | None = None
     rotation: int = 0
     scan_detectors: tuple = ()
+    # Item L18. The release file's path, or None for a window whose Start is not held; the worker is not told.
+    hold_start: Path | None = None
+    hold_timeout_seconds: float = guidance.HOLD_TIMEOUT_SECONDS  # Shorter only in the checks.
 
     def spec(self):
         """What the worker is told: the run's arguments, nothing else."""
@@ -222,6 +241,49 @@ def check_report_path(path):
     except OSError:
         raise ValueError("--report needs a directory this command can write to") from None
     return target
+
+
+def check_hold_path(path, report_path):
+    """The start hold's release file as the window will look for it, or ``ValueError``. Nothing is created.
+
+    The path is taken as written (made absolute, no link followed). Nothing
+    may be at it yet, a dangling link included, so a file left by an earlier
+    run can never release this one. Its directory must exist and be a real
+    directory, not a link to one; and it must be either the report's own
+    directory, which ``check_report_path`` has just found writable, or a
+    directory the user owns and can write to with no write permission for
+    group or others, so that nobody else can say go. It may not be the
+    report's own path. Only the path and its directory are examined: a link
+    further up the path is the operator's to know about.
+    """
+    target = Path(os.path.abspath(Path(path).expanduser()))
+    if target == Path(os.path.abspath(Path(report_path).expanduser())):
+        raise ValueError("--hold-start needs a path of its own, not the report's")
+    try:
+        directory = os.lstat(target.parent)
+    except OSError:
+        raise ValueError("--hold-start needs a path in an existing directory") from None
+    if not stat.S_ISDIR(directory.st_mode):
+        raise ValueError("--hold-start needs a path in a real directory, not a link to one")
+    if os.path.lexists(target):
+        raise ValueError("--hold-start needs a path where nothing exists yet; remove what an earlier run left there")
+    mode = stat.S_IMODE(directory.st_mode)
+    private = directory.st_uid == os.geteuid() and mode & 0o300 == 0o300 and not mode & 0o022
+    try:
+        beside_report = os.path.samefile(target.parent, Path(report_path).expanduser().parent)
+    except OSError:
+        beside_report = False
+    if not private and not (beside_report and os.access(target.parent, os.W_OK | os.X_OK)):
+        raise ValueError("--hold-start needs a directory that only you can write to, or the report's directory")
+    return target
+
+
+def hold_released(path):
+    """Whether the release file is there: a regular file at the path itself. Its contents are never read."""
+    try:
+        return stat.S_ISREG(os.lstat(path).st_mode)
+    except OSError:
+        return False
 
 
 def run_limits(script, seconds=None, max_frames=None, fps=DEFAULT_FPS):
@@ -741,6 +803,10 @@ def create_window(config, *, worker_factory=None, clock=time.monotonic_ns, size=
             self.signal_number = None
             self.stop_sent_ns = self.terminate_sent_ns = self.run_deadline_ns = self.watch_started_ns = None
             self.helper_gone_ns = None
+            # The start hold (item L18): when the window opened, when it last looked and when it saw the release.
+            self.hold_opened_ns = self.page_shown_ns
+            self.hold_checked_ns = self.hold_released_ns = None
+            self.hold_timed_out = False
             self.run_screen_log = []  # Every distinct content the run screen showed, for the checks.
             self.stack = QtWidgets.QStackedLayout(self)
             self.stack.setContentsMargins(0, 0, 0, 0)
@@ -783,11 +849,14 @@ def create_window(config, *, worker_factory=None, clock=time.monotonic_ns, size=
             self.start_note = label(START_NOTE, "small")
             self.reminder_label = label(guidance.start_reminder(config.script, config.target), "body")
             self.dwell_label = label("", "body")
+            # Only a window asked to hold its Start has this line; any other window's notice is what it was.
+            self.hold_label = None if config.hold_start is None else label(guidance.TEXT_HOLD_WAITING, "big")
             self.start_button, self.cancel_button = button(TEXT_START, "go"), button(TEXT_CANCEL)
             self.start_button.clicked.connect(self.guarded(self.start_run))
             self.cancel_button.clicked.connect(self.guarded(lambda: self.decline(guidance.ENDED_CANCEL)))
             self._page(PHASE_NOTICE, [label("Please read", "title"), (scrolling(self.notice_label), 1), self.bounds_label,
                                       self.target_label, self.path_label, self.start_note, self.reminder_label,
+                                      *([] if self.hold_label is None else [self.hold_label]),
                                       self.dwell_label], [self.start_button, self.cancel_button])
             # The run.
             self.step_label = label("", "small", wrap=False, align=Qt.AlignmentFlag.AlignLeft)
@@ -910,10 +979,13 @@ def create_window(config, *, worker_factory=None, clock=time.monotonic_ns, size=
                 return
             if self.phase == PHASE_NOTICE:
                 left = config.start_dwell_seconds - self.shown_for(now_ns)
-                self.start_button.setEnabled(live and left <= 0)
+                self.start_button.setEnabled(live and left <= 0 and not self.start_held(now_ns))
                 self.cancel_button.setEnabled(live)
-                self.dwell_label.setText("You can start now" if left <= 0 else
-                                         f"You can start in {int(-(-left // 1))} s")
+                self.dwell_label.setText(f"You can start in {int(-(-left // 1))} s" if left > 0 else
+                                         guidance.TEXT_HOLD_DWELL if self.start_held(now_ns) else "You can start now")
+                if self.hold_label is not None:
+                    self.hold_label.setText(guidance.TEXT_HOLD_WAITING if self.hold_released_ns is None else
+                                            guidance.TEXT_HOLD_RELEASED)
             elif self.phase == PHASE_WATCH:
                 self.render_watch(now_ns, live)
             elif self.phase == PHASE_RESULT:
@@ -928,6 +1000,36 @@ def create_window(config, *, worker_factory=None, clock=time.monotonic_ns, size=
                     widget.setEnabled(live)
 
         # -- before the run --
+
+        def start_held(self, now_ns):
+            """Whether Start is held: the operator has not released it, or did so less than the guard interval ago."""
+            if config.hold_start is None:
+                return False
+            return self.hold_released_ns is None or (now_ns - self.hold_released_ns) / 1e9 < config.guard_seconds
+
+        def poll_hold(self, now_ns):
+            """Look for the operator's release, at most every ``HOLD_POLL_MS``; end the window when its bound passes.
+
+            On this timer's tick, so nothing outlives the window. The
+            release is kept once seen: removing the file does not hold Start
+            again. The last look is made on the tick that finds the bound
+            passed, so a release made just inside it counts.
+            """
+            if (config.hold_start is None or self.hold_released_ns is not None or self.final is not None
+                    or self.phase not in (PHASE_STATE, PHASE_PLAN, PHASE_NOTICE)):
+                return
+            timed_out = (now_ns - self.hold_opened_ns) / 1e9 >= config.hold_timeout_seconds
+            if (not timed_out and self.hold_checked_ns is not None
+                    and (now_ns - self.hold_checked_ns) / 1e6 < guidance.HOLD_POLL_MS):
+                return
+            self.hold_checked_ns = now_ns
+            if hold_released(config.hold_start):
+                self.hold_released_ns = now_ns
+            elif timed_out:  # As an unstarted run ends: the report and the result screen, nothing launched.
+                self.hold_timed_out = True
+                self.unstarted_reason = guidance.HOLD_NOT_RELEASED
+                self.ended_by = guidance.ENDED_HOLD_TIMEOUT
+                self.finish()
 
         def answer_state(self, answer):
             if self.phase != PHASE_STATE:
@@ -948,7 +1050,7 @@ def create_window(config, *, worker_factory=None, clock=time.monotonic_ns, size=
             """The Start button: the informed start of this one run. The only place a worker is made."""
             now_ns = clock()
             if (self.phase != PHASE_NOTICE or self.worker is not None
-                    or self.shown_for(now_ns) < config.start_dwell_seconds):
+                    or self.shown_for(now_ns) < config.start_dwell_seconds or self.start_held(now_ns)):
                 return
             self.started_ns = now_ns
             self.guide = guidance.Guide(config.script, config.limits["max_seconds"], started_ns=now_ns,
@@ -1022,6 +1124,7 @@ def create_window(config, *, worker_factory=None, clock=time.monotonic_ns, size=
                         self.ended_by = guidance.ENDED_SIGNAL
                     self.close()
                     return
+            self.poll_hold(now_ns)
             while True:
                 try:
                     kind, value = self.events.get_nowait()
@@ -1125,13 +1228,17 @@ def create_window(config, *, worker_factory=None, clock=time.monotonic_ns, size=
             else:
                 report = unstarted_report(config, self.unstarted_reason)
             anchor = (report.get("timebase") or {}).get("anchor")
+            run_clock = None if anchor is None else marks.Clock(anchor["monotonic_ns"], anchor["utc_ns"])
+            hold = None if config.hold_start is None else guidance.hold_block(
+                released_ns=self.hold_released_ns, started_ns=self.started_ns, timed_out=self.hold_timed_out,
+                timeout_seconds=config.hold_timeout_seconds, clock=run_clock)
             report["guide"] = guidance.guide_block(
                 self.guide, script=config.script, started=self.workers_started > 0, ended_by=self.ended_by,
                 observations=self.observations, validation_only=config.validation, watch=self.watch_state,
                 limits_ms={"late_frame_limit_ms": config.late_frame_limit_ms,
                            "removal_end_limit_ms": config.removal_end_limit_ms},
-                clock=None if anchor is None else marks.Clock(anchor["monotonic_ns"], anchor["utc_ns"]),
-                recorded_marks=(report.get("marks") or {}).get("recorded") or (), started_ns=self.started_ns)
+                clock=run_clock, recorded_marks=(report.get("marks") or {}).get("recorded") or (),
+                started_ns=self.started_ns, hold=hold)
             report["guide"]["worker_lines_dropped"] = 0 if self.worker is None else getattr(self.worker, "unexpected_lines", 0)
             report["camera_data"].update(report_saved_by_operator=True, report_path=str(config.report_path))
             try:
@@ -1263,14 +1370,18 @@ def validate(helper=None):
     recorded scripts and the scan, a run that reaches its bound, a presence end, Stop, the window
     closed mid-run, a launch that fails, Cancel, a declined start and a run
     too short for its script; then the report path that is refused before a
-    window exists and the worker that refuses to run by hand. Returns the
-    validation report.
+    window exists and the worker that refuses to run by hand. The start
+    hold's flows are in their own block, ``start_hold_flows``, and count
+    towards ``flows_failed`` like the rest: Start held until the release
+    file is made and the run then started by the click, a hold nobody
+    releases, and the release paths refused before a window exists. Returns
+    the validation report.
     """
     helper = Path(guard.ROOT) / FAKE_HELPER if helper is None else Path(helper)
     report = {"report_kind": VALIDATION_KIND, "schema_version": 2, "status": "validation_failed", "reason": None,
               **gates.claims(), "validation_only": True, "images_saved": False,
               "pixels_in_report": False, "camera_opened": False, "display_started": False, "helper": None,
-              "flows": {}, "exit_code": 1}
+              "flows": {}, "start_hold_flows": {}, "exit_code": 1}
     described = describe_helper(helper)
     fake = described is not None and described.get("backend") == "fake" and described.get("sdk_release") is None
     report["helper"] = {"fake": fake, "backend": "fake" if fake else "withheld"}
@@ -1425,6 +1536,79 @@ def validate(helper=None):
                        and entry["helper_cleanup_ok"] is True)
         flows["scan_to_the_bound"] = entry
 
+        # The start hold (item L18). Start stays off, however it is asked, until the release file is made; the
+        # release enables the button and starts nothing; the click starts the run and the report has the times.
+        hold_flows = report["start_hold_flows"]
+        config = make("held", guidance.SCRIPT_POSITIONS)
+        config.hold_start = check_hold_path(Path(directory) / "held.go", config.report_path)
+        flow = Flow(config)
+        window = flow.window
+        held = (all(flow.click_when_offered(text) for text in (TEXT_COLOUR_STABLE, TEXT_NEXT))
+                and flow.wait(lambda: window.dwell_label.text() == guidance.TEXT_HOLD_DWELL)
+                and window.cancel_button.isEnabled())  # The dwell and the guard are over: only the hold is left.
+        refused = held and not flow.click(TEXT_START)
+        window.start_run()
+        refused = (refused and window.workers_started == 0 and window.started_ns is None and window.phase == PHASE_NOTICE
+                   and window.hold_label.text() == guidance.TEXT_HOLD_WAITING)
+        config.hold_start.touch()  # The operator's one command.
+        released = refused and flow.wait(lambda: window.hold_released_ns is not None)
+        waiting_for_the_click = released and window.workers_started == 0  # The release started nothing.
+        said_so = released and flow.wait(lambda: window.hold_label.text() == guidance.TEXT_HOLD_RELEASED)
+        done = said_so and flow.click_when_offered(TEXT_START) and flow.finish_after_run()
+        entry, final = base(flow, config, done)
+        hold = (final.get("guide") or {}).get("start_hold") or {}
+        entry.update(start_refused_while_held=bool(refused), release_started_nothing=bool(waiting_for_the_click),
+                     released=hold.get("released"), timed_out=hold.get("timed_out"),
+                     release_file_read=hold.get("release_file_read"),
+                     release_to_start_click_ms=hold.get("release_to_start_click_ms"),
+                     release_times_recorded=type(hold.get("release_monotonic_ns")) is int
+                     and type(hold.get("release_utc_ns")) is int)
+        entry["ok"] = (entry["ok"] and entry["start_refused_while_held"] and entry["release_started_nothing"]
+                       and entry["status"] == "recognized" and entry["workers_started"] == 1
+                       and (entry["released"], entry["timed_out"], entry["release_file_read"]) == (True, False, False)
+                       and entry["release_times_recorded"]
+                       and (entry["release_to_start_click_ms"] or 0) >= VALIDATION_GUARD_SECONDS * 1000
+                       and entry["run_screen_only_scripted"] and entry["helper_cleanup_ok"] is True)
+        hold_flows["start_held_until_released"] = entry
+
+        # A hold nobody releases: the window ends as an unstarted run does, with nothing launched.
+        config = make("hold_timeout", guidance.SCRIPT_POSITIONS)
+        config.hold_start = check_hold_path(Path(directory) / "hold_timeout.go", config.report_path)
+        config.hold_timeout_seconds = 1.0
+        flow = Flow(config)
+        done = flow.reach(PHASE_RESULT) and flow.close()
+        entry, final = base(flow, config, done)
+        hold = (final.get("guide") or {}).get("start_hold") or {}
+        entry.update(released=hold.get("released"), timed_out=hold.get("timed_out"))
+        entry["ok"] = (entry["ok"] and entry["workers_started"] == 0 and entry["confirmation"] is None
+                       and (entry["status"], entry["reason"]) == ("error", guidance.HOLD_NOT_RELEASED)
+                       and entry["ended_by"] == guidance.ENDED_HOLD_TIMEOUT
+                       and (entry["released"], entry["timed_out"]) == (False, True)
+                       and "capture" not in final and not flow.window.run_screen_log)
+        hold_flows["start_hold_not_released"] = entry
+
+        # The release path is checked before a window exists: something already there, a link, a directory others
+        # can write to, a directory that cannot be written to, and the report's own path.
+        places = Path(directory) / "hold_places"
+        for name, mode in (("shared", 0o777), ("read_only", 0o500)):
+            (places / name).mkdir(parents=True)
+            (places / name).chmod(mode)
+        (Path(directory) / "dangling.go").symlink_to(Path(directory) / "nowhere")
+        new_report = Path(directory) / "hold_new.json"
+        refused = []
+        for name, path in (("exists", Path(directory) / "held.go"), ("link", Path(directory) / "dangling.go"),
+                           ("shared_directory", places / "shared" / "go"),
+                           ("unwritable_directory", places / "read_only" / "go"),
+                           ("missing_directory", places / "missing" / "go"), ("the_report", new_report)):
+            try:
+                check_hold_path(path, new_report)
+            except ValueError:
+                refused.append(name)
+        (places / "read_only").chmod(0o700)  # So that the directory can be removed.
+        hold_flows["hold_path_checked_first"] = {
+            "ok": refused == ["exists", "link", "shared_directory", "unwritable_directory", "missing_directory",
+                              "the_report"], "refused": refused}
+
         # The report path is checked before a window exists: an existing file, a missing directory, another suffix.
         refused = []
         for path in (Path(directory) / "positions.json", Path(directory) / "missing" / "a.json", Path(directory) / "a.txt"):
@@ -1446,7 +1630,8 @@ def validate(helper=None):
             "ok": (by_hand.returncode == 1 and answer.get("reason") == "guide_worker_not_launched_by_window"
                    and answer.get("confirmation") is None and "capture" not in answer),
             "reason": answer.get("reason"), "exit_code": by_hand.returncode}
-    failed = sorted(name for name, entry in flows.items() if not entry["ok"])
+    failed = sorted(name for group in (flows, report["start_hold_flows"]) for name, entry in group.items()
+                    if not entry["ok"])
     report.update(flows_failed=failed, status="validation_failed" if failed else "validated",
                   reason="flows_failed" if failed else None, exit_code=1 if failed else 0)
     return report
@@ -1521,6 +1706,11 @@ def build_parser():
                         help="The sightcircuit-presence-watcher binary (scripts/build_presence_watcher.sh), given "
                              "explicitly: the run ends when SteamVR reports standby, and refuses to read the camera "
                              "if the watcher cannot be armed. Presence signals only; no camera data")
+    parser.add_argument("--hold-start", type=Path, metavar="PATH",
+                        help="Keep Start off until this file exists: the operator releases the run with 'touch PATH' "
+                             "once its companions are up, and the wearer's click still starts it. Nothing may be at "
+                             "PATH yet; its directory must be one only you can write to, or the report's. The window "
+                             f"ends unstarted if no release comes within {guidance.HOLD_TIMEOUT_SECONDS // 60} minutes")
     parser.add_argument("--windowed", action="store_true", help="A 1280 by 800 window in place of a maximized one")
     return parser
 
@@ -1532,7 +1722,7 @@ def main(argv=None):
         return worker_main(args.worker_fd)
     run_arguments = (args.allow_camera_input or args.script or args.report or args.seconds or args.max_frames
                      or args.helper_arg or args.windowed or args.region or args.rotation or args.scan_detectors
-                     or args.presence_watcher)
+                     or args.presence_watcher or args.hold_start)
     if args.validate:
         if run_arguments:
             parser.error("--validate takes only --helper")
@@ -1589,6 +1779,11 @@ def main(argv=None):
         config.report_path = check_report_path(args.report)
     except ValueError as error:
         refusal = ("report_path_refused", str(error))
+    if refusal is None and args.hold_start is not None:
+        try:  # The release file's place: nothing there yet, in a directory nobody else can write to.
+            config.hold_start = check_hold_path(args.hold_start, config.report_path)
+        except ValueError as error:
+            refusal = ("hold_start_path_refused", str(error))
     if refusal is None:
         try:
             config.helper = camera_helper.helper_path(args.helper)
@@ -1616,7 +1811,9 @@ def main(argv=None):
                           "watch_seconds_elapsed": None, "watch_completed": False},
             watch=guidance.WATCH_NOT_STARTED,
             limits_ms={"late_frame_limit_ms": config.late_frame_limit_ms,
-                       "removal_end_limit_ms": config.removal_end_limit_ms})
+                       "removal_end_limit_ms": config.removal_end_limit_ms},
+            hold=None if args.hold_start is None else guidance.hold_block(
+                released_ns=None, started_ns=None, timed_out=False, timeout_seconds=config.hold_timeout_seconds))
     else:
         report = run_window(config, windowed=args.windowed)
     print(json.dumps(report, indent=2))
