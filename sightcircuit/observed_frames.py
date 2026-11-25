@@ -22,8 +22,11 @@ before layouts existed. Naming a layout permits nothing: real output with a
 named layout is refused, before the permission above is asked, unless
 ``layout_output_permitted`` says so, and that function lets the strip alone
 pass on to it, because the strip is the only geometry a scope record binds.
-The box panel therefore runs on the validation bridge and, in tests that
-patch both permission functions, on the fake runtime, and nowhere else.
+Through this client the box panel therefore runs on the validation bridge
+and, in tests that patch both permission functions, on the fake runtime, and
+nowhere else. That is a property of this repository's callers and of the
+procedure, not of the bridge binary, which takes ``--layout`` from whoever
+launches it (docs/reference/box-panel.md, "Who may show it").
 """
 import math
 import os
@@ -333,12 +336,14 @@ class ObservedFrameClient(OverlayClient):
         it (``launch_arguments``); neither goes through a method or property
         a subclass could answer differently, so the layout launched is the
         layout judged, whatever ``check_start`` or ``layout`` have been made
-        to say.
+        to say. The judgement comes first, before ``check_start`` and so
+        before any scope is asked: a refused layout spends no run id here
+        either.
         """
         layout, validation_only = self._layout, self.validation_only is True
-        self.check_start()
-        if not validation_only:
+        if not validation_only:  # Before ``check_start``: a refused layout never reaches the scope, whatever that does.
             require_real_output_layout(layout)
+        self.check_start()
         if self.validation_only is not True and self._started_real_output:
             raise ValueError("observed_frame_client_already_started")  # One permitted start, one bridge.
         self._started_real_output = self.validation_only is not True

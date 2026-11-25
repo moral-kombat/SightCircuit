@@ -817,6 +817,32 @@ class BoxPanelPermissionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "^fixed_hud_layout_not_approved$"):
                 swapped.start()
             self.assertEqual(len(launched_with), 2)
+            # A subclass whose ``check_start`` is the one of before layouts existed (the permission alone) and
+            # whose scope would permit: the layout is refused first, so the scope is never asked and no run id is
+            # spent.
+            class AsBefore(ObservedFrameClient):
+                def check_start(self):
+                    if self.validation_only is not True:
+                        gates.LIVE_HUD_OUTPUT.require(observed_frames.fixed_hud_output_permitted(self),
+                                                      observed_frames.FIXED_HUD_REFUSAL)
+        asked = []
+
+        class PermittingScope:
+            seconds = 5
+
+            def permit(self, use, holder):
+                asked.append(use)
+                return True
+
+        with mock.patch.object(observed_frames, "RunScope", PermittingScope), \
+                mock.patch.object(observed_frames, "pinned_binary", return_value=True), \
+                mock.patch.object(subprocess, "Popen", side_effect=launch):
+            old_style = AsBefore(layout=PANEL, validation_only=False, max_output_seconds=5, scope=PermittingScope())
+            with self.assertRaisesRegex(ValueError, "^fixed_hud_layout_not_approved$"):
+                old_style.start()
+            self.assertEqual((asked, len(launched_with)), ([], 2))
+            old_style.check_start()  # its own check alone would have consumed the scope: the order in start matters
+            self.assertEqual(len(asked), 1)
         # In the source: one read of the layout in start, and the judgement and the command line both take that local.
         source = (ROOT / "sightcircuit/observed_frames.py").read_text()
         start = source.split("    def start(self):", 1)[1].split("\n    def ", 1)[0]
@@ -824,47 +850,77 @@ class BoxPanelPermissionTests(unittest.TestCase):
         self.assertIn("layout, validation_only = self._layout, self.validation_only is True", start)
         self.assertIn("require_real_output_layout(layout)", start)
         self.assertIn("*launch_arguments(validation_only, layout)]", start)
-        self.assertLess(start.index("require_real_output_layout(layout)"), start.index("subprocess.Popen("))
+        self.assertLess(start.index("require_real_output_layout(layout)"), start.index("self.check_start()"))
+        self.assertLess(start.index("self.check_start()"), start.index("subprocess.Popen("))
         self.assertNotIn("bridge_mode()", start)
 
     def test_nothing_that_can_drive_real_output_names_a_layout(self):
-        # A static scan of the package and the scripts, and what it can and cannot see.
+        # A static scan of the package and the scripts. It is a tripwire for honest mistakes; the refusal in
+        # ``start`` is what holds. Only ``observed_frames.py`` is exempt.
         #
-        # Seen: any call at all that passes a keyword named ``layout`` (so a construction through an alias, through
-        # ``functools.partial`` or through a subclass's ``super().__init__`` is caught as well as a direct one); any
-        # ``**options`` handed to a call that names the client, to ``partial`` or to ``super().__init__`` of a
-        # subclass of it; any subclass of the client; in a file that names the client, any string "layout" that
-        # could be a key of such options; and any reach for ``_layout``. Only ``observed_frames.py`` may do any of it.
+        # What it fails on, and no more than this:
+        # * any call, whatever is called, that passes a keyword named ``layout`` (so a construction through any
+        #   alias, through ``partial`` under any name, or through a subclass's ``super().__init__`` is caught);
+        # * ``**options`` into a call of the client, of ``partial`` or of an ``__init__``, where the client and
+        #   ``partial`` are recognised by their own names and by aliases made in the same module with a plain
+        #   ``Name = ObservedFrameClient``, ``import ... as Name`` or ``from ... import ... as Name``;
+        # * a class whose bases include the client under such a name, and ``type(name, bases, ...)`` whose bases
+        #   tuple does;
+        # * the string "layout" in a file that names the client, and the string "_layout" or the attribute
+        #   ``._layout`` anywhere.
         #
-        # Not seen: code that builds the keyword at run time under another spelling ("lay" + "out"), ``setattr``
-        # or ``getattr`` with computed names, ``exec``, and code outside these two folders. A scan is a tripwire for
-        # honest mistakes; the refusal in ``start`` is what holds.
+        # What it does not see: an alias made any other way (through a container, a function's return, another
+        # module's re-export, ``getattr``); ``factory(**options)`` where the factory is not recognised as the
+        # client; a subclass of a class it did not recognise; a keyword or attribute name built at run time
+        # ("lay" + "out", ``setattr`` or ``getattr`` with a computed name); ``exec`` and ``eval``; and anything
+        # outside these two folders.
         owner = "sightcircuit/observed_frames.py"
         constructions, scanned = 0, 0
+
+        def named(node):
+            return getattr(node, "id", getattr(node, "attr", ""))
+
         for folder in ("sightcircuit", "scripts"):
             for path in sorted((ROOT / folder).rglob("*.py")):
                 name = path.relative_to(ROOT).as_posix()
-                tree = ast.parse(path.read_text())
+                text = path.read_text()
+                tree = ast.parse(text)
                 scanned += 1
-                names_client = "ObservedFrameClient" in path.read_text()
+                names_client = "ObservedFrameClient" in text
+                clients, partials = {"ObservedFrameClient"}, {"partial"}
+                for _ in range(3):  # aliases of aliases, a few deep
+                    for node in ast.walk(tree):
+                        if isinstance(node, (ast.Import, ast.ImportFrom)):
+                            for alias in node.names:
+                                last = alias.name.rsplit(".", 1)[-1]
+                                clients |= {alias.asname} if alias.asname and last in clients else set()
+                                partials |= {alias.asname} if alias.asname and last in partials else set()
+                        elif isinstance(node, ast.Assign) and named(node.value) in clients | partials:
+                            target = clients if named(node.value) in clients else partials
+                            target |= {named(item) for item in node.targets if named(item)}
                 for node in ast.walk(tree):
+                    where = f"{name}:{getattr(node, 'lineno', 0)}"
                     if isinstance(node, ast.Call):
-                        callee = getattr(node.func, "id", getattr(node.func, "attr", ""))
-                        constructions += callee == "ObservedFrameClient"
+                        callee = named(node.func)
+                        constructions += callee in clients
                         if name != owner:
-                            self.assertNotIn("layout", {keyword.arg for keyword in node.keywords}, f"{name}:{node.lineno}")
-                            if callee in ("ObservedFrameClient", "partial") or (names_client and callee == "__init__"):
+                            self.assertNotIn("layout", {keyword.arg for keyword in node.keywords}, where)
+                            if callee in clients | partials or (names_client and callee == "__init__"):
                                 self.assertFalse(any(keyword.arg is None for keyword in node.keywords),
-                                                 f"{name}:{node.lineno} passes **options")
+                                                 f"{where} passes **options")
+                            if callee == "type" and len(node.args) == 3 and isinstance(node.args[1], ast.Tuple):
+                                self.assertFalse({named(base) for base in node.args[1].elts} & clients,
+                                                 f"{where} subclasses the client with type()")
                     if name == owner:
                         continue
                     if isinstance(node, ast.ClassDef):
-                        bases = {getattr(base, "id", getattr(base, "attr", "")) for base in node.bases}
-                        self.assertNotIn("ObservedFrameClient", bases, f"{name}:{node.lineno} subclasses the client")
+                        self.assertFalse({named(base) for base in node.bases} & clients, f"{where} subclasses the client")
                     if names_client and isinstance(node, ast.Constant) and node.value == "layout":
-                        self.fail(f'{name}:{node.lineno} holds the string "layout" beside the client')
+                        self.fail(f'{where} holds the string "layout" beside the client')
+                    if isinstance(node, ast.Constant) and node.value == "_layout":
+                        self.fail(f'{where} holds the string "_layout"')
                     if isinstance(node, ast.Attribute) and node.attr == "_layout":
-                        self.fail(f"{name}:{node.lineno} reaches for _layout")
+                        self.fail(f"{where} reaches for _layout")
         self.assertGreaterEqual(constructions, 2)
         self.assertGreater(scanned, 100)
         # And by name: what may drive real output knows no word by which the panel or a layout can be reached.

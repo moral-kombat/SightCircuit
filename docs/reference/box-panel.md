@@ -10,10 +10,12 @@ panel fixed in front of the head.
 **Status: cloud-checked only, and selected by no stage or command.** These
 are a contract, a pure renderer, a pure mapping and, since item B3, a second
 fixed layout of the bridge's `--fixed-hud` mode, tested on generated boxes
-against a fake runtime. Nothing that is permitted to drive real output names
-the panel, so it can be shown only to the fake runtime of the tests and to
-the validation bridge, which displays nothing
-([the bridge and the panel](#the-bridge-and-the-panel-item-b3)). The wearer's
+against a fake runtime. Nothing in this repository that is permitted to
+drive real output names the panel, so its callers can show it only to the
+fake runtime of the tests and to the validation bridge, which displays
+nothing. That is a property of the repository's callers and of the
+procedure, not of the bridge binary, which takes the layout from whoever
+launches it ([who may show it](#who-may-show-it)). The wearer's
 alignment step is B4 and `camera_hud`'s layout is B5. Nothing here has
 displayed anything on a headset, opens a gate or reads calibration data. The
 strip (`fixed-edge-hud-v1`, [row selection](hud-runtime.md#row-selection)) is
@@ -453,16 +455,20 @@ compositor.
 
 What follows from them:
 
-- **The deadline is acted on within one 20 ms poll while a megabyte is
-  arriving, and no sooner than that on average.** The bridge notices a
-  deadline on its next input poll, so a hide comes anywhere from 0 to 20 ms
-  after its deadline, about 10 ms in the middle, depending only on where in
-  a poll the deadline falls. That is the same for the strip and the panel,
-  and the same whether or not a megabyte is mid-arrival: the bridge reads a
-  payload in pieces and re-checks the deadline before every piece, as it
-  always has, so a frame of 16 pipe-fulls gives it more pieces, not a longer
-  wait. The lives of the measured tiles are spread over 200 to 219.5 ms for
-  that reason. (A first version of this table used a 200 ms life in every
+- **The deadline is acted on within one 20 ms poll, for both layouts.**
+  The bridge re-checks the deadline each time its input wait returns: when
+  bytes arrive, or after 20 ms without any. Two cases follow, and the bound
+  covers both. *Nothing arriving, or a frame partly arrived and then held*
+  (the two rows of the table, and a sender that stalls): the wait runs its
+  full 20 ms, so a hide comes anywhere from 0 to 20 ms after its deadline,
+  about 10 ms in the middle, depending only on where in a poll the deadline
+  falls. *Bytes still flowing* (a megabyte actually mid-arrival): every
+  piece wakes the wait and the deadline is re-checked before the next read,
+  so the hide follows the deadline by about the gap between pieces; the
+  review measured 0.1 to 2.2 ms, median about 1 ms, for both layouts. A
+  frame of 16 pipe-fulls therefore gives the bridge more checks, not a
+  longer wait. The lives of the measured tiles are spread over 200 to
+  219.5 ms so that the held case samples the whole poll. (A first version of this table used a 200 ms life in every
   run, a whole number of polls, which always put the deadline just before a
   wake-up and reported "within 6 ms" with differences between the layouts;
   both were artefacts of the test's timing.)
@@ -537,9 +543,13 @@ not built.
 
 ## Cloud checks and what is unproven
 
-`tests/test_hud_box_panel.py`: the strip's fields, digests, header and tiles
-unchanged; the geometry's pins and its validation; that nothing outside the
-four modules names the panel; the font (exactly the 65 characters, fixed
+`tests/test_hud_box_panel.py`: the strip's fields, configuration digest and
+tiles unchanged; the generated header, which since B3 holds the panel under
+its own names with a new contract digest while the strip's block and digest
+are what they were; the geometry's pins and its validation; that only the
+listed files name the panel itself and only the listed files use the layout
+mechanism (two separate lists), and that the package re-exports neither; the
+font (exactly the 65 characters, fixed
 cells, distinct glyphs, pinned); the layout (open sides, tiny boxes, cut
 names, the placement order, the sweeps above, collisions, random scenes);
 the renderer's transparency, outline, glyph pixels, order, refusals and

@@ -275,38 +275,55 @@ class BoxPanelContractTests(unittest.TestCase):
         self.assertEqual(select_boxes((), 5), ((), 0, 0))
 
     def test_nothing_selects_the_box_panel(self):
-        # Items B3 and B5 are where a bridge mode and a command take the geometry. B3 is in: the generated header
-        # and its generator name the panel, the bridge's table of fixed layouts holds it, the entry point and the
-        # rendering and reporting units read a layout from that table, the observed-frame client takes one from the
-        # contract's list, and the synthetic scenes list boxes for it. The words below are every spelling by which
-        # the panel can be reached, by its own name or as "the second fixed layout". Until B5 no stage, command,
-        # scope record, manifest or script may use any of them (tests/test_box_panel_bridge.py holds the rest).
-        allowed = {"sightcircuit/hud/contract.py", "sightcircuit/hud/box_render.py", "sightcircuit/hud/boxes.py",
-                   "sightcircuit/hud/box_font.py", "sightcircuit/hud/__init__.py",
-                   "sightcircuit/hud/native.py", "sightcircuit/hud/box_scenes.py", "sightcircuit/observed_frames.py",
-                   "tools/hud_contract.hpp", "tools/overlay_frame.hpp", "tools/overlay_bridge.cpp",
-                   "tools/overlay_bridge.hpp", "tools/overlay_bridge_rendering.cpp", "tools/overlay_bridge_reporting.cpp"}
-        words = ("BOX_PANEL_CONFIG", "BoxPanelConfig", "box_render", "draw_boxes", "camera_boxes", "PanelBox",
-                 "head-fixed-box-panel", "box_font",
-                 # Since B3: the list the panel is the second entry of, the scenes, and the bridge's layout argument.
-                 "FIXED_LAYOUTS", "fixed_layout", "box_scenes", "orientation_scene", "kBoxPanel", "kFixedLayouts",
-                 "FixedLayout", "pinned_layout", "layout_index", "layout_in_force", "--layout", "LAYOUT_ARGUMENT",
-                 "launch_arguments", "layout_output_permitted", "REAL_OUTPUT_LAYOUT_IDS")
+        # Items B3 and B5 are where a bridge mode and a command take the geometry. B3 is in, and there are now two
+        # ways to reach the panel, each with its own words and its own list of files, so that a file allowed one
+        # is still forbidden the other. Until B5 no stage, command, scope record, manifest or script may use either
+        # (tests/test_box_panel_bridge.py holds the rest).
+        #
+        # The panel by name: its contract, font, renderer, selector and scenes, the header generator and the
+        # generated header, and the bridge's table of fixed layouts, which reads the header's constants.
+        panel_files = {"sightcircuit/hud/contract.py", "sightcircuit/hud/box_render.py", "sightcircuit/hud/boxes.py",
+                       "sightcircuit/hud/box_font.py", "sightcircuit/hud/__init__.py", "sightcircuit/hud/native.py",
+                       "sightcircuit/hud/box_scenes.py", "tools/hud_contract.hpp", "tools/overlay_frame.hpp"}
+        panel_words = ("BOX_PANEL_CONFIG", "BoxPanelConfig", "box_render", "draw_boxes", "camera_boxes", "PanelBox",
+                       "head-fixed-box-panel", "box_font", "kBoxPanel", "box_scenes", "orientation_scene")
+        # The panel as "the second fixed layout": the contract's list, the bridge's table and the units that read
+        # a layout from it, and the observed-frame client. None of the bridge's other units or the client names
+        # the panel itself.
+        layout_files = {"sightcircuit/hud/contract.py", "sightcircuit/hud/__init__.py", "sightcircuit/observed_frames.py",
+                        "tools/overlay_frame.hpp", "tools/overlay_bridge.cpp", "tools/overlay_bridge.hpp",
+                        "tools/overlay_bridge_rendering.cpp", "tools/overlay_bridge_reporting.cpp"}
+        layout_words = ("FIXED_LAYOUTS", "fixed_layout", "kFixedLayouts", "FixedLayout", "pinned_layout", "layout_index",
+                        "layout_in_force", "--layout", "LAYOUT_ARGUMENT", "launch_arguments", "layout_output_permitted",
+                        "require_real_output_layout", "REAL_OUTPUT_LAYOUT_IDS")
         paths = [path for folder in ("sightcircuit", "scripts", "tools")
                  for path in (ROOT / folder).rglob("*") if path.suffix in (".py", ".cpp", ".hpp", ".sh", ".json")]
         self.assertGreater(len(paths), 100)
+        used = {"panel": set(), "layout": set()}
         for path in paths:
             name = path.relative_to(ROOT).as_posix()
-            if name not in allowed:
-                text = path.read_text()
-                for word in words:
-                    self.assertNotIn(word, text, f"{name} names {word}")
-        # The package describes the modules but imports none of the box panel's names.
+            text = path.read_text()
+            for kind, files, words in (("panel", panel_files, panel_words), ("layout", layout_files, layout_words)):
+                found = [word for word in words if word in text]
+                if name in files:
+                    used[kind].update([name] if found else [])
+                else:
+                    self.assertEqual(found, [], f"{name} uses the {kind} words {found}")
+        # Each list is exact: every file on it uses a word of its kind, so neither list is wider than it needs to be.
+        self.assertEqual((used["panel"], used["layout"]), (panel_files, layout_files))
+        # The package describes the modules but re-exports none of the box panel's names and nothing of the layout
+        # mechanism, under any alias: a stage or command cannot reach either through ``sightcircuit.hud``.
         package = ast.parse((ROOT / "sightcircuit/hud/__init__.py").read_text())
-        imported = {alias.name for node in ast.walk(package) if isinstance(node, ast.ImportFrom) for alias in node.names}
+        imported = {alias.name for node in ast.walk(package) if isinstance(node, (ast.ImportFrom, ast.Import))
+                    for alias in node.names}
         imported |= {node.module for node in ast.walk(package) if isinstance(node, ast.ImportFrom)}
         self.assertFalse(imported & {"BOX_PANEL_CONFIG", "BoxPanelConfig", "PanelBox", "box_render", "boxes",
-                                     "box_font", "draw_boxes", "camera_boxes"})
+                                     "box_font", "draw_boxes", "camera_boxes", "box_scenes", "orientation_scene",
+                                     "FIXED_LAYOUTS", "fixed_layout", "BOX_PANEL_LIMITS", "BOX_PANEL_PIXELS",
+                                     "panel_box_valid", "select_boxes", "observed_frames", "*"})
+        assigned = {target.id for node in ast.walk(package) if isinstance(node, ast.Assign)
+                    for target in node.targets if isinstance(target, ast.Name)}
+        self.assertEqual(assigned, {"__all__"})  # nothing is rebound under another name either
 
 
 class BoxFontTests(unittest.TestCase):
