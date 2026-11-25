@@ -106,7 +106,7 @@ FIELDS = ("report_kind", "schema_version", "step", "runner", "source", "hud_conf
           "region", "rotation", "alignment", "presence_watch",
           "revision", "manifest_sha256", "run_id", "created_utc", "deadline_utc", "max_seconds", "approval",
           "statement")
-# The view's value ranges. They are ``camera.region``'s and ``hud.boxes``' own, repeated here because this module
+# The view's value ranges. They are the region's and the alignment's own classes', repeated here because this module
 # must load without NumPy and OpenCV, which those modules' packages need; tests/test_scope_record.py keeps them equal.
 ROTATIONS = (0, 90, 180, 270)
 WHOLE_FRAME = (0.0, 0.0, 1.0, 1.0)
@@ -230,7 +230,7 @@ def alignment_value(source, layout, alignment):
     An alignment belongs to a run that maps camera boxes onto a panel: the
     left camera with any fixed layout but the strip, whose rows take none.
     There it is required, as exactly ``ALIGNMENT_FIELDS`` (the shape of
-    ``hud.boxes.Alignment.report()``), within that class's ranges; the
+    the alignment class's ``report()``), within that class's ranges; the
     neutral alignment is stated like any other. Everywhere else it is None.
     """
     expected = source == CAMERA_LEFT and layout is not HUD_CONFIG
