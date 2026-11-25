@@ -15,7 +15,12 @@ camera helper built on this machine, its sources and build script, and the
 scope-record staging tool) are the ``camera_hud`` group since schema version
 3, so the manifest's digest, which a one-run scope record names
 (``runtime/scope.py``), covers the helper as well as the bridge and the
-models. That group is optional: a manifest carries it when it is asked for
+models. Since schema version 4 (work-order items B5 and L17) the group also
+holds the presence watcher built on this machine, its sources and its build
+script, and every manifest records ``layouts``: the configuration digest of
+each fixed layout the bridge can be launched with (``hud.contract.FIXED_LAYOUTS``),
+as this checkout's code computes it, so the record's layout digest can be
+compared with the manifest's. That group is optional: a manifest carries it when it is asked for
 or when the helper exists, says so in ``groups``, and is verified with
 exactly the groups it carries, so a machine without the SDK helper still
 writes and verifies a manifest for the commands that never use it; the scope
@@ -38,11 +43,15 @@ import tempfile
 
 from .. import assets
 from ..errors import SightCircuitError
+from ..hud.contract import FIXED_LAYOUTS, config_digest
 
 ROOT = Path(__file__).resolve().parents[2]
 # 2 (2026-11-07): the agent package left ``modules`` for its own ``agent`` group.
 # 3 (2026-11-16): ``groups``, the optional ``camera_hud`` group and ``runtime_packages`` (work-order item L10).
-SCHEMA_VERSION = 3
+# 4 (2026-11-25): the ``camera_hud`` group gains the presence watcher, its sources and its build script, and
+#   ``layouts`` records each fixed layout's configuration digest (work-order items B5 and L17). A manifest of
+#   an earlier version never verifies (``schema_version`` differs), and a scope record refuses it by name.
+SCHEMA_VERSION = 4
 REPORT_KIND = "checkpoint_artifact_manifest"
 VERIFICATION_KIND = "checkpoint_manifest_verification"
 SCOPE = ("Pins software identity only (checkout, interpreter, packages, the SteamVR package and the bridge built "
@@ -79,8 +88,16 @@ CAMERA_HELPER_SOURCES = (
     "tools/camera_convert_spirv.hpp", "tools/camera_export_protocol.hpp", "tools/camera_helper.cpp",
     "tools/camera_pixels.hpp", "tools/camera_pixels_cpu.cpp", "tools/camera_pixels_gpu.cpp",
     "tools/camera_sha256.hpp", "tools/camera_status_map.hpp", "tools/camera_ycbcr.hpp")
-CAMERA_HUD_SCRIPTS = ("scripts/build_camera_helper.sh", "scripts/camera_hud.py", "scripts/stage_scope_record.py")
-CAMERA_HUD_FILES = (CAMERA_HELPER, *CAMERA_HELPER_SOURCES, *CAMERA_HUD_SCRIPTS)
+# The presence watcher (work-order item L16) joins the group with items B5 and L17, for the displayed path's
+# watch: the binary scripts/build_presence_watcher.sh leaves in the ignored artifacts directory, its one unit and
+# the local header that unit includes beside tools/overlay_lifecycle.hpp (already in NATIVE_SOURCES), and its
+# build script (scripts/build_openvr_tool.sh, which that script runs, is in CHECKPOINT_SCRIPTS).
+PRESENCE_WATCHER = "artifacts/presence-watcher/sightcircuit-presence-watcher"
+PRESENCE_WATCHER_SOURCES = ("tools/presence_signals.hpp", "tools/presence_watcher.cpp")
+CAMERA_HUD_SCRIPTS = ("scripts/build_camera_helper.sh", "scripts/build_presence_watcher.sh", "scripts/camera_hud.py",
+                      "scripts/stage_scope_record.py")
+CAMERA_HUD_BINARIES = (CAMERA_HELPER, PRESENCE_WATCHER)  # What the group's device modes launch, beside the bridge.
+CAMERA_HUD_FILES = (*CAMERA_HUD_BINARIES, *CAMERA_HELPER_SOURCES, *PRESENCE_WATCHER_SOURCES, *CAMERA_HUD_SCRIPTS)
 CAMERA_GROUP = "camera_hud"
 BASE_GROUPS = ("agent", "assets", "bridge", "modules", "native_sources", "scripts")  # Every manifest carries these.
 FILE_GROUPS = tuple(sorted((*BASE_GROUPS, CAMERA_GROUP)))
@@ -312,14 +329,28 @@ def package_versions(packages=CHECKPOINT_PACKAGES):
     return versions
 
 
-def observe(root=ROOT, packages=CHECKPOINT_PACKAGES, camera_hud=None):
+def layout_digests():
+    """{layout id: configuration digest} of every fixed layout, as this checkout's contract computes them."""
+    return {layout.layout_id: config_digest(layout) for layout in FIXED_LAYOUTS}
+
+
+def observe(root=ROOT, packages=CHECKPOINT_PACKAGES, camera_hud=None, watcher=None):
     """The manifest of the checkout and interpreter as they are now, plus its dirty entries; writes nothing.
 
     ``camera_hud`` says whether the camera HUD's group is carried: True or
     False, or None for "when the helper exists". ``groups`` records the
-    answer.
+    answer. ``watcher`` says whether a carried group holds the presence
+    watcher's binary: True or False, or None for "required when the group
+    was asked for (``camera_hud`` True), else when the watcher exists". So a
+    group that was asked for holds the helper and the watcher, and one that
+    is not built is recorded as null and is a problem; a group carried only
+    because the helper exists holds the watcher when it is built and leaves
+    it out, without a problem, when it is not. The watcher's sources and
+    build script are tracked files and are in every carried group.
     """
     root = Path(root)
+    if watcher is None:
+        watcher = True if camera_hud is True else (root / PRESENCE_WATCHER).is_file()
     if camera_hud is None:
         camera_hud = (root / CAMERA_HELPER).is_file()
     commit, changes = git_state(root)
@@ -329,7 +360,7 @@ def observe(root=ROOT, packages=CHECKPOINT_PACKAGES, camera_hud=None):
     groups = {"agent": sorted([*agent, *AGENT_FILES]), "assets": asset_paths(root), "bridge": [BRIDGE],
               "modules": modules, "native_sources": NATIVE_SOURCES, "scripts": CHECKPOINT_SCRIPTS}
     if camera_hud:
-        groups[CAMERA_GROUP] = CAMERA_HUD_FILES
+        groups[CAMERA_GROUP] = tuple(path for path in CAMERA_HUD_FILES if watcher or path != PRESENCE_WATCHER)
     current = {"schema_version": SCHEMA_VERSION, "report_kind": REPORT_KIND, "scope": SCOPE,
                "git": {"commit": commit, "dirty": bool(changes)},
                "python": {"implementation": platform.python_implementation(), "version": platform.python_version()},
@@ -337,7 +368,8 @@ def observe(root=ROOT, packages=CHECKPOINT_PACKAGES, camera_hud=None):
                             "kernel_release": platform.release(), "os_release": os_release(),
                             "steamvr_package": steamvr_package()},
                "packages": package_versions(packages),
-               "runtime_packages": package_versions({name: name for name in RUNTIME_PACKAGES}), "groups": sorted(groups)}
+               "runtime_packages": package_versions({name: name for name in RUNTIME_PACKAGES}), "groups": sorted(groups),
+               "layouts": layout_digests()}
     current.update({group: {path: _digest(root / path) for path in paths} for group, paths in groups.items()})
     return current, changes
 
@@ -420,8 +452,12 @@ def write_manifest(path, root=ROOT, allow_dirty=False, packages=CHECKPOINT_PACKA
     """Pin the current state to a new file; return the write result.
 
     ``camera_hud`` is ``observe``'s: True carries the camera HUD's group
-    (a missing helper is then a problem), False leaves it out, None carries
-    it when the helper exists.
+    with the helper and the presence watcher (a missing one of either is
+    then a problem), which is what a one-run scope record requires; False
+    leaves the group out; None carries it when the helper exists, with the
+    watcher when that exists too and without it, and without a problem,
+    when it does not, so the manifest of a procedure that never uses the
+    watcher is not made unverifiable by its absence.
     Refuses an existing path, a path that would dirty the checkout and, unless
     ``allow_dirty`` (recorded as ``dirty: true``, which never verifies), a dirty
     tree. Missing files and packages are recorded as null and returned as problems.
@@ -500,9 +536,13 @@ def verify_manifest(path, root=ROOT, packages=CHECKPOINT_PACKAGES):
     except (OSError, ValueError, RecursionError) as error:
         report["differences"] = [_difference("manifest", "unreadable_manifest", None, str(error)[:200])]
         return report
-    try:  # With the groups the manifest carries: one written without the camera group is verified without it.
+    # With the groups the manifest carries: one written without the camera group is verified without it, and
+    # one whose group was written without the watcher's binary is verified without that.
+    try:
         carried = recorded.get("groups")
-        current, changes = observe(root, packages, CAMERA_GROUP in carried if isinstance(carried, list) else None)
+        group = recorded.get(CAMERA_GROUP)
+        current, changes = observe(root, packages, CAMERA_GROUP in carried if isinstance(carried, list) else None,
+                                   PRESENCE_WATCHER in group if isinstance(group, dict) else None)
     except (OSError, ManifestError) as error:
         reason = getattr(error, "reason", "checkout_unreadable")
         report["differences"] = [_difference("checkout", reason, None, str(error)[:200])]

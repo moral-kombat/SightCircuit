@@ -338,7 +338,7 @@ class FixedHudStartGateTests(unittest.TestCase):
                 mock.patch.object(subprocess, "Popen") as launched:
             with self.assertRaisesRegex(ValueError, "fixed_hud_output_not_approved"):
                 client.start()
-            asked.assert_called_once_with(client)
+            asked.assert_called_once_with(client, None)  # The client and the layout value it would launch with.
             launched.assert_not_called()
         # Validation never asks.
         with mock.patch.object(observed_frames, "fixed_hud_output_permitted") as asked:

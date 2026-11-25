@@ -67,7 +67,7 @@ from ..observed_frames import BRIDGE_COUNTS, MAX_ACKNOWLEDGEMENTS, ObservedFrame
 from ..overlay import BRIDGE_INPUT_POLL_NS, CLOSE_REPORT_FIELDS, rgba_from_bgr
 from ..pipeline import PERCENTILE_METHOD, TIMINGS, Pipeline, TimingSample
 from ..runtime.manifest import CAMERA_HELPER as PINNED_HELPER
-from ..runtime.scope import CAMERA_INPUT, CAMERA_LEFT, RunScope, pinned_binary
+from ..runtime.scope import CAMERA_INPUT, CAMERA_LEFT, WHOLE_FRAME, RunScope, pinned_binary, view_value
 from ..sources.camera_helper import LEFT_CAMERA, CameraHelperSource
 from .camera import ORIENTATIONS, camera_rows
 from .contract import HUD_CONFIG, MAX_DISPLAY_AGE_MS, MAX_DISPLAY_AGE_NS, ROW_LABEL_CHARS, config_digest, row_label
@@ -499,22 +499,52 @@ def bridge_retired_itself(report, client):
         "hide_returned_ok", "clear_texture_returned_ok", "destroy_returned_ok"))
 
 
+# The only view the stage has today, as a scope record states it (``runtime.scope.view_value``).
+STAGE_VIEW = {"region": list(WHOLE_FRAME), "rotation": 0, "alignment": None, "presence_watch": False}
+
+
+def stage_view_bound(scope):
+    """Whether ``scope`` asks for the only view this stage has today; True or False, and it changes nothing.
+
+    A scope record binds the layout, the region of the frame, the rotation,
+    the alignment and whether the presence watch is required (work-order
+    item B5), and a scope is granted only for a request equal to its record.
+    The request must in turn be what runs. Today the stage draws the strip
+    from the whole frame, unturned, maps nothing through an alignment and
+    holds no presence watch, so it serves a scope that asks for exactly that
+    and refuses every other before the record is consumed: a record that
+    names a region, a rotation, a panel layout or the watch cannot be spent
+    on a run that would not do what it says. The stage that takes a region,
+    a layout and the watch compares its own values here instead.
+    """
+    if scope.hud_config is not HUD_CONFIG:
+        return False
+    view, refusal = view_value(scope.source, scope.hud_config, scope.region, scope.rotation, scope.alignment,
+                               scope.presence_watch)
+    return refusal is None and view == STAGE_VIEW
+
+
 def camera_display_input_preconditions(stage):
     """What the camera site checks before anything is consumed; True or False, and it changes nothing.
 
     The stage's source is a ``CameraHelperSource`` on the left camera whose
     helper is the checkout's own, at the path the checkpoint manifest
     hashes; the client's ``scope`` is a ``RunScope`` (that exact type) asked
-    for ``arcturus_camera_left``; and the run is bounded within the scope's
+    for ``arcturus_camera_left``; the run is bounded within the scope's
     seconds by what will actually run: the stage's own ``seconds`` (a stage
     with none is refused), the helper's ``max_seconds``, and the helper's
-    ``max_frames`` at its frame rate.
+    ``max_frames`` at its frame rate; and the scope asks for the view this
+    stage has (``stage_view_bound``).
     """
-    scope = getattr(getattr(stage, "client", None), "scope", None)
+    return _camera_preconditions(stage, getattr(getattr(stage, "client", None), "scope", None))
+
+
+def _camera_preconditions(stage, scope):
+    """``camera_display_input_preconditions`` on ``scope``, the one object the caller read from the client."""
     source = getattr(stage, "source", None)
     if (type(scope) is not RunScope or scope.source != CAMERA_LEFT or not isinstance(source, CameraHelperSource)
             or source.source_id != camera_contract.source_id(LEFT_CAMERA)
-            or not pinned_binary(source.binary, PINNED_HELPER)):
+            or not pinned_binary(source.binary, PINNED_HELPER) or not stage_view_bound(scope)):
         return False
     permitted, seconds, limits = scope.seconds, getattr(stage, "seconds", None), source.limits
     if type(permitted) not in (int, float) or type(seconds) not in (int, float) or not 0 < seconds <= permitted:
@@ -535,12 +565,15 @@ def camera_display_input_permitted(stage):
     source, the pinned helper, bounds within the scope's seconds) and the
     scope, already verified and consumed by the output check, permits camera
     input to this stage, checking the deadline and the helper's digest as it
-    answers. A record for the synthetic step, the mirror or both cameras
+    answers. The client's ``scope`` is read once and that one object is
+    judged and asked. A record for the synthetic step, the mirror or both cameras
     never does. The gate is not open.
     """
-    if not camera_display_input_preconditions(stage):
+    scope = getattr(getattr(stage, "client", None), "scope", None)  # Read once, as the output site reads it.
+    if not _camera_preconditions(stage, scope):
         return False
-    return stage.client.scope.permit(CAMERA_INPUT, stage) is True
+    # After the scope's answer the view it verified against its record must still be the stage's.
+    return scope.permit(CAMERA_INPUT, stage) is True and scope.view == STAGE_VIEW
 
 
 class CameraHudStage:

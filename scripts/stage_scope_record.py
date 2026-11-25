@@ -13,16 +13,56 @@ which must carry the camera HUD's group and verify now (run
 ``scripts/checkpoint_manifest.py --write PATH --camera-hud`` after the builds
 first). One record serves one run of one step; a re-run is a new
 approval and a new record.
+
+It also names exactly what the run may show and through which view (work-order
+item B5), and a run that differs in any of them is refused with the record
+unspent: ``--layout``, one of the bridge's fixed layouts, with no default;
+for a camera step ``--region`` and ``--rotation`` (the whole frame, unturned,
+when not given), ``--presence-watch required`` or ``none``, with no default,
+and on a panel layout ``--alignment``, its five numbers, with no default
+either (the neutral alignment is ``1,1,0,0,0``). The alignment is the
+project's own numbers, set by the wearer; it is never the SDK's calibration.
+The synthetic step opens no camera and takes none of the four.
 """
 import argparse
 import json
+import math
 from pathlib import Path
 import sys
 
 if not __package__:  # Run as a file: import this checkout's packages without installation.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from sightcircuit.hud.contract import FIXED_LAYOUTS, fixed_layout  # noqa: E402
 from sightcircuit.runtime import scope  # noqa: E402
+
+PRESENCE_WATCH = {"required": True, "none": False}
+
+
+def numbers(text, count):
+    """``count`` comma-separated numbers as floats; ``argparse`` reports anything else."""
+    parts = text.split(",")
+    if len(parts) != count:
+        raise argparse.ArgumentTypeError(f"needs {count} comma-separated numbers")
+    try:
+        values = [float(part) for part in parts]
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"needs {count} comma-separated numbers") from None
+    if not all(math.isfinite(value) for value in values):  # inf, nan and a literal too large for a float.
+        raise argparse.ArgumentTypeError(f"needs {count} finite numbers")
+    return values
+
+
+def region(text):
+    return numbers(text, 4)
+
+
+def alignment(text):
+    """``SCALE_X,SCALE_Y,OFFSET_X,OFFSET_Y,TURN`` as the record's alignment; the turn is a whole number."""
+    *values, turn = numbers(text, len(scope.ALIGNMENT_FIELDS))
+    if turn != int(turn):
+        raise argparse.ArgumentTypeError("the turn is 0, 90, 180 or 270")
+    return dict(zip(scope.ALIGNMENT_FIELDS, (*values, int(turn))))
 
 
 def build_parser():
@@ -36,6 +76,18 @@ def build_parser():
                         help="how long from now the record's absolute UTC deadline lies")
     parser.add_argument("--max-seconds", type=int, metavar="SECONDS",
                         help="the run's duration bound; default and maximum are the step's own")
+    parser.add_argument("--layout", required=True, choices=[layout.layout_id for layout in FIXED_LAYOUTS],
+                        help="the fixed layout the run may show; a run with any other is refused")
+    parser.add_argument("--region", type=region, metavar="X0,Y0,X1,Y1",
+                        help="camera steps: the region of the frame the detector is given, as fractions "
+                             "(default: the whole frame)")
+    parser.add_argument("--rotation", type=int, choices=scope.ROTATIONS,
+                        help="camera steps: the clockwise quarter turn applied to the region (default 0)")
+    parser.add_argument("--alignment", type=alignment, metavar="SX,SY,OX,OY,TURN",
+                        help="camera steps on a panel layout, required there: the wearer's alignment, the project's "
+                             "own five numbers (neutral is 1,1,0,0,0)")
+    parser.add_argument("--presence-watch", choices=sorted(PRESENCE_WATCH),
+                        help="camera steps, required there: whether the run must hold the presence watch")
     parser.add_argument("--out", required=True, type=Path, metavar="PATH",
                         help="new .json file for the record, outside the checkout or in an ignored directory")
     return parser
@@ -46,7 +98,9 @@ def main(argv=None):
     try:
         record = scope.write_record(args.out, step=args.step, approval=args.approval,
                                     checkpoint_manifest=args.checkpoint_manifest, valid_minutes=args.valid_minutes,
-                                    max_seconds=args.max_seconds)
+                                    max_seconds=args.max_seconds, hud_config=fixed_layout(args.layout),
+                                    region=args.region, rotation=args.rotation, alignment=args.alignment,
+                                    presence_watch=PRESENCE_WATCH.get(args.presence_watch))
     except (OSError, scope.ScopeError) as error:
         print(f"Scope record not written: {getattr(error, 'reason', 'os_error')}: {error}", file=sys.stderr)
         return 1

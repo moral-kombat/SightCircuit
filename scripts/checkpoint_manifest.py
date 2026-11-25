@@ -29,9 +29,11 @@ def build_parser():
     parser.add_argument("--allow-dirty", action="store_true",
                         help="with --write: pin a dirty tree, recorded as dirty: true (it never verifies)")
     parser.add_argument("--camera-hud", action="store_true",
-                        help="with --write: carry the camera HUD's group (the SDK helper built here, its sources and "
-                             "scripts), which a one-run scope record requires; a missing helper is then a problem. "
-                             "Without it the group is carried only when the helper exists")
+                        help="with --write: carry the camera HUD's group (the SDK helper and the presence watcher "
+                             "built here, their sources and scripts), which a one-run scope record requires; a "
+                             "missing helper or watcher is then a problem. Without it the group is carried only "
+                             "when the helper exists, with the watcher when that exists too and without it, and "
+                             "without a problem, when it does not")
     parser.add_argument("--root", type=Path, default=manifest.ROOT, help=argparse.SUPPRESS)
     return parser
 

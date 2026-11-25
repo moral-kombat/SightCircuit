@@ -88,8 +88,10 @@ and local headers of its SDK build, the shader source, `build_camera_helper.sh`
 and the scope-record staging tool, so the manifest's digest, which a
 [one-run scope record](camera-hud.md#the-one-run-scope-record) names, covers
 the helper as well as the bridge and the models. A manifest carries the group
-when `--write` is given `--camera-hud` (a missing helper is then a problem)
-or when the helper exists; `groups` records what it carries, and `--verify`
+when `--write` is given `--camera-hud` (a missing helper is then a problem,
+and since schema version 4 a missing presence watcher too)
+or when the helper exists (the watcher's binary is then carried if it is
+built and left out, without a problem, if it is not); `groups` records what it carries, and `--verify`
 checks exactly those groups. So a machine without an SDK build of the helper
 still writes a manifest with no problems and verifies it, for the marker
 checkpoint and the fallback measurement, which never use the helper; the
@@ -98,8 +100,25 @@ without it. `runtime_packages` records whether `onnxruntime`, which
 detection uses when it is installed, is present and at which version: absent
 is recorded as null and is not a problem, and installing, removing or
 upgrading it afterwards is a difference. The Python version was already
-pinned. A version 2 manifest no longer verifies and is rewritten after the
-builds. It also pins the installed package versions, all
+pinned. Since schema version 4 (2026-11-25, work-order items B5 and L17) the
+`camera_hud` group also pins the presence watcher built on the machine
+(`artifacts/presence-watcher/sightcircuit-presence-watcher`), its unit
+`tools/presence_watcher.cpp` with `tools/presence_signals.hpp`, and
+`build_presence_watcher.sh`, so that a displayed run can launch only the
+watcher the manifest hashed. The watcher's binary is required only when the
+group was asked for with `--camera-hud`, which is what a scope record needs:
+then a watcher that is not built is a problem, as a missing helper is. A
+plain `--write` on a machine where the helper exists carries the group as
+before and adds the watcher's binary only if it is built, so the manifests
+of the marker checkpoint and the fallback measurement, which never use the
+watcher, are written and verified without it; `--verify` checks a manifest
+with the watcher exactly when the manifest recorded one. Every manifest also records `layouts`: the
+configuration digest of each fixed layout the bridge can be launched with
+(`fixed-edge-hud-v1`, `head-fixed-box-panel-v1`), as the checkout's contract
+computes it, which a scope record's layout digest is compared with. A
+manifest of version 2 or 3 no longer verifies (`schema_version` differs, and
+the fields it lacks are differences) and is rewritten after the builds; a
+scope record refuses one as `scope_manifest_schema_unsupported`. It also pins the installed package versions, all
 as deterministic JSON with checkout-relative paths. It creates a new file
 (never overwriting) and refuses a dirty tree unless `--allow-dirty` records
 `dirty: true`. `--verify PATH` is read-only: it writes nothing, builds nothing
@@ -361,13 +380,14 @@ version and build), the kernel release, the SteamVR package identity (since
 `artifacts/overlay-bridge/sightcircuit-overlay-bridge`, every
 `sightcircuit/**/*.py` outside `sightcircuit/agent/` (`modules`), the agent
 package with its scripts and settings template in their own `agent` group,
-the camera helper with its sources, build script and the scope-record staging
-tool in the `camera_hud` group when the manifest carries it, the scripts this
-procedure runs, the bridge sources
+the camera helper and the presence watcher with their sources and build
+scripts and the scope-record staging tool in the `camera_hud` group when the
+manifest carries it, the scripts this procedure runs, the bridge sources
 including `tools/hud_contract.hpp`, and the models and fixture listed in
 `scripts/smoke-assets.json`. It also records the installed `numpy` and
 `opencv-python-headless` versions. Paths are relative to the checkout. The JSON
-is deterministic (sorted keys), with `schema_version` 3, `report_kind`
+is deterministic (sorted keys), with `schema_version` 4, `layouts` (the
+configuration digest of each fixed layout), `report_kind`
 `checkpoint_artifact_manifest` and a `scope` stating that it pins software
 identity only. It is not device or qualification evidence.
 `checkpoint_manifest.py --help` confirms these flags:

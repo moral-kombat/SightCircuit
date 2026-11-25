@@ -88,7 +88,8 @@ class BoundaryTests(unittest.TestCase):
         self.assertTrue((ROOT / "scripts/camera_hud.py").is_file())
         # Its own manifest group: the wrapper beside the helper it launches; the body is in ``modules``.
         self.assertIn("scripts/camera_hud.py", manifest.CAMERA_HUD_FILES)
-        self.assertEqual(manifest.CAMERA_HUD_SCRIPTS, ("scripts/build_camera_helper.sh", "scripts/camera_hud.py",
+        self.assertEqual(manifest.CAMERA_HUD_SCRIPTS, ("scripts/build_camera_helper.sh",
+                                                       "scripts/build_presence_watcher.sh", "scripts/camera_hud.py",
                                                        "scripts/stage_scope_record.py"))
         self.assertNotIn("scripts/camera_hud.py", manifest.CHECKPOINT_SCRIPTS)
         current, _ = manifest.observe(ROOT, camera_hud=True)  # The group is optional; a scope record requires it.
@@ -318,9 +319,19 @@ class GuideAndTemplateTests(unittest.TestCase):
         earlier = camera_stage.window_verdict([(0.0, 40.0), (45.0, 90.0)], 90.0, **camera_hud.G10_WINDOW)
         self.assertFalse(earlier["found"])  # The schedule this replaced: a pause in the middle leaves no window.
         staged = self.commands("scripts/stage_scope_record.py")
-        self.assertEqual(len(staged), 1)
+        self.assertEqual(len(staged), 2)  # L-D3's, and a camera step's in full (it needs --presence-watch).
         args = stage_scope_record.build_parser().parse_args(staged[0])
-        self.assertEqual((args.step, args.valid_minutes), ("L-D3", 60))
+        self.assertEqual((args.step, args.valid_minutes, args.layout), ("L-D3", 60, "fixed-edge-hud-v1"))
+        # The synthetic step's record names no view: the camera is never opened.
+        self.assertEqual((args.region, args.rotation, args.alignment, args.presence_watch), (None, None, None, None))
+        args = stage_scope_record.build_parser().parse_args(staged[1])
+        self.assertEqual((args.step, args.layout, args.presence_watch, args.region, args.rotation, args.alignment),
+                         ("L-D4", "fixed-edge-hud-v1", "none", None, None, None))
+        # What the guide's camera command stages is a record today's command runs under: the strip, the whole
+        # frame, no watch (the view ``stage_view_bound`` serves).
+        view, refusal = scope.view_value(scope.CAMERA_LEFT, camera_stage.HUD_CONFIG, args.region, args.rotation,
+                                         args.alignment, stage_scope_record.PRESENCE_WATCH[args.presence_watch])
+        self.assertEqual((view, refusal), (camera_stage.STAGE_VIEW, None))
         written = []
         for arguments in self.commands("scripts/checkpoint_manifest.py"):
             parsed = checkpoint_manifest.build_parser().parse_args(arguments)
@@ -587,6 +598,42 @@ class RefusalTests(DeviceModeCase):
                                                    confirmed=True)
         self.assert_refused(report, "fixed_hud_output_not_approved", "scope_step_mismatch", camera_hud.SYNTHETIC_BLOCKS)
         self.assertEqual((seen, report["complete"], report["updates"]["submitted"]), ([], False, 0))
+        # A record that binds another layout or another view than this command runs with (item B5): refused by
+        # name before any launch, as a refusal in the report and never as an uncaught error, the record unspent.
+        from sightcircuit.hud.contract import BOX_PANEL_CONFIG
+        neutral = {"scale_x": 1.0, "scale_y": 1.0, "offset_x": 0.0, "offset_y": 0.0, "turn": 0}
+        bound = (("the panel's record", {"hud_config": BOX_PANEL_CONFIG, "alignment": neutral},
+                  "fixed_hud_layout_not_approved", "scope_layout_mismatch"),
+                 ("a record with a region", {"region": [0.25, 0.25, 0.75, 0.75]},
+                  "fixed_hud_output_not_approved", "scope_region_mismatch"),
+                 ("a record with a rotation", {"rotation": 90}, "fixed_hud_output_not_approved", "scope_rotation_mismatch"),
+                 ("a record that requires the presence watch", {"presence_watch": True},
+                  "fixed_hud_output_not_approved", "scope_presence_watch_mismatch"))
+        for name, staged, reason, refusal in bound:
+            path, record = self.staged("L-D4", **staged)
+            run_scope = self.camera_scope(path)
+            with self.subTest(case=name), self.launches() as seen, \
+                    mock.patch.object(camera_helper, "run_export", side_effect=AssertionError("exported")):
+                report = self.camera(run_scope)
+                self.assert_refused(report, reason, refusal, camera_hud.CAMERA_BLOCKS)
+                self.assertEqual((seen, run_scope.consumed, run_scope.status, report["scope_record"]["run_id"]),
+                                 ([], False, "refused", record["run_id"]))
+        path, _ = self.staged("L-D3", hud_config=BOX_PANEL_CONFIG)
+        run_scope = self.rows_scope(path)
+        with self.launches() as seen:
+            report = camera_hud.run_synthetic_rows(8, stops=1, stop_seconds=2.0, run_scope=run_scope, confirmed=True)
+        self.assert_refused(report, "fixed_hud_layout_not_approved", "scope_layout_mismatch", camera_hud.SYNTHETIC_BLOCKS)
+        self.assertEqual((seen, report["complete"], run_scope.consumed, self.ledger()), ([], False, False, []))
+        # Through the command line as well: a report and exit code 1, with the typed yes given.
+        for mode, step, blocks in ((self.CAMERA, "L-D4", camera_hud.CAMERA_BLOCKS), (self.ROWS, "L-D3", camera_hud.SYNTHETIC_BLOCKS)):
+            staged = {"hud_config": BOX_PANEL_CONFIG, **({"alignment": neutral} if step == "L-D4" else {})}
+            with self.subTest(command_line=step), self.launches() as seen, \
+                    mock.patch.object(camera_hud, "create_detector", return_value=camera_hud.ValidationDetector()), \
+                    mock.patch.object(camera_helper, "run_export", side_effect=AssertionError("exported")):
+                code, report, _ = run_main(self.arguments(mode, self.staged(step, **staged)[0]), Terminal())
+            self.assertEqual((code, seen), (1, []))
+            self.assert_refused(report, "fixed_hud_layout_not_approved", "scope_layout_mismatch", blocks)
+        self.assertEqual(self.ledger(), [])
         # Another helper than the one the manifest pins: refused before the record is consulted, so it is unspent.
         elsewhere = self.out / "sightcircuit-camera-helper"
         shutil.copy2(self.helper, elsewhere)

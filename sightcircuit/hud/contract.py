@@ -425,7 +425,7 @@ def select_rows(rows, limit):
 # A second geometry beside the strip. Nothing above changes with it and nothing selects it by default. Since item B3
 # the generated native header carries it (``sightcircuit.hud.native``) and the bridge's ``--fixed-hud`` mode can be
 # launched with it as a named layout (``FIXED_LAYOUTS``, below); no stage or command names it (the layout of
-# ``camera_hud`` is item B5), and nothing that is permitted to drive real output selects it.
+# ``camera_hud`` is item B5's second part), and real output with it needs a scope record that names it.
 # docs/reference/box-panel.md has the reasons for every number.
 
 BOX_PANEL_PIXELS = "box_panel_pixels"  # The coordinate space of ``PanelBox.box_xyxy``.

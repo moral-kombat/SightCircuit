@@ -10,13 +10,16 @@ panel fixed in front of the head.
 **Status: cloud-checked only, and selected by no stage or command.** These
 are a contract, a pure renderer, a pure mapping and, since item B3, a second
 fixed layout of the bridge's `--fixed-hud` mode, tested on generated boxes
-against a fake runtime. Nothing in this repository that is permitted to
-drive real output names the panel, so its callers can show it only to the
+against a fake runtime. Since the first part of item B5 a one-run scope
+record can name the panel, and the one permission site admits a client
+with the panel if and only if such a record verifies; no stage or command
+names the panel yet (that is B5's second part), no record exists on any
+device, and every gate is closed, so its callers can show it only to the
 fake runtime of the tests and to the validation bridge, which displays
 nothing. That is a property of the repository's callers and of the
 procedure, not of the bridge binary, which takes the layout from whoever
 launches it ([who may show it](#who-may-show-it)). The wearer's
-alignment step is B4 and `camera_hud`'s layout is B5. Nothing here has
+alignment step is B4. Nothing here has
 displayed anything on a headset, opens a gate or reads calibration data. The
 strip (`fixed-edge-hud-v1`, [row selection](hud-runtime.md#row-selection)) is
 unchanged, byte for byte, and stays the names-only fallback.
@@ -28,7 +31,7 @@ unchanged, byte for byte, and stays the names-only fallback.
 | Renderer `draw_boxes(boxes, config)` and its geometry `layout(boxes, config)` | `sightcircuit/hud/box_render.py` |
 | `Alignment`, `camera_boxes`, `panel_point`, `boxes_report` | `sightcircuit/hud/boxes.py` |
 | The bridge's fixed layouts (`FIXED_LAYOUTS`, `fixed_layout`), and the header's copy of the panel | `sightcircuit/hud/contract.py`, `sightcircuit/hud/native.py`, `tools/hud_contract.hpp`, `tools/overlay_frame.hpp` |
-| The client's `layout` and the refusal of real output with the panel (`layout_output_permitted`) | `sightcircuit/observed_frames.py` |
+| The client's `layout`, and the comparison of it with the layout a scope record binds (`layout_bound`, inside the one permission site) | `sightcircuit/observed_frames.py`, `sightcircuit/runtime/scope.py` |
 | `orientation_scene`: five boxes named by where they are drawn | `sightcircuit/hud/box_scenes.py` |
 | Tests | `tests/test_hud_box_panel.py`, `tests/test_hud_camera_boxes.py`, `tests/test_box_panel_bridge.py` |
 
@@ -393,34 +396,57 @@ not 512 × 512 × 4 bytes before queueing it (`observed_frame_not_layout_size`)
 and confirms cleanup only when the bridge's own report names the layout. A
 client without `layout` is the strip's client, unchanged.
 
-Real output with the panel is refused before anything is launched and before
-any scope record is consulted: `check_start` first asks
-`observed_frames.layout_output_permitted`, which lets the strip alone pass,
-and refuses any other layout by name (`fixed_hud_layout_not_approved`). It
-only narrows: a layout it lets pass still meets the closed `LIVE_HUD_OUTPUT`
-gate and the one permission function, as before. The check is needed. The permission to
-drive real output (`fixed_hud_output_permitted`, the scope record) was
-written when there was one geometry: a record binds `fixed-edge-hud-v1` and
-its digest but never compared them with what the client was about to show,
-so a client naming the panel would have been let through on a strip's
-record. That permission, the record, the manifest, `CameraHudStage` and
-`camera_hud` are unchanged and do not know the panel; a test pins that none
-of them names it and that no construction of the client in the package
-passes a layout. Item B5, which makes the record and the manifest bind the
-layout, is where `layout_output_permitted` may come to permit more.
+Real output with a layout is admitted if and only if a
+[one-run scope record](camera-hud.md#the-one-run-scope-record) that verifies
+names that layout (work-order item B5, 2026-11-25). A record binds the
+layout by id and by the digest of its fields (`hud_config_id`,
+`hud_config_sha256`), and the one site that permits real output,
+`observed_frames.fixed_hud_output_permitted`, compares them with the layout
+the client is about to launch. A record for the strip never admits the
+panel, and a record for the panel never admits the strip. There is no list
+of layouts allowed real output: the contract's `FIXED_LAYOUTS` says what the
+bridge can show, a record says what one run may, and the site compares the
+two (`layout_bound`). The stopgap of item B3, a second list beside the
+record that admitted the strip alone (`layout_output_permitted`,
+`REAL_OUTPUT_LAYOUT_IDS`), is removed.
+
+The comparison is made three times, in this order, and the order is chosen
+so that a difference costs no record wherever it can be seen without one:
+
+| When | What is compared | A difference |
+| --- | --- | --- |
+| Before the record is read (the site's preconditions) | the client's layout value with the layout the run's scope was asked for: the contract's own object, by identity, so a copy or an edited copy is another layout | refused, the record unread and unspent |
+| When the scope reads the record (its step 3, before the clock, the revision, the manifest and the ledger) | the scope's layout with the record's id and digest | refused as `scope_layout_mismatch`, the record unspent |
+| After the scope's answer, each time the client asks (the check and the start) | the record the scope now holds with the client's layout, id and digest | refused; by then the record is spent, as any record is once it verified |
+
+In all three the client is refused under the name
+`fixed_hud_layout_not_approved`, through the `LIVE_HUD_OUTPUT` gate's one
+`require` call; every other refusal of the site keeps the name
+`fixed_hud_output_not_approved`. A record that verified in full is spent
+whatever happens next, and a refused or failed run gives its scope back, as
+before ([which refusals spend the record](camera-hud.md#the-one-run-scope-record)).
+
+The manifest binds the layout as well: since its schema version 4 it records
+each fixed layout's digest, and the scope refuses a manifest whose digest
+for the record's layout is not the record's
+(`scope_manifest_layout_mismatch`) before it verifies the rest.
 
 The layout launched is the layout judged. `start` reads the client's
-layout once, hands that value to `layout_output_permitted` (which judges the
-layout object itself, by identity with the contract's) and builds the
-command line from the same value with `launch_arguments`, a plain function.
-No method or property of the client lies between the two, so a subclass
-that answers "the strip" when asked, or that would put another layout on
-the command line, changes nothing; a test tries both.
+layout once, hands that value to the permission site
+(`require_real_output`) and builds the command line from the same value with
+`launch_arguments`, a plain function. No method or property of the client
+lies between the two, and the start does not go through `check_start`, so a
+subclass that answers "the strip" when asked, that would put another layout
+on the command line, that replaces `check_start`, or whose layout changes
+from one read to the next changes nothing; a test tries each.
 
 So, **through this repository's Python**, the panel reaches a runtime only
-in tests that patch both permission functions and point the bridge at the
-fake `vrclient.so`, and reaches the validation bridge freely. Neither
-displays anything.
+under a scope record that names it. The tests do exactly that on the fake
+`vrclient.so`, with a record written in a temporary checkout and no
+permission patched; the validation bridge needs no record and displays
+nothing. `camera_hud` and `CameraHudStage` do not name the panel yet, and
+the stage as it stands refuses a scope that asks for it
+([the two sites](camera-hud.md#the-one-run-scope-record)).
 
 **The bridge binary itself has no gate for the layout, and never had one
 for anything.** Once a Frame's bridge is rebuilt from this source,
@@ -575,10 +601,13 @@ input ending mid-panel; a hide request behind a megabyte; five updates a second;
 bytes handed to the overlay call; the report block; the launch arguments and
 the validation stream's size rule; the bridge retiring the overlay when its
 launcher is killed; the client's layout, its refusals and a bridge killed
-under it; the refusal of real output, also against a subclass that would
-part the layout judged from the layout launched; a static scan for anything
-else that could name a layout; and the orientation scene under all seven
-flips and turns.
+under it; real output with the panel under a scope record that names it, on
+the fake runtime with no permission patched, and its refusal under a strip's
+record or none; and the orientation scene under all seven flips and turns.
+The binding itself is `tests/test_scope_record.py`'s: each field a record
+binds, alone; the record's first schema; and the site's comparison, also
+against subclasses that would part the layout judged from the layout
+launched.
 
 Unproven, all of it device work that needs its own approval: that names at
 7.5 pixels per degree (capitals 1.9°) are readable in the headset; that 0.75 m is a

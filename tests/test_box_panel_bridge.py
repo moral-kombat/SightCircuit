@@ -13,8 +13,10 @@ Three kinds of test, none of them a device or a display:
   in flight, the bytes handed to the overlay call, the report block, the
   size refusals, five updates a second, and the launcher's death.
 * ``BoxPanelClientTests`` and ``BoxPanelPermissionTests`` are the Python
-  end: ``ObservedFrameClient`` with a named layout, and that no real output
-  can be started with the box panel.
+  end: ``ObservedFrameClient`` with a named layout, and that real output
+  with the box panel starts under a one-run scope record that names the
+  panel and under nothing else (work-order item B5; the binding itself is
+  tested field by field in ``tests/test_scope_record.py``).
 
 Every time printed or asserted here is this cloud host's, never a Frame's.
 """
@@ -41,8 +43,9 @@ from sightcircuit.hud.contract import (BOX_PANEL_CONFIG, FIXED_LAYOUTS, HUD_CONF
 from sightcircuit.hud import box_scenes, native
 from sightcircuit.observed_frames import ObservedFrameClient
 from sightcircuit.overlay import DEFAULT_BRIDGE, observed_frame_packet, packet, visibility_packet
-from sightcircuit.runtime import manifest
+from sightcircuit.runtime import manifest, scope
 from tests import fake_vrclient
+from tests import test_scope_record as scope_tests
 
 try:
     import numpy as np
@@ -693,263 +696,62 @@ class BoxPanelClientTests(unittest.TestCase):
                 self.assertIs(closed(changes), False)
 
 
-class BoxPanelPermissionTests(unittest.TestCase):
-    """No real output with the box panel: refused before the scope is asked and before anything is launched."""
+class BoxPanelPermissionTests(scope_tests.ScopeCase):
+    """Real output with the box panel (work-order item B5): admitted by a scope record that names the panel, and
+    by nothing else. The binding itself, field by field, is ``tests/test_scope_record.py``'s; here it meets the
+    real bridge on the fake runtime. Every gate stays closed throughout."""
 
-    def test_real_output_with_the_box_panel_is_refused_even_where_real_output_is_permitted(self):
-        client = ObservedFrameClient(layout=PANEL, validation_only=False, max_output_seconds=5)
-        self.assertIs(observed_frames.layout_output_permitted(client.layout), False)
-        with mock.patch.object(observed_frames, "fixed_hud_output_permitted", return_value=True) as permitted, \
-                mock.patch.object(subprocess, "Popen") as launched:
-            for start in (client.check_start, client.start):
-                with self.assertRaises(ValueError) as caught:
-                    start()
-                self.assertEqual(str(caught.exception), "fixed_hud_layout_not_approved")
-            permitted.assert_not_called()  # the scope was never asked, so no run id was consumed
-            launched.assert_not_called()
-        self.assertIsNone(client.process)
+    def panel_client(self, record, name=None, runtime_env=None, **options):
+        run = scope.RunScope(record, self.path, runner="camera_hud", step="L-D3", source=scope.SYNTHETIC, seconds=30,
+                             hud_config=options.pop("asked", PANEL))
+        env = None if runtime_env is None else {**os.environ, **runtime_env, "FAKE_VR_LOG": str(self.out / f"{name}.jsonl")}
+        return ObservedFrameClient(self.bridge, validation_only=False, max_output_seconds=30, scope=run, env=env,
+                                   **{"layout": PANEL, **options})
+
+    def test_without_a_record_for_the_panel_nothing_is_launched(self):
+        strip_record, _ = self.staged("L-D3")
+        cases = (("no record", ObservedFrameClient(self.bridge, layout=PANEL, validation_only=False, max_output_seconds=5),
+                  "fixed_hud_output_not_approved"),
+                 ("a record for the strip", self.panel_client(strip_record), "fixed_hud_layout_not_approved"),
+                 ("a record for the strip, the scope asked for the strip", self.panel_client(strip_record, asked=STRIP),
+                  "fixed_hud_layout_not_approved"),
+                 ("a record for the panel, a strip client",
+                  self.panel_client(self.staged("L-D3", hud_config=PANEL)[0], layout=None), "fixed_hud_layout_not_approved"),
+                 ("a record for the panel, a named strip client",
+                  self.panel_client(self.staged("L-D3", hud_config=PANEL)[0], layout=STRIP), "fixed_hud_layout_not_approved"))
+        for name, client, reason in cases:
+            with self.subTest(case=name), mock.patch.object(subprocess, "Popen", wraps=subprocess.Popen) as launched:
+                for start in (client.check_start, client.start):
+                    with self.assertRaises(ValueError) as caught:
+                        start()
+                    self.assertEqual(str(caught.exception), reason)
+                self.assertEqual([call.args[0][0] for call in launched.call_args_list if call.args[0][0] != "git"], [])
+                self.assertIsNone(client.process)
+        self.assertEqual(self.ledger(), [])  # No refusal above spent a record.
         self.assertEqual(gates.claims(), {"production_live_input_enabled": False,
                                           "production_camera_input_enabled": False, "mapping_qualified": False,
                                           "production_hud_enabled": False})
-
-    def test_the_refusal_comes_before_the_gate_and_only_the_strip_is_a_real_output_layout(self):
-        client = ObservedFrameClient(layout=PANEL, validation_only=False)
-        with mock.patch.object(gates.Gate, "require", autospec=True, side_effect=gates.Gate.require) as required:
-            with self.assertRaisesRegex(ValueError, "^fixed_hud_layout_not_approved$"):
-                client.check_start()
-        required.assert_not_called()  # refused before the gate's one require call, which stays the permission's
-        # A layout that is let pass still meets the gate and the permission, exactly as an unnamed client does.
-        with mock.patch.object(gates.Gate, "require", autospec=True, side_effect=gates.Gate.require) as required:
-            with self.assertRaisesRegex(ValueError, "^fixed_hud_output_not_approved$"):
-                ObservedFrameClient(layout=STRIP, validation_only=False).check_start()
-        (gate, permitted, reason), = [call.args for call in required.call_args_list]
-        self.assertEqual((gate, permitted, reason), (gates.LIVE_HUD_OUTPUT, False, "fixed_hud_output_not_approved"))
-        self.assertEqual(observed_frames.REAL_OUTPUT_LAYOUT_IDS, ("fixed-edge-hud-v1",))
-        import dataclasses
-        self.assertIs(observed_frames.layout_output_permitted(STRIP), True)
-        # It judges the layout value itself, by identity with the contract's object: not a name, a copy, a
-        # look-alike, a client or nothing.
-        for other in (PANEL, object(), None, STRIP.layout_id, PANEL.layout_id, dataclasses.replace(STRIP),
-                      types.SimpleNamespace(layout_id=STRIP.layout_id), ObservedFrameClient(layout=STRIP),
-                      types.SimpleNamespace(layout=STRIP)):
-            self.assertIs(observed_frames.layout_output_permitted(other), False)
-        observed_frames.require_real_output_layout(None)  # no layout named: the strip's client, nothing to refuse
-        observed_frames.require_real_output_layout(STRIP)
-        with self.assertRaisesRegex(ValueError, "^fixed_hud_layout_not_approved$"):
-            observed_frames.require_real_output_layout(PANEL)
-        # Only the literal True permits, and a named strip is still asked for its scope afterwards.
-        with mock.patch.object(observed_frames, "layout_output_permitted", return_value=1), \
-                mock.patch.object(observed_frames, "fixed_hud_output_permitted", return_value=True):
-            with self.assertRaisesRegex(ValueError, "fixed_hud_layout_not_approved"):
-                client.check_start()
-        named_strip = ObservedFrameClient(layout=STRIP, validation_only=False)
-        with self.assertRaisesRegex(ValueError, "fixed_hud_output_not_approved"):
-            named_strip.check_start()
-        # Validation never asks either function.
-        with mock.patch.object(observed_frames, "layout_output_permitted") as layout_asked, \
-                mock.patch.object(observed_frames, "fixed_hud_output_permitted") as output_asked:
+        # Validation needs no record and asks for none.
+        with mock.patch.object(observed_frames, "fixed_hud_output_permitted") as asked:
             ObservedFrameClient(layout=PANEL).check_start()
-            layout_asked.assert_not_called()
-            output_asked.assert_not_called()
-
-    def test_the_existing_permission_alone_would_have_let_the_box_panel_through(self):
-        # Why the layout check exists: the permission to drive real output knows nothing of layouts. Asked about a
-        # box-panel client whose scope permits (a stand-in for a strip's record that verifies), it says yes.
-        client = ObservedFrameClient(layout=PANEL, validation_only=False, max_output_seconds=5)
-        class PermittingScope:
-            seconds, asked = 5, 0
-
-            def permit(self, use, holder):
-                PermittingScope.asked += 1
-                return True
-
-        client.scope = PermittingScope()
-        with mock.patch.object(observed_frames, "RunScope", PermittingScope), \
-                mock.patch.object(observed_frames, "pinned_binary", return_value=True):
-            self.assertIs(observed_frames.fixed_hud_output_permitted(client), True)
-            self.assertEqual(PermittingScope.asked, 1)
-            with mock.patch.object(subprocess, "Popen") as launched:
-                with self.assertRaisesRegex(ValueError, "fixed_hud_layout_not_approved"):
-                    client.start()
-                launched.assert_not_called()
-            self.assertEqual(PermittingScope.asked, 1)  # the start itself never reached the scope
-
-    @unittest.skipUnless(DEFAULT_BRIDGE.is_file(), "Run bash scripts/build_overlay_bridge.sh")
-    def test_the_layout_launched_is_the_layout_judged_whatever_a_subclass_overrides(self):
-        # The start reads the layout once, judges that value and builds the command line from it. Two subclasses
-        # try to part the two, each with the permission to drive real output patched to permit (a strip's record).
-        class SaysStrip(ObservedFrameClient):  # holds the panel, answers "the strip" to anyone who asks
-            layout = property(lambda self: STRIP)
-
-            def check_start(self):
-                pass
-
-        class ArguesPanel(ObservedFrameClient):  # holds no layout, would put the panel on the command line
-            def bridge_arguments(self):
-                return ("--fixed-hud", "--layout", PANEL.layout_id)
-
-            def bridge_mode(self):
-                return "--fixed-hud --layout " + PANEL.layout_id
-
-        launched_with = []
-
-        def launch(arguments, **options):
-            launched_with.append(list(arguments))
-            raise RuntimeError("stop")
-
-        with mock.patch.object(observed_frames, "fixed_hud_output_permitted", return_value=True), \
-                mock.patch.object(subprocess, "Popen", side_effect=launch):
-            tricked = SaysStrip(layout=PANEL, validation_only=False, max_output_seconds=5)
-            self.assertIs(tricked.layout, STRIP)
-            with self.assertRaisesRegex(ValueError, "^fixed_hud_layout_not_approved$"):
-                tricked.start()
-            self.assertEqual(launched_with, [])
-            for layout in (None, STRIP):
-                argued = ArguesPanel(layout=layout, validation_only=False, max_output_seconds=5)
-                with self.assertRaisesRegex(RuntimeError, "stop"):
-                    argued.start()
-            named = [str(DEFAULT_BRIDGE), "--fixed-hud", "--layout", STRIP.layout_id]
-            self.assertEqual(launched_with, [[str(DEFAULT_BRIDGE), "--fixed-hud"], named])
-            # A layout swapped in after construction is the one judged, and refused: nothing judges one value and
-            # launches another.
-            swapped = ObservedFrameClient(layout=STRIP, validation_only=False, max_output_seconds=5)
-            swapped._layout = PANEL
-            with self.assertRaisesRegex(ValueError, "^fixed_hud_layout_not_approved$"):
-                swapped.start()
-            self.assertEqual(len(launched_with), 2)
-            # A subclass whose ``check_start`` is the one of before layouts existed (the permission alone) and
-            # whose scope would permit: the layout is refused first, so the scope is never asked and no run id is
-            # spent.
-            class AsBefore(ObservedFrameClient):
-                def check_start(self):
-                    if self.validation_only is not True:
-                        gates.LIVE_HUD_OUTPUT.require(observed_frames.fixed_hud_output_permitted(self),
-                                                      observed_frames.FIXED_HUD_REFUSAL)
-        asked = []
-
-        class PermittingScope:
-            seconds = 5
-
-            def permit(self, use, holder):
-                asked.append(use)
-                return True
-
-        with mock.patch.object(observed_frames, "RunScope", PermittingScope), \
-                mock.patch.object(observed_frames, "pinned_binary", return_value=True), \
-                mock.patch.object(subprocess, "Popen", side_effect=launch):
-            old_style = AsBefore(layout=PANEL, validation_only=False, max_output_seconds=5, scope=PermittingScope())
-            with self.assertRaisesRegex(ValueError, "^fixed_hud_layout_not_approved$"):
-                old_style.start()
-            self.assertEqual((asked, len(launched_with)), ([], 2))
-            old_style.check_start()  # its own check alone would have consumed the scope: the order in start matters
-            self.assertEqual(len(asked), 1)
-        # In the source: one read of the layout in start, and the judgement and the command line both take that local.
-        source = (ROOT / "sightcircuit/observed_frames.py").read_text()
-        start = source.split("    def start(self):", 1)[1].split("\n    def ", 1)[0]
-        self.assertEqual(start.count("self._layout"), 1)
-        self.assertIn("layout, validation_only = self._layout, self.validation_only is True", start)
-        self.assertIn("require_real_output_layout(layout)", start)
-        self.assertIn("*launch_arguments(validation_only, layout)]", start)
-        self.assertLess(start.index("require_real_output_layout(layout)"), start.index("self.check_start()"))
-        self.assertLess(start.index("self.check_start()"), start.index("subprocess.Popen("))
-        self.assertNotIn("bridge_mode()", start)
-
-    def test_nothing_that_can_drive_real_output_names_a_layout(self):
-        # A static scan of the package and the scripts. It is a tripwire for honest mistakes; the refusal in
-        # ``start`` is what holds. Only ``observed_frames.py`` is exempt.
-        #
-        # What it fails on, and no more than this:
-        # * any call, whatever is called, that passes a keyword named ``layout`` (so a construction through any
-        #   alias, through ``partial`` under any name, or through a subclass's ``super().__init__`` is caught);
-        # * ``**options`` into a call of the client, of ``partial`` or of an ``__init__``, where the client and
-        #   ``partial`` are recognised by their own names and by aliases made in the same module with a plain
-        #   ``Name = ObservedFrameClient``, ``import ... as Name`` or ``from ... import ... as Name``;
-        # * a class whose bases include the client under such a name, and ``type(name, bases, ...)`` whose bases
-        #   tuple does;
-        # * the string "layout" in a file that names the client, and the string "_layout" or the attribute
-        #   ``._layout`` anywhere.
-        #
-        # What it does not see: an alias made any other way (through a container, a function's return, another
-        # module's re-export, ``getattr``); ``factory(**options)`` where the factory is not recognised as the
-        # client; a subclass of a class it did not recognise; a keyword or attribute name built at run time
-        # ("lay" + "out", ``setattr`` or ``getattr`` with a computed name); ``exec`` and ``eval``; and anything
-        # outside these two folders.
-        owner = "sightcircuit/observed_frames.py"
-        constructions, scanned = 0, 0
-
-        def named(node):
-            return getattr(node, "id", getattr(node, "attr", ""))
-
-        for folder in ("sightcircuit", "scripts"):
-            for path in sorted((ROOT / folder).rglob("*.py")):
-                name = path.relative_to(ROOT).as_posix()
-                text = path.read_text()
-                tree = ast.parse(text)
-                scanned += 1
-                names_client = "ObservedFrameClient" in text
-                clients, partials = {"ObservedFrameClient"}, {"partial"}
-                for _ in range(3):  # aliases of aliases, a few deep
-                    for node in ast.walk(tree):
-                        if isinstance(node, (ast.Import, ast.ImportFrom)):
-                            for alias in node.names:
-                                last = alias.name.rsplit(".", 1)[-1]
-                                clients |= {alias.asname} if alias.asname and last in clients else set()
-                                partials |= {alias.asname} if alias.asname and last in partials else set()
-                        elif isinstance(node, ast.Assign) and named(node.value) in clients | partials:
-                            target = clients if named(node.value) in clients else partials
-                            target |= {named(item) for item in node.targets if named(item)}
-                for node in ast.walk(tree):
-                    where = f"{name}:{getattr(node, 'lineno', 0)}"
-                    if isinstance(node, ast.Call):
-                        callee = named(node.func)
-                        constructions += callee in clients
-                        if name != owner:
-                            self.assertNotIn("layout", {keyword.arg for keyword in node.keywords}, where)
-                            if callee in clients | partials or (names_client and callee == "__init__"):
-                                self.assertFalse(any(keyword.arg is None for keyword in node.keywords),
-                                                 f"{where} passes **options")
-                            if callee == "type" and len(node.args) == 3 and isinstance(node.args[1], ast.Tuple):
-                                self.assertFalse({named(base) for base in node.args[1].elts} & clients,
-                                                 f"{where} subclasses the client with type()")
-                    if name == owner:
-                        continue
-                    if isinstance(node, ast.ClassDef):
-                        self.assertFalse({named(base) for base in node.bases} & clients, f"{where} subclasses the client")
-                    if names_client and isinstance(node, ast.Constant) and node.value == "layout":
-                        self.fail(f'{where} holds the string "layout" beside the client')
-                    if isinstance(node, ast.Constant) and node.value == "_layout":
-                        self.fail(f'{where} holds the string "_layout"')
-                    if isinstance(node, ast.Attribute) and node.attr == "_layout":
-                        self.fail(f"{where} reaches for _layout")
-        self.assertGreaterEqual(constructions, 2)
-        self.assertGreater(scanned, 100)
-        # And by name: what may drive real output knows no word by which the panel or a layout can be reached.
-        for name in ("sightcircuit/runtime/scope.py", "sightcircuit/runtime/manifest.py", "sightcircuit/hud/camera_stage.py",
-                     "sightcircuit/hud/camera.py", "sightcircuit/hud/synthetic_rows.py", "sightcircuit/commands/camera_hud.py",
-                     "sightcircuit/gates.py", "scripts/camera_hud.py", "scripts/stage_scope_record.py"):
-            text = (ROOT / name).read_text()
-            for word in ("FIXED_LAYOUTS", "fixed_layout", "BOX_PANEL", "BoxPanel", "box_panel", "box-panel", "box_scenes",
-                         "orientation_scene", "--layout", "LAYOUT_ARGUMENT", "layout_output_permitted",
-                         "require_real_output_layout", "launch_arguments", "bridge_arguments", "REAL_OUTPUT_LAYOUT_IDS"):
-                self.assertNotIn(word, text, f"{name} names {word}")
+            asked.assert_not_called()
 
     @unittest.skipUnless(RUNTIME, NEEDS_RUNTIME)
-    def test_on_the_fake_runtime_the_client_shows_the_panel_reports_it_and_survives_the_bridges_death(self):
-        # Reached only with both permission functions patched, as the strip's fake-runtime tests patch theirs.
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        runtime_env, _ = fake_vrclient.runtime(directory.name)
-        for patched in ("fixed_hud_output_permitted", "layout_output_permitted"):
-            permit = mock.patch.object(observed_frames, patched, return_value=True)
-            permit.start()
-            self.addCleanup(permit.stop)
+    def test_on_the_fake_runtime_a_panel_record_shows_the_panel_and_the_client_survives_the_bridges_death(self):
+        # No permission is patched: the bridge is the checkout fixture's pinned one (the real binary, copied in
+        # and pinned by a manifest written after it), and each start is under its own one-run record for the
+        # panel. The runtime is the fake ``vrclient.so``; nothing is displayed anywhere.
+        import shutil
+        shutil.copy2(DEFAULT_BRIDGE, self.bridge)
+        self.path = self.out / "real-bridge-manifest.json"
+        self.write()
+        runtime_env, _ = fake_vrclient.runtime(self.out / "vr")
 
-        def started(name):
-            log = Path(directory.name) / f"{name}.jsonl"
-            client = ObservedFrameClient(layout=PANEL, validation_only=False, max_output_seconds=30,
-                                         env={**os.environ, **runtime_env, "FAKE_VR_LOG": str(log)})
+        def started(name, **options):
+            path, record = self.staged("L-D3", hud_config=PANEL)
+            client = self.panel_client(path, name, runtime_env, **options)
             self.addCleanup(client.close)
-            return client.start(), log
+            return client, self.out / f"{name}.jsonl", record
 
         def present(client, frame_id, life_ns):
             observed = time.monotonic_ns()
@@ -959,8 +761,17 @@ class BoxPanelPermissionTests(unittest.TestCase):
                 time.sleep(0.005)
             self.assertIn(frame_id, client.presented, client.error)
 
-        client, log = started("shown")
-        self.assertEqual(client.process.args, [str(DEFAULT_BRIDGE), "--fixed-hud", "--layout", PANEL.layout_id])
+        # A strip's record first, on the real bridge and the fake runtime: refused, and the runtime saw no call.
+        strip_record, _ = self.staged("L-D3")
+        refused = self.panel_client(strip_record, "refused", runtime_env)
+        with self.assertRaisesRegex(ValueError, "^fixed_hud_layout_not_approved$"):
+            refused.start()
+        self.assertEqual((refused.process, (self.out / "refused.jsonl").exists(), self.ledger()), (None, False, []))
+
+        client, log, record = started("shown")
+        client.start()
+        self.assertEqual(client.process.args, [str(self.bridge), "--fixed-hud", "--layout", PANEL.layout_id])
+        self.assertEqual((client.scope.status, self.ledger()), ("granted", [f"{record['run_id']}.json"]))
         present(client, 1, 600 * MS)
         present(client, 2, 250 * MS)  # renewed by a newer observation, then left to expire
         end = time.monotonic() + 5
@@ -974,8 +785,16 @@ class BoxPanelPermissionTests(unittest.TestCase):
         self.assertEqual(report["native_report"]["fixed_hud"]["config_digest"], config_digest(PANEL))
         calls = [call["call"] for call in fake_vrclient.calls(log) if call["call"] in strip_suite.DRAWING]
         self.assertEqual(calls[-3:], ["HideOverlay", "ClearOverlayTexture", "DestroyOverlay"])
+        # The same record a second time: spent, so nothing starts.
+        again = scope.RunScope(client.scope.record_path, self.path, runner="camera_hud", step="L-D3",
+                               source=scope.SYNTHETIC, seconds=30, hud_config=PANEL)
+        retry = ObservedFrameClient(self.bridge, validation_only=False, max_output_seconds=30, scope=again, layout=PANEL)
+        with self.assertRaisesRegex(ValueError, "^fixed_hud_output_not_approved$"):
+            retry.start()
+        self.assertEqual((retry.process, again.refusal), (None, "scope_run_id_used"))
         # The bridge is killed with a panel up: the client says so, stops, and confirms no cleanup.
-        client, log = started("killed")
+        client, log, _ = started("killed")
+        client.start()
         present(client, 1, 900 * MS)
         client.process.kill()
         end = time.monotonic() + 5
@@ -987,6 +806,9 @@ class BoxPanelPermissionTests(unittest.TestCase):
         self.assertLess(time.monotonic() - began, 5)
         self.assertEqual((report["cleanup_confirmed"], report["worker_reaped"], report["transport_threads_stopped"]),
                          (False, True, True))
+        self.assertEqual(gates.claims(), {"production_live_input_enabled": False,
+                                          "production_camera_input_enabled": False, "mapping_qualified": False,
+                                          "production_hud_enabled": False})
 
 
 class OrientationSceneTests(unittest.TestCase):

@@ -18,15 +18,19 @@ B3): one of ``hud.contract.FIXED_LAYOUTS``. The bridge is then launched with
 ``--layout <layout_id>``, must repeat the name on its ready line, and takes
 frames of exactly that layout's size; the client refuses any other frame
 before it is queued. A client without one is the strip's client, exactly as
-before layouts existed. Naming a layout permits nothing: real output with a
-named layout is refused, before the permission above is asked, unless
-``layout_output_permitted`` says so, and that function lets the strip alone
-pass on to it, because the strip is the only geometry a scope record binds.
-Through this client the box panel therefore runs on the validation bridge
-and, in tests that patch both permission functions, on the fake runtime, and
-nowhere else. That is a property of this repository's callers and of the
-procedure, not of the bridge binary, which takes ``--layout`` from whoever
-launches it (docs/reference/box-panel.md, "Who may show it").
+before layouts existed. Naming a layout permits nothing. Since work-order
+item B5 the scope record binds the layout, by id and by configuration
+digest, and the one permission site compares it with the layout the client
+is about to launch (``layout_bound``): a client is permitted real output
+with a layout if and only if a record that verifies names that layout, so a
+record for the strip never admits the box panel and a record for the panel
+never admits the strip. There is no list of layouts allowed real output
+here or anywhere else; the contract lists what the bridge can show and a
+record says what one run may. A difference is refused by name
+(``fixed_hud_layout_not_approved``) before the record's run id is consumed.
+That is a property of this repository's callers and of the procedure, not
+of the bridge binary, which takes ``--layout`` from whoever launches it
+(docs/reference/box-panel.md, "Who may show it").
 """
 import math
 import os
@@ -46,10 +50,8 @@ FIXED_HUD_MODE = "--fixed-hud"
 VALIDATION_MODE = "--validate-stdin"
 FIXED_HUD_REFUSAL = "fixed_hud_output_not_approved"
 LAYOUT_ARGUMENT = "--layout"  # Follows the mode on the bridge's command line when the client names a layout.
+# The permission site's name for one refusal: the layout to be launched is not the layout the run's record binds.
 LAYOUT_REFUSAL = "fixed_hud_layout_not_approved"
-# The layouts a scope record can bind, and so the only ones real output may be started with: the strip
-# (``runtime.scope`` writes and verifies ``fixed-edge-hud-v1`` and its digest, nothing else).
-REAL_OUTPUT_LAYOUT_IDS = (HUD_CONFIG.layout_id,)
 # The bridge ends after ten seconds without a complete packet and takes no settings heartbeat in ``--fixed-hud``, so
 # the client repeats its last visibility request once this long has passed without a packet. A cloud choice.
 KEEPALIVE_SECONDS = 2.0
@@ -73,90 +75,144 @@ BRIDGE_COUNTS = ("observed_frames_received", "frames_received", "frames_submitte
                  "visibility_requests_received", "visibility_events_missing")
 
 
-def output_preconditions(client):
+def output_preconditions(client, layout=None):
     """What the output site checks before anything is consumed; True or False, and it changes nothing.
 
     ``client`` is an ``ObservedFrameClient`` in real output; its ``scope`` is
     a ``RunScope`` (that exact type); its bridge is the checkout's own, at
-    the path the checkpoint manifest hashes; and it carries a duration bound
+    the path the checkpoint manifest hashes; it carries a duration bound
     of its own (``max_output_seconds``, which it enforces by ending real
-    output itself) no longer than the scope's seconds. A client with no
-    bound is refused.
+    output itself) no longer than the scope's seconds, and a client with no
+    bound is refused; and ``layout``, the layout value the start is about to
+    launch with (None is the strip), is the one the scope was asked for
+    (``layout_bound``).
     """
-    scope = getattr(client, "scope", None)
+    return _output_preconditions(client, getattr(client, "scope", None), layout)
+
+
+def _output_preconditions(client, scope, layout):
+    """``output_preconditions`` on ``scope``, the one object the caller read from the client."""
     if not isinstance(client, ObservedFrameClient) or type(scope) is not RunScope or client.validation_only is not False:
         return False
     bound, permitted = client.max_output_seconds, scope.seconds
     if type(bound) not in (int, float) or type(permitted) not in (int, float) or not 0 < bound <= permitted:
         return False
-    return pinned_binary(client.binary, PINNED_BRIDGE)
+    return layout_bound(scope, layout) and pinned_binary(client.binary, PINNED_BRIDGE)
 
 
-def fixed_hud_output_permitted(client):
+def layout_bound(scope, layout, granted=False):
+    """Whether ``layout``, the value a start is about to launch with, is the layout ``scope`` binds; True or False.
+
+    The comparison of work-order item B5, and all that is left of the
+    stopgap it replaces: no list of layouts is consulted, only what this
+    one run asked for and what its record says. ``layout`` is the client's
+    layout value itself (None is the strip's client), the object the launch
+    arguments are then built from. It must be the contract's own object, the
+    very one the scope was asked for (identity, so a copy or an edited copy
+    is another layout); and once the scope has read its record, the record's
+    ``hud_config_id`` and ``hud_config_sha256`` must be that layout's id and
+    the digest of its fields as this checkout computes it. It reads the
+    record the scope already holds, consumes nothing and changes nothing,
+    so it is asked before the scope is consulted (a difference then costs
+    no run id) and again after it. With ``granted`` the answer is for a scope
+    that has just permitted: it must be granted and hold the record it was
+    granted on, and that record is what is compared; a scope that has read
+    no record never satisfies it.
+    """
+    shown = HUD_CONFIG if layout is None else layout
+    if type(scope) is not RunScope or not any(shown is known for known in FIXED_LAYOUTS) or scope.hud_config is not shown:
+        return False
+    record = scope.record
+    if granted and (scope.status != "granted" or record is None):
+        return False
+    if record is None:  # Not read yet, or refused before it was accepted: the request is all there is to compare.
+        return True
+    return (type(record) is dict and record.get("hud_config_id") == shown.layout_id
+            and record.get("hud_config_sha256") == config_digest(shown))
+
+
+def fixed_hud_output_permitted(client, layout=None):
     """Whether ``client`` may start the bridge in ``--fixed-hud``, real output: only under a one-run scope record.
 
-    This is the one place that decides it. ``ObservedFrameClient.check_start``
-    hands the answer to the ``LIVE_HUD_OUTPUT`` gate's ``require``, which
-    refuses everything but the literal ``True``. The order is: this site's
-    own preconditions (``output_preconditions``); then every callable in the
+    This is the one place that decides it. ``require_real_output`` hands the
+    answer to the ``LIVE_HUD_OUTPUT`` gate's ``require``, which refuses
+    everything but the literal ``True``. ``layout`` is the layout value the
+    start is about to launch with (None is the strip). The order is: this
+    site's own preconditions (``output_preconditions``), among them that the
+    layout is the one the scope was asked for; then every callable in the
     client's ``prerequisites``, which is how a stage has its camera site's
     preconditions checked before anything is consumed; and only then the
     scope, whose first answer verifies the record in full against what is on
-    disk and consumes its run id, all before this returns and so before
-    anything is launched (``runtime/scope.py`` lists the checks). The client
-    is the use's holder: when it asks again, at ``start``, the scope checks
-    the deadline and the bridge's digest once more and consumes nothing; any
-    other client is refused. No argument, environment variable,
-    configuration value or bridge line changes the answer. The gate is not
-    open: this is the diagnostic tier of owner decision 15, one record for
-    one displayed step, a procedural control against mistakes and not a
-    cryptographic one.
+    disk, compares each field the record binds with what the run asked for,
+    the layout by id and digest among them, and consumes its run id last,
+    all before this returns and so before anything is launched
+    (``runtime/scope.py`` lists the checks). Then the record the scope now
+    holds is compared with the layout once more (``layout_bound``). The
+    client's ``scope`` is read once, and that one object is the scope whose
+    request is judged, the scope that is asked and the scope whose record
+    is compared, so a client that answers with different scopes from one
+    read to the next gains nothing. The
+    client is the use's holder: when it asks again, at ``start``, the scope
+    checks the deadline and the bridge's digest once more and consumes
+    nothing; any other client is refused. No argument, environment
+    variable, configuration value or bridge line changes the answer. The
+    gate is not open: this is the diagnostic tier of owner decision 15, one
+    record for one displayed step, a procedural control against mistakes
+    and not a cryptographic one.
+
+    Why the layout is compared in this order. Everything that can be told
+    without spending the record is told first: a client whose layout is not
+    the scope's is refused by the preconditions with the record unread, and
+    a scope whose layout is not its record's is refused by the scope's own
+    step 3, before the clock, the revision, the manifest and the ledger. In
+    both cases the run id is unspent and the same record still serves the
+    run it was written for. The run id is spent only by a scope that
+    verified in full; what is refused or fails after that (a start past the
+    deadline, a rewritten bridge, a run that dies before its bridge) leaves
+    it spent, and a refused or failed run revokes its scope either way
+    (``ObservedFrameClient.withdraw``), so nothing starts under it later.
     """
-    if not output_preconditions(client):
+    scope = getattr(client, "scope", None)  # Read once: the scope judged, the scope asked and the scope compared are one.
+    if not _output_preconditions(client, scope, layout):
         return False
     try:
         if not all(prerequisite() is True for prerequisite in client.prerequisites):
             return False
     except Exception:
         return False
-    return client.scope.permit(HUD_OUTPUT, client) is True
+    return scope.permit(HUD_OUTPUT, client) is True and layout_bound(scope, layout, granted=True)
 
 
-def layout_output_permitted(layout):
-    """Whether ``layout``, the layout a client names, may be driven as real output: the strip's, and no other.
+def output_refusal(client, layout):
+    """The name the output site refuses under; it decides nothing and changes nothing.
 
-    The one place that decides it. It judges the layout value itself, the
-    very object the launch arguments are then built from
-    (``launch_arguments``), never a client or anything a client could
-    answer differently the second time it is asked. It is asked before the
-    permission to drive real output at all (``fixed_hud_output_permitted``),
-    so a refused layout consumes no scope record, and it only ever narrows:
-    a layout it lets pass still has to pass that permission and the
-    ``LIVE_HUD_OUTPUT`` gate. ``fixed_hud_output_permitted`` and the scope
-    record know nothing of layouts: a record binds ``fixed-edge-hud-v1`` and
-    its digest, so a record that verifies says nothing about any other
-    geometry, and without this check a client naming the box panel would be
-    let through on a strip's record. The answer is the literal ``True`` or
-    ``False``; no argument, environment variable or bridge line changes it.
-    Item B5, which makes the record and the manifest bind the layout, is
-    where this list may grow.
+    ``LAYOUT_REFUSAL`` when the client carries a scope and the layout it is
+    about to launch with is not the one that scope and its record bind
+    (``layout_bound``), so the operator is told which thing differed; else
+    ``FIXED_HUD_REFUSAL``, which covers every other reason, a missing record
+    included.
     """
-    return any(layout is known for known in FIXED_LAYOUTS) and layout.layout_id in REAL_OUTPUT_LAYOUT_IDS
+    scope = getattr(client, "scope", None)
+    return LAYOUT_REFUSAL if type(scope) is RunScope and not layout_bound(scope, layout) else FIXED_HUD_REFUSAL
 
 
-def require_real_output_layout(layout):
-    """Refuse (``ValueError(LAYOUT_REFUSAL)``) a named layout that may not be driven as real output; None is the strip."""
-    if layout is not None and layout_output_permitted(layout) is not True:
-        raise ValueError(LAYOUT_REFUSAL)
+def require_real_output(client, layout):
+    """Refuse real output with ``layout`` unless the one permission check says so; the gate's one ``require``.
+
+    ``layout`` is a value, read once by the caller: ``start`` hands the same
+    value to ``launch_arguments``, so what is launched is what was judged.
+    """
+    LIVE_HUD_OUTPUT.require(fixed_hud_output_permitted(client, layout), output_refusal(client, layout))
 
 
 def launch_arguments(validation_only, layout):
     """What follows the binary on the bridge's command line: the mode, then the layout when one is named.
 
     A plain function of its two arguments: ``ObservedFrameClient.start``
-    reads the client's layout once, judges that value and hands the same
-    value here, so what is launched is what was judged. No method of the
-    client lies between the two.
+    reads the client's layout once, has that value judged
+    (``require_real_output``) and hands the same value here, so what is
+    launched is what was judged. No method of the client lies between the
+    two.
     """
     mode = VALIDATION_MODE if validation_only is True else FIXED_HUD_MODE
     return (mode,) if layout is None else (mode, LAYOUT_ARGUMENT, layout.layout_id)
@@ -171,7 +227,7 @@ class ObservedFrameClient(OverlayClient):
     and is refused before anything is launched (``check_start``, through the
     ``LIVE_HUD_OUTPUT`` gate) unless ``fixed_hud_output_permitted``, the single
     place that decides, finds a one-run scope record that verifies on
-    ``scope``. ``scope`` is a ``runtime.scope.RunScope`` or None; a
+    ``scope`` and binds the layout this client is about to launch. ``scope`` is a ``runtime.scope.RunScope`` or None; a
     validation client never consults it. The mode is fixed at construction:
     ``validation_only`` cannot be assigned afterwards. ``max_output_seconds``
     is the client's own bound on real output: that long after ``start`` is
@@ -308,11 +364,7 @@ class ObservedFrameClient(OverlayClient):
         more, and consumes nothing.
         """
         if self.validation_only is not True:
-            # A named layout is checked first, before the scope is asked, so a refused layout consumes nothing.
-            # It is a plain refusal and not a second use of the gate: the gate's one ``require`` stays the
-            # permission's, below, and every real-output start still has to pass it.
-            require_real_output_layout(self._layout)
-            LIVE_HUD_OUTPUT.require(fixed_hud_output_permitted(self), FIXED_HUD_REFUSAL)
+            require_real_output(self, self._layout)
 
     def withdraw(self):
         """A run that was refused or failed before the bridge started gives its scope back for good.
@@ -331,19 +383,18 @@ class ObservedFrameClient(OverlayClient):
         launch. What remains between that answer and the launch is the launch
         itself. The client's own bound on real output counts from this call.
 
-        The layout is read once, here. That one value is judged
-        (``require_real_output_layout``) and the command line is built from
-        it (``launch_arguments``); neither goes through a method or property
-        a subclass could answer differently, so the layout launched is the
+        The layout is read once, here. That one value is judged by the
+        permission site (``require_real_output``, which compares it with the
+        layout the run's record binds) and the command line is built from it
+        (``launch_arguments``); neither goes through a method or property a
+        subclass could answer differently, and the judgement here does not
+        go through ``check_start`` either, so the layout launched is the
         layout judged, whatever ``check_start`` or ``layout`` have been made
-        to say. The judgement comes first, before ``check_start`` and so
-        before any scope is asked: a refused layout spends no run id here
-        either.
+        to say.
         """
         layout, validation_only = self._layout, self.validation_only is True
-        if not validation_only:  # Before ``check_start``: a refused layout never reaches the scope, whatever that does.
-            require_real_output_layout(layout)
-        self.check_start()
+        if not validation_only:  # The site itself, on this value: an overridden ``check_start`` changes nothing.
+            require_real_output(self, layout)
         if self.validation_only is not True and self._started_real_output:
             raise ValueError("observed_frame_client_already_started")  # One permitted start, one bridge.
         self._started_real_output = self.validation_only is not True

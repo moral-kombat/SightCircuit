@@ -174,8 +174,10 @@ The mode has two fixed geometries, both from the generated contract header:
 the strip and the [box panel](box-panel.md#the-bridge-and-the-panel-item-b3).
 The layout is chosen on the command line, once, and nothing on the pipe can
 change it. **Cloud-checked only**, on the fake runtime; the Frame's bridge
-predates it, and no caller that is permitted to drive real output names a
-layout.
+predates it. A caller in this repository starts real output with a layout
+only under a one-run scope record that names that layout
+([who may show it](box-panel.md#who-may-show-it)), and no stage or command
+names one yet.
 
 | Launch | Layout | Frame taken | Placement |
 | --- | --- | --- | --- |
