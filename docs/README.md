@@ -61,8 +61,9 @@ Each device guide describes prerequisites, operating limits, and shutdown.
   its report; library code, cloud-checked, real output refused.
 - [Box panel](reference/box-panel.md) — the second HUD geometry
   (`head-fixed-box-panel-v1`), its renderer and `camera_boxes` with the
-  wearer's alignment; contract and library code, cloud-checked, selected by
-  nothing yet.
+  wearer's alignment, and the bridge's second fixed layout for it; contract,
+  library and bridge code, cloud-checked on a fake runtime, selected by no
+  stage or command and refused as real output.
 - [Agent-on-Frame design](agent-on-frame.md) and
   [third-party attribution](../THIRD_PARTY.md).
 

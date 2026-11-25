@@ -259,9 +259,9 @@ of concept). At most 128 detections are accepted per frame.
 
 `camera_boxes` stands beside `camera_rows` for the box panel: positions,
 where a row has only a direction. It shares `row_label` and the threshold
-rule and has its own page, the [box panel reference](box-panel.md); nothing
-selects it yet, and the strip's geometry, renderer and digests are unchanged
-by it.
+rule and has its own page, the [box panel reference](box-panel.md); no stage
+or command selects it yet, and the strip's geometry, renderer and digests are
+unchanged by it.
 
 The selector opens no gate and displays nothing. A runner that shows its rows
 remains subject to `sightcircuit/gates.py`; the stage that sends its tiles to

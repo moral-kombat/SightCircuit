@@ -1,18 +1,24 @@
-# Box panel: contract, renderer and `camera_boxes`
+# Box panel: contract, renderer, `camera_boxes` and the bridge's layout
 
-Work-order items B1 and B2 of
+Work-order items B1, B2 and B3 of
 [lane B](../live-capture.md#lane-b-the-box-panel): the cloud-side pieces of
 the head-fixed box panel (Level 1 of the
 [box display scope change](../live-capture.md#box-display-scope-change-adopted-2026-11-24)).
 A box and a name are drawn around each recognised object on a transparent
 panel fixed in front of the head.
 
-**Status: cloud-checked only, and selected by nothing.** These are a
-contract, a pure renderer and a pure mapping, tested on generated boxes. No
-stage, command or bridge mode uses them: the bridge's second geometry is item
-B3, the wearer's alignment step is B4 and `camera_hud`'s layout is B5. Nothing
-here displays anything, opens a gate or reads calibration data. The strip
-(`fixed-edge-hud-v1`, [row selection](hud-runtime.md#row-selection)) is
+**Status: cloud-checked only, and selected by no stage or command.** These
+are a contract, a pure renderer, a pure mapping and, since item B3, a second
+fixed layout of the bridge's `--fixed-hud` mode, tested on generated boxes
+against a fake runtime. Nothing in this repository that is permitted to
+drive real output names the panel, so its callers can show it only to the
+fake runtime of the tests and to the validation bridge, which displays
+nothing. That is a property of the repository's callers and of the
+procedure, not of the bridge binary, which takes the layout from whoever
+launches it ([who may show it](#who-may-show-it)). The wearer's
+alignment step is B4 and `camera_hud`'s layout is B5. Nothing here has
+displayed anything on a headset, opens a gate or reads calibration data. The
+strip (`fixed-edge-hud-v1`, [row selection](hud-runtime.md#row-selection)) is
 unchanged, byte for byte, and stays the names-only fallback.
 
 | Piece | Where |
@@ -21,7 +27,10 @@ unchanged, byte for byte, and stays the names-only fallback.
 | The name font: hand-drawn glyph bitmaps for the 65 characters a label can hold | `sightcircuit/hud/box_font.py` |
 | Renderer `draw_boxes(boxes, config)` and its geometry `layout(boxes, config)` | `sightcircuit/hud/box_render.py` |
 | `Alignment`, `camera_boxes`, `panel_point`, `boxes_report` | `sightcircuit/hud/boxes.py` |
-| Tests | `tests/test_hud_box_panel.py`, `tests/test_hud_camera_boxes.py` |
+| The bridge's fixed layouts (`FIXED_LAYOUTS`, `fixed_layout`), and the header's copy of the panel | `sightcircuit/hud/contract.py`, `sightcircuit/hud/native.py`, `tools/hud_contract.hpp`, `tools/overlay_frame.hpp` |
+| The client's `layout` and the refusal of real output with the panel (`layout_output_permitted`) | `sightcircuit/observed_frames.py` |
+| `orientation_scene`: five boxes named by where they are drawn | `sightcircuit/hud/box_scenes.py` |
+| Tests | `tests/test_hud_box_panel.py`, `tests/test_hud_camera_boxes.py`, `tests/test_box_panel_bridge.py` |
 
 ## The geometry
 
@@ -113,46 +122,30 @@ looked at on the Frame in the retargeted displayed steps.
   casing is the visible edge, over a dark room the bright core is. The green
   is the strip's arrow colour.
 
-### Bytes per update, a note for item B3
+### Bytes per update
 
 One update is 512 × 512 × 4 = **1,048,576 bytes** (`update_bytes`), 6.4 times
-the strip's 163,840; with the 32-byte observed-frame prefix and at 5 updates
-a second that is 5.2 MB/s through the pipe against 0.8 MB/s today. What that
-implies, none of it built or measured here:
-
-- The panel is exactly the largest frame the bridge accepts
-  (`kMaxSide` × `kMaxSide` × 4), so the packet format and its limits can stay.
-- A Linux pipe holds 65,536 bytes by default: one panel is 16 pipe-fulls
-  where the strip is 2.5, so the client's writer blocks on the bridge's reads
-  for longer. The in-band limit of the
-  [stage](camera-hud.md#the-stage) (a hide is written behind at most the frame
-  already being written) grows with it; B3 should measure the write and the
-  upload on the fake runtime and decide whether to enlarge the pipe.
-- `SetOverlayRaw` copies the whole megabyte each update. Its duration on the
-  Frame is unknown, it sits inside the capture-to-display budget (400 ms p95
-  proposed), and the third-party reports of a freeze after many raw updates
-  ([risks](../live-capture.md#risks)) were not made at this size.
-- The image arrives as RGBA already (`draw_boxes(...).tobytes()`); no colour
-  conversion is needed. The bridge must present it with per-pixel alpha and
-  the overlay's own opacity at 1.0. A compositor that filters the texture
-  blends drawn pixels with transparent black at their border, which darkens
-  the border; the outermost drawn pixel of every mark is already dark.
-- The generated header does not carry the panel yet (below). When B3 adds
-  it, `kContractDigest` changes and every bridge has to be rebuilt.
+the strip's 163,840 and exactly the largest frame the packet format carries
+(`kMaxSide` × `kMaxSide` × 4), so the packet format and its limits did not
+move. With the 12-byte packet header and the 32-byte observed-frame prefix
+one update is 1,048,620 bytes on the pipe; at 5 updates a second that is
+5.2 MB/s against the strip's 0.8 MB/s. What that costs on a cloud host is
+measured [below](#the-megabyte-measured-in-the-cloud); what it costs on the
+Frame is unknown.
 
 ### The generated header
 
-`tools/hud_contract.hpp` is **unchanged**: `sightcircuit/hud/native.py` does
-not emit `BOX_PANEL_CONFIG`, so `scripts/hud_contract_header.py --check`
-passes on the committed header, `kContractDigest` and `kHudConfigDigest` are
-what they were, the bridge builds to the same program and no manifest or pin
-moves. The panel's values reach the header in item B3, in the same change
-that makes the bridge use them
-(`_record("BoxPanel", contract.BOX_PANEL_CONFIG)` and its digest in
-`_sections()`). `tests/test_hud_box_panel.py` pins the header's digest and
-that it holds no box-panel name; B3 moves that one pin deliberately. The
-strip's own pins (its fields, its configuration digest and its four tile
-digests) are repeated in that test and must not move.
+Since item B3 `tools/hud_contract.hpp` carries the panel:
+`sightcircuit/hud/native.py` emits every field of `BOX_PANEL_CONFIG` as
+`kBoxPanel*` and its digest as `kBoxPanelConfigDigest`, in the change that
+made the bridge use them. The bridge reads the name, the size, the placement
+and the digest; the drawing fields are carried so that `kContractDigest`
+pins the whole record. `kContractDigest` therefore changed (from
+`70663bdc…6c98` to `8192f645…0531`), and **every bridge has to be rebuilt**:
+a bridge built before B3 reports the old digest and rejects `--layout`. The
+strip's block of the header, `kHudConfigDigest` (`82f3f630…f392`) and the
+strip's four tile digests are what they were; `tests/test_hud_box_panel.py`
+and `tests/test_box_panel_bridge.py` hold both sides.
 
 ## The renderer
 
@@ -260,8 +253,9 @@ five numbers, frozen and checked when built:
 | `offset_x`, `offset_y` | move it, in panel widths and heights, positive right and down | −1 to 1 |
 | `turn` | a further clockwise quarter turn about the centre, before the scale | 0, 90, 180 or 270 |
 
-`+offset_y` increases the row index of the panel image. Whether row 0 is the
-top of the panel as displayed is the bridge's to establish and test (B3).
+`+offset_y` increases the row index of the panel image. The bridge hands
+row 0 to the overlay call first; whether the Frame displays row 0 at the top
+is unproven ([row direction and alpha](#row-direction-and-alpha)).
 
 `Alignment()` is neutral. The numbers are the project's own: the wearer sets
 them in item B4, and they are format metadata that may be saved and reported
@@ -362,11 +356,200 @@ part of `CameraHudStage`'s report. Item B5 wires it in: per processed frame,
 report `boxes_report(selection, config)`, with the run's totals summed from each frame's
 `dropped`.
 
+## The bridge and the panel (item B3)
+
+The bridge's real-output mode has two fixed layouts, chosen at launch and
+never afterwards: `--fixed-hud` alone is the strip, exactly as before, and
+`--fixed-hud --layout head-fixed-box-panel-v1` is the panel
+([overlay reference](overlay.md#fixed-layouts-work-order-item-b3-2026-11-24)).
+With the panel named, the bridge:
+
+| What | How |
+| --- | --- |
+| Places the overlay | once, at connect, from the contract: 0.9 m wide, 0.75 m ahead, centred on the head (`x`, `y` zero), overlay opacity 1.0. No packet can move it; a settings packet ends the run |
+| Takes frames | observed frames (opcode 6) of exactly 512 × 512. Any other size ends the run with `fixed_hud_frame_size`, and the strip's own 320 × 128 with `frame_for_other_layout`, before anything is uploaded |
+| Presents pixels | the frame's bytes go to `SetOverlayRaw` unchanged, four bytes a pixel, in the order `draw_boxes(...).tobytes()` wrote them: row 0 first, each pixel R, G, B, A. The bridge does not convert, premultiply, flip or copy them, and the overlay's own opacity is 1.0, so transparency is the image's alpha alone |
+| Expires, acknowledges, hides | by the strip's code: the deadline rule, the hide at the deadline, `frame_presented` and `frame_refused`, the visibility requests, the final hide and the watchdogs do not read the layout. The stream loop and the lifecycle unit do not contain the word (a test pins it) |
+| Reports | the `fixed_hud` block with the strip's fourteen keys and the panel's values: `config_id`, `config_digest`, `width`, `height`, the placement as applied (`panel_width_m`, `distance_m`, `x_m`, `y_m`, `opacity`) and the three refusals. Numbers, booleans and two closed names. The `ready` line carries `layout_id` |
+
+`--validate-stdin --layout head-fixed-box-panel-v1` applies the same size
+rule without a runtime and reports a `validation_layout` block (name,
+digest, size; no placement, since validation places nothing).
+
+**No digest of a panel image is reported.** The strip's reports carry no
+digest of a displayed tile either: `config_digest` is the digest of the
+geometry's fields (sizes, placement, colours, the font's glyphs), which are
+this repository's own values and say nothing about any frame. The panel's
+equivalent is the same kind of value, `config_digest(BOX_PANEL_CONFIG)`. The
+bridge's lines for a frame hold its identity, its times and whether it was
+presented; no line or report holds a pixel, a count of drawn pixels or a
+hash of an image.
+
+### Who may show it
+
+`ObservedFrameClient(layout=BOX_PANEL_CONFIG)` launches the bridge with the
+layout, requires the `ready` line to repeat it, refuses any frame that is
+not 512 × 512 × 4 bytes before queueing it (`observed_frame_not_layout_size`)
+and confirms cleanup only when the bridge's own report names the layout. A
+client without `layout` is the strip's client, unchanged.
+
+Real output with the panel is refused before anything is launched and before
+any scope record is consulted: `check_start` first asks
+`observed_frames.layout_output_permitted`, which lets the strip alone pass,
+and refuses any other layout by name (`fixed_hud_layout_not_approved`). It
+only narrows: a layout it lets pass still meets the closed `LIVE_HUD_OUTPUT`
+gate and the one permission function, as before. The check is needed. The permission to
+drive real output (`fixed_hud_output_permitted`, the scope record) was
+written when there was one geometry: a record binds `fixed-edge-hud-v1` and
+its digest but never compared them with what the client was about to show,
+so a client naming the panel would have been let through on a strip's
+record. That permission, the record, the manifest, `CameraHudStage` and
+`camera_hud` are unchanged and do not know the panel; a test pins that none
+of them names it and that no construction of the client in the package
+passes a layout. Item B5, which makes the record and the manifest bind the
+layout, is where `layout_output_permitted` may come to permit more.
+
+The layout launched is the layout judged. `start` reads the client's
+layout once, hands that value to `layout_output_permitted` (which judges the
+layout object itself, by identity with the contract's) and builds the
+command line from the same value with `launch_arguments`, a plain function.
+No method or property of the client lies between the two, so a subclass
+that answers "the strip" when asked, or that would put another layout on
+the command line, changes nothing; a test tries both.
+
+So, **through this repository's Python**, the panel reaches a runtime only
+in tests that patch both permission functions and point the bridge at the
+fake `vrclient.so`, and reaches the validation bridge freely. Neither
+displays anything.
+
+**The bridge binary itself has no gate for the layout, and never had one
+for anything.** Once a Frame's bridge is rebuilt from this source,
+`sightcircuit-overlay-bridge --fixed-hud --layout head-fixed-box-panel-v1`
+typed in a shell there would present whatever observed frames are piped to
+it, exactly as `--fixed-hud` and `--stdin` typed in a shell already would
+with the strip or a replay frame. "Only the fake runtime and the validation
+bridge" is a property of the callers in this repository and of the
+procedure, not of the binary: the rebuild and every launch of the bridge on
+the Frame happen inside approved device steps, and that procedural model is
+what stands between the binary and a headset, for the panel as for
+everything else it can show.
+
+### The megabyte, measured in the cloud
+
+**Cloud figures, not Frame figures.** One x86_64 cloud container (4 virtual
+cores of an Intel Xeon at 2.1 GHz, Linux 6.18, g++ 13.3, Python 3.12), the
+real bridge against the fake runtime, whose `SetOverlayRaw` returns without
+copying the image (0.04 ms). They show that the bridge's and the client's
+own handling of a megabyte is small; they say nothing about the Frame's
+compositor.
+
+| Measured, 100 frames at 5 a second | Strip (163,840 B) | Panel (1,048,576 B) |
+| --- | --- | --- |
+| Building the packet in Python (prefix and header joined to the image: two copies) | 0.08 ms median, 0.2 max | 0.29 ms median, 1.9 max |
+| Writing it to the default 65,536-byte pipe | 0.44 ms median, 1.4 max | 1.49 ms median, 3.4 max |
+| From the start of the write to `frame_presented` | 0.56 ms median, 0.9 p95, 1.5 max | 1.57 ms median, 2.5 p95, 3.5 max |
+| A hide request written right behind a frame, to `hide_returned` | 0.78 ms median, 1.1 max | 2.10 ms median, 2.8 max |
+| A tile's deadline to its hide returning, nothing arriving (40 runs, lives spread over one poll) | 0.5 to 19.8 ms, median 10.0 | 1.0 to 20.1 ms, median 11.1 |
+| The same with the next frame one third arrived | 0.8 to 20.1 ms, median 10.3 | 1.2 to 20.1 ms, median 10.7 |
+| Drawing the panel (`draw_boxes`, five boxes) and `tobytes()` | | 0.67 ms and 0.07 ms median |
+
+What follows from them:
+
+- **The deadline is acted on within one 20 ms poll, for both layouts.**
+  The bridge re-checks the deadline each time its input wait returns: when
+  bytes arrive, or after 20 ms without any. Two cases follow, and the bound
+  covers both. *Nothing arriving, or a frame partly arrived and then held*
+  (the two rows of the table, and a sender that stalls): the wait runs its
+  full 20 ms, so a hide comes anywhere from 0 to 20 ms after its deadline,
+  about 10 ms in the middle, depending only on where in a poll the deadline
+  falls. *Bytes still flowing* (a megabyte actually mid-arrival): every
+  piece wakes the wait and the deadline is re-checked before the next read,
+  so the hide follows the deadline by about the gap between pieces; the
+  review measured 0.1 to 2.2 ms, median about 1 ms, for both layouts. A
+  frame of 16 pipe-fulls therefore gives the bridge more checks, not a
+  longer wait. The lives of the measured tiles are spread over 200 to
+  219.5 ms so that the held case samples the whole poll. (A first version of this table used a 200 ms life in every
+  run, a whole number of polls, which always put the deadline just before a
+  wake-up and reported "within 6 ms" with differences between the layouts;
+  both were artefacts of the test's timing.)
+  `test_a_megabyte_in_flight_cannot_hold_a_tile_past_its_deadline` asserts
+  one poll plus this host's scheduling margin at three split points, each at
+  four places in the poll, and that the latenesses differ.
+- **While a frame is being written to the overlay nothing can be hidden**,
+  for either layout: `SetOverlayRaw` is synchronous and the bridge is one
+  thread. The rule is the strip's and so is its bound: both deadlines are
+  re-read when the call returns, a late frame is never shown, and the 5 s
+  step watchdog ends a call that does not return. The strip's slow-upload
+  tests pass on the panel. How long the Frame takes to copy a megabyte is
+  the unknown that this bound waits on.
+- **A hide request behind a frame trails by that frame's read and upload.**
+  This in-band limit of the [stage](camera-hud.md#the-stage) grows with the
+  frame: 2.1 ms median here against the strip's 0.8 ms. The new limit is the
+  megabyte's read (about 1.3 ms more on this host) plus the Frame's unknown
+  upload time; the bridge's own deadline, not the request, is what bounds a
+  stale panel.
+- **The pipe is not enlarged.** A 1 MiB pipe (`F_SETPIPE_SZ`) brought the
+  write from 1.49 to 0.92 ms and write-to-presented from 1.57 to 1.03 ms:
+  half a millisecond in a 200 ms period. It cannot hold a whole update
+  either (1,048,620 bytes against this host's unprivileged ceiling of
+  1,048,576, `/proc/sys/fs/pipe-max-size`, the kernel's default), and a
+  kernel may refuse the request (`EPERM` above that ceiling or over the
+  per-user pipe page limit), which would leave two transport configurations
+  to qualify on the Frame. The default pipe is the one configuration measured and tested. The
+  question returns only if a Frame measurement shows the read of a megabyte
+  to matter: with the default pipe the bridge takes one update in at least
+  17 reads, each preceded by one poll of the runtime's event queues, and the
+  cost of those polls on the Frame's runtime is not known.
+- **Copies of the megabyte per update.** In Python three: `tobytes()`, then
+  the prefix and the header each joined in front (`observed_frame_packet`).
+  Into the kernel's pipe and out again: two. In the bridge none of its own:
+  the payload is read into one buffer (allocated and zeroed per packet) and
+  `SetOverlayRaw` is handed a pointer into it. What the runtime's client
+  library and the compositor copy is theirs and unmeasured.
+- **At 5 updates a second** every frame was presented and no update hid the
+  tile (`test_five_updates_a_second_are_each_presented_and_the_tile_stays_up`).
+
+### Row direction and alpha
+
+The cloud establishes what the bridge hands over. On the fake runtime the
+bytes `SetOverlayRaw` received are compared with the renderer's, and they
+are identical: 1,048,576 bytes, width 512, height 512, 4 bytes a pixel, the
+image's row 0 first, alpha 0 or 255 as drawn, colour 0 wherever alpha is 0,
+and overlay opacity 1.0 set once.
+
+It cannot establish what the Frame's runtime then does. **Unproven:**
+whether row 0 is displayed at the top of the panel and column 0 at its left
+(no test here or earlier was built to show it), and whether the Frame's
+compositor honours per-pixel alpha for a raw overlay (every image this
+bridge has been given so far, the test pattern, the marker and the strip's
+tile, is opaque throughout).
+
+`box_scenes.orientation_scene(BOX_PANEL_CONFIG)` is the scene for a later
+synthetic displayed step to settle both. Its five boxes are named by where
+they are drawn in the image, `top left`, `top right`, `bottom left`,
+`bottom right` and `centre`, and the four corner boxes differ in size and
+shape, so a flip or a turn is visible without reading: **the largest box,
+wider than tall, is the image's top left.** Both halves of that rule are
+needed. Of the seven ways a square picture can be flipped or turned by
+quarter turns, six move the largest box out of the top left, and the
+seventh, a flip about the diagonal, leaves it there but stands it taller
+than wide (160 × 96 pixels becomes 96 × 160); a test checks all seven. If
+the wearer sees the largest box at the top left, wider than tall, named
+`top left` with names reading left to right, row 0 is the top; if the room is
+visible between and inside the boxes, alpha is honoured. Its RGBA digest is
+pinned (`b4219d8d…8d0e`). The scene is boxes written in the module, not
+detections; showing it is device work that needs its own approval and is
+not built.
+
 ## Cloud checks and what is unproven
 
-`tests/test_hud_box_panel.py`: the strip's fields, digests, header and tiles
-unchanged; the geometry's pins and its validation; that nothing outside the
-four modules names the panel; the font (exactly the 65 characters, fixed
+`tests/test_hud_box_panel.py`: the strip's fields, configuration digest and
+tiles unchanged; the generated header, which since B3 holds the panel under
+its own names with a new contract digest while the strip's block and digest
+are what they were; the geometry's pins and its validation; that only the
+listed files name the panel itself and only the listed files use the layout
+mechanism (two separate lists), and that the package re-exports neither; the
+font (exactly the 65 characters, fixed
 cells, distinct glyphs, pinned); the layout (open sides, tiny boxes, cut
 names, the placement order, the sweeps above, collisions, random scenes);
 the renderer's transparency, outline, glyph pixels, order, refusals and
@@ -381,10 +564,33 @@ and its acceptance by the stage's schema; a generated frame through
 `tests/test_hud_camera_rows.py` pass on the Python 3.12 and the Python 3.14
 locked sets.
 
+`tests/test_box_panel_bridge.py` (item B3): the strip's whole fake-runtime
+suite (`tests/test_fixed_hud_runtime.py`, unedited) run a second time on the
+panel, a megabyte per tile, which is the evidence that expiry, renewal,
+refusals, slow and failing hides, stalled uploads, end of input, SIGTERM and
+the input timeout are one code path for both layouts; a megabyte in flight
+at a deadline, at several places in the bridge's poll; a writer that stalls
+mid-panel within and beyond the panel's life; thirty panels back to back;
+input ending mid-panel; a hide request behind a megabyte; five updates a second; the
+bytes handed to the overlay call; the report block; the launch arguments and
+the validation stream's size rule; the bridge retiring the overlay when its
+launcher is killed; the client's layout, its refusals and a bridge killed
+under it; the refusal of real output, also against a subclass that would
+part the layout judged from the layout launched; a static scan for anything
+else that could name a layout; and the orientation scene under all seven
+flips and turns.
+
 Unproven, all of it device work that needs its own approval: that names at
 7.5 pixels per degree (capitals 1.9°) are readable in the headset; that 0.75 m is a
 comfortable distance for a box around a hand-held object; that 62° holds the
 region L-D1b chooses; that the Frame's compositor honours per-pixel alpha
-for a raw overlay; what a one-megabyte update costs at 5 a second; and row
-G8, on which showing anything over the scene depends. Whether the
+for a raw overlay, and which way up it shows the image; what a one-megabyte
+`SetOverlayRaw` costs on the Frame at 5 a second, inside the proposed 400 ms,
+and whether the third-party reports of a freeze after many raw updates
+([risks](../live-capture.md#risks)) apply at this size; whether a
+compositor that filters the texture darkens the border of a mark by blending
+it with transparent black (the outermost drawn pixel of every mark is
+already dark); and row G8, on which showing anything over the scene depends.
+The Frame's bridge predates the layout and has to be rebuilt inside an
+approved device step before any of this. Whether the
 hand-drawn font reads well in the headset is likewise unseen.

@@ -12,6 +12,21 @@ L10) whose record verifies in full; every other start is refused through the
 stays closed. The transport (bounded pipe writes, the reader thread, the stop and
 its escalation) is ``overlay.OverlayClient``'s, which itself still starts
 only the validation and replay streams.
+
+A client may name the fixed layout it sends for (``layout``, work-order item
+B3): one of ``hud.contract.FIXED_LAYOUTS``. The bridge is then launched with
+``--layout <layout_id>``, must repeat the name on its ready line, and takes
+frames of exactly that layout's size; the client refuses any other frame
+before it is queued. A client without one is the strip's client, exactly as
+before layouts existed. Naming a layout permits nothing: real output with a
+named layout is refused, before the permission above is asked, unless
+``layout_output_permitted`` says so, and that function lets the strip alone
+pass on to it, because the strip is the only geometry a scope record binds.
+Through this client the box panel therefore runs on the validation bridge
+and, in tests that patch both permission functions, on the fake runtime, and
+nowhere else. That is a property of this repository's callers and of the
+procedure, not of the bridge binary, which takes ``--layout`` from whoever
+launches it (docs/reference/box-panel.md, "Who may show it").
 """
 import math
 import os
@@ -20,7 +35,7 @@ import threading
 import time
 
 from .gates import LIVE_HUD_OUTPUT
-from .hud.contract import BRIDGE_READY_WAIT_SECONDS, OPCODE_STOP
+from .hud.contract import BRIDGE_READY_WAIT_SECONDS, FIXED_LAYOUTS, HUD_CONFIG, OPCODE_STOP, RGBA_BYTES, config_digest
 from .overlay import (DEFAULT_BRIDGE, OverlayClient, bridge_closed_cleanly, observed_frame_packet, packet,
                       visibility_packet)
 from .runtime.manifest import BRIDGE as PINNED_BRIDGE
@@ -30,6 +45,11 @@ from .runtime.scope import HUD_OUTPUT, RunScope, pinned_binary
 FIXED_HUD_MODE = "--fixed-hud"
 VALIDATION_MODE = "--validate-stdin"
 FIXED_HUD_REFUSAL = "fixed_hud_output_not_approved"
+LAYOUT_ARGUMENT = "--layout"  # Follows the mode on the bridge's command line when the client names a layout.
+LAYOUT_REFUSAL = "fixed_hud_layout_not_approved"
+# The layouts a scope record can bind, and so the only ones real output may be started with: the strip
+# (``runtime.scope`` writes and verifies ``fixed-edge-hud-v1`` and its digest, nothing else).
+REAL_OUTPUT_LAYOUT_IDS = (HUD_CONFIG.layout_id,)
 # The bridge ends after ten seconds without a complete packet and takes no settings heartbeat in ``--fixed-hud``, so
 # the client repeats its last visibility request once this long has passed without a packet. A cloud choice.
 KEEPALIVE_SECONDS = 2.0
@@ -100,6 +120,46 @@ def fixed_hud_output_permitted(client):
     except Exception:
         return False
     return client.scope.permit(HUD_OUTPUT, client) is True
+
+
+def layout_output_permitted(layout):
+    """Whether ``layout``, the layout a client names, may be driven as real output: the strip's, and no other.
+
+    The one place that decides it. It judges the layout value itself, the
+    very object the launch arguments are then built from
+    (``launch_arguments``), never a client or anything a client could
+    answer differently the second time it is asked. It is asked before the
+    permission to drive real output at all (``fixed_hud_output_permitted``),
+    so a refused layout consumes no scope record, and it only ever narrows:
+    a layout it lets pass still has to pass that permission and the
+    ``LIVE_HUD_OUTPUT`` gate. ``fixed_hud_output_permitted`` and the scope
+    record know nothing of layouts: a record binds ``fixed-edge-hud-v1`` and
+    its digest, so a record that verifies says nothing about any other
+    geometry, and without this check a client naming the box panel would be
+    let through on a strip's record. The answer is the literal ``True`` or
+    ``False``; no argument, environment variable or bridge line changes it.
+    Item B5, which makes the record and the manifest bind the layout, is
+    where this list may grow.
+    """
+    return any(layout is known for known in FIXED_LAYOUTS) and layout.layout_id in REAL_OUTPUT_LAYOUT_IDS
+
+
+def require_real_output_layout(layout):
+    """Refuse (``ValueError(LAYOUT_REFUSAL)``) a named layout that may not be driven as real output; None is the strip."""
+    if layout is not None and layout_output_permitted(layout) is not True:
+        raise ValueError(LAYOUT_REFUSAL)
+
+
+def launch_arguments(validation_only, layout):
+    """What follows the binary on the bridge's command line: the mode, then the layout when one is named.
+
+    A plain function of its two arguments: ``ObservedFrameClient.start``
+    reads the client's layout once, judges that value and hands the same
+    value here, so what is launched is what was judged. No method of the
+    client lies between the two.
+    """
+    mode = VALIDATION_MODE if validation_only is True else FIXED_HUD_MODE
+    return (mode,) if layout is None else (mode, LAYOUT_ARGUMENT, layout.layout_id)
 
 
 class ObservedFrameClient(OverlayClient):
@@ -178,9 +238,12 @@ class ObservedFrameClient(OverlayClient):
     """
 
     def __init__(self, binary=DEFAULT_BRIDGE, *, validation_only=True, env=None, keepalive_seconds=KEEPALIVE_SECONDS,
-                 listener=None, scope=None, max_output_seconds=None):
+                 listener=None, scope=None, max_output_seconds=None, layout=None):
         if type(validation_only) is not bool:
             raise ValueError("observed_frame_client_mode_invalid")
+        # The layout is one of the contract's own objects or nothing: a copy, an edited copy or a name is refused.
+        if layout is not None and not any(layout is known for known in FIXED_LAYOUTS):
+            raise ValueError("observed_frame_layout_unknown")
         if (not isinstance(keepalive_seconds, (int, float)) or not math.isfinite(keepalive_seconds)
                 or not 0 < keepalive_seconds <= KEEPALIVE_MAX_SECONDS):
             raise ValueError("observed_frame_keepalive_invalid")
@@ -188,6 +251,7 @@ class ObservedFrameClient(OverlayClient):
                                                or not math.isfinite(max_output_seconds) or max_output_seconds <= 0):
             raise ValueError("observed_frame_output_bound_invalid")
         super().__init__(binary, validation_only=validation_only, env=env)
+        self._layout = layout
         self.max_output_seconds = max_output_seconds
         self.output_bound_reached = False
         self._output_deadline = None  # ``time.monotonic()`` after which real output ends; set by ``start``.
@@ -226,6 +290,11 @@ class ObservedFrameClient(OverlayClient):
             raise AttributeError("observed_frame_client_mode_is_fixed")
         self._validation_only = value
 
+    @property
+    def layout(self):
+        """The fixed layout named at construction, or None (the strip's client of before layouts); never assigned."""
+        return self._layout
+
     def bridge_mode(self):
         return VALIDATION_MODE if self.validation_only else FIXED_HUD_MODE
 
@@ -239,6 +308,10 @@ class ObservedFrameClient(OverlayClient):
         more, and consumes nothing.
         """
         if self.validation_only is not True:
+            # A named layout is checked first, before the scope is asked, so a refused layout consumes nothing.
+            # It is a plain refusal and not a second use of the gate: the gate's one ``require`` stays the
+            # permission's, below, and every real-output start still has to pass it.
+            require_real_output_layout(self._layout)
             LIVE_HUD_OUTPUT.require(fixed_hud_output_permitted(self), FIXED_HUD_REFUSAL)
 
     def withdraw(self):
@@ -257,7 +330,19 @@ class ObservedFrameClient(OverlayClient):
         In real output the permission is asked again here, right before the
         launch. What remains between that answer and the launch is the launch
         itself. The client's own bound on real output counts from this call.
+
+        The layout is read once, here. That one value is judged
+        (``require_real_output_layout``) and the command line is built from
+        it (``launch_arguments``); neither goes through a method or property
+        a subclass could answer differently, so the layout launched is the
+        layout judged, whatever ``check_start`` or ``layout`` have been made
+        to say. The judgement comes first, before ``check_start`` and so
+        before any scope is asked: a refused layout spends no run id here
+        either.
         """
+        layout, validation_only = self._layout, self.validation_only is True
+        if not validation_only:  # Before ``check_start``: a refused layout never reaches the scope, whatever that does.
+            require_real_output_layout(layout)
         self.check_start()
         if self.validation_only is not True and self._started_real_output:
             raise ValueError("observed_frame_client_already_started")  # One permitted start, one bridge.
@@ -266,7 +351,8 @@ class ObservedFrameClient(OverlayClient):
             self._output_deadline = time.monotonic() + self.max_output_seconds
         if not self.binary.is_file() or not os.access(self.binary, os.X_OK):
             raise RuntimeError("Overlay bridge missing; run bash scripts/build_overlay_bridge.sh")
-        self.process = subprocess.Popen([str(self.binary), self.bridge_mode()], stdin=subprocess.PIPE,
+        self.process = subprocess.Popen([str(self.binary), *launch_arguments(validation_only, layout)],
+                                        stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, env=self.env, bufsize=0)
         os.set_blocking(self.process.stdin.fileno(), False)
         self.reader = threading.Thread(target=self._read, daemon=True)
@@ -290,6 +376,9 @@ class ObservedFrameClient(OverlayClient):
                 raise RuntimeError("overlay_bridge_lacks_observed_frames")
             if (message.get("fixed_hud") is True) != (not self.validation_only):
                 raise RuntimeError("overlay_bridge_fixed_hud_mode_mismatch")
+            # A bridge names its layout exactly when it was launched with one: the name asked for, or none.
+            if message.get("layout_id") != (None if self._layout is None else self._layout.layout_id):
+                raise RuntimeError("overlay_bridge_layout_mismatch")
         elif event in FIRST_FRAME_LINES and self.first_frame is None:
             self.frames_sent_before_first_frame_line = self.frames_sent
             self.first_frame = {"event": event, "width": message.get("width"), "height": message.get("height"),
@@ -338,8 +427,16 @@ class ObservedFrameClient(OverlayClient):
         (``observed_frame_packet`` refuses anything else, as the bridge
         would). ``frame_id`` must be higher than every identity queued before:
         this client never retransmits and never reuses one. ``token`` comes
-        back unchanged to the listener.
+        back unchanged to the listener. A client that names a layout takes
+        that layout's frame alone: exactly its width and height, four bytes
+        a pixel (for the box panel, its renderer's RGBA bytes); anything
+        else is ``observed_frame_not_layout_size``, before it is queued.
         """
+        if self._layout is not None and (
+                type(width) is not int or type(height) is not int
+                or (width, height) != (self._layout.width_px, self._layout.height_px)
+                or len(rgba) != width * height * RGBA_BYTES):
+            raise ValueError("observed_frame_not_layout_size")
         data = observed_frame_packet(frame_id, observed_ns, expires_ns, width, height, rgba)
         with self.condition:
             if self.final or not self._running():
@@ -504,6 +601,15 @@ class ObservedFrameClient(OverlayClient):
                 else:
                     mode_ok = (native.get("mode") == FIXED_HUD_MODE and native.get("hide_returned_ok") is True and
                                native.get("clear_texture_returned_ok") is True and native.get("destroy_returned_ok") is True)
+                if self._layout is not None:
+                    # The bridge's own record of the layout it was pinned to must be the one this client named.
+                    layout_id, layout_digest = self._layout.layout_id, config_digest(self._layout)
+                    block = native.get("validation_layout" if self.validation_only else "fixed_hud")
+                    block = block if type(block) is dict else {}
+                    mode_ok = mode_ok and (
+                        (block.get("config_id"), block.get("config_digest"), block.get("width"), block.get("height"))
+                        == (layout_id, layout_digest, self._layout.width_px, self._layout.height_px))
+                    report.update(layout_id=layout_id, layout_digest=layout_digest)
                 report.update(
                     started=started, mode=self.bridge_mode(), frames_submitted=self.frames_submitted,
                     frames_replaced=self.frames_replaced, frames_withdrawn=self.frames_withdrawn,

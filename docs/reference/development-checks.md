@@ -105,7 +105,10 @@ The runner is the suite's entry point and does two more things there:
   48 s, the next nine between 8 and 18 s, everything else under 7 s, 308 s in
   all) with about three times margin for a loaded runner: 180 s and 150 s for
   the two largest, 30 to 60 s for the listed middle, a 30 s default and a
-  900 s total. A ceiling bounds runner time and is never a reason to skip or
+  900 s total. The total was raised to 1200 s on 2026-11-25: with
+  `tests/test_box_panel_bridge.py` added (about 40 s), the replay job's
+  whole-suite run took 861 s and then 932 s on the cloud runner for the same
+  2064 tests, so the old total no longer covered a slower runner. A ceiling bounds runner time and is never a reason to skip or
   shorten a test: raise it, with the measurement that needs it, when a module
   legitimately grows. `tests/test_run_tests_no_skips.py` checks that every
   listed ceiling names an existing module and that CI enforces the file.
