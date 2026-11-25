@@ -45,10 +45,12 @@ PYSIDE = importlib.util.find_spec("PySide6") is not None
 MS = 1_000_000
 SECOND = 1_000_000_000
 T0 = 1_000 * SECOND
-# The camera export contract's digest at 7f3afc9, the revision the Frame's helper was rebuilt at on 2026-11-19.
-# This command changes no contract value, so a helper built there stays valid; a deliberate contract change moves
-# this value with the generated header.
-CONTRACT_DIGEST = "f3afd174074dd70fcfde4cbdf4cd4f039bb4510c8da4fbc1785c0bebb0e600a4"
+# The camera export contract's digest. A deliberate contract change moves this value with the generated header:
+# it was f3afd174...e600a4 from 7f3afc9 (the revision the Frame's helper was rebuilt at on 2026-11-19) until one
+# clause of the export notice was revised on 2026-11-25 (owner decision B of work-order item B5: a display command
+# may show boxes). The Frame's helper built before that carries the earlier digest and must be rebuilt before its
+# next use on a checkout that has the change.
+CONTRACT_DIGEST = "9ff5ff5ff024a3acdf666dbda38e3686fffc6760d9e734239bcd0ff8be9e3196"
 ALL_CLOSED = {name: False for name in gates.claims()}
 
 

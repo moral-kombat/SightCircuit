@@ -173,8 +173,9 @@ the case on every run.
 and `presence_watch` are properties without setters, and whether a frame is
 prepared (`prepares`) is derived from the layout and the region on every
 frame, so the sites cannot approve one view and the run use another.
-`presence_watch` is whether the stage holds a watch, not a flag beside it;
-the stage holds none.
+`presence_watch` is whether the stage holds a watch, not a flag beside it
+([the presence watch](#the-presence-watch-on-the-displayed-path-items-b5-and-l17),
+below).
 
 **A detection is judged in the detector's input, before its box is mapped.**
 Taking a box back to the whole frame sorts, clamps and rounds it
@@ -256,8 +257,11 @@ stage is built, so a NumPy scalar cannot fail the report at the end of a run.
 | --- | --- | --- |
 | `completed` | `max_frames`, `seconds`, or the helper's end reason | The pipeline's or the helper's own bound |
 | `stopped` | `stop_requested` | The caller set `stop` |
-| `presence_ended` | `headset_removed` or `standby` | The helper's end packet said so; never retried |
+| `stopped` | `stopped_before_launch` | The caller's stop came while the presence watch was arming; nothing was launched |
+| `presence_ended` | `headset_removed` or `standby` | The helper's end packet said so, or the presence watch's ending signal did (`standby`; `presence_watch.ended_run` says which); never retried |
+| `presence_watch_lost` | the loss's own reason, for example `watcher_exited` | The watcher died or went silent during the run: the tile is hidden and the run ends |
 | `cancelled` | `signal` | The supervision primitive took a signal |
+| `error` | `presence_watch_not_armed` | The run holds a watch and it could not be armed; nothing was launched |
 | `error` | the client's error when it is a bare code, else `overlay_bridge_failed` (the bridge left without a final report or was forced) or `overlay_client_failed`; otherwise the source's reason, the exception's text when it is a bare code, else `camera_hud_run_failed` | A bridge that failed, a failure on the client's threads, a helper error, a detector or sink exception |
 
 A caller treats `cleanup.ok` false as a failed run whatever the status, as
@@ -268,6 +272,56 @@ nothing; with the real helper that is bounded recognition without display,
 the class of use `camera_recognize` already is. Showing camera-derived labels
 needs the client's real-output start, which is refused. `run_pipeline` still
 refuses the camera source.
+
+### The presence watch on the displayed path (items B5 and L17)
+
+Every run that shows camera-derived boxes or names in the headset holds the
+[presence watch](../guides/camera-recognize.md#the-presence-stop---presence-watcher)
+(owner decision of 2026-11-25). It is `camera.presence.PresenceWatch`, the
+class the run without display uses, on the watcher the checkpoint manifest
+pins. `CameraHudStage(watch=...)` takes one (anything else is
+`camera_hud_presence_watch_invalid`), and `presence_watch` is true exactly
+when the stage holds one. The run's stop event is the watch's own; a caller
+that passes another is refused (`camera_hud_presence_stop_mismatch`),
+because the watch's signal would then end nothing.
+
+**The order.** In real output the record's check comes first and consumes
+the record, as it always did. The stage then gives the watch the watcher's
+digest from the manifest and arms it, and only then launches the bridge and
+the helper. So nothing that reaches the runtime or the camera starts before
+the record verifies, and nothing is displayed without an armed watch. The
+consequence is stated, not hidden: a run whose watch cannot be armed has
+spent its record. The camera site's preconditions, which consume nothing,
+refuse a watch on any path but the pinned watcher's beforehand.
+
+| What happens | `status`, `reason` | What ran |
+| --- | --- | --- |
+| The watcher cannot be launched, has another digest than the manifest's (`watcher_not_pinned`), does not say `ready` in time, reports an error or a headset already in standby, or is lost again before the launch | `error`, `presence_watch_not_armed`; the watcher's own word is in `presence_watch.refusal` | nothing: no bridge, no helper |
+| A stop or a signal while the watch is arming | `stopped`, `stopped_before_launch`, or `cancelled`, `signal` | nothing |
+| The watcher's ending signal (SteamVR's standby event) during the run | `presence_ended`, `standby` | the tile is hidden at once; both children are stopped |
+| The watcher dies, or is silent past its heartbeat bound, during the run | `presence_watch_lost`, the loss's reason | the same: a watch that is not there holds nothing up |
+
+The end is the one every other end takes: the stop event wakes the stage's
+end thread, which latches the client and writes the in-band hide without
+waiting for the detector. No thread, timer or polling loop was added for
+the watch; its reader blocks on the watcher's pipe. After the run's end a
+signal or a loss is recorded and ends nothing, and the watcher is always
+ended with the run (SIGTERM, a bounded wait, then SIGKILL).
+
+**The report's `presence_watch` block** is always there (`requested: false`
+for a stage without a watch): `requested`, `armed`, `refusal`, `protocol`,
+`watcher_sha256`, `ended_run`, `run_end_reason`, `ending_signal`,
+`signal_ns`, `signal_received_ns`, `hide_written_after_signal_ms`,
+`bridge_hide_after_signal_ms`, `frames_received_after_signal`, `lost`,
+`lost_ended_run`, `event_count`, `heartbeats`, `exit_code`, `forced_kill`,
+`cleanup_ok` and `camera_data_read` (false: the watcher reads SteamVR's
+events and the headset's activity level, nothing of the camera). The two
+signal-to-hide times are measured from the watcher's own reading of the
+signal (`signal_ns`, the same monotonic clock), not from when this side
+noticed it, to the final hide's write and to the bridge's answer for it;
+they are null unless the watch ended the run. `cleanup` keeps its four
+keys; a watcher that is not proven gone makes `cleanup.ok` false and says
+so in `presence_watch.cleanup_ok`.
 
 ## The one-run scope record
 
@@ -287,8 +341,8 @@ session, is the authority. The record makes the ordinary mistakes fail
 closed: the wrong commit, a rebuilt binary, a second run, a run after the
 sitting, the wrong source, a longer run, another program, and since schema
 version 2 (work-order item B5, 2026-11-25) another layout, another region or
-rotation of the camera image, another alignment, and a run without the
-presence watch where the record requires it.
+rotation of the camera image, another alignment, and a camera run without
+the presence watch, for which no record is written or accepted.
 
 **Schema version 2.** Version 1 (item L10) bound `fixed-edge-hud-v1` and its
 digest as constants and compared them with nothing, because there was one
@@ -310,7 +364,7 @@ operator commands are unchanged.
 | `hud_config_id`, `hud_config_sha256` | the layout the run may show: the id of one of the contract's fixed layouts (`fixed-edge-hud-v1`, `head-fixed-box-panel-v1`) and the digest of that layout's fields as this checkout computes it. The run's own layout must be the same, by id and by digest |
 | `region`, `rotation` | the view the detector is given: four fractions of the native frame `[x0, y0, x1, y1]` and the clockwise quarter turn (0, 90, 180, 270), by the rules of the [region of view](../guides/camera-recognize.md#a-region-of-view). A camera step's record always states both (the whole frame, unturned, is `[0.0, 0.0, 1.0, 1.0]` and `0`); the synthetic step has no frame and states `null` for both |
 | `alignment` | the wearer's [alignment](box-panel.md#the-alignment), its five numbers (`scale_x`, `scale_y`, `offset_x`, `offset_y`, `turn`), for a camera step on a layout that maps boxes to a panel; the neutral alignment is stated like any other. `null` for the strip, which takes none, and for the synthetic step. The numbers are the project's own format metadata, never the SDK's calibration |
-| `presence_watch` | `true` when the run must hold the [presence watch](../guides/camera-recognize.md#the-presence-stop---presence-watcher), else `false`; always `false` for the synthetic step, which opens no camera |
+| `presence_watch` | whether the run must hold the [presence watch](../guides/camera-recognize.md#the-presence-stop---presence-watcher): always `true` for a camera step, on either layout (owner decision of 2026-11-25: no record is written for a run that shows camera-derived output without it, and one that says `false` is refused, `scope_presence_watch_required`); always `false` for the synthetic step, which opens no camera. This narrowed which values a record may state and changed no field, so the schema version stays 2; no record had been written on any device |
 | `revision` | the checkout's full commit |
 | `manifest_sha256` | the SHA-256 of the [checkpoint manifest](hud-development.md#checkpoint-manifest-identity-and-verification) file, which must be of schema version 4 and carry the `camera_hud` group, and so pins the camera helper, the presence watcher, the bridge, the models, every module, the inference runtime's version and the camera HUD's scripts, and records each fixed layout's digest |
 | `run_id` | 32 random hexadecimal characters; single-use through the ledger |
@@ -339,7 +393,7 @@ dirty the checkout. What the run may show is named, not defaulted:
 | `--layout ID` | every step | refused: no record names a layout nobody chose |
 | `--region X0,Y0,X1,Y1`, `--rotation DEGREES` | camera steps | the whole frame, unturned, stated in the record; the synthetic step refuses both |
 | `--alignment SX,SY,OX,OY,TURN` | camera steps on a panel layout | refused there (the neutral alignment is `1,1,0,0,0`), and refused everywhere else when given |
-| `--presence-watch required` or `none` | camera steps | refused for a camera step; the synthetic step refuses `required` |
+| `--presence-watch required` | camera steps | refused for a camera step: it has no default, so the requirement is stated by whoever stages the step. `none` is refused for a camera step by name (`scope_presence_watch_required`); the synthetic step refuses `required` |
 
 ```bash
 .venv-replay/bin/python scripts/stage_scope_record.py --step L-D3 \
@@ -364,7 +418,7 @@ verifies everything, in order, and stops at the first refusal, which
 
 | Order | Check | Refusal |
 | --- | --- | --- |
-| 1 | The request: runner `camera_hud`, a known step and source that belong together, a positive finite duration, a layout that is one of the contract's objects (not a copy or a name), and a view that is well formed and belongs to that source and layout | `scope_runner_not_permitted`, `scope_source_not_permitted`, `scope_step_unknown`, `scope_step_source_mismatch`, `scope_duration_invalid`, `scope_geometry_mismatch`, `scope_region_invalid`, `scope_region_not_for_source`, `scope_alignment_invalid`, `scope_alignment_not_for_layout`, `scope_presence_watch_invalid`, `scope_presence_watch_not_for_source` |
+| 1 | The request: runner `camera_hud`, a known step and source that belong together, a positive finite duration, a layout that is one of the contract's objects (not a copy or a name), and a view that is well formed and belongs to that source and layout | `scope_runner_not_permitted`, `scope_source_not_permitted`, `scope_step_unknown`, `scope_step_source_mismatch`, `scope_duration_invalid`, `scope_geometry_mismatch`, `scope_region_invalid`, `scope_region_not_for_source`, `scope_alignment_invalid`, `scope_alignment_not_for_layout`, `scope_presence_watch_invalid`, `scope_presence_watch_required` (a camera step without the watch), `scope_presence_watch_not_for_source` |
 | 2 | The record: present, at most 4,096 bytes, no key written twice, of schema version 2, exactly the fields above, a known step with that step's source, a fixed layout with this checkout's digest for it, the view stated as the writer states it for that source and layout, a duration within the step's bound | `scope_record_missing`, `scope_record_schema_unsupported`, `scope_record_invalid`, `scope_step_unknown`, `scope_source_not_permitted` (the mirror, both cameras, anything else), `scope_step_source_mismatch`, `scope_geometry_mismatch`, the view's refusals of row 1, `scope_duration_over_bound` |
 | 3 | The request against the record, field by field: the same step and source; the same layout by id and digest; the same region, rotation, alignment and presence-watch requirement, compared exactly, number for number; a duration within the record's | `scope_step_mismatch`, `scope_source_mismatch`, `scope_layout_mismatch`, `scope_region_mismatch`, `scope_rotation_mismatch`, `scope_alignment_mismatch`, `scope_presence_watch_mismatch`, `scope_duration_over_record` |
 | 4 | The clock: the record was not created more than 60 s in the future, the deadline has not passed, it is not more than 240 minutes ahead, and the run would end before it | `scope_record_from_the_future`, `scope_record_expired`, `scope_deadline_too_far`, `scope_run_would_pass_deadline` |
@@ -422,9 +476,11 @@ rotation, alignment and presence-watch requirement, stated as a record
 states them, must equal the stage's region and turn, its alignment's five
 numbers (or none) and whether it holds the watch. Any difference is refused
 with the record unspent, so a record is never spent on a run that would not
-do what it says. The stage holds no presence watch yet (the watch on the
-displayed path is the last part of item L17), so a record that requires the
-watch is still refused by every run.
+do what it says. A stage that holds no watch is therefore served by no
+camera record, since every camera record requires it. With row 1's rule a
+record and a request can no longer disagree about the watch (each is
+refused by its own name first), and `scope_presence_watch_mismatch` stays
+in row 3 as the second line.
 
 **What verification runs.** It hashes files and runs read-only queries: `git`
 for the commit and the tree's state, and, where no package database is
@@ -658,13 +714,26 @@ the HUD contract's constants.
 
 `sightcircuit/commands/camera_hud.py` is the fifteenth command; the
 [camera HUD guide](../guides/camera-hud.md) owns the operator procedure. It
-is the only code that builds a `RunScope`, and it has three modes.
+is the only code that builds a `RunScope`, and it has four modes.
 
 **`--validate`** runs `run_camera` on the helper's fake backend with a
 scripted detector and the validation bridge, once for the strip from the
 whole frame and once for the box panel through a region turned a quarter
-(`camera_panel` in its report, whose schema version is 2 since that part was
-added), then the synthetic rows on the validation bridge with one stop. The
+(`camera_panel` in its report), a third time with a watch that ends the run
+(`presence_end`), then the synthetic rows and the synthetic boxes on the
+validation bridge with one stop each (`synthetic_rows`, `synthetic_boxes`).
+The report's schema version is 3 since the watch's and the boxes' parts
+were added (2 since the panel's). The presence watcher needs a running
+SteamVR, which a validation has not, so the camera passes hold their watch
+on a stand-in (`sightcircuit/camera/presence_standin.py`): the watcher's
+protocol spoken by a process that asks nothing of anyone, with one scripted
+standby signal for the third pass. No device mode can launch it, because a
+device run launches only the watcher at the manifest's path with the
+manifest's digest. Each camera pass must report its watch armed
+(`presence_armed`); the third must end `presence_ended` with reason
+`standby`, by the watch (`ended_run`), with everything cleaned up, else the
+validation fails with `presence_path_failed`. The hide's times from the
+signal are reported there and are not a pass criterion on a loaded runner. The
 panel's pass is judged on its `boxes` block as well: the block must be
 there, with a positive `results_sent` equal to the frames handed to the
 client (`frames.submitted`; the run's last may be withdrawn unwritten, so
@@ -701,6 +770,25 @@ the expiry stands in for the hide's call and the second verdict is null. The cam
 `camera_derived` is false by construction: the row's text is built from the
 counter alone.
 
+**`--synthetic-boxes`** runs `SyntheticBoxes`
+(`sightcircuit/hud/synthetic_boxes.py`): the rows' driver with another
+picture on the box panel, and nothing else changed. The schedule, the
+deadlines (each update observed when drawn, due one second later), the
+expiry observed in each stop, the report's blocks and the end are the
+rows'. It ends by itself at its bound and on a stop signal exactly as
+`--synthetic-rows` does, and in both cases the client's close takes the
+panel down. Every update draws
+[`orientation_scene`](box-panel.md#row-direction-and-alpha): four corner boxes that differ in size
+and a centre box, each named by where it is; after the first stop the
+centre box's name is the update's counter (`count NNNN`), so a picture that
+has stopped updating can be told from one that has not. Its report kind is
+`camera_hud_synthetic_boxes` and `config.row` is
+`orientation_scene_then_counter`. It runs under an L-D3 record that names
+the panel; a record for the strip never runs it, nor the reverse
+(`scope_layout_mismatch`, the record unspent). It opens no camera, loads no
+detector and holds no presence watch: nothing it shows came from a camera.
+Its informed start shows `SYNTHETIC_BOXES_NOTICE`.
+
 **`--camera`** runs `run_camera`: `CameraHelperSource` on the left camera,
 the chosen detector, `CameraHudStage` and an `ObservedFrameClient` in real
 output carrying the run's `RunScope`. `--step` (L-D4 or L-D5) is required
@@ -711,8 +799,12 @@ fixed layout (the strip unless given); the box panel requires `--alignment`
 strip refuses `--alignment`. `--region` and `--rotation` are
 `camera_recognize`'s, parsed by the same `parse_region`. All four are
 checked by the parser, before the informed start and before any record is
-read, and they are what the run's `RunScope` asks the record for (with no
-presence watch: the command holds none yet). A panel run's informed start
+read, and they are what the run's `RunScope` asks the record for, always
+with the presence watch: the command has no option that names a watcher or
+turns the watch off, and a device run launches the watcher the manifest
+pins ([above](#the-presence-watch-on-the-displayed-path-items-b5-and-l17)).
+A run the watch ends exits 0 like the helper's own presence end; a lost
+watch and a watch that could not be armed exit 1. A panel run's informed start
 shows `BOX_DISPLAY_NOTICE` in place of the strip's display notice. The client's own bound
 on real output is the scope's seconds: the run's `--seconds`, which also
 bound the stage and the helper; for the synthetic rows it is `--seconds`
@@ -720,7 +812,7 @@ plus a 10 s allowance for the bridge's start. The run is on the main
 thread, the helper under the supervision primitive, and never routed through
 `ReplayWorker` or the live runner.
 
-**Signals.** In both device modes, from the typed `yes` until the report is
+**Signals.** In every device mode, from the typed `yes` until the report is
 printed, SIGINT, SIGTERM and SIGHUP are recorded and never raised
 (`guard.cancellation`). The run stops at the next 50 ms poll, its teardown
 finishes, and the report is the run's own, `cancelled` with reason `signal`,
@@ -737,7 +829,8 @@ still an error. That judgement is the stage's and the driver's; the client's
 own `cleanup_confirmed` is unchanged.
 
 **Preconditions before the record.** The `--report` path (before the
-question), the pinned helper and bridge, the helper's lock directory
+question), the pinned helper and bridge, for a camera run the pinned
+presence watcher (`presence_watcher_not_found` and the like), the helper's lock directory
 (`XDG_RUNTIME_DIR`, by the helper's own rule), the detector and the target
 label. The helper's supervision waits `ATTACH_SECONDS` (the bridge's ready
 wait plus 5 s) for the pipeline to attach, because the pipeline starts the
@@ -782,7 +875,16 @@ whose pinned bridge is a copy of the bridge built here and whose pinned
 helper is the camera stand-in), the synthetic rows expiring at each stop and
 returning after it, the camera mode end to end, a headset removal, and the
 command line from the typed `yes` to the saved report, with the second
-launch on the same record refused.
+launch on the same record refused. Since the watch (items B5 and L17) the
+fixture's pinned watcher is the watcher's stand-in of
+`tests/fake_presence_watcher.py`, and the module also covers: the watch
+ending a displayed run on both layouts through the command line, with the
+hide in the fake runtime's own log; a lost watch; a watch that cannot be
+armed, with the record spent and neither the bridge nor the helper
+launched; the synthetic boxes under a panel record, expiring at each stop,
+ended by a signal, and refused under a strip record; the picture itself
+(the orientation scene, then the counter) on the validation bridge; and the
+validation's five parts with each new part's failure by name.
 
 `tests/test_observed_frame_client.py` (standard library, validation bridge):
 the packets and their order, the take-down and the show, the end latch and a
@@ -794,7 +896,11 @@ on the writer thread, the refusals, and the gate.
 `tests/test_camera_hud_stage.py` runs the stage on the camera stand-in. On
 the validation bridge: every frame's observation and deadline, the per-frame
 acknowledgements, empty rows, a slow detector, a presence end
-(`headset_removed` and `standby`), a stop, an end set during a tile's colour
+(`headset_removed` and `standby`), the presence watch on the watcher's
+stand-in (its signal ending the run with the hide timed from the signal, a
+watch that is not armed in six ways with nothing launched, a stop and a
+signal while arming, a watcher that dies or goes silent, a run that ends
+on its own bound, and the stop that must be the watch's), a stop, an end set during a tile's colour
 conversion, the pipeline's own bounds, a detector error, helper errors, a
 bridge killed with the detector idle and with it busy for three seconds, a
 failure on the client's writer thread, NumPy arguments, names-only rows and

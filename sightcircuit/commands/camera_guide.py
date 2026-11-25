@@ -931,9 +931,12 @@ def create_window(config, *, worker_factory=None, clock=time.monotonic_ns, size=
                 return
             self.unit = self.picture.unit = unit
             self.picture.setMinimumHeight(unit * 5)
-            for shown in self.pages.values():
+            for phase, shown in self.pages.items():
                 shown.content.setContentsMargins(unit * 2, unit, unit * 2, unit)
-                shown.content.setSpacing(unit // 2)
+                # The notice page has the most rows, and the notice is the consent text: it must be readable
+                # whole, without scrolling. Its rows sit a third of a unit apart instead of half, which gives
+                # the notice the room of one more line (the notice grew by a clause on 2026-11-25).
+                shown.content.setSpacing(unit // 3 if phase == PHASE_NOTICE else unit // 2)
                 shown.row_layout.setSpacing(unit * 2)
             self.setStyleSheet(
                 f"QWidget {{ background: #10151b; color: #f4f6f8; font-size: {unit}px; }}"

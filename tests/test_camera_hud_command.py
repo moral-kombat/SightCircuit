@@ -30,7 +30,7 @@ from sightcircuit.overlay import DEFAULT_BRIDGE
 from sightcircuit.runtime import manifest, scope
 from sightcircuit.runtime.supervision import RECORD_AND_POLL
 from sightcircuit.sources import camera_helper
-from tests import fake_camera_export, fake_vrclient
+from tests import fake_camera_export, fake_presence_watcher, fake_vrclient
 from tests import test_scope_record as scope_tests
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -152,8 +152,9 @@ class BoundaryTests(unittest.TestCase):
         self.assertEqual(shown.getvalue(), contract.EXPORT_NOTICE + "\n" + confirmation.BOX_DISPLAY_NOTICE + "\n" +
                          "Bounds: 150 frames, 30 seconds, 5 frames a second, cameras 0.\nType yes to continue: ")
         # The helper's notice is true of a display command that is given --report (revised with this command).
-        self.assertIn("a display command shows labels and approximate arrows in the headset and saves only the report "
-                      "you name (counts, labels, boxes and timings)", contract.EXPORT_NOTICE)
+        self.assertIn("a display command shows the names of detected objects in the headset, with approximate arrows "
+                      "or as boxes drawn around them, and saves only the report you name (counts, labels, boxes and "
+                      "timings)", contract.EXPORT_NOTICE)  # The clause the owner revised on 2026-11-25 for the panel.
         self.assertNotIn("saves nothing", contract.EXPORT_NOTICE)
         self.assertEqual(contract.VERSION, 2)  # The layout is unchanged; only the digest moved.
         self.assertIn("No camera is opened", confirmation.SYNTHETIC_NOTICE)
@@ -203,6 +204,85 @@ class ScheduleTests(unittest.TestCase):
 
 
 @unittest.skipUnless(RUNNABLE, NEEDS)
+class SyntheticBoxesTests(unittest.TestCase):
+    """The panel's synthetic picture on the validation bridge: no runtime, no camera, nothing displayed."""
+
+    def driver(self, **options):
+        from sightcircuit.hud import synthetic_boxes
+        from sightcircuit.hud.contract import BOX_PANEL_CONFIG
+        from sightcircuit.observed_frames import ObservedFrameClient
+        client = ObservedFrameClient(layout=BOX_PANEL_CONFIG)
+        driver = synthetic_boxes.SyntheticBoxes(client, **{"seconds": 4, "stops": 1, "stop_seconds": 2.0, **options})
+        sent, submit = [], client.submit_observed
+
+        def record(number, observed_ns, expires_ns, width, height, rgba, **more):
+            sent.append((number, expires_ns - observed_ns, (width, height), rgba))
+            return submit(number, observed_ns, expires_ns, width, height, rgba, **more)
+        client.submit_observed = record
+        return driver, sent
+
+    def test_the_picture_is_the_orientation_scene_until_the_first_stop_and_then_its_centre_counts(self):
+        from sightcircuit.hud import synthetic_boxes
+        from sightcircuit.hud.box_render import draw_boxes
+        from sightcircuit.hud.box_scenes import orientation_scene
+        from sightcircuit.hud.contract import BOX_PANEL_CONFIG as PANEL, MAX_DISPLAY_AGE_NS, PanelBox
+        from sightcircuit.observed_frames import ObservedFrameClient
+        driver, sent = self.driver()
+        self.assertEqual(driver.plan, [("rows", 5), ("stop", 2.0), ("rows", 5)])
+        report = driver.run()
+        self.assertEqual((report["report_kind"], report["status"], report["reason"], report["validation_only"],
+                          report["camera_opened"], report["camera_derived"], report["config"]["row"],
+                          report["config"]["hud_config_id"]),
+                         ("camera_hud_synthetic_boxes", "completed", "schedule", True, False, False,
+                          "orientation_scene_then_counter", PANEL.layout_id))
+        self.assertEqual((report["updates"]["requested"], report["updates"]["acknowledged_presented"],
+                          report["stops"]["reached"], report["stops"]["expired"], report["cleanup"]["ok"]),
+                         (10, 10, 1, 1, True))
+        # Every update is the panel's megabyte, observed when drawn and due one second later, as the rows are.
+        self.assertEqual([item[:3] for item in sent], [(number, MAX_DISPLAY_AGE_NS, (512, 512)) for number in range(1, 11)])
+        scene = orientation_scene(PANEL)
+        still = draw_boxes(scene, PANEL).tobytes()
+        self.assertEqual([item[3] == still for item in sent], [True] * 5 + [False] * 5)  # Unchanged until the stop.
+        *corners, centre = scene
+        for number, _, _, rgba in sent[5:]:  # After it the centre's name is the update's counter; nothing else moves.
+            counted = (*corners, PanelBox(synthetic_rows.counter_label(number), centre.confidence, centre.box_xyxy))
+            self.assertEqual(rgba, draw_boxes(counted, PANEL).tobytes())
+        self.assertEqual(len({item[3] for item in sent}), 6)
+        # What the wearer is told (``SYNTHETIC_BOXES_NOTICE``): five boxes, and the largest, wider than tall, is
+        # the picture's top left.
+        def area(box):
+            x0, y0, x1, y1 = box.box_xyxy
+            return (x1 - x0) * (y1 - y0)
+        x0, y0, x1, y1 = scene[0].box_xyxy
+        self.assertEqual((len(scene), scene[0].label, max(scene, key=area), x1 - x0 > y1 - y0),
+                         (5, "top left", scene[0], True))
+        self.assertLess(max(x1, y1), PANEL.width_px // 2)
+        for phrase in ("five named boxes", "top left", "No camera is opened and nothing is detected"):
+            self.assertIn(phrase, confirmation.SYNTHETIC_BOXES_NOTICE)
+        # The driver is the rows' driver with another picture: only for a client that names the panel, and the
+        # rows' driver never draws on it.
+        self.assertTrue(issubclass(synthetic_boxes.SyntheticBoxes, synthetic_rows.SyntheticRows))
+        with self.assertRaisesRegex(ValueError, "^synthetic_boxes_client_layout_mismatch$"):
+            synthetic_boxes.SyntheticBoxes(ObservedFrameClient(), seconds=4, stops=1, stop_seconds=2.0)
+        with self.assertRaisesRegex(ValueError, "^synthetic_rows_config_not_fixed$"):
+            synthetic_rows.SyntheticRows(ObservedFrameClient(layout=PANEL), seconds=4, stops=1, stop_seconds=2.0, config=PANEL)
+
+    def test_a_stop_ends_the_synthetic_boxes_at_once_with_the_bridge_closed(self):
+        import threading
+        driver, sent = self.driver(seconds=20)
+        stop = threading.Event()
+        timer = threading.Timer(0.7, stop.set)
+        started = time.monotonic()
+        timer.start()
+        self.addCleanup(timer.cancel)
+        report = driver.run(stop)
+        self.assertLess(time.monotonic() - started, 3)
+        self.assertEqual((report["status"], report["reason"], report["complete"], report["cleanup"]["ok"]),
+                         ("stopped", "stop_requested", False, True))
+        self.assertTrue(0 < len(sent) < 10)
+        self.assertIsNotNone(driver.client.process.poll())  # The bridge is gone with the run.
+
+
 class ArgumentTests(unittest.TestCase):
     """The parser refuses a device mode that lacks its opt-ins, its record or its explicit choices."""
     DEVICE = ("--allow-hud-output", "--scope-record", "record.json", "--manifest", "manifest.json", "--seconds", "20")
@@ -210,7 +290,20 @@ class ArgumentTests(unittest.TestCase):
 
     def test_argument_refusals(self):
         cases = (
-            ((), "one of the arguments --validate --synthetic-rows --camera is required"),
+            ((), "one of the arguments --validate --synthetic-rows --synthetic-boxes --camera is required"),
+            (("--synthetic-rows", "--synthetic-boxes", *self.DEVICE), "not allowed with"),
+            (("--synthetic-boxes", "--camera", *self.DEVICE), "not allowed with"),
+            (("--synthetic-boxes", *self.DEVICE[1:]), "--allow-hud-output is required"),
+            (("--synthetic-boxes", *self.DEVICE[:5]), "--scope-record, --manifest and --seconds"),
+            (("--synthetic-boxes", *self.DEVICE, "--allow-camera-input"), "--synthetic-boxes never opens the camera"),
+            (("--synthetic-boxes", *self.DEVICE, "--layout", "head-fixed-box-panel-v1"), "never opens the camera"),
+            (("--synthetic-boxes", *self.DEVICE, "--alignment", "1,1,0,0,0"), "never opens the camera"),
+            (("--synthetic-boxes", *self.DEVICE, "--region", "0.25,0.25,0.75,0.75"), "never opens the camera"),
+            (("--synthetic-boxes", *self.DEVICE, "--rotation", "90"), "never opens the camera"),
+            (("--synthetic-boxes", *self.DEVICE, "--step", "L-D4"), "never opens the camera"),
+            (("--synthetic-boxes", *self.DEVICE[:-1], "111"), "--seconds must be 1..110 for --synthetic-boxes"),
+            (("--synthetic-boxes", *self.DEVICE[:-1], "8"), "synthetic_rows_schedule_too_short"),
+            (("--synthetic-boxes", *self.DEVICE, "--helper", "x"), "--helper is for --validate"),
             (("--validate", "--camera"), "not allowed with"),
             (("--validate", "--seconds", "5"), "--validate takes no run arguments"),
             (("--validate", "--allow-hud-output"), "--validate takes no run arguments"),
@@ -225,7 +318,7 @@ class ArgumentTests(unittest.TestCase):
             (("--synthetic-rows", *self.DEVICE, "--fps", "5"), "never opens the camera"),
             (("--synthetic-rows", *self.DEVICE, "--detector", "mobilenet-ssd"), "never opens the camera"),
             (("--synthetic-rows", *self.DEVICE, "--threshold", "0.5"), "never opens the camera"),
-            ((*self.CAMERA, "--stops", "2"), "--stops and --stop-seconds belong to --synthetic-rows"),
+            ((*self.CAMERA, "--stops", "2"), "--stops and --stop-seconds belong to --synthetic-rows and --synthetic-boxes"),
             ((*self.CAMERA, "--stop-seconds", "3"), "--stops and --stop-seconds belong to --synthetic-rows"),
             (("--validate", "--stops", "1"), "--validate takes no run arguments"),
             ((*self.CAMERA, "--report", "/nonexistent-directory/run.json"), "is not an existing directory"),
@@ -269,7 +362,10 @@ class ArgumentTests(unittest.TestCase):
         options = {option for action in camera_hud.build_parser()._actions for option in action.option_strings}
         self.assertEqual(options & {"--bridge", "--cameras", "--helper-arg", "--source", "--device", "--mirror",
                                     "--approve", "--yes", "--force", "--no-confirm", "--run-id"}, set())
-        self.assertLessEqual({"--validate", "--synthetic-rows", "--camera", "--allow-hud-output", "--allow-camera-input",
+        # Nor one that names a presence watcher or turns the watch off: a displayed camera run always holds it.
+        self.assertEqual({option for option in options if "presence" in option or "watch" in option}, set())
+        self.assertLessEqual({"--validate", "--synthetic-rows", "--synthetic-boxes", "--camera", "--allow-hud-output",
+                              "--allow-camera-input",
                               "--scope-record", "--manifest", "--seconds", "--step", "--directions", "--names-only",
                               "--orientation", "--target-label", "--cue", "--key-marks", "--mark-labels", "--report"},
                              options)
@@ -283,48 +379,76 @@ class GuideAndTemplateTests(unittest.TestCase):
     GUIDE = ROOT / "docs/guides/camera-hud.md"
     TEMPLATE = ROOT / "docs/templates/camera-hud-device-report.json"
 
-    def commands(self, script):
+    def commands(self, script, **variables):
+        """The arguments of every documented ``script`` command line, in the guide's order.
+
+        A block may set a shell variable on a line of its own (``ROTATION=90``) and use it (``"$ROTATION"``): the
+        value is a parameter of the example, so ``variables`` may give another, and the line is expanded as a
+        shell would expand it. A variable that no block sets is an error here, as it would be at the terminal.
+        """
         import re
         import shlex
         blocks = re.findall(r"```bash\n(.*?)```", self.GUIDE.read_text(), re.S)
         found = []
-        for line in "\n".join(blocks).replace("\\\n", " ").splitlines():
-            if script in line:
-                tokens = shlex.split(line.rstrip("&").strip())
-                found.append(tokens[tokens.index(script) + 1:])
+        for block in blocks:
+            values = {}
+            for line in block.replace("\\\n", " ").splitlines():
+                assignment = re.fullmatch(r"([A-Z_]+)=(\S+)", line.strip())
+                if assignment:
+                    values[assignment[1]] = str(variables.get(assignment[1], assignment[2]))
+                elif script in line:
+                    tokens = shlex.split(line.rstrip("&").strip())
+                    tokens = [re.sub(r"\$([A-Z_]+)", lambda match: values[match[1]], token) for token in tokens]
+                    found.append(tokens[tokens.index(script) + 1:])
         return found
 
     def test_every_documented_command_parses_and_names_its_opt_ins_record_and_manifest(self):
-        from scripts import checkpoint_manifest, stage_scope_record
+        from scripts import checkpoint_manifest
         commands = self.commands("scripts/camera_hud.py")
-        self.assertEqual(len(commands), 4)  # Validate, L-D3, L-D4 and L-D5.
+        # Validate; the strip's L-D3, L-D4 and L-D5; the panel's synthetic step and its camera step.
+        self.assertEqual(len(commands), 6)
         modes = []
         for arguments in commands:
             with self.subTest(arguments=arguments[:1]), contextlib.redirect_stderr(io.StringIO()):
                 args = camera_hud.build_parser().parse_args(arguments)
-                modes.append("validate" if args.validate else "rows" if args.synthetic_rows else "camera")
+                synthetic = args.synthetic_rows or args.synthetic_boxes
+                modes.append("validate" if args.validate else "rows" if args.synthetic_rows else
+                             "boxes" if args.synthetic_boxes else "camera" if args.layout is None else "panel")
                 if not args.validate:
                     self.assertTrue(args.allow_hud_output and args.scope_record and args.manifest and args.report)
-                    step = args.scope_record.stem.removeprefix("scope-")
-                    allowance = camera_hud.SYNTHETIC_ALLOWANCE_SECONDS if args.synthetic_rows else 0
+                    step = args.scope_record.stem.removeprefix("scope-").removesuffix("-panel")
+                    # The panel's examples name their own record and report, so they never meet the strip's.
+                    self.assertEqual((args.scope_record.stem.endswith("-panel"), args.report.stem.endswith("-panel")),
+                                     (modes[-1] in ("boxes", "panel"),) * 2)
+                    allowance = camera_hud.SYNTHETIC_ALLOWANCE_SECONDS if synthetic else 0
                     self.assertLessEqual(args.seconds + allowance, scope.STEPS[step][1])  # Within the record's bound.
-                    self.assertEqual(args.step, None if args.synthetic_rows else step)
+                    self.assertEqual(args.step, None if synthetic else step)
                 if args.camera:
-                    self.assertTrue(args.allow_camera_input and args.orientation and args.directions is False)
+                    self.assertTrue(args.allow_camera_input)
                     self.assertEqual(args.target_label, "bottle")
                     from sightcircuit.camera import marks
                     marks.check_cues(marks.parse_cue(text, args.seconds) for text in args.cue)
                     marks.check_mark_labels(item for item in args.mark_labels.split(",") if args.mark_labels)
-                if args.synthetic_rows:
+                    if args.layout is None:  # The strip: names only, with the orientation stated.
+                        self.assertTrue(args.orientation and args.directions is False)
+                        self.assertEqual((args.region, args.rotation, args.alignment), (None, None, None))
+                    else:  # The panel: none of the strip's three, and its own view in full.
+                        self.assertEqual((args.orientation, args.directions, args.layout, args.region, args.rotation,
+                                          args.alignment),
+                                         (None, None, "head-fixed-box-panel-v1", "0.25,0.25,0.75,0.75", 90, "1,1,0,0,0"))
+                if synthetic:
+                    self.assertEqual((args.layout, args.region, args.rotation, args.alignment), (None,) * 4)
                     plan = synthetic_rows.schedule(args.seconds, args.stops, args.stop_seconds)
                     self.assertGreaterEqual(sum(value for kind, value in plan if kind == "rows"), 375)  # Row G9.
-        self.assertEqual(modes, ["validate", "rows", "camera", "camera"])
+        self.assertEqual(modes, ["validate", "rows", "camera", "camera", "boxes", "panel"])
+        # No documented command names a watcher or turns the watch off: there is no such option.
+        self.assertFalse([argument for arguments in commands for argument in arguments if "watch" in argument])
         # The L-D5 command can pass row G10: under an ideal run (the label up from the bridge's ready until the
         # out_of_view cue, down for the cued pause, up again to the end) a contiguous 60 s window qualifies, even
         # when the bridge takes its whole ready wait and the client's bound ends the run that much early.
         from sightcircuit.camera import marks as camera_marks
         from sightcircuit.hud.contract import BRIDGE_READY_WAIT_SECONDS
-        final = camera_hud.build_parser().parse_args(commands[-1])
+        final = camera_hud.build_parser().parse_args(commands[3])
         cued = dict((label, offset_ms / 1000) for offset_ms, label in
                     (camera_marks.parse_cue(text, final.seconds) for text in final.cue))
         self.assertEqual((final.step, final.seconds, sorted(cued)), ("L-D5", 90, ["in_view", "out_of_view"]))
@@ -336,20 +460,6 @@ class GuideAndTemplateTests(unittest.TestCase):
                 self.assertGreaterEqual(cued["out_of_view"], 60 + 5)  # The pause comes after the window, with margin.
         earlier = camera_stage.window_verdict([(0.0, 40.0), (45.0, 90.0)], 90.0, **camera_hud.G10_WINDOW)
         self.assertFalse(earlier["found"])  # The schedule this replaced: a pause in the middle leaves no window.
-        staged = self.commands("scripts/stage_scope_record.py")
-        self.assertEqual(len(staged), 2)  # L-D3's, and a camera step's in full (it needs --presence-watch).
-        args = stage_scope_record.build_parser().parse_args(staged[0])
-        self.assertEqual((args.step, args.valid_minutes, args.layout), ("L-D3", 60, "fixed-edge-hud-v1"))
-        # The synthetic step's record names no view: the camera is never opened.
-        self.assertEqual((args.region, args.rotation, args.alignment, args.presence_watch), (None, None, None, None))
-        args = stage_scope_record.build_parser().parse_args(staged[1])
-        self.assertEqual((args.step, args.layout, args.presence_watch, args.region, args.rotation, args.alignment),
-                         ("L-D4", "fixed-edge-hud-v1", "none", None, None, None))
-        # What the guide's camera command stages is a record today's command runs under: the strip, the whole
-        # frame, no watch (the view ``stage_view_bound`` serves).
-        view, refusal = scope.view_value(scope.CAMERA_LEFT, camera_stage.HUD_CONFIG, args.region, args.rotation,
-                                         args.alignment, stage_scope_record.PRESENCE_WATCH[args.presence_watch])
-        self.assertEqual((view, refusal), (camera_stage.STAGE_VIEW, None))
         written = []
         for arguments in self.commands("scripts/checkpoint_manifest.py"):
             parsed = checkpoint_manifest.build_parser().parse_args(arguments)
@@ -360,9 +470,80 @@ class GuideAndTemplateTests(unittest.TestCase):
                          "not a cryptographic one", "No screen showing the Frame's desktop, the replay window or the "
                          "SteamVR mirror may be in the cameras' view", "no software path in this checkout touches it",
                          "white service LED", "the 30 seconds count from then", "G2 recovery ready",
-                         "It is not an approval, it creates no record and it opens nothing"):
+                         "It is not an approval, it creates no record and it opens nothing",
+                         # The watch, the panel's steps and the helper's rebuild (work-order item B5).
+                         "Every `--camera` run holds the presence watch, on either layout",
+                         "A run whose watch cannot be armed has therefore spent its record",
+                         "It holds no presence watch, because nothing it shows came from a camera",
+                         "The run ends by itself at its bound and on Ctrl-C exactly as `--synthetic-rows` does",
+                         "The rotation is a parameter in both commands, not a finding",
+                         "A helper built before 2026-11-25 must be rebuilt before its next use",
+                         "Nothing on the panel has run on the Frame either."):
             self.assertIn(sentence, text)
         self.assertIn("(guides/camera-hud.md)", (ROOT / "docs/on-device.md").read_text())
+        helper_reference = " ".join((ROOT / "docs/reference/camera-helper.md").read_text().split())
+        self.assertIn("a helper built before that change must be rebuilt before its next use", helper_reference)
+        from sightcircuit.camera import native
+        self.assertIn(native.contract_digest(), helper_reference)  # The digest the page names is this checkout's.
+
+    def test_each_documented_staging_command_writes_the_record_its_run_command_asks_for(self):
+        # Each staging command in the guide, through the staging tool's parser and the scope's own rules, and the
+        # run command documented with it, through the command's parser and the conversions ``main`` applies:
+        # the view the record would state is the view the run would ask for, on the same layout and step. The
+        # rotation is a parameter of the panel's examples, so each quarter turn is tried.
+        from scripts import stage_scope_record
+        from sightcircuit.camera import region as regions
+        from sightcircuit.hud.contract import fixed_layout
+        expected = (("L-D3", "fixed-edge-hud-v1", "rows"), ("L-D4", "fixed-edge-hud-v1", "camera"),
+                    ("L-D3", "head-fixed-box-panel-v1", "boxes"), ("L-D4", "head-fixed-box-panel-v1", "camera"))
+        for rotation in (90, 270, 0, 180):
+            staged = self.commands("scripts/stage_scope_record.py", ROTATION=rotation)
+            # Each run command by what it draws for: the boxes' layout is the panel by the mode itself.
+            runs = {(mode, "head-fixed-box-panel-v1" if mode == "boxes" else args.layout or "fixed-edge-hud-v1",
+                     args.step): args for args, mode in (
+                (args, "rows" if args.synthetic_rows else "boxes" if args.synthetic_boxes else "camera")
+                for args in (camera_hud.build_parser().parse_args(arguments)
+                             for arguments in self.commands("scripts/camera_hud.py", ROTATION=rotation)[1:]))}
+            self.assertEqual(len(runs), 5)
+            self.assertEqual(len(staged), 4)
+            for arguments, (step, layout_id, mode) in zip(staged, expected):
+                with self.subTest(step=step, layout=layout_id, rotation=rotation):
+                    args = stage_scope_record.build_parser().parse_args(arguments)
+                    self.assertEqual((args.step, args.layout, args.valid_minutes), (step, layout_id, 60))
+                    source, layout = scope.STEPS[step][0], fixed_layout(layout_id)
+                    watch = stage_scope_record.PRESENCE_WATCH.get(args.presence_watch)
+                    if mode != "camera":  # The synthetic step's record names no view: the camera is never opened.
+                        self.assertEqual((args.region, args.rotation, args.alignment, args.presence_watch), (None,) * 4)
+                        watch = False  # What the writer states for it.
+                    else:
+                        self.assertEqual(args.presence_watch, "required")
+                    recorded, refusal = scope.view_value(source, layout, args.region, args.rotation, args.alignment, watch)
+                    self.assertIsNone(refusal)
+                    # The run command documented for that record, converted as ``main`` converts it.
+                    run = runs[(mode, layout_id, None if mode != "camera" else step)]
+                    self.assertEqual(run.scope_record.name, args.out.name)  # It names the file the staging wrote.
+                    if mode != "camera":
+                        asked, refusal = scope.view_value(source, layout, None, None, None, False)
+                    else:
+                        region = regions.Region(*(regions.WHOLE if run.region is None else regions.parse_region(run.region)),
+                                                rotation=0 if run.rotation is None else run.rotation)
+                        alignment = None if run.alignment is None else camera_hud.parse_alignment(run.alignment).report()
+                        asked, refusal = scope.view_value(source, layout, list(region.fractions), region.rotation,
+                                                          alignment, True)  # ``main`` always asks with the watch.
+                    self.assertEqual((asked, refusal), (recorded, None))
+                    if layout_id != "fixed-edge-hud-v1" and mode == "camera":
+                        self.assertEqual((recorded["region"], recorded["rotation"], recorded["alignment"],
+                                          recorded["presence_watch"]),
+                                         ([0.25, 0.25, 0.75, 0.75], rotation,
+                                          {"scale_x": 1.0, "scale_y": 1.0, "offset_x": 0.0, "offset_y": 0.0, "turn": 0}, True))
+        # The same staging commands with the watch not required are what the tool refuses, for both layouts.
+        for arguments in (staged[1], staged[3]):
+            args = stage_scope_record.build_parser().parse_args(
+                ["none" if previous == "--presence-watch" else argument
+                 for previous, argument in zip([None, *arguments], arguments)])
+            view, refusal = scope.view_value(scope.CAMERA_LEFT, fixed_layout(args.layout), args.region, args.rotation,
+                                             args.alignment, stage_scope_record.PRESENCE_WATCH[args.presence_watch])
+            self.assertEqual((view, refusal), (None, "scope_presence_watch_required"))
 
     def test_the_device_report_template_follows_the_reports_and_claims_nothing(self):
         template = json.loads(self.TEMPLATE.read_text())
@@ -371,9 +552,14 @@ class GuideAndTemplateTests(unittest.TestCase):
         self.assertEqual({name: template[name] for name in gates.claims()}, ALL_CLOSED)
         blocks = camera_hud.CAMERA_BLOCKS
         for name in ("config", "frames", "deadlines", "frame_expired", "end", "cleanup", "scope_record", "command", "target",
-                     "view", "boxes", "steps_ms"):
+                     "view", "boxes", "steps_ms", "presence_watch"):
             with self.subTest(block=name):
                 self.assertLessEqual(set(template[name]), set(blocks[name]))
+        # The presence watch a displayed camera run holds: whether it was armed, what ended, and the hide's
+        # times from the signal. The signal's own clock readings stay in the original report.
+        self.assertEqual(set(blocks["presence_watch"]) - set(template["presence_watch"]),
+                         {"protocol", "signal_ns", "signal_received_ns", "event_count", "heartbeats"})
+        self.assertTrue(all(value is None for value in template["presence_watch"].values()))
         # The record's bound fields and the box layout's blocks are on the worksheet (work-order item B5): the
         # layout, the region and rotation, the alignment's five numbers and the watch, and the boxes' counts.
         self.assertLessEqual({"requested_layout", "hud_config_id", "hud_config_sha256", "region", "rotation", "alignment",
@@ -437,6 +623,7 @@ class ValidateTests(unittest.TestCase):
         self.assertEqual(report["helper"], {"backend": "fake", "fake": True, "build_dirty": report["helper"]["build_dirty"],
                                             "sdk_release": None, "contract": "camera-helper/1"})
         camera, rows = report["camera"], report["synthetic_rows"]
+        self.assertIs(camera["presence_armed"], True)  # Both camera passes hold a watch, on the watcher's stand-in.
         self.assertEqual((camera["status"], camera["bridge_mode"], camera["frames_emitted"], camera["ok"],
                           camera["source_cleanup_ok"], camera["bridge_cleanup_ok"]),
                          ("completed", "--validate-stdin", 6, True, True, True))
@@ -463,7 +650,27 @@ class ValidateTests(unittest.TestCase):
         self.assertGreaterEqual(panel["results_sent"], panel["frames_sent"])
         self.assertGreater(panel["frames_sent"], 0)
         self.assertEqual(panel["labels"], [{"label": "bottle", "spells": panel["labels"][0]["spells"]}])
-        self.assertEqual(report["schema_version"], 2)  # 2 since the panel's part.
+        self.assertIs(panel["presence_armed"], True)
+        # A run the presence watch ends (work-order item B5): the stand-in writes SteamVR's standby signal and
+        # the run ends by that name with everything cleaned up. The hide's times are reported, not judged here.
+        ended = report["presence_end"]
+        self.assertEqual({name: ended[name] for name in (
+            "status", "reason", "bridge_mode", "watcher", "armed", "ended_run", "ending_signal", "watcher_cleanup_ok",
+            "source_cleanup_ok", "bridge_cleanup_ok", "ok")},
+            {"status": "presence_ended", "reason": "standby", "bridge_mode": "--validate-stdin", "watcher": "stand_in",
+             "armed": True, "ended_run": True, "ending_signal": "enter_standby_event", "watcher_cleanup_ok": True,
+             "source_cleanup_ok": True, "bridge_cleanup_ok": True, "ok": True})
+        if ended["frames_sent"] and not ended["tile_already_down"]:  # A tile was up: its hide is timed from the signal.
+            self.assertGreater(ended["hide_written_after_signal_ms"], 0)
+            self.assertGreaterEqual(ended["bridge_hide_after_signal_ms"], 0)
+        # The panel's synthetic step through the same driver: every update acknowledged, the stop reached and expired.
+        boxes = report["synthetic_boxes"]
+        self.assertEqual(sorted(boxes), sorted(rows))
+        self.assertEqual((boxes["status"], boxes["bridge_mode"], boxes["requested"], boxes["acknowledged_presented"],
+                          boxes["stops_reached"], boxes["stops_expired"], boxes["ok"]),
+                         ("completed", "--validate-stdin", 10, 10, 1, 1, True))
+        self.assertEqual(report["schema_version"], 3)  # 2 since the panel's part, 3 since the watch and the boxes.
+        self.assertEqual(set(report), set(camera_hud.VALIDATION_BLOCKS))
 
     def test_validate_refuses_any_helper_that_does_not_describe_itself_as_the_fake(self):
         os.makedirs(self.directory.name + "/stand-in", exist_ok=True)
@@ -478,23 +685,65 @@ class ValidateTests(unittest.TestCase):
             with self.subTest(helper=Path(helper).name), \
                     mock.patch.object(camera_helper, "run_export", side_effect=AssertionError("exported")) as exported, \
                     mock.patch.object(camera_hud, "run_camera") as camera, \
-                    mock.patch.object(camera_hud, "run_synthetic_rows") as rows:
+                    mock.patch.object(camera_hud, "run_synthetic_rows") as rows, \
+                    mock.patch.object(camera_hud.presence_standin, "install") as watcher:
                 report = camera_hud.validate(helper)
                 self.assertEqual((report["status"], report["reason"], report["command"]["exit_code"],
                                   report["helper"]["fake"], report["camera"], report["camera_panel"],
-                                  report["synthetic_rows"]),
-                                 ("validation_failed", "validate_requires_fake_helper", 1, False, None, None, None))
-                for called in (exported, camera, rows):
+                                  report["presence_end"], report["synthetic_rows"], report["synthetic_boxes"]),
+                                 ("validation_failed", "validate_requires_fake_helper", 1, False, None, None, None,
+                                  None, None))
+                camera_stage.check_report(report, camera_hud.VALIDATION_BLOCKS, camera_hud.MAX_REPORT_BYTES)
+                for called in (exported, camera, rows, watcher):
                     called.assert_not_called()
 
     def test_validate_reports_a_missing_bridge_and_a_failed_part(self):
         report = camera_hud.validate(self.helper, bridge=Path(self.directory.name) / "no-bridge")
         self.assertEqual((report["status"], report["reason"]), ("validation_failed", "overlay_bridge_missing"))
+        camera_stage.check_report(report, camera_hud.VALIDATION_BLOCKS, camera_hud.MAX_REPORT_BYTES)
         with mock.patch.object(camera_hud, "VALIDATION_HELPER_ARGS", ("--fake-scenario", "no_such_scenario")):
             report = camera_hud.validate(self.helper)
         self.assertEqual((report["status"], report["reason"], report["camera"]["ok"], report["command"]["exit_code"]),
                          ("validation_failed", "camera_path_failed", False, 1))
         self.assertEqual({name: report[name] for name in gates.claims()}, ALL_CLOSED)
+
+    def test_validate_fails_by_name_when_the_watch_does_not_end_its_run_or_a_pass_runs_without_a_watch(self):
+        # The parts added with the watch are judged on the watch's own words. One validation, each of the three
+        # camera passes spoiled in its own way and the synthetic boxes cut short: every spoiled part fails, the
+        # reason is the first in the report's order, and the untouched part still passes.
+        run_camera, run_rows = camera_hud.run_camera, camera_hud.run_synthetic_rows
+
+        def camera(limits, **options):
+            report = run_camera(limits, **options)
+            if limits is camera_hud.VALIDATION_PRESENCE_LIMITS:  # The pass the watch must end: it ended otherwise.
+                report["presence_watch"].update(ended_run=False)
+            elif options.get("layout") is not None:  # The panel's pass: its watch was not armed.
+                report["presence_watch"].update(armed=False)
+            return report
+
+        def rows(*arguments, **options):
+            report = run_rows(*arguments, **options)
+            if options.get("boxes"):
+                report["stops"].update(expired=0)  # The panel was still up in the stop.
+            return report
+        with mock.patch.object(camera_hud, "run_camera", camera), mock.patch.object(camera_hud, "run_synthetic_rows", rows):
+            report = camera_hud.validate(self.helper)
+        self.assertEqual((report["status"], report["reason"], report["command"]["exit_code"]),
+                         ("validation_failed", "camera_panel_path_failed", 1))
+        self.assertEqual({name: report[name]["ok"] for name in ("camera", "camera_panel", "presence_end",
+                                                                "synthetic_rows", "synthetic_boxes")},
+                         {"camera": True, "camera_panel": False, "presence_end": False, "synthetic_rows": True,
+                          "synthetic_boxes": False})
+        self.assertEqual((report["presence_end"]["status"], report["presence_end"]["ended_run"],
+                          report["synthetic_boxes"]["status"], report["synthetic_boxes"]["stops_expired"]),
+                         ("presence_ended", False, "completed", 0))
+        camera_stage.check_report(report, camera_hud.VALIDATION_BLOCKS, camera_hud.MAX_REPORT_BYTES)
+        # Each reason is its own part's: with only that part spoiled it is the one named.
+        for spoiled, reason in ((("presence_end",), "presence_path_failed"), (("synthetic_boxes",), "synthetic_boxes_failed")):
+            parts = {name: {"ok": name not in spoiled} for name in ("camera", "camera_panel", "presence_end",
+                                                                    "synthetic_rows", "synthetic_boxes")}
+            self.assertEqual(camera_hud.failed_parts(parts)[0], reason)
+        self.assertEqual(camera_hud.failed_parts({name: {"ok": True} for name in parts}), [])
 
     def test_validate_fails_its_panel_part_by_name_when_the_boxes_block_is_missing_or_says_nothing_was_sent(self):
         # The panel's pass is judged on its boxes block: without the block, or with one that counts nothing
@@ -523,8 +772,9 @@ class ValidateTests(unittest.TestCase):
             with self.subTest(spoiled=name):
                 self.assertEqual((report["status"], report["reason"], report["command"]["exit_code"]),
                                  ("validation_failed", "camera_panel_path_failed", 1))
-                self.assertEqual((report["camera"]["ok"], report["camera_panel"]["ok"], report["synthetic_rows"]["ok"]),
-                                 (True, False, True))
+                self.assertEqual((report["camera"]["ok"], report["camera_panel"]["ok"], report["presence_end"]["ok"],
+                                  report["synthetic_rows"]["ok"], report["synthetic_boxes"]["ok"]),
+                                 (True, False, True, True, True))
                 self.assertEqual(report["camera_panel"]["status"], "completed")  # The pass ran; its count failed it.
                 camera_stage.check_report(report, camera_hud.VALIDATION_BLOCKS, camera_hud.MAX_REPORT_BYTES)
 
@@ -537,14 +787,17 @@ class DeviceModeCase(scope_tests.ScopeCase):
     def install_binaries(self):
         shutil.copy2(DEFAULT_BRIDGE, self.bridge)
         self.helper.write_text(fake_camera_export.SHEBANG_INSTALL.format(python=sys.executable, root=str(ROOT)))
+        # The pinned presence watcher is the watcher's stand-in (scripted by FAKE_PRESENCE_SCENARIO), never SteamVR.
+        self.watcher.write_text(fake_presence_watcher.SHEBANG_INSTALL.format(python=sys.executable, root=str(ROOT)))
         super().install_binaries()
 
     def setUp(self):
         super().setUp()
         for number in (*RECORD_AND_POLL.numbers, signal.SIGINT, signal.SIGTERM):
             self.addCleanup(signal.signal, number, signal.getsignal(number))
-        self.assertEqual((camera_hud.pinned(manifest.BRIDGE), camera_hud.pinned(manifest.CAMERA_HELPER)),
-                         (self.bridge, self.helper))
+        self.assertEqual((camera_hud.pinned(manifest.BRIDGE), camera_hud.pinned(manifest.CAMERA_HELPER),
+                          camera_hud.pinned(manifest.PRESENCE_WATCHER)), (self.bridge, self.helper, self.watcher))
+        os.environ.pop("FAKE_PRESENCE_SCENARIO", None)  # A plain watcher unless a test scripts one.
         # The helper's lock directory, as the helper requires it: a device run checks it before the record.
         self.runtime_directory = self.out / "xdg-runtime"
         self.runtime_directory.mkdir(mode=0o700)
@@ -586,7 +839,8 @@ class DeviceModeCase(scope_tests.ScopeCase):
                 timer.join()
 
     def camera_scope(self, path, seconds=LIMITS["max_seconds"], step="L-D4"):
-        return scope.RunScope(path, self.path, runner="camera_hud", step=step, source=scope.CAMERA_LEFT, seconds=seconds)
+        return scope.RunScope(path, self.path, runner="camera_hud", step=step, source=scope.CAMERA_LEFT, seconds=seconds,
+                              presence_watch=True)
 
     def rows_scope(self, path, seconds=8 + 10):  # The schedule's seconds plus the command's start-up allowance.
         return scope.RunScope(path, self.path, runner="camera_hud", step="L-D3", source=scope.SYNTHETIC, seconds=seconds)
@@ -726,15 +980,13 @@ class RefusalTests(DeviceModeCase):
         self.assertEqual((seen, report["complete"], report["updates"]["submitted"]), ([], False, 0))
         # A record that binds another layout or another view than this command runs with (item B5): refused by
         # name before any launch, as a refusal in the report and never as an uncaught error, the record unspent.
-        from sightcircuit.hud.contract import BOX_PANEL_CONFIG
+        from sightcircuit.hud.contract import BOX_PANEL_CONFIG, HUD_CONFIG
         neutral = {"scale_x": 1.0, "scale_y": 1.0, "offset_x": 0.0, "offset_y": 0.0, "turn": 0}
         bound = (("the panel's record", {"hud_config": BOX_PANEL_CONFIG, "alignment": neutral},
                   "fixed_hud_layout_not_approved", "scope_layout_mismatch"),
                  ("a record with a region", {"region": [0.25, 0.25, 0.75, 0.75]},
                   "fixed_hud_output_not_approved", "scope_region_mismatch"),
-                 ("a record with a rotation", {"rotation": 90}, "fixed_hud_output_not_approved", "scope_rotation_mismatch"),
-                 ("a record that requires the presence watch", {"presence_watch": True},
-                  "fixed_hud_output_not_approved", "scope_presence_watch_mismatch"))
+                 ("a record with a rotation", {"rotation": 90}, "fixed_hud_output_not_approved", "scope_rotation_mismatch"))
         for name, staged, reason, refusal in bound:
             path, record = self.staged("L-D4", **staged)
             run_scope = self.camera_scope(path)
@@ -744,12 +996,35 @@ class RefusalTests(DeviceModeCase):
                 self.assert_refused(report, reason, refusal, camera_hud.CAMERA_BLOCKS)
                 self.assertEqual((seen, run_scope.consumed, run_scope.status, report["scope_record"]["run_id"]),
                                  ([], False, "refused", record["run_id"]))
+        # A scope asked without the presence watch, which the command never does: the stage holds the watch, so
+        # the request is not what runs, and it is refused at the site with the record unread and unspent.
+        path, record = self.staged("L-D4")
+        run_scope = scope.RunScope(path, self.path, runner="camera_hud", step="L-D4", source=scope.CAMERA_LEFT,
+                                   seconds=LIMITS["max_seconds"])
+        with self.launches() as seen, mock.patch.object(camera_helper, "run_export", side_effect=AssertionError("exported")):
+            report = self.camera(run_scope)
+        self.assert_refused(report, "fixed_hud_output_not_approved", "site_preconditions_failed", camera_hud.CAMERA_BLOCKS)
+        self.assertEqual((seen, run_scope.consumed, run_scope.record, self.ledger()), ([], False, None, []))
         path, _ = self.staged("L-D3", hud_config=BOX_PANEL_CONFIG)
         run_scope = self.rows_scope(path)
         with self.launches() as seen:
             report = camera_hud.run_synthetic_rows(8, stops=1, stop_seconds=2.0, run_scope=run_scope, confirmed=True)
         self.assert_refused(report, "fixed_hud_layout_not_approved", "scope_layout_mismatch", camera_hud.SYNTHETIC_BLOCKS)
         self.assertEqual((seen, report["complete"], run_scope.consumed, self.ledger()), ([], False, False, []))
+        # And the reverse: the synthetic boxes under the strip's record are refused by the record's layout; and
+        # under the panel's record asked for through a scope that names the strip they are refused sooner, at
+        # the output site, because the scope's layout is not the one the client would launch (the record unread).
+        for staged_layout, asked, refusal in ((HUD_CONFIG, BOX_PANEL_CONFIG, "scope_layout_mismatch"),
+                                              (BOX_PANEL_CONFIG, HUD_CONFIG, "site_preconditions_failed")):
+            path, _ = self.staged("L-D3", hud_config=staged_layout)
+            run_scope = scope.RunScope(path, self.path, runner="camera_hud", step="L-D3", source=scope.SYNTHETIC,
+                                       seconds=18, hud_config=asked)
+            with self.subTest(staged=staged_layout.layout_id), self.launches() as seen:
+                report = camera_hud.run_synthetic_rows(8, stops=1, stop_seconds=2.0, run_scope=run_scope, confirmed=True,
+                                                       boxes=True, mode="synthetic_boxes")
+                self.assert_refused(report, "fixed_hud_layout_not_approved", refusal, camera_hud.SYNTHETIC_BLOCKS)
+                self.assertEqual((seen, report["report_kind"], report["command"]["mode"], run_scope.consumed, self.ledger()),
+                                 ([], "camera_hud_synthetic_boxes", "synthetic_boxes", False, []))
         # Through the command line as well: a report and exit code 1, with the typed yes given.
         for mode, step, blocks in ((self.CAMERA, "L-D4", camera_hud.CAMERA_BLOCKS), (self.ROWS, "L-D3", camera_hud.SYNTHETIC_BLOCKS)):
             staged = {"hud_config": BOX_PANEL_CONFIG, **({"alignment": neutral} if step == "L-D4" else {})}
@@ -781,6 +1056,7 @@ class RefusalTests(DeviceModeCase):
         cases = (("target_label_unknown", dict(target_label="unicorn")),
                  ("detector_unavailable", dict(detector_factory=mock.Mock(side_effect=RuntimeError("no model")))),
                  ("helper_not_found", dict(helper=self.out / "absent-helper")),
+                 ("presence_watcher_not_found", dict(presence_watcher=self.out / "absent-watcher")),
                  ("overlay_bridge_missing", dict(bridge=self.out / "absent-bridge")))
         for reason, options in cases:
             with self.subTest(reason=reason), self.launches() as seen:
@@ -934,6 +1210,11 @@ class FixedHudCommandTests(DeviceModeCase):
                           report["scope_record"]["source"], report["scope_record"]["approval"]),
                          ("granted", True, "L-D4", "arcturus_camera_left", "owner-2026-11-16-a1"))
         self.assertEqual(self.ledger(), [f"{record['run_id']}.json"])
+        watch = report["presence_watch"]
+        self.assertEqual((watch["requested"], watch["armed"], watch["ended_run"], watch["lost_ended_run"],
+                          watch["exit_code"], watch["forced_kill"], watch["cleanup_ok"], watch["watcher_sha256"],
+                          report["scope_record"]["presence_watch"]),
+                         (True, True, False, False, 0, False, True, scope._file_digest(self.watcher), True))
         # The G10 rule is computed for the named class; a three-second run holds no 60-second window.
         target = report["target"]
         self.assertEqual((target["label"], target["rule"], target["window_seconds"], target["fraction"],
@@ -960,6 +1241,158 @@ class FixedHudCommandTests(DeviceModeCase):
                           report["cleanup"]["ok"]), ("presence_ended", "headset_removed", "headset_removed", 0, True))
         self.assert_retired(report)
         self.assertEqual({name: report[name] for name in gates.claims()}, ALL_CLOSED)
+
+    def scripted_watcher(self, scenario):
+        """Script the pinned watcher's stand-in for this test (``tests/fake_presence_watcher.py``)."""
+        patch = mock.patch.dict(os.environ, {"FAKE_PRESENCE_SCENARIO": scenario})
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_the_presence_watch_ends_a_displayed_camera_run_on_both_layouts_with_the_overlay_hidden_and_retired(self):
+        # The watcher's standby signal, 1.2 s after it said ready, on the bridge's real output mode against the
+        # fake runtime: the run ends ``presence_ended`` by the signal's name, exit code 0, the hide is timed
+        # from the signal, and the overlay is hidden, cleared and destroyed. Through the command line.
+        from sightcircuit.hud.contract import BOX_PANEL_CONFIG as PANEL
+        self.scripted_watcher("1200:enter_standby_event")
+        base = ["--camera", "--allow-camera-input", "--allow-hud-output", "--manifest", self.path, "--seconds", "20",
+                "--step", "L-D4"]
+        for name, staged, view in (
+                ("strip", {}, ["--names-only", "--orientation", "identity"]),
+                ("panel", {"hud_config": PANEL, "region": [0.25, 0.25, 0.75, 0.75], "rotation": 90,
+                           "alignment": {"scale_x": 1.0, "scale_y": 1.0, "offset_x": 0.0, "offset_y": 0.0, "turn": 0}},
+                 ["--layout", PANEL.layout_id, "--region", "0.25,0.25,0.75,0.75", "--rotation", "90", "--alignment",
+                  "1,1,0,0,0"])):
+            self.log.unlink(missing_ok=True)
+            path, record = self.staged("L-D4", **staged)
+            started = time.monotonic()
+            with self.subTest(layout=name), mock.patch.dict(os.environ, self.runtime_env), \
+                    mock.patch.object(camera_hud, "create_detector", return_value=camera_hud.ValidationDetector()):
+                code, report, _ = run_main([*base, "--scope-record", path, *view], Terminal())
+                self.assertLess(time.monotonic() - started, 12)  # Long before the run's own twenty seconds.
+                self.assertEqual((code, report["status"], report["reason"], report["command"]["exit_code"],
+                                  report["cleanup"]["ok"], report["scope_record"]["run_id"]),
+                                 (0, "presence_ended", "standby", 0, True, record["run_id"]))
+                camera_stage.check_report(report, camera_hud.CAMERA_BLOCKS, camera_hud.MAX_REPORT_BYTES)
+                watch = report["presence_watch"]
+                self.assertEqual((watch["armed"], watch["ended_run"], watch["run_end_reason"], watch["ending_signal"],
+                                  watch["lost"], watch["cleanup_ok"], watch["forced_kill"], watch["camera_data_read"]),
+                                 (True, True, "standby", "enter_standby_event", None, True, False, False))
+                self.assertGreater(report["frames"]["sent"], 0)  # A tile was up when the signal came,
+                self.assertTrue(0 < watch["hide_written_after_signal_ms"] < HOST_MARGIN_MS, watch)
+                # and the fake runtime's own log has the hide returning within the margin of the signal.
+                hides = [call for call in self.drawing() if call["call"] == "HideOverlay"
+                         and call["end_ns"] >= watch["signal_ns"]]
+                self.assertLess((hides[0]["end_ns"] - watch["signal_ns"]) / 1e6, HOST_MARGIN_MS + 20)
+                self.assertFalse([call for call in self.drawing() if call["call"] in ("SetOverlayRaw", "ShowOverlay")
+                                  and call["start_ns"] > hides[0]["start_ns"]])  # Nothing shown after it.
+                self.assertEqual(report["source"]["status"], "stopped")
+                self.assert_retired(report)
+                self.assertEqual({name: report[name] for name in gates.claims()}, ALL_CLOSED)
+
+    def test_a_lost_watch_ends_the_displayed_run_by_name_and_a_watch_that_is_not_armed_launches_nothing(self):
+        # Lost: the watcher dies 1.2 s in. The run ends ``presence_watch_lost``, exit code 1, overlay retired.
+        self.scripted_watcher("1200:die")
+        path, record = self.staged("L-D4")
+        report = self.camera(self.camera_scope(path), client_env=self.env, directions=False, orientation="identity")
+        self.assertEqual((report["status"], report["reason"], report["command"]["exit_code"], report["cleanup"]["ok"]),
+                         ("presence_watch_lost", "watcher_exited", 1, True))
+        watch = report["presence_watch"]
+        self.assertEqual((watch["armed"], watch["ended_run"], watch["lost_ended_run"], watch["lost"], watch["cleanup_ok"]),
+                         (True, False, True, "watcher_exited", True))
+        self.assert_retired(report)
+        self.assertEqual(self.ledger(), [f"{record['run_id']}.json"])
+        # Not armed: the watcher reports no SteamVR. The record's check came first and spent the record; then
+        # the run ended by name with no bridge and no helper launched, and the runtime saw nothing.
+        self.log.unlink(missing_ok=True)
+        self.scripted_watcher("error=vrserver_not_running")
+        path, record = self.staged("L-D4")
+        run_scope = self.camera_scope(path)
+        with mock.patch.object(camera_helper, "run_export", side_effect=AssertionError("exported")):
+            report = self.camera(run_scope, client_env=self.env, directions=False, orientation="identity")
+        camera_stage.check_report(report, camera_hud.CAMERA_BLOCKS, camera_hud.MAX_REPORT_BYTES)
+        self.assertEqual((report["status"], report["reason"], report["command"]["exit_code"], report["command"]["refusal"],
+                          report["cleanup"]["ok"]), ("error", "presence_watch_not_armed", 1, None, True))
+        watch = report["presence_watch"]
+        self.assertEqual((watch["requested"], watch["armed"], watch["refusal"], watch["cleanup_ok"]),
+                         (True, False, "watcher_error:vrserver_not_running", True))
+        self.assertEqual((report["bridge"]["started"], report["source"]["status"], report["frames"]["sent"]),
+                         (False, "not_started", 0))
+        self.assertFalse(self.log.exists() and fake_vrclient.calls(self.log))  # No bridge reached the runtime.
+        self.assertEqual((run_scope.consumed, report["scope_record"]["consumed"]), (True, True))
+        self.assertEqual(len(self.ledger()), 2)
+        self.assertEqual({name: report[name] for name in gates.claims()}, ALL_CLOSED)
+
+    def test_synthetic_boxes_under_a_panel_record_show_the_scene_expire_at_each_stop_and_end_on_a_signal(self):
+        from sightcircuit.hud.contract import BOX_PANEL_CONFIG as PANEL, config_digest
+        path, record = self.staged("L-D3", hud_config=PANEL)
+        run_scope = scope.RunScope(path, self.path, runner="camera_hud", step="L-D3", source=scope.SYNTHETIC, seconds=18,
+                                   hud_config=PANEL)
+        report = camera_hud.run_synthetic_rows(8, stops=2, stop_seconds=2.0, run_scope=run_scope, confirmed=True,
+                                               client_env=self.env, boxes=True, mode="synthetic_boxes")
+        camera_stage.check_report(report, camera_hud.SYNTHETIC_BLOCKS, camera_hud.MAX_REPORT_BYTES)
+        self.assertEqual((report["report_kind"], report["status"], report["reason"], report["bridge_mode"],
+                          report["validation_only"], report["camera_opened"], report["camera_derived"],
+                          report["command"]["mode"], report["config"]["row"], report["config"]["hud_config_id"]),
+                         ("camera_hud_synthetic_boxes", "completed", "schedule", "--fixed-hud", False, False, False,
+                          "synthetic_boxes", "orientation_scene_then_counter", PANEL.layout_id))
+        self.assertEqual({name: report[name] for name in gates.claims()}, ALL_CLOSED)
+        updates, stops = report["updates"], report["stops"]
+        self.assertEqual((updates["requested"], updates["submitted"], updates["acknowledged_presented"],
+                          updates["acknowledged_refused"], updates["replaced"]), (20, 20, 20, 0, 0))
+        self.assertEqual((stops["requested"], stops["reached"], stops["expired"], stops["basis"]),
+                         (2, 2, 2, "runtime_hide_called_and_returned"))
+        for event in stops["events"]:  # The panel went down by its own deadline in each stop, as the rows do.
+            self.assertEqual((event["expired"], event["hide_ok"], event["api_visible_after_hide"], event["texture_cleared"],
+                              event["deadline_after_observation_ms"]), (True, True, False, True, 1000.0))
+            self.assertLessEqual(event["hide_returned_after_observation_ms"], 1020.0 + HOST_MARGIN_MS)
+        visible, changes = None, []
+        for call in fake_vrclient.calls(self.log):
+            if "visible" in call and call["visible"] != visible:
+                visible = call["visible"]
+                changes.append(visible)
+        self.assertEqual(changes, [False, True, False, True, False, True, False])  # Down, then up thrice.
+        self.assertEqual(len([call for call in self.drawing() if call["call"] == "SetOverlayRaw"]), 20)
+        final = report["bridge"]["final_report"]
+        self.assertEqual((final["fixed_hud"]["config_id"], final["fixed_hud"]["config_digest"], final["fixed_hud"]["width"],
+                          final["fixed_hud"]["height"]), (PANEL.layout_id, config_digest(PANEL), 512, 512))
+        self.assert_retired(report)
+        self.assertEqual((report["scope_record"]["status"], report["scope_record"]["consumed"], report["scope_record"]["step"],
+                          report["scope_record"]["hud_config_id"], report["scope_record"]["presence_watch"]),
+                         ("granted", True, "L-D3", PANEL.layout_id, False))
+        self.assertNotIn("presence_watch", report)  # No watch: nothing here came from a camera.
+        self.assertEqual(self.ledger(), [f"{record['run_id']}.json"])
+        # Through the command line, stopped by the operator's Ctrl-C: the panel comes down and nothing is left.
+        import threading
+        self.log.unlink()
+        path, record = self.staged("L-D3", hud_config=PANEL)
+        arguments = ["--synthetic-boxes", "--allow-hud-output", "--scope-record", path, "--manifest", self.path,
+                     "--seconds", "20", "--stops", "1", "--stop-seconds", "2"]
+        threads = threading.active_count()
+        timer = threading.Timer(1.5, os.kill, (os.getpid(), signal.SIGINT))
+        started = time.monotonic()
+        timer.start()
+        try:
+            with mock.patch.dict(os.environ, self.runtime_env):
+                code, report, shown = run_main(arguments, Terminal())
+        finally:
+            timer.cancel()
+            timer.join()
+        self.assertLess(time.monotonic() - started, 10)
+        self.assertEqual((code, report["report_kind"], report["status"], report["reason"], report["complete"]),
+                         (128 + signal.SIGINT, "camera_hud_synthetic_boxes", "cancelled", "signal", False))
+        self.assertIn(confirmation.SYNTHETIC_BOXES_NOTICE, shown)
+        self.assertNotIn(confirmation.SYNTHETIC_NOTICE, shown)
+        self.assertNotIn(contract.EXPORT_NOTICE, shown)  # No camera notice: no camera.
+        self.assertGreater(report["updates"]["acknowledged_presented"], 2)
+        self.assert_retired(report)
+        self.assertEqual((report["cleanup"]["ok"], report["scope_record"]["consumed"]), (True, True))
+        self.assertEqual(threading.active_count(), threads)
+        # A strip record never runs the boxes from the command line either: refused before any launch.
+        strip, _ = self.staged("L-D3")
+        with mock.patch.dict(os.environ, self.runtime_env), self.launches() as seen:
+            code, report, _ = run_main([*arguments[:3], strip, *arguments[4:]], Terminal())
+        self.assertEqual((code, seen), (1, []))
+        self.assert_refused(report, "fixed_hud_layout_not_approved", "scope_layout_mismatch", camera_hud.SYNTHETIC_BLOCKS)
 
     def test_the_command_line_runs_the_camera_mode_only_after_the_typed_yes_and_saves_only_where_named(self):
         path, record = self.staged("L-D4")
@@ -993,7 +1426,7 @@ class FixedHudCommandTests(DeviceModeCase):
         from sightcircuit.hud.contract import BOX_PANEL_CONFIG as PANEL, config_digest
         neutral = {"scale_x": 1.0, "scale_y": 1.0, "offset_x": 0.0, "offset_y": 0.0, "turn": 0}
         centre = [0.25, 0.25, 0.75, 0.75]
-        bound = {"hud_config": PANEL, "region": centre, "rotation": 90, "alignment": neutral, "presence_watch": False}
+        bound = {"hud_config": PANEL, "region": centre, "rotation": 90, "alignment": neutral, "presence_watch": True}
         base = ["--camera", "--allow-camera-input", "--allow-hud-output", "--manifest", self.path, "--seconds", "3",
                 "--step", "L-D4", "--target-label", "bottle"]
         view = ["--layout", PANEL.layout_id, "--region", "0.25,0.25,0.75,0.75", "--rotation", "90",
@@ -1038,7 +1471,12 @@ class FixedHudCommandTests(DeviceModeCase):
                           block["hud_config_sha256"], block["region"], block["rotation"], block["alignment"],
                           block["presence_watch"]),
                          ("granted", True, PANEL.layout_id, PANEL.layout_id, config_digest(PANEL),
-                          dict(zip(("x0", "y0", "x1", "y1"), centre)), 90, neutral, False))
+                          dict(zip(("x0", "y0", "x1", "y1"), centre)), 90, neutral, True))
+        # The run held the presence watch the record requires, on the checkout's pinned watcher (the stand-in here).
+        watch = report["presence_watch"]
+        self.assertEqual((watch["requested"], watch["armed"], watch["refusal"], watch["ended_run"], watch["lost"],
+                          watch["cleanup_ok"], watch["watcher_sha256"]),
+                         (True, True, None, False, None, True, scope._file_digest(self.watcher)))
         # What ran is what the record names: the layout, the megabyte, the region and turn, the alignment.
         self.assertEqual((report["config"]["hud_config_id"], report["config"]["update_bytes"], report["config"]["alignment"],
                           report["view"]["region"], report["view"]["rotation"], report["view"]["crop_native_xyxy"],
@@ -1074,7 +1512,7 @@ class FixedHudCommandTests(DeviceModeCase):
             code, again, _ = run(path, view, "again")
         self.assertEqual((code, again["status"], again["command"]["refusal"], seen), (1, "refused", "scope_run_id_used", []))
         # The strip through the same region, under a strip record that names it: the region is the strip's too.
-        strip_bound = {"region": centre, "rotation": 90, "presence_watch": False}
+        strip_bound = {"region": centre, "rotation": 90, "presence_watch": True}
         path, _ = self.staged("L-D4", **strip_bound)
         code, report, _ = run(path, ["--names-only", "--orientation", "identity", "--region", "0.25,0.25,0.75,0.75",
                                      "--rotation", "90"], "strip")
@@ -1369,6 +1807,7 @@ class SlowBridgeTests(DeviceModeCase):
         shutil.copy2(DEFAULT_BRIDGE, real)
         self.bridge.write_text(f"#!/bin/sh\nsleep {self.DELAY_SECONDS}\nexec '{real}' \"$@\"\n")
         self.helper.write_text(fake_camera_export.SHEBANG_INSTALL.format(python=sys.executable, root=str(ROOT)))
+        self.watcher.write_text(fake_presence_watcher.SHEBANG_INSTALL.format(python=sys.executable, root=str(ROOT)))
         scope_tests.ScopeCase.install_binaries(self)
 
     def test_a_slow_starting_bridge_does_not_end_the_run_after_the_record_is_spent(self):

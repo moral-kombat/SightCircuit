@@ -557,8 +557,10 @@ compositor honours per-pixel alpha for a raw overlay (every image this
 bridge has been given so far, the test pattern, the marker and the strip's
 tile, is opaque throughout).
 
-`box_scenes.orientation_scene(BOX_PANEL_CONFIG)` is the scene for a later
-synthetic displayed step to settle both. Its five boxes are named by where
+`box_scenes.orientation_scene(BOX_PANEL_CONFIG)` is the scene of the
+synthetic displayed step that is to settle both
+([`camera_hud --synthetic-boxes`](camera-hud.md#the-command-l9), which
+draws it five times a second under a record that names the panel). Its five boxes are named by where
 they are drawn in the image, `top left`, `top right`, `bottom left`,
 `bottom right` and `centre`, and the four corner boxes differ in size and
 shape, so a flip or a turn is visible without reading: **the largest box,

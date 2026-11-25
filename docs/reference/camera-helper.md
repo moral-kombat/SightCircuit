@@ -179,7 +179,17 @@ was "saves nothing" until work-order item L9 gave the display command
 `--report`, 2026-11-16); neither saves an image or shows a camera image. That
 revision moved the contract digest and nothing of the layout, so the
 protocol version stays 2; a helper built before it reports the earlier
-digest and is rebuilt before any run, as the Frame's already had to be. `--fps` stays 1 to 10. The
+digest and is rebuilt before any run, as the Frame's already had to be.
+One clause changed again on 2026-11-25 (work-order item B5, the owner's
+wording): a display command "shows the names of detected objects in the
+headset, with approximate arrows or as boxes drawn around them", where it
+said "shows labels and approximate arrows in the headset", because the box
+panel draws boxes. Nothing else in the notice changed and nothing of the
+layout, so the protocol version is still 2; the contract digest moved from
+`f3afd174074dd70fcfde4cbdf4cd4f039bb4510c8da4fbc1785c0bebb0e600a4` to
+`9ff5ff5ff024a3acdf666dbda38e3686fffc6760d9e734239bcd0ff8be9e3196`, and
+**a helper built before that change must be rebuilt before its next use**
+([build](#build)). `--fps` stays 1 to 10. The
 helper's flag ranges are the generated header's constants, not a second copy.
 The prefix version and `ready.protocol` are 2, so the versions refuse each
 other on the first packet: this checkout's reader refuses a helper built
@@ -537,6 +547,19 @@ bash scripts/build_camera_helper.sh --shader                    # regenerate the
 (`--sdk DIR`) before any run with a checkout whose contract is
 `camera-export/2`: a binary built earlier writes version 1 and the reader
 refuses its first packet (`unsupported_version`), before any frame.
+
+**Rebuild for the notice of 2026-11-25.** The export notice is compiled into
+the helper (`kExportNotice` in the generated header) and is part of the
+contract digest. One clause of it changed on 2026-11-25
+([the export mode](#the-export-mode-s6)), so a helper built before that
+prints the earlier notice to the wearer and reports the earlier digest in
+its `--describe` record. The reader does not refuse such a helper by the
+digest: the prefix and the packets are unchanged. It is the operator's
+step, for every command that launches the helper (`camera_probe`,
+`camera_recognize`, `camera_guide`, `camera_hud`): rebuild with `--sdk DIR`
+before the next use, then write a new checkpoint manifest, since the
+helper's file digest changed with it and a displayed run launches only the
+helper the manifest pins.
 
 `--fake` compiles `camera_helper.cpp`, the two pixel-path units and
 `camera_backend_fake.cpp` into

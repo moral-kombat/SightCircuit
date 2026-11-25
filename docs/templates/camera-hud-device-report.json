@@ -179,6 +179,24 @@
     "bridge_hide_after_end_ms": null,
     "bridge_ended_first": null
   },
+  "presence_watch": {
+    "requested": null,
+    "armed": null,
+    "refusal": null,
+    "watcher_sha256": null,
+    "ended_run": null,
+    "run_end_reason": null,
+    "ending_signal": null,
+    "hide_written_after_signal_ms": null,
+    "bridge_hide_after_signal_ms": null,
+    "frames_received_after_signal": null,
+    "lost": null,
+    "lost_ended_run": null,
+    "exit_code": null,
+    "forced_kill": null,
+    "cleanup_ok": null,
+    "camera_data_read": null
+  },
   "bridge": {
     "mode": null,
     "cleanup_confirmed": null,

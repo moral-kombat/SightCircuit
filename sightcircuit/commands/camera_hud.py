@@ -574,6 +574,18 @@ def _positive(value):
     return type(value) is int and value > 0
 
 
+# The validation's parts in the report's order, each with the reason the validation gives when it did not pass.
+VALIDATION_PARTS = (("camera", "camera_path_failed"), ("camera_panel", "camera_panel_path_failed"),
+                    ("presence_end", "presence_path_failed"), ("synthetic_rows", "synthetic_rows_failed"),
+                    ("synthetic_boxes", "synthetic_boxes_failed"))
+
+
+def failed_parts(report):
+    """The reasons of the validation's parts that did not pass, in the report's order; a part that is missing
+    did not pass."""
+    return [reason for name, reason in VALIDATION_PARTS if (report.get(name) or {}).get("ok") is not True]
+
+
 def validate(helper=None, bridge=None):
     """The whole path with nothing real in it: the fake helper, a scripted detector, the validation bridge.
 
@@ -590,7 +602,7 @@ def validate(helper=None, bridge=None):
     report = {"report_kind": VALIDATION_KIND, "schema_version": 3, "status": "validation_failed", "reason": None,
               **gates.claims(), "validation_only": True, "images_saved": False, "pixels_in_report": False,
               "camera_opened": False, "command": command, "helper": None, "camera": None, "camera_panel": None,
-              "synthetic_rows": None}
+              "presence_end": None, "synthetic_rows": None, "synthetic_boxes": None}
     described = describe_helper(helper)
     fake = described is not None and described.get("backend") == "fake" and described.get("sdk_release") is None
     report["helper"] = {"backend": camera_stage._identifier((described or {}).get("backend"), None), "fake": fake,
@@ -707,10 +719,7 @@ def validate(helper=None, bridge=None):
     report["synthetic_boxes"] = synthetic_part(
         run_synthetic_rows(validation_only=True, bridge=bridge, mode="validate", boxes=True, **VALIDATION_BOXES),
         VALIDATION_BOXES)
-    parts = (("camera", "camera_path_failed"), ("camera_panel", "camera_panel_path_failed"),
-             ("presence_end", "presence_path_failed"), ("synthetic_rows", "synthetic_rows_failed"),
-             ("synthetic_boxes", "synthetic_boxes_failed"))
-    failed = [reason for name, reason in parts if not report[name]["ok"]]
+    failed = failed_parts(report)
     if not failed:
         report["status"] = "validated"
     else:
