@@ -721,6 +721,13 @@
       "file": "e103.md",
       "kind": "device_report",
       "reconstructed": false
+    },
+    {
+      "id": "E104",
+      "title": "Frame update check, tracking service crash with no SightCircuit process, camera provider socket gone, an OS update offered",
+      "file": "e104.md",
+      "kind": "device_report",
+      "reconstructed": false
     }
   ]
 }
