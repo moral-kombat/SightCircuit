@@ -22,6 +22,7 @@ import unittest
 from unittest import mock
 
 from sightcircuit import gates, observed_frames
+from sightcircuit.camera.presence import PresenceWatch
 from sightcircuit.errors import SightCircuitError
 from sightcircuit.hud.contract import BOX_PANEL_CONFIG, FIXED_LAYOUTS, HUD_CONFIG, config_digest
 from sightcircuit.observed_frames import ObservedFrameClient
@@ -74,7 +75,7 @@ class ScopeCase(checkpoint.CheckoutCase):
         options.setdefault("valid_minutes", 30)
         options.setdefault("hud_config", HUD_CONFIG)
         if scope.STEPS.get(step, (None,))[0] == scope.CAMERA_LEFT:
-            options.setdefault("presence_watch", False)  # A camera step's record says so; the writer has no default.
+            options.setdefault("presence_watch", True)  # A camera step's record requires it; the writer has no default.
         record = scope.write_record(path, step=step, approval="owner-2026-11-16-a1",
                                     checkpoint_manifest=self.path, **options)
         return path, record
@@ -105,6 +106,8 @@ class ScopeCase(checkpoint.CheckoutCase):
                 step = None
             if type(step) is not str or step not in scope.STEPS:
                 step = {scope.SYNTHETIC: "L-D3"}.get(source, "L-D4") if type(source) is str else "L-D4"
+        if source == scope.CAMERA_LEFT:
+            options.setdefault("presence_watch", True)  # What every camera run asks: it holds the watch.
         return scope.RunScope(path, options.pop("checkpoint_manifest", self.path), runner=runner, step=step,
                               source=source, seconds=seconds, **options)
 
@@ -120,6 +123,8 @@ class ScopeCase(checkpoint.CheckoutCase):
             if arguments[0] == "git":
                 return real(arguments, *more, **options)
             seen.append((list(map(str, arguments)), self.ledger()))
+            if str(arguments[0]) == str(self.watcher) and getattr(self, "WATCHER_RUNS", False):
+                return real(arguments, *more, **options)  # Recorded like any launch, and really started.
             raise RuntimeError(stop or "a process was launched")
         with mock.patch.object(subprocess, "Popen", side_effect=launch):
             yield seen
@@ -149,7 +154,7 @@ class WriterTests(ScopeCase):
         # Schema 2: the layout by id and digest, and the view. A camera step's record always states its region
         # and rotation (here the whole frame, unturned); the strip takes no alignment.
         self.assertEqual((record["hud_config_sha256"], record["region"], record["rotation"], record["alignment"],
-                          record["presence_watch"]), (config_digest(HUD_CONFIG), [0.0, 0.0, 1.0, 1.0], 0, None, False))
+                          record["presence_watch"]), (config_digest(HUD_CONFIG), [0.0, 0.0, 1.0, 1.0], 0, None, True))
         self.assertEqual(record["revision"], self.git("rev-parse", "HEAD").strip())
         self.assertEqual(record["manifest_sha256"], scope._file_digest(self.path))
         self.assertRegex(record["run_id"], r"\A[0-9a-f]{32}\Z")
@@ -193,7 +198,7 @@ class WriterTests(ScopeCase):
         )
         for reason, changes in cases:
             options = {"path": target, "step": "L-D4", "approval": "owner-2026-11-16-a1", "hud_config": HUD_CONFIG,
-                       "presence_watch": False, "checkpoint_manifest": self.path, "valid_minutes": 30, **changes}
+                       "presence_watch": True, "checkpoint_manifest": self.path, "valid_minutes": 30, **changes}
             with self.subTest(reason=reason, changes=sorted(changes)):
                 with self.assertRaises(scope.ScopeError) as caught:
                     scope.write_record(options.pop("path"), **options)
@@ -262,10 +267,10 @@ class WriterTests(ScopeCase):
                           record["alignment"], record["presence_watch"]),
                          (PANEL.layout_id, config_digest(PANEL), CENTRE, 90, NEUTRAL, True))
         self.assertIsNone(scope.check_record(record))
-        code, record, _ = tool("--step", "L-D4", "--layout", STRIP.layout_id, "--presence-watch", "none")
+        code, record, _ = tool("--step", "L-D4", "--layout", STRIP.layout_id, "--presence-watch", "required")
         self.assertEqual((code, record["region"], record["rotation"], record["alignment"], record["presence_watch"]),
-                         (0, WHOLE, 0, None, False))
-        code, record, _ = tool("--step", "L-D4", "--layout", PANEL.layout_id, "--presence-watch", "none",
+                         (0, WHOLE, 0, None, True))
+        code, record, _ = tool("--step", "L-D4", "--layout", PANEL.layout_id, "--presence-watch", "required",
                                "--alignment", "1.25,0.8,0.1,-0.2,90")
         self.assertEqual((code, record["alignment"]), (0, ALIGNED))
         code, record, _ = tool("--step", "L-D3", "--layout", PANEL.layout_id)
@@ -276,23 +281,28 @@ class WriterTests(ScopeCase):
             (2, "--layout", ("--step", "L-D3", "--layout", "head-fixed-box-panel-v2")),
             (2, "--layout", ("--step", "L-D3", "--layout", "validation-layout-v1")),
             (1, "scope_presence_watch_invalid", ("--step", "L-D4", "--layout", STRIP.layout_id)),  # Nor for the watch.
-            (1, "scope_alignment_not_for_layout", ("--step", "L-D4", "--layout", PANEL.layout_id, "--presence-watch", "none")),
+            # A camera step's record that does not require the watch is never written, for either layout (owner
+            # decision of 2026-11-25): the option still has no default, and "none" is refused by name.
+            (1, "scope_presence_watch_required", ("--step", "L-D4", "--layout", STRIP.layout_id, "--presence-watch", "none")),
+            (1, "scope_presence_watch_required", ("--step", "L-D5", "--layout", PANEL.layout_id, "--presence-watch", "none",
+                                                  "--alignment", "1,1,0,0,0", "--region", "0.25,0.25,0.75,0.75")),
+            (1, "scope_alignment_not_for_layout", ("--step", "L-D4", "--layout", PANEL.layout_id, "--presence-watch", "required")),
             (1, "scope_alignment_not_for_layout", ("--step", "L-D4", "--layout", STRIP.layout_id, "--presence-watch",
-                                                   "none", "--alignment", "1,1,0,0,0")),
-            (1, "scope_alignment_invalid", ("--step", "L-D4", "--layout", PANEL.layout_id, "--presence-watch", "none",
+                                                   "required", "--alignment", "1,1,0,0,0")),
+            (1, "scope_alignment_invalid", ("--step", "L-D4", "--layout", PANEL.layout_id, "--presence-watch", "required",
                                             "--alignment", "5,1,0,0,0")),
-            (1, "scope_alignment_invalid", ("--step", "L-D4", "--layout", PANEL.layout_id, "--presence-watch", "none",
+            (1, "scope_alignment_invalid", ("--step", "L-D4", "--layout", PANEL.layout_id, "--presence-watch", "required",
                                             "--alignment", "1,1,0,0,45")),
-            (2, "--alignment", ("--step", "L-D4", "--layout", PANEL.layout_id, "--presence-watch", "none",
+            (2, "--alignment", ("--step", "L-D4", "--layout", PANEL.layout_id, "--presence-watch", "required",
                                 "--alignment", "1,1,0,0")),
-            (2, "--alignment", ("--step", "L-D4", "--layout", PANEL.layout_id, "--presence-watch", "none",
+            (2, "--alignment", ("--step", "L-D4", "--layout", PANEL.layout_id, "--presence-watch", "required",
                                 "--alignment", "1,1,0,0,90.5")),
-            (2, "--alignment", ("--step", "L-D4", "--layout", PANEL.layout_id, "--presence-watch", "none",
+            (2, "--alignment", ("--step", "L-D4", "--layout", PANEL.layout_id, "--presence-watch", "required",
                                 "--alignment", "neutral")),
-            (1, "scope_region_invalid", ("--step", "L-D4", "--layout", STRIP.layout_id, "--presence-watch", "none",
+            (1, "scope_region_invalid", ("--step", "L-D4", "--layout", STRIP.layout_id, "--presence-watch", "required",
                                          "--region", "0.5,0.5,0.52,0.9")),
-            (2, "--region", ("--step", "L-D4", "--layout", STRIP.layout_id, "--presence-watch", "none", "--region", "0,0,1")),
-            (2, "--rotation", ("--step", "L-D4", "--layout", STRIP.layout_id, "--presence-watch", "none", "--rotation", "45")),
+            (2, "--region", ("--step", "L-D4", "--layout", STRIP.layout_id, "--presence-watch", "required", "--region", "0,0,1")),
+            (2, "--rotation", ("--step", "L-D4", "--layout", STRIP.layout_id, "--presence-watch", "required", "--rotation", "45")),
             (2, "--presence-watch", ("--step", "L-D4", "--layout", STRIP.layout_id, "--presence-watch", "yes")),
             (1, "scope_region_not_for_source", ("--step", "L-D3", "--layout", STRIP.layout_id, "--rotation", "90")),
             (1, "scope_region_not_for_source", ("--step", "L-D3", "--layout", STRIP.layout_id, "--region", "0,0,1,1")),
@@ -312,7 +322,7 @@ class WriterTests(ScopeCase):
                 numbers = ["1", "1", "0", "0", "0"]
                 numbers[place] = literal
                 with self.subTest(alignment=place, literal=literal):
-                    code, record, shown = tool("--step", "L-D4", "--layout", PANEL.layout_id, "--presence-watch", "none",
+                    code, record, shown = tool("--step", "L-D4", "--layout", PANEL.layout_id, "--presence-watch", "required",
                                                f"--alignment={','.join(numbers)}")
                     self.assertEqual((code, record), (2, None))
                     self.assertIn("--alignment", shown)
@@ -321,7 +331,7 @@ class WriterTests(ScopeCase):
                 numbers = ["0.25", "0.25", "0.75", "0.75"]
                 numbers[place] = literal
                 with self.subTest(region=place, literal=literal):
-                    code, record, shown = tool("--step", "L-D4", "--layout", STRIP.layout_id, "--presence-watch", "none",
+                    code, record, shown = tool("--step", "L-D4", "--layout", STRIP.layout_id, "--presence-watch", "required",
                                                f"--region={','.join(numbers)}")
                     self.assertEqual((code, record), (2, None))
                     self.assertIn("--region", shown)
@@ -783,7 +793,38 @@ class OutputSiteTests(ScopeCase):
 
 @unittest.skipUnless(NUMPY_CV2, "The camera HUD stage needs NumPy and OpenCV")
 class CameraSiteTests(ScopeCase):
-    """The camera-input site and the stage's order: both checks, then the first launch."""
+    """The camera-input site and the stage's order: both checks, then the first launch.
+
+    Every displayed camera run holds a presence watch (owner decision of 2026-11-25), and a stage runs only on
+    a real one, armed with a running watcher. So the fixture's pinned watcher is here the scripted fake
+    (``tests/fake_presence_watcher.py``, never SteamVR), and ``launches`` lets that one file start while it
+    records it: a run that reaches the arming shows the watcher's launch, after the record was spent, and
+    nothing else.
+    """
+    WATCHER_RUNS = True
+
+    def install_binaries(self):
+        from tests import fake_presence_watcher
+        self.watcher.write_text(fake_presence_watcher.SHEBANG_INSTALL.format(
+            python=sys.executable, root=str(Path(__file__).resolve().parents[1])))
+        super().install_binaries()
+
+    def setUp(self):
+        super().setUp()
+        scenario = mock.patch.dict(os.environ)
+        scenario.start()
+        self.addCleanup(scenario.stop)
+        for name in ("FAKE_PRESENCE_SCENARIO", "FAKE_PRESENCE_PID_FILE"):
+            os.environ.pop(name, None)
+
+    def watch(self, binary=None, seconds=5):
+        watch = PresenceWatch(binary or self.watcher, seconds, threading.Event())
+        self.addCleanup(watch.close)
+        return watch
+
+    def assert_only_the_watcher_ran(self, seen, record):
+        """The one process a run launched is the pinned watcher, with the record already in the ledger."""
+        self.assertEqual(seen, [([str(self.watcher), "--watch", "--seconds", mock.ANY], [f"{record['run_id']}.json"])])
 
     def source(self, binary=None):
         return CameraHelperSource(binary or self.helper, LIMITS, confirmed=True)
@@ -795,6 +836,8 @@ class CameraSiteTests(ScopeCase):
 
     def stage(self, client, **options):
         options.setdefault("seconds", LIMITS["max_seconds"])
+        # The stage holds a watch on the checkout's pinned watcher unless a test says otherwise (``watch=None``).
+        options.setdefault("watch", self.watch(seconds=options["seconds"]))
         return camera_stage.CameraHudStage(self.source(), synthetic.FixtureDetector(), client, **options)
 
     def test_a_truthy_answer_that_is_not_true_is_refused_at_both_sites(self):
@@ -863,7 +906,9 @@ class CameraSiteTests(ScopeCase):
             run = self.run_scope(path, seconds=5)
             client = self.client(run)
             stage = camera_stage.CameraHudStage(CameraHelperSource(self.helper, limits, confirmed=True),
-                                                synthetic.FixtureDetector(), client, **options)
+                                                synthetic.FixtureDetector(), client,
+                                                watch=self.watch(), **options)
+            self.assertIs(camera_stage.stage_view_bound(run, stage), True)  # The bound is the one thing wrong.
             with self.subTest(case=name), self.launches() as seen, \
                     mock.patch.object(stage.source, "drive", side_effect=AssertionError("driven")), \
                     mock.patch.object(camera_helper, "run_export", side_effect=AssertionError("exported")):
@@ -878,7 +923,8 @@ class CameraSiteTests(ScopeCase):
         self.assertIs(camera_stage.camera_display_input_preconditions(stage), True)
         with mock.patch.object(stage.source, "drive", side_effect=RuntimeError("stop")), self.launches() as seen:
             stage.run()
-        self.assertEqual((seen, self.ledger(), run.consumed), ([], [f"{record['run_id']}.json"], True))
+        self.assert_only_the_watcher_ran(seen, record)  # The watch was armed; neither the bridge nor the helper ran.
+        self.assertEqual((self.ledger(), run.consumed), ([f"{record['run_id']}.json"], True))
         self.assertEqual(run.status, "revoked")  # It failed before the bridge started: nothing can start later.
         with self.launches() as seen, self.assertRaisesRegex(ValueError, "^fixed_hud_output_not_approved$"):
             stage.client.start()
@@ -897,7 +943,7 @@ class CameraSiteTests(ScopeCase):
             ("the stage has a region, the scope asks for none", {}, {"region": centre}, {}),
             ("another region", e103, {"region": Region(0.2, 0.25, 0.75, 0.75, rotation=90)}, {}),
             ("another rotation", e103, {"region": Region(*CENTRE, rotation=270)}, {}),
-            ("the scope asks for the presence watch, the stage holds none", {"presence_watch": True}, {}, {}),
+            ("the scope asks for the presence watch, the stage holds none", {}, {"watch": None}, {}),
             ("the scope asks for the panel, the stage draws the strip",
              {"hud_config": PANEL, "alignment": dict(NEUTRAL)}, {}, {"layout": PANEL}),
             ("another alignment", {"hud_config": PANEL, "alignment": dict(ALIGNED)},
@@ -930,11 +976,10 @@ class CameraSiteTests(ScopeCase):
                 direct = self.run_scope(path, seconds=5, **bound)
                 self.assertIs(direct.permit(scope.HUD_OUTPUT, self), True)
                 # And a scope already granted for output is still refused camera input for an object that states
-                # no view: such an object is taken to be the strip from the whole frame with no watch, which is
-                # not what these scopes ask. (The one case whose scope asks for exactly that, with the difference
-                # on the stage's side, is the exception: for a view-less object there is no difference left.)
+                # no view: such an object is taken to be the strip from the whole frame with no watch, which no
+                # camera scope asks for, since every camera scope requires the watch.
                 plain = SimpleNamespace(client=SimpleNamespace(scope=direct), source=self.source(), seconds=5)
-                self.assertIs(camera_stage.camera_display_input_permitted(plain), not bound)
+                self.assertIs(camera_stage.camera_display_input_permitted(plain), False)
                 (self.root / scope.LEDGER / f"{record['run_id']}.json").unlink()
         # What the stage runs, asked for exactly, is served: the strip from the whole frame (stated in full or
         # left out), the strip through E103's view, and the panel through it with its alignment.
@@ -987,7 +1032,9 @@ class CameraSiteTests(ScopeCase):
         holder = self.client(plain)
         for run in (cropped, plain):
             self.assertIs(run.permit(scope.HUD_OUTPUT, holder), True)
-        stage = SimpleNamespace(client=None, source=self.source(), seconds=5)  # One stage: a use has one holder.
+        # One stage (a use has one holder), which states the strip from the whole frame with the watch held.
+        stage = SimpleNamespace(client=None, source=self.source(), seconds=5,
+                                view=lambda: {**camera_stage.STAGE_VIEW, "presence_watch": True})
         for order in ((plain, cropped), (cropped, plain), (plain, cropped, plain), (cropped, plain, cropped),
                       (plain, plain, cropped), (cropped, cropped, plain)):
             reads = []
@@ -1054,6 +1101,50 @@ class CameraSiteTests(ScopeCase):
         self.assertEqual(calls[-3:], ["HideOverlay", "ClearOverlayTexture", "DestroyOverlay"])
         self.assertIs(client.submit_observed(10_000, 1, 2, HUD_CONFIG.width_px, HUD_CONFIG.height_px, rgba), False)
 
+    def test_a_wrong_watcher_is_refused_with_the_record_unspent_and_the_watch_compares_the_digest(self):
+        # The watch a displayed camera run holds launches the checkout's own watcher, at the path the manifest
+        # hashes: any other is refused at the camera site's preconditions with the record unspent.
+        path, record = self.staged("L-D4")
+        elsewhere = self.out / "sightcircuit-presence-watcher"
+        elsewhere.write_bytes(self.watcher.read_bytes())  # The same bytes at another path are another binary.
+        elsewhere.chmod(0o755)
+        for binary in (elsewhere, Path(sys.executable), self.helper, self.out / "absent"):
+            run = self.run_scope(path, seconds=5)
+            stage = self.stage(self.client(run), seconds=5, watch=self.watch(binary))
+            with self.subTest(watcher=binary.name), self.launches() as seen:
+                self.assertIs(camera_stage.stage_view_bound(run, stage), True)  # The watcher is the one thing wrong.
+                self.assertIs(camera_stage.camera_display_input_preconditions(stage), False)
+                with self.assertRaisesRegex(ValueError, "^fixed_hud_output_not_approved$"):
+                    stage.run()
+                self.assertEqual((seen, self.ledger(), run.consumed), ([], [], False))
+        # The watcher rewritten between the permission and its launch: the watch hashes it, launches nothing and
+        # is not armed, and the run ends there by name with no bridge and no helper launched. The record was
+        # consumed by the permission, as it is for a helper rewritten at that moment.
+        run = self.run_scope(path, seconds=5)
+        watch = PresenceWatch(self.watcher, 5, threading.Event())
+        client = self.client(run)
+        stage = self.stage(client, seconds=5, watch=watch)
+        expected, start = scope._file_digest(self.watcher), watch.start
+
+        def rewrite_then_start(abort=None):
+            self.assertEqual(watch.expected_sha256, expected)
+            self.watcher.write_bytes(b"#!/bin/sh\nexit 0\n")
+            return start(abort)
+        with mock.patch.object(watch, "start", side_effect=rewrite_then_start) as started, self.launches() as seen, \
+                mock.patch.object(stage.source, "drive", side_effect=AssertionError("driven")), \
+                mock.patch.object(camera_helper, "run_export", side_effect=AssertionError("exported")):
+            report = stage.run()
+        started.assert_called_once()
+        self.assertEqual(seen, [])  # Neither the watcher, the helper nor the bridge was launched.
+        self.assertEqual((report["status"], report["reason"]), ("error", "presence_watch_not_armed"))
+        block = report["presence_watch"]
+        self.assertEqual((block["requested"], block["armed"], block["refusal"], block["cleanup_ok"]),
+                         (True, False, "watcher_not_pinned", True))
+        self.assertEqual((client.process, stage.source.status), (None, "not_started"))
+        self.assertEqual(report["cleanup"]["ok"], True)
+        self.assertEqual(self.ledger(), [f"{record['run_id']}.json"])
+        self.assertEqual(gates.claims(), ALL_CLOSED)
+
     def test_a_wrong_helper_is_refused_with_the_record_unspent_and_the_launcher_compares_the_digest(self):
         path, record = self.staged("L-D4")
         elsewhere = self.out / "sightcircuit-camera-helper"
@@ -1061,7 +1152,9 @@ class CameraSiteTests(ScopeCase):
         elsewhere.chmod(0o755)
         for binary in (elsewhere, Path(sys.executable), self.bridge, self.out / "absent"):
             run = self.run_scope(path, seconds=5)
-            stage = camera_stage.CameraHudStage(self.source(binary), synthetic.FixtureDetector(), self.client(run), seconds=5)
+            stage = camera_stage.CameraHudStage(self.source(binary), synthetic.FixtureDetector(), self.client(run),
+                                                seconds=5, watch=self.watch())
+            self.assertIs(camera_stage.stage_view_bound(run, stage), True)  # The helper is the one thing wrong.
             with self.subTest(helper=binary.name), self.launches() as seen:
                 with self.assertRaisesRegex(ValueError, "^fixed_hud_output_not_approved$"):
                     stage.run()
@@ -1084,7 +1177,7 @@ class CameraSiteTests(ScopeCase):
         with mock.patch.object(stage.source, "drive", side_effect=rewrite_then_export) as driven, self.launches() as seen:
             stage.run()
         driven.assert_called_once()
-        self.assertEqual(seen, [])  # Neither the helper nor the bridge was launched.
+        self.assert_only_the_watcher_ran(seen, record)  # The watch was armed; neither the helper nor the bridge ran.
         self.helper.write_bytes(b"camera helper built on this machine")
         report = camera_helper.run_export(self.helper, LIMITS, (0,), on_frame=lambda frame: None, confirmed=True,
                                           expected_sha256="0" * 64)
@@ -1108,7 +1201,8 @@ class CameraSiteTests(ScopeCase):
                          [(gates.LIVE_HUD_OUTPUT, True), (gates.LIVE_CAMERA_INPUT, True)])
         self.assertEqual(order, [("drive", [f"{record['run_id']}.json"])])  # Both checks, then the first launch.
         exported.assert_not_called()
-        self.assertEqual(seen, [])
+        self.assert_only_the_watcher_ran(seen, record)  # After both checks and the record: the watch, then the drive.
+        self.assertEqual((report["presence_watch"]["armed"], report["presence_watch"]["cleanup_ok"]), (True, True))
         self.assertEqual((report["status"], report["reason"]), ("error", "camera_hud_run_failed"))
         self.assertEqual({name: report[name] for name in gates.claims()}, ALL_CLOSED)
         self.assertEqual(client.scope.status, "revoked")  # It failed before the bridge started.
@@ -1135,7 +1229,10 @@ class CameraSiteTests(ScopeCase):
         self.assertIs(granted.permit(scope.HUD_OUTPUT, client), True)
         self.assertIs(camera_stage.camera_display_input_permitted(
             SimpleNamespace(client=SimpleNamespace(scope=granted), source=self.source(), seconds=5)), False)
-        # A granted camera scope still refuses a source that is not the left camera's helper source.
+        # A granted camera scope still refuses a source that is not the left camera's helper source. (The object
+        # asked states the strip's view with the watch held, so that the source is the one thing wrong.)
+        def watched():
+            return {**camera_stage.STAGE_VIEW, "presence_watch": True}
         for label, make in (("both", lambda source: setattr(source, "source_id", "arcturus_camera:0+1")),
                             ("right", lambda source: setattr(source, "source_id", "arcturus_camera:1")),
                             ("mirror", lambda source: setattr(source, "source_id", "mirror:observed"))):
@@ -1143,7 +1240,7 @@ class CameraSiteTests(ScopeCase):
             self.assertIs(run.permit(scope.HUD_OUTPUT, client), True)
             source = self.source()
             make(source)
-            stand_in = SimpleNamespace(client=SimpleNamespace(scope=run), source=source, seconds=5)
+            stand_in = SimpleNamespace(client=SimpleNamespace(scope=run), source=source, seconds=5, view=watched)
             with self.subTest(source=label):
                 self.assertIs(camera_stage.camera_display_input_permitted(stand_in), False)
                 stand_in.source = self.source()
@@ -1154,11 +1251,16 @@ class CameraSiteTests(ScopeCase):
         declared.source_id = self.source().source_id
         for source in (declared, SimpleNamespace(source_id=self.source().source_id, kind="synthetic"), None):
             self.assertIs(camera_stage.camera_display_input_permitted(
-                SimpleNamespace(client=SimpleNamespace(scope=run), source=source, seconds=5)), False)
+                SimpleNamespace(client=SimpleNamespace(scope=run), source=source, seconds=5, view=watched)), False)
+        # An object that states no view is taken to hold no watch, which no camera scope asks for: refused too.
+        self.assertIs(camera_stage.camera_display_input_permitted(
+            SimpleNamespace(client=SimpleNamespace(scope=run), source=self.source(), seconds=5)), False)
+        self.assertIs(camera_stage.camera_display_input_permitted(
+            SimpleNamespace(client=SimpleNamespace(scope=run), source=self.source(), seconds=5, view=watched)), True)
         for stand_in in (None, True, mock.Mock(),
                          SimpleNamespace(source=scope.CAMERA_LEFT, seconds=20, permit=lambda use, holder=None: True)):
-            self.assertIs(camera_stage.camera_display_input_permitted(
-                SimpleNamespace(client=SimpleNamespace(scope=stand_in), source=self.source(), seconds=5)), False)
+            self.assertIs(camera_stage.camera_display_input_permitted(SimpleNamespace(
+                client=SimpleNamespace(scope=stand_in), source=self.source(), seconds=5, view=watched)), False)
         for cameras in ((0, 1), (1,)):
             with self.assertRaises(SightCircuitError) as caught:  # Both cameras never reach a stage at all.
                 CameraHelperSource(Path("unused"), LIMITS, cameras=cameras)
@@ -1307,18 +1409,22 @@ class BindingTests(ScopeCase):
                  ("no region", {"region": None}, "scope_region_mismatch"),
                  ("the rotation", {"rotation": 270}, "scope_rotation_mismatch"),
                  ("no rotation", {"rotation": None}, "scope_rotation_mismatch"),
-                 ("the neutral alignment", {"alignment": dict(NEUTRAL)}, "scope_alignment_mismatch"),
-                 ("no presence watch", {"presence_watch": False}, "scope_presence_watch_mismatch")]
+                 ("the neutral alignment", {"alignment": dict(NEUTRAL)}, "scope_alignment_mismatch")]
         cases += [(f"the alignment's {name}", {"alignment": {**ALIGNED, name: NEUTRAL[name]}}, "scope_alignment_mismatch")
                   for name in scope.ALIGNMENT_FIELDS]
         cases += [("the alignment by the last digit", {"alignment": {**ALIGNED, "offset_x": 0.1000001}},
                    "scope_alignment_mismatch")]
-        self.assertEqual(len(cases), 13)
+        self.assertEqual(len(cases), 12)
         for name, change, reason in cases:
             with self.subTest(differs_in=name):
                 run = self.run_scope(path, seconds=60, **{**bound, **change})
                 self.assert_refused(run, reason)
                 self.assertEqual(run.record, record)  # The record was read and is well formed: the request differs.
+        # Without the presence watch it is not a request a camera run can make at all: refused by its own name
+        # before any record is read (owner decision of 2026-11-25), so it never gets as far as a mismatch.
+        run = self.run_scope(path, seconds=60, **{**bound, "presence_watch": False})
+        self.assert_refused(run, "scope_presence_watch_required")
+        self.assertIsNone(run.record)
         # The layout alone, on the step that has no view: a strip's record never serves the panel, nor the reverse.
         for recorded, asked in ((STRIP, PANEL), (PANEL, STRIP)):
             with self.subTest(recorded=recorded.layout_id, asked=asked.layout_id):
@@ -1338,22 +1444,55 @@ class BindingTests(ScopeCase):
         self.assertIn(f"{record['run_id']}.json", self.ledger())
         self.assertEqual(gates.claims(), ALL_CLOSED)
 
-    def test_the_presence_watch_is_matched_exactly_in_both_directions(self):
-        # A record that requires the watch refuses a run without it, and a record that does not require it
-        # refuses a run that holds it. The record says what the run does; "at least" is not the rule.
+    def test_a_camera_run_holds_the_presence_watch_and_no_record_or_request_says_otherwise(self):
+        # Owner decision of 2026-11-25: every run that shows camera-derived boxes or names in the headset holds
+        # the presence watch, and no approval record can be written for one without it. For both layouts: the
+        # writer refuses such a record, a record edited to say so does not verify, and a request without the
+        # watch is refused before any record is read. Nothing is spent by any of it. (A record and a request
+        # that disagree about the watch therefore no longer exist: each side is refused by its own name first,
+        # and ``scope_presence_watch_mismatch`` stays in the comparison as the second line.)
         granted = 0
         for layout, extra in ((STRIP, {}), (PANEL, {"alignment": dict(NEUTRAL)})):
-            for recorded in (False, True):
-                path, record = self.staged("L-D4", hud_config=layout, presence_watch=recorded, **extra)
-                self.assertIs(record["presence_watch"], recorded)
-                with self.subTest(layout=layout.layout_id, recorded=recorded):
-                    run = self.run_scope(path, hud_config=layout, presence_watch=not recorded, **extra)
-                    self.assert_refused(run, "scope_presence_watch_mismatch")
-                    self.assertEqual(len(self.ledger()), granted)  # The refusal spent nothing.
-                    self.assertIs(self.run_scope(path, hud_config=layout, presence_watch=recorded,
-                                                 **extra).permit(scope.HUD_OUTPUT), True)
+            for step in ("L-D4", "L-D5"):
+                with self.subTest(layout=layout.layout_id, step=step):
+                    with self.assertRaises(scope.ScopeError) as caught:
+                        self.staged(step, hud_config=layout, presence_watch=False, **extra)
+                    self.assertEqual(caught.exception.reason, "scope_presence_watch_required")
+                    path, record = self.staged(step, hud_config=layout, **extra)
+                    self.assertIs(record["presence_watch"], True)
+                    without = self.edited(step, staged={"hud_config": layout, **extra}, presence_watch=False)
+                    self.assertEqual(scope.check_record(json.loads(without.read_text())), "scope_presence_watch_required")
+                    for asked in (True, False):  # The edited record serves no request, with the watch or without.
+                        self.assert_refused(self.run_scope(without, hud_config=layout, presence_watch=asked, **extra),
+                                            "scope_presence_watch_required")
+                    run = self.run_scope(path, hud_config=layout, presence_watch=False, **extra)
+                    self.assert_refused(run, "scope_presence_watch_required")
+                    self.assertIsNone(run.record)  # Refused as a request, before the record was read.
+                    self.assertEqual(len(self.ledger()), granted)  # No refusal spent anything.
+                    self.assertIs(self.run_scope(path, hud_config=layout, **extra).permit(scope.HUD_OUTPUT), True)
                     granted += 1
         self.assertEqual((granted, len(self.ledger())), (4, 4))
+        # The second line, asserted and not only said: with the record's own check out of the way (the one thing
+        # patched), a record that says no watch against a request that asks for it is refused by the comparison,
+        # by its name, with nothing spent. Unpatched, the same pair is refused by the record's check first.
+        without = self.edited("L-D4", presence_watch=False)
+        with mock.patch.object(scope, "check_record", return_value=None) as checked:
+            self.assert_refused(self.run_scope(without, presence_watch=True), "scope_presence_watch_mismatch")
+        checked.assert_called_once()
+        self.assert_refused(self.run_scope(without, presence_watch=True), "scope_presence_watch_required")
+        self.assertEqual(len(self.ledger()), 4)
+        # The synthetic step opens no camera and is unaffected: its record says no watch, and one that says
+        # otherwise, or a request that does, is refused as before.
+        for layout in (STRIP, PANEL):
+            path, record = self.staged("L-D3", hud_config=layout)
+            self.assertIs(record["presence_watch"], False)
+            with self.assertRaises(scope.ScopeError) as caught:
+                self.staged("L-D3", hud_config=layout, presence_watch=True)
+            self.assertEqual(caught.exception.reason, "scope_presence_watch_not_for_source")
+            self.assert_refused(self.run_scope(path, source=scope.SYNTHETIC, hud_config=layout, presence_watch=True),
+                                "scope_presence_watch_not_for_source")
+            self.assertIs(self.run_scope(path, source=scope.SYNTHETIC, hud_config=layout).permit(scope.HUD_OUTPUT), True)
+        self.assertEqual(len(self.ledger()), 6)
 
     def test_a_request_whose_view_is_malformed_or_does_not_belong_is_refused_before_any_record_is_read(self):
         nan = float("nan")

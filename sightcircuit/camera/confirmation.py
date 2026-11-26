@@ -47,6 +47,18 @@ BOX_DISPLAY_NOTICE = (
     "counts, labels, timings and format metadata, printed on this terminal and written to a file only if you named "
     "--report. Stop with Ctrl-C at any passthrough change, any green input, or when the wearer asks. Typing yes "
     "starts this one run; it is not an approval and creates no scope record.")
+# The synthetic boxes on the panel (work-order item B5): what the wearer will see is the orientation scene. The
+# owner accepted this wording on 2026-11-25 with one sentence changed, relayed by the coordinator ("Yes, with the
+# clearer sentence"): "The largest box, which is wider than tall, should appear at the top left." in place of
+# "The largest box, wider than tall, is the picture's top left." ``tests/test_camera_hud_command.py`` pins it
+# sentence for sentence, so a change to it is a change the owner is asked about.
+SYNTHETIC_BOXES_NOTICE = (
+    "camera_hud --synthetic-boxes: shows five named boxes on a transparent panel in the middle of the view in the "
+    "headset, for the bounds shown below, with scheduled pauses in which the panel must go blank within about a "
+    "second. The largest box, which is wider than tall, should appear at the top left. No camera is opened and "
+    "nothing is detected. Nothing is saved but the report of counts and timings, printed on this terminal and written to a "
+    "file only if you named --report. Stop with Ctrl-C at any passthrough change, any green input, or when the "
+    "wearer asks. Typing yes starts this one run; it is not an approval and creates no scope record.")
 SYNTHETIC_NOTICE = (
     "camera_hud --synthetic-rows: shows a counter row on a small tile at the edge of the view in the headset, "
     "for the bounds shown below, with scheduled pauses in which the tile must go blank within about a second. "
@@ -103,7 +115,8 @@ def confirm_on_terminal(limits, cameras, *, stdin=None, output=None, notices=())
     return confirm((contract.EXPORT_NOTICE, *notices), bounds, stdin=stdin, output=output)
 
 
-def confirm_synthetic_rows(seconds, hz, *, stdin=None, output=None):
-    """The informed start of the synthetic-rows run: its notice, its bounds and the typed answer; no camera."""
-    return confirm((SYNTHETIC_NOTICE,), f"{seconds} seconds, {hz} updates a second, no camera.", stdin=stdin,
+def confirm_synthetic_rows(seconds, hz, *, stdin=None, output=None, notice=SYNTHETIC_NOTICE):
+    """The informed start of a synthetic run (rows, or boxes with ``notice``): its notice, its bounds and the
+    typed answer; no camera."""
+    return confirm((notice,), f"{seconds} seconds, {hz} updates a second, no camera.", stdin=stdin,
                    output=output)

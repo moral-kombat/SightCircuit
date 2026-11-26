@@ -95,12 +95,12 @@ if not __package__:  # Run as a file: import the package beside this one.
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from sightcircuit import gates
-from sightcircuit.camera import confirmation, marks
+from sightcircuit.camera import confirmation, marks, presence, presence_standin
 from sightcircuit.camera import region as regions
 from sightcircuit.detection import DEFAULT_DETECTOR, DETECTORS, POC_THRESHOLD, class_names, create_detector
 from sightcircuit.errors import SightCircuitError
 from sightcircuit.frame import Detection, DetectionResult
-from sightcircuit.hud import camera_stage, synthetic_rows
+from sightcircuit.hud import camera_stage, synthetic_boxes, synthetic_rows
 from sightcircuit.hud.boxes import ALIGNMENT_FIELDS, Alignment
 from sightcircuit.hud.camera import ORIENTATIONS
 from sightcircuit.hud.camera_stage import CAMERA_INPUT_REFUSAL, CameraHudStage
@@ -150,6 +150,14 @@ SCOPE_KEYS = ("status", "refusal", "consumed", "requested_runner", "requested_st
 # The validate mode's view for the box panel: the centre half of the frame turned a quarter turn (E103's view; the
 # stand-in's frames have no right way up) and the neutral alignment.
 VALIDATION_REGION = regions.Region(0.25, 0.25, 0.75, 0.75, rotation=90)
+# The validate mode's presence end: a longer run of the stand-in camera, and the watcher stand-in's standby signal
+# asked for by the run itself, when the detector is given the frame after the first one it answered
+# (``PresenceEndDetector``): the helper is then running and a tile has been sent, whatever the host's speed. A
+# signal, a loss or a stop that lands while the helper is still starting is another case and not a clean end: the
+# helper is ended by its supervision (``helper_exit``), the run's cleanup is not confirmed and its exit code is 1.
+VALIDATION_PRESENCE_LIMITS = {"fps": 5, "max_seconds": 4, "max_frames": 15}
+VALIDATION_STANDBY_AFTER_DETECTIONS = 1
+VALIDATION_BOXES = {"seconds": 4, "stops": 1, "stop_seconds": 2.0}
 COMMAND_BLOCKS = {"command": COMMAND_KEYS, "scope_record": SCOPE_KEYS}
 ERROR_BLOCKS.update(COMMAND_BLOCKS)
 CAMERA_BLOCKS = {
@@ -163,19 +171,26 @@ CAMERA_BLOCKS = {
                  "anchor_at_report", "wall_clock_step_ns"),
 }
 SYNTHETIC_BLOCKS = {**synthetic_rows.REPORT_BLOCKS, **COMMAND_BLOCKS}
+SYNTHETIC_PART = ("status", "reason", "bridge_mode", "requested", "acknowledged_presented", "stops_reached",
+                  "stops_expired", "stops_within_bound", "bridge_cleanup_ok", "complete", "ok")
 VALIDATION_BLOCKS = {
     "report_kind": None, "schema_version": None, "status": None, "reason": None, **dict.fromkeys(gates.claims()),
     "validation_only": None, "images_saved": None, "pixels_in_report": None, "camera_opened": None,
     "command": COMMAND_KEYS,
     "helper": ("backend", "fake", "build_dirty", "sdk_release", "contract"),
     "camera": ("status", "reason", "bridge_mode", "frames_emitted", "frames_sent", "acknowledged_presented",
-               "labels", "expiries", "tile_already_down", "source_cleanup_ok", "bridge_cleanup_ok", "ok"),
+               "labels", "expiries", "tile_already_down", "presence_armed", "source_cleanup_ok", "bridge_cleanup_ok",
+               "ok"),
     "camera_panel": ("status", "reason", "bridge_mode", "layout_id", "update_bytes", "region_rotation",
                      "frames_emitted", "frames_sent", "acknowledged_presented", "results_sent", "boxes_sent", "labels",
                      "expiries",
-                     "tile_already_down", "source_cleanup_ok", "bridge_cleanup_ok", "ok"),
-    "synthetic_rows": ("status", "reason", "bridge_mode", "requested", "acknowledged_presented", "stops_reached",
-                       "stops_expired", "stops_within_bound", "bridge_cleanup_ok", "complete", "ok"),
+                     "tile_already_down", "presence_armed", "source_cleanup_ok", "bridge_cleanup_ok", "ok"),
+    # The watch ending a displayed run: the watcher stand-in's standby signal, the end by name and the hide's times.
+    "presence_end": ("status", "reason", "bridge_mode", "watcher", "armed", "ended_run", "ending_signal", "frames_sent",
+                     "hide_written_after_signal_ms", "bridge_hide_after_signal_ms", "tile_already_down",
+                     "watcher_cleanup_ok", "source_cleanup_ok", "bridge_cleanup_ok", "ok"),
+    "synthetic_rows": SYNTHETIC_PART,
+    "synthetic_boxes": SYNTHETIC_PART,
 }
 
 
@@ -186,6 +201,26 @@ class ValidationDetector:
     def detect(self, image, threshold):
         height, width = image.shape[:2]
         return DetectionResult((Detection("bottle", 0.9, (width // 8, height // 8, width // 2, height // 2)),), 0.0)
+
+
+class PresenceEndDetector(ValidationDetector):
+    """The validation's detector for the pass its watch must end: it asks the watcher stand-in for the standby.
+
+    ``trigger`` is the file the stand-in looks for at each heartbeat
+    (``presence_standin.install(standby_trigger=...)``). It is created when
+    a frame arrives after ``VALIDATION_STANDBY_AFTER_DETECTIONS`` were
+    answered, so the signal follows the run's own progress: no delay is
+    guessed and nothing polls.
+    """
+
+    def __init__(self, trigger):
+        self.trigger, self.answered = Path(trigger), 0
+
+    def detect(self, image, threshold):
+        if self.answered == VALIDATION_STANDBY_AFTER_DETECTIONS:
+            self.trigger.touch()
+        self.answered += 1
+        return super().detect(image, threshold)
 
 
 def pinned(path):
@@ -368,7 +403,8 @@ def exit_code(report, signals=()):
 def run_camera(limits, *, run_scope=None, helper=None, bridge=None, detector=DEFAULT_DETECTOR, detector_factory=None,
                threshold=POC_THRESHOLD, directions=True, orientation="identity", target_label=None, cues=(),
                mark_labels=(), key_fd=None, terminal=None, confirmed=False, validation_only=False, client_env=None,
-               extra_args=(), stop=None, signals=None, mode="camera", layout=HUD_CONFIG, region=None, alignment=None):
+               extra_args=(), stop=None, signals=None, mode="camera", layout=HUD_CONFIG, region=None, alignment=None,
+               presence_watcher=None):
     """One bounded camera HUD run; returns the report (the stage's plus this command's blocks). Main thread only.
 
     ``layout`` is the fixed layout the run draws for (the strip unless the
@@ -376,6 +412,13 @@ def run_camera(limits, *, run_scope=None, helper=None, bridge=None, detector=DEF
     ``alignment`` the panel's ``Alignment``; the stage and the client are
     built from them, and a device run's ``run_scope`` must have been asked
     for the same, or the sites refuse.
+
+    ``presence_watcher`` is the watcher the run's presence watch launches.
+    A device run always holds the watch (owner decision of 2026-11-25) and
+    launches the watcher the checkpoint manifest pins; the validation names
+    a stand-in. The stage arms the watch after the record's check and before
+    the bridge or the helper is launched: a run whose watch cannot be armed
+    ends there, ``presence_watch_not_armed``, and its record is spent.
 
     ``run_scope`` is the ``RunScope`` of a device run (None in validation,
     where nothing is displayed). ``helper`` and ``bridge`` default to the
@@ -395,6 +438,9 @@ def run_camera(limits, *, run_scope=None, helper=None, bridge=None, detector=DEF
     cues, mark_labels = marks.check_cues(cues), marks.check_mark_labels(mark_labels)
     helper = pinned(manifest.CAMERA_HELPER) if helper is None else helper
     bridge = (DEFAULT_BRIDGE if validation_only else pinned(manifest.BRIDGE)) if bridge is None else bridge
+    if presence_watcher is None and not validation_only:
+        presence_watcher = pinned(manifest.PRESENCE_WATCHER)  # No displayed camera run without the watch.
+    stop = threading.Event() if stop is None else stop  # The watch sets it; the stage and the helper wait on it.
     clock = marks.Clock()
     session = marks.MarkSession(clock, cues, mark_labels, key_fd, sys.stderr if terminal is None else terminal)
     command = command_block(mode, confirmation=confirmation.OPERATOR_TERMINAL if confirmed else None,
@@ -416,6 +462,11 @@ def run_camera(limits, *, run_scope=None, helper=None, bridge=None, detector=DEF
         refusal = error.reason
     if refusal is None and not bridge_usable(bridge):
         refusal = "overlay_bridge_missing"
+    if refusal is None and presence_watcher is not None:
+        try:
+            camera_helper.helper_path(presence_watcher)
+        except SightCircuitError as error:
+            refusal = "presence_watcher_" + error.reason.removeprefix("helper_")
     if refusal is None and not validation_only:
         refusal = runtime_dir_refusal()
     if refusal is None:
@@ -426,10 +477,14 @@ def run_camera(limits, *, run_scope=None, helper=None, bridge=None, detector=DEF
     if refusal is None and target_label is not None and target_label not in model.classes:
         refusal = "target_label_unknown"
 
+    # No mark is recorded after the ending signal, as in the run without display.
+    watch = None if presence_watcher is None else presence.PresenceWatch(
+        presence_watcher, limits["max_seconds"], stop, on_signal=session.freeze)
     stage = CameraHudStage(source, model, client, threshold=threshold, directions=directions, orientation=orientation,
                            max_fps=limits["fps"], seconds=limits["max_seconds"], config=layout, region=region,
                            alignment=alignment, on_frame=lambda frame: session.first_frame(frame.observed_ns),
-                           target_label=target_label if refusal is None else None, signalled=lambda: bool(signals))
+                           target_label=target_label if refusal is None else None, signalled=lambda: bool(signals),
+                           watch=watch)
     status = invalid = None
     if refusal is not None:
         status = ("error", refusal)
@@ -447,9 +502,9 @@ def run_camera(limits, *, run_scope=None, helper=None, bridge=None, detector=DEF
                 raise
         finally:
             session.stop()
-    cleanup = {"source_ok": source.cleanup_ok is True,
+    cleanup = {"source_ok": source.cleanup_ok is True or stage._nothing_launched,
                "bridge_ok": (stage._bridge_report or {}).get("cleanup_confirmed") is True}
-    cleanup["ok"] = cleanup["source_ok"] and cleanup["bridge_ok"]
+    cleanup["ok"] = cleanup["source_ok"] and cleanup["bridge_ok"] and (watch is None or watch.cleanup_ok)
     try:
         report = stage.report() if invalid is None else None
     except ValueError as error:
@@ -473,14 +528,22 @@ def run_camera(limits, *, run_scope=None, helper=None, bridge=None, detector=DEF
 # ---- the synthetic rows ---------------------------------------------------------------------------------------------
 
 def run_synthetic_rows(seconds, *, stops=3, stop_seconds=3.0, run_scope=None, bridge=None, confirmed=False,
-                       validation_only=False, client_env=None, stop=None, mode="synthetic_rows"):
-    """One bounded run of counter rows with scheduled stops; returns the report. The camera is never opened."""
+                       validation_only=False, client_env=None, stop=None, mode="synthetic_rows", boxes=False):
+    """One bounded run of counter rows with scheduled stops; returns the report. The camera is never opened.
+
+    With ``boxes`` the same driver draws the orientation scene on the box
+    panel (``synthetic_boxes``): the client names that layout and a device
+    run's record must name it too. No presence watch is held by either: a
+    synthetic run shows nothing that came from a camera.
+    """
     bridge = (DEFAULT_BRIDGE if validation_only else pinned(manifest.BRIDGE)) if bridge is None else bridge
     command = command_block(mode, confirmation=confirmation.OPERATOR_TERMINAL if confirmed else None,
                             seconds_requested=seconds, fps_requested=synthetic_rows.UPDATE_HZ, stops_requested=stops)
     client = ObservedFrameClient(bridge, validation_only=validation_only, env=client_env, scope=run_scope,
-                                 max_output_seconds=None if validation_only else output_bound(run_scope))
-    driver = synthetic_rows.SyntheticRows(client, seconds=seconds, stops=stops, stop_seconds=stop_seconds)
+                                 max_output_seconds=None if validation_only else output_bound(run_scope),
+                                 layout=camera_stage.box_layout() if boxes else None)
+    driver = (synthetic_boxes.SyntheticBoxes if boxes else synthetic_rows.SyntheticRows)(
+        client, seconds=seconds, stops=stops, stop_seconds=stop_seconds)
     status = None
     if not bridge_usable(bridge):
         status, command["refusal"] = ("error", "overlay_bridge_missing"), "overlay_bridge_missing"
@@ -503,7 +566,7 @@ def run_synthetic_rows(seconds, *, stops=3, stop_seconds=3.0, run_scope=None, br
     except ValueError as error:
         if not str(error).startswith(REPORT_INVALID):
             raise
-        return error_report(synthetic_rows.REPORT_KIND, mode, str(error), command=command, run_scope=run_scope,
+        return error_report(driver.KIND, mode, str(error), command=command, run_scope=run_scope,
                             cleanup=cleanup)
     if status is not None:
         report.update(status=status[0], reason=status[1])
@@ -533,6 +596,18 @@ def _positive(value):
     return type(value) is int and value > 0
 
 
+# The validation's parts in the report's order, each with the reason the validation gives when it did not pass.
+VALIDATION_PARTS = (("camera", "camera_path_failed"), ("camera_panel", "camera_panel_path_failed"),
+                    ("presence_end", "presence_path_failed"), ("synthetic_rows", "synthetic_rows_failed"),
+                    ("synthetic_boxes", "synthetic_boxes_failed"))
+
+
+def failed_parts(report):
+    """The reasons of the validation's parts that did not pass, in the report's order; a part that is missing
+    did not pass."""
+    return [reason for name, reason in VALIDATION_PARTS if (report.get(name) or {}).get("ok") is not True]
+
+
 def validate(helper=None, bridge=None):
     """The whole path with nothing real in it: the fake helper, a scripted detector, the validation bridge.
 
@@ -546,10 +621,10 @@ def validate(helper=None, bridge=None):
     helper = Path(guard.ROOT) / FAKE_HELPER if helper is None else helper
     bridge = DEFAULT_BRIDGE if bridge is None else bridge
     command = command_block("validate", detector=ValidationDetector.name)
-    report = {"report_kind": VALIDATION_KIND, "schema_version": 2, "status": "validation_failed", "reason": None,
+    report = {"report_kind": VALIDATION_KIND, "schema_version": 3, "status": "validation_failed", "reason": None,
               **gates.claims(), "validation_only": True, "images_saved": False, "pixels_in_report": False,
               "camera_opened": False, "command": command, "helper": None, "camera": None, "camera_panel": None,
-              "synthetic_rows": None}
+              "presence_end": None, "synthetic_rows": None, "synthetic_boxes": None}
     described = describe_helper(helper)
     fake = described is not None and described.get("backend") == "fake" and described.get("sdk_release") is None
     report["helper"] = {"backend": camera_stage._identifier((described or {}).get("backend"), None), "fake": fake,
@@ -565,17 +640,24 @@ def validate(helper=None, bridge=None):
     # The fake backend has no camera and no wearer: its parent's confirmation is this check that it is the fake.
     previous = os.environ.get("XDG_RUNTIME_DIR")
     panel = camera_stage.box_layout()  # By what it is, never by its place in the contract's list.
-    with tempfile.TemporaryDirectory(prefix="sightcircuit-camera-hud-validate-") as runtime_directory:
+    with tempfile.TemporaryDirectory(prefix="sightcircuit-camera-hud-validate-") as runtime_directory, \
+            tempfile.TemporaryDirectory(prefix="sightcircuit-camera-hud-watcher-") as watcher_directory:
         os.environ["XDG_RUNTIME_DIR"] = runtime_directory
+        # The presence watcher needs a running SteamVR, which a validation has not: its stand-in speaks the
+        # watcher's protocol and nothing else (``presence_standin``). Both camera passes run with the watch armed.
+        standin = presence_standin.install(watcher_directory)
+        common = dict(helper=helper, bridge=bridge, detector_factory=ValidationDetector, confirmed=True,
+                      validation_only=True, extra_args=VALIDATION_HELPER_ARGS, target_label="bottle", mode="validate")
         try:
-            stage = run_camera(VALIDATION_LIMITS, helper=helper, bridge=bridge, detector_factory=ValidationDetector,
-                               confirmed=True, validation_only=True, extra_args=VALIDATION_HELPER_ARGS,
-                               target_label="bottle", mode="validate")
+            stage = run_camera(VALIDATION_LIMITS, presence_watcher=standin, **common)
             # The same path for the box panel, through a region turned a quarter turn: a megabyte per update.
-            boxed = run_camera(VALIDATION_LIMITS, helper=helper, bridge=bridge, detector_factory=ValidationDetector,
-                               confirmed=True, validation_only=True, extra_args=VALIDATION_HELPER_ARGS,
-                               target_label="bottle", mode="validate", layout=panel, region=VALIDATION_REGION,
-                               alignment=Alignment())
+            boxed = run_camera(VALIDATION_LIMITS, presence_watcher=standin, layout=panel, region=VALIDATION_REGION,
+                               alignment=Alignment(), **common)
+            # And a run the watch ends: the stand-in writes SteamVR's standby signal, the tile comes down.
+            trigger = Path(watcher_directory) / "standby-now"
+            ended = run_camera(VALIDATION_PRESENCE_LIMITS, presence_watcher=presence_standin.install(
+                watcher_directory, standby_trigger=trigger),
+                **dict(common, detector_factory=lambda: PresenceEndDetector(trigger)))
         finally:
             if previous is None:
                 os.environ.pop("XDG_RUNTIME_DIR", None)
@@ -588,8 +670,10 @@ def validate(helper=None, bridge=None):
               "labels": [{"label": row["label"], "spells": row["spells"]} for row in (stage.get("labels") or {}).get("rows", [])],
               "expiries": (stage.get("frame_expired") or {}).get("count"),
               "tile_already_down": (stage.get("end") or {}).get("tile_already_down"),
+              "presence_armed": (stage.get("presence_watch") or {}).get("armed"),
               "source_cleanup_ok": cleanup.get("source_ok"), "bridge_cleanup_ok": cleanup.get("bridge_ok")}
     camera["ok"] = (stage["status"] == "completed" and cleanup.get("ok") is True and stage.get("validation_only") is True
+                    and camera["presence_armed"] is True
                     and (frames.get("sent") or 0) > 0 and frames.get("acknowledged_presented") == frames.get("sent")
                     and [row["label"] for row in camera["labels"]] == ["bottle"])
     report["camera"] = camera
@@ -606,9 +690,11 @@ def validate(helper=None, bridge=None):
         "labels": [{"label": row["label"], "spells": row["spells"]} for row in (boxed.get("labels") or {}).get("rows", [])],
         "expiries": (boxed.get("frame_expired") or {}).get("count"),
         "tile_already_down": (boxed.get("end") or {}).get("tile_already_down"),
+        "presence_armed": (boxed.get("presence_watch") or {}).get("armed"),
         "source_cleanup_ok": cleanup.get("source_ok"), "bridge_cleanup_ok": cleanup.get("bridge_ok")}
     camera_panel["ok"] = (
         boxed["status"] == "completed" and cleanup.get("ok") is True and boxed.get("validation_only") is True
+        and camera_panel["presence_armed"] is True
         and config.get("hud_config_id") == panel.layout_id
         and config.get("update_bytes") == panel.width_px * panel.height_px * 4
         and (frames.get("sent") or 0) > 0 and frames.get("acknowledged_presented") == frames.get("sent")
@@ -620,24 +706,49 @@ def validate(helper=None, bridge=None):
         and counted.get("boxes_selected") == counted.get("results_counted")
         and [row["label"] for row in camera_panel["labels"]] == ["bottle"])
     report["camera_panel"] = camera_panel
-    rows = run_synthetic_rows(validation_only=True, bridge=bridge, mode="validate", **VALIDATION_ROWS)
-    updates, stops = rows.get("updates") or {}, rows.get("stops") or {}
-    report["synthetic_rows"] = {
-        "status": rows["status"], "reason": rows["reason"], "bridge_mode": rows.get("bridge_mode"),
-        "requested": updates.get("requested"), "acknowledged_presented": updates.get("acknowledged_presented"),
-        "stops_reached": stops.get("reached"), "stops_expired": stops.get("expired"),
-        "stops_within_bound": stops.get("within_bound"), "bridge_cleanup_ok": (rows.get("cleanup") or {}).get("ok"),
-        "complete": rows.get("complete"),
-        # Expiry timing on a loaded CI runner is not a pass criterion here: the stop must be reached and expire.
-        "ok": (rows["status"] == "completed" and rows.get("validation_only") is True
-               and updates.get("acknowledged_presented") == updates.get("requested")
-               and stops.get("expired") == stops.get("reached") == VALIDATION_ROWS["stops"]
-               and (rows.get("cleanup") or {}).get("ok") is True)}
-    if camera["ok"] and camera_panel["ok"] and report["synthetic_rows"]["ok"]:
+    watch, frames, cleanup = ended.get("presence_watch") or {}, ended.get("frames") or {}, ended.get("cleanup") or {}
+    presence_end = {
+        "status": ended["status"], "reason": ended["reason"], "bridge_mode": ended.get("bridge_mode"),
+        "watcher": "stand_in", "armed": watch.get("armed"), "ended_run": watch.get("ended_run"),
+        "ending_signal": watch.get("ending_signal"), "frames_sent": frames.get("sent"),
+        "hide_written_after_signal_ms": watch.get("hide_written_after_signal_ms"),
+        "bridge_hide_after_signal_ms": watch.get("bridge_hide_after_signal_ms"),
+        "tile_already_down": (ended.get("end") or {}).get("tile_already_down"),
+        "watcher_cleanup_ok": watch.get("cleanup_ok"), "source_cleanup_ok": cleanup.get("source_ok"),
+        "bridge_cleanup_ok": cleanup.get("bridge_ok")}
+    # The end is the watch's, by name, and everything is cleaned up. How long the hide took is reported and is
+    # not a pass criterion on a loaded runner. The stand-in is asked for the signal only after a frame was
+    # answered, so the part does not depend on how long the helper took to start.
+    presence_end["ok"] = ((ended["status"], ended["reason"]) == (presence.STATUS_PRESENCE_ENDED, "standby")
+                          and ended.get("validation_only") is True and watch.get("armed") is True
+                          and watch.get("ended_run") is True and watch.get("ending_signal") == "enter_standby_event"
+                          and cleanup.get("ok") is True and watch.get("cleanup_ok") is True)
+    report["presence_end"] = presence_end
+
+    def synthetic_part(run, plan):
+        updates, stops = run.get("updates") or {}, run.get("stops") or {}
+        return {
+            "status": run["status"], "reason": run["reason"], "bridge_mode": run.get("bridge_mode"),
+            "requested": updates.get("requested"), "acknowledged_presented": updates.get("acknowledged_presented"),
+            "stops_reached": stops.get("reached"), "stops_expired": stops.get("expired"),
+            "stops_within_bound": stops.get("within_bound"), "bridge_cleanup_ok": (run.get("cleanup") or {}).get("ok"),
+            "complete": run.get("complete"),
+            # Expiry timing on a loaded CI runner is not a pass criterion here: the stop must be reached and expire.
+            "ok": (run["status"] == "completed" and run.get("validation_only") is True
+                   and updates.get("acknowledged_presented") == updates.get("requested")
+                   and stops.get("expired") == stops.get("reached") == plan["stops"]
+                   and (run.get("cleanup") or {}).get("ok") is True)}
+    report["synthetic_rows"] = synthetic_part(
+        run_synthetic_rows(validation_only=True, bridge=bridge, mode="validate", **VALIDATION_ROWS), VALIDATION_ROWS)
+    # The panel's synthetic step: the orientation scene through the same driver, a megabyte per update.
+    report["synthetic_boxes"] = synthetic_part(
+        run_synthetic_rows(validation_only=True, bridge=bridge, mode="validate", boxes=True, **VALIDATION_BOXES),
+        VALIDATION_BOXES)
+    failed = failed_parts(report)
+    if not failed:
         report["status"] = "validated"
     else:
-        report["reason"] = ("camera_path_failed" if not camera["ok"] else "camera_panel_path_failed"
-                            if not camera_panel["ok"] else "synthetic_rows_failed")
+        report["reason"] = failed[0]
     command["exit_code"] = 0 if report["status"] == "validated" else 1
     return finish(report, VALIDATION_BLOCKS, "validate")
 
@@ -690,6 +801,9 @@ def build_parser():
                        help="The fake helper, a scripted detector and the validation bridge: nothing real, nothing displayed")
     modes.add_argument("--synthetic-rows", action="store_true",
                        help="Device step L-D3: a counter row at 5 Hz on the fixed HUD with scheduled stops; no camera")
+    modes.add_argument("--synthetic-boxes", action="store_true",
+                       help="The panel's synthetic step: five named boxes at 5 Hz on the box panel with scheduled "
+                            "stops; no camera")
     modes.add_argument("--camera", action="store_true",
                        help="Device steps L-D4 and L-D5: names from the left camera on the fixed HUD, at most 90 s")
     parser.add_argument("--allow-hud-output", action="store_true",
@@ -790,22 +904,29 @@ def main(argv=None):
             parser.error("--allow-hud-output is required for a device mode (or use --validate)")
         if args.scope_record is None or args.manifest is None or args.seconds is None:
             parser.error("--scope-record, --manifest and --seconds are required for a device mode")
-        if args.synthetic_rows:
+        synthetic = "--synthetic-rows" if args.synthetic_rows else "--synthetic-boxes" if args.synthetic_boxes else None
+        if synthetic:
             if camera_only:
-                parser.error("--synthetic-rows never opens the camera and takes no camera arguments")
+                parser.error(f"{synthetic} never opens the camera and takes no camera arguments")
             if not 1 <= args.seconds <= MAX_SYNTHETIC_SECONDS:
-                parser.error(f"--seconds must be 1..{MAX_SYNTHETIC_SECONDS} for --synthetic-rows: its record allows "
+                parser.error(f"--seconds must be 1..{MAX_SYNTHETIC_SECONDS} for {synthetic}: its record allows "
                              f"{synthetic_rows.MAX_SECONDS} s and {SYNTHETIC_ALLOWANCE_SECONDS} s are the bridge's start")
             stops = 3 if args.stops is None else args.stops
+            if args.synthetic_boxes and stops < 1:
+                # The centre box counts only after the first stop: without one a frozen picture looks live.
+                parser.error(f"{synthetic_boxes.STOPS_REFUSAL}: --synthetic-boxes needs --stops 1 or more; the "
+                             "counter that tells a live picture from a frozen one starts after the first stop")
             stop_seconds = 3.0 if args.stop_seconds is None else args.stop_seconds
             try:
                 synthetic_rows.schedule(args.seconds, stops, stop_seconds)
             except ValueError as error:
                 parser.error(str(error))
             blocks, kind, mode = SYNTHETIC_BLOCKS, synthetic_rows.REPORT_KIND, "synthetic_rows"
+            if args.synthetic_boxes:
+                kind, mode = synthetic_boxes.REPORT_KIND, "synthetic_boxes"
         else:
             if rows_only:
-                parser.error("--stops and --stop-seconds belong to --synthetic-rows")
+                parser.error("--stops and --stop-seconds belong to --synthetic-rows and --synthetic-boxes")
             if not args.allow_camera_input:
                 parser.error("--allow-camera-input is required to launch the camera helper")
             if not 1 <= args.seconds <= MAX_SECONDS:
@@ -852,6 +973,9 @@ def main(argv=None):
             try:
                 if args.synthetic_rows:
                     refusal = confirmation.confirm_synthetic_rows(args.seconds, synthetic_rows.UPDATE_HZ)
+                elif args.synthetic_boxes:
+                    refusal = confirmation.confirm_synthetic_rows(args.seconds, synthetic_rows.UPDATE_HZ,
+                                                                  notice=confirmation.SYNTHETIC_BOXES_NOTICE)
                 else:
                     notice = confirmation.DISPLAY_NOTICE if layout is HUD_CONFIG else confirmation.BOX_DISPLAY_NOTICE
                     refusal = confirmation.confirm_on_terminal(limits, (camera_helper.LEFT_CAMERA,), notices=(notice,))
@@ -866,12 +990,16 @@ def main(argv=None):
             # From here to the report every signal is recorded, never raised: the run stops, its teardown
             # finishes, and the report is the run's own however many signals arrive.
             with guard.cancellation() as recorded:
-                if args.synthetic_rows:
+                if synthetic:
+                    # The boxes' record names the panel, the rows' the strip: a record for one never runs the other.
                     run_scope = scope.RunScope(args.scope_record, args.manifest, runner=RUNNER, step=SYNTHETIC_STEP,
                                                source=scope.SYNTHETIC,
-                                               seconds=args.seconds + SYNTHETIC_ALLOWANCE_SECONDS)
+                                               seconds=args.seconds + SYNTHETIC_ALLOWANCE_SECONDS,
+                                               **({"hud_config": camera_stage.box_layout()} if args.synthetic_boxes
+                                                  else {}))
                     report = run_synthetic_rows(args.seconds, stops=stops, stop_seconds=stop_seconds,
-                                                run_scope=run_scope, confirmed=True, stop=RecordedStop(recorded))
+                                                run_scope=run_scope, confirmed=True, stop=RecordedStop(recorded),
+                                                boxes=args.synthetic_boxes, mode=mode)
                 else:
                     # The scope is asked for exactly what the stage is built from; each is compared with the
                     # record before anything is launched (the scope's steps 1 and 3, which consume nothing).
@@ -879,7 +1007,7 @@ def main(argv=None):
                                                source=scope.CAMERA_LEFT, seconds=args.seconds, hud_config=layout,
                                                region=list(region.fractions), rotation=region.rotation,
                                                alignment=None if alignment is None else alignment.report(),
-                                               presence_watch=False)
+                                               presence_watch=True)  # Always: the run holds the watch.
                     with relayed_stop(recorded) as stop:
                         report = run_camera(limits, run_scope=run_scope, detector=detector, threshold=threshold,
                                             layout=layout, region=region, alignment=alignment,
