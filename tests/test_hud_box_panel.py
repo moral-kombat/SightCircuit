@@ -303,6 +303,8 @@ class BoxPanelContractTests(unittest.TestCase):
                         "scripts/stage_scope_record.py",
                         # Since B5's second part: the stage is built for a layout and the command takes one.
                         "sightcircuit/hud/camera_stage.py", "sightcircuit/commands/camera_hud.py",
+                        # Since 2026-11-24: L-D2's still panel shows any fixed layout, chosen by --layout.
+                        "sightcircuit/hud/still_panel.py",
                         "tools/overlay_frame.hpp", "tools/overlay_bridge.cpp", "tools/overlay_bridge.hpp",
                         "tools/overlay_bridge_rendering.cpp", "tools/overlay_bridge_reporting.cpp"}
         layout_words = ("FIXED_LAYOUTS", "fixed_layout", "kFixedLayouts", "FixedLayout", "pinned_layout", "layout_index",
