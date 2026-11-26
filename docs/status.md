@@ -495,6 +495,10 @@ provenance and original uncertainty.
 
 [Full evidence](evidence/e103.md). Device report.
 
+### E104: Frame update check, tracking service crash with no SightCircuit process, camera provider socket gone, an OS update offered
+
+[Full evidence](evidence/e104.md). Device report.
+
 ## Maintaining the evidence
 
 The coordinator checks pending allocations before assigning an evidence ID and adds its record
