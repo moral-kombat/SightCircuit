@@ -129,6 +129,8 @@ VIEW_REFUSALS = {
     "scope_alignment_invalid": "An alignment is scale_x, scale_y (0.25 to 4), offset_x, offset_y (-1 to 1) and a "
                                "turn of 0, 90, 180 or 270",
     "scope_presence_watch_invalid": "A camera step's record must say whether the presence watch is required",
+    "scope_presence_watch_required": "A camera step's record must require the presence watch: no run shows "
+                                     "camera-derived output without it",
     "scope_presence_watch_not_for_source": "The synthetic step opens no camera and holds no presence watch",
 }
 
@@ -251,10 +253,18 @@ def alignment_value(source, layout, alignment):
 
 
 def presence_value(source, presence_watch):
-    """``(presence_watch, None)`` as a record states it for ``source``, or ``(None, refusal)``: a ``bool``, and
-    never True for the synthetic source, whose run opens no camera and holds no watch."""
+    """``(presence_watch, None)`` as a record states it for ``source``, or ``(None, refusal)``: a ``bool``.
+
+    For the camera source it is always True: every run that shows
+    camera-derived output in the headset holds the presence watch, and no
+    record can be written, or accepted, for one without it (owner decision
+    of 2026-11-25). It is never True for the synthetic source, whose run
+    opens no camera and holds no watch.
+    """
     if type(presence_watch) is not bool:
         return None, "scope_presence_watch_invalid"
+    if source == CAMERA_LEFT and not presence_watch:
+        return None, "scope_presence_watch_required"
     if presence_watch and source != CAMERA_LEFT:
         return None, "scope_presence_watch_not_for_source"
     return presence_watch, None

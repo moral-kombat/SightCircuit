@@ -18,11 +18,18 @@ It also names exactly what the run may show and through which view (work-order
 item B5), and a run that differs in any of them is refused with the record
 unspent: ``--layout``, one of the bridge's fixed layouts, with no default;
 for a camera step ``--region`` and ``--rotation`` (the whole frame, unturned,
-when not given), ``--presence-watch required`` or ``none``, with no default,
-and on a panel layout ``--alignment``, its five numbers, with no default
-either (the neutral alignment is ``1,1,0,0,0``). The alignment is the
-project's own numbers, set by the wearer; it is never the SDK's calibration.
-The synthetic step opens no camera and takes none of the four.
+when not given), ``--presence-watch required``, which has no default, and
+on a panel layout ``--alignment``, its five numbers, with no default either
+(the neutral alignment is ``1,1,0,0,0``). The alignment is the project's own
+numbers, set by the wearer; it is never the SDK's calibration. The synthetic
+step opens no camera and takes none of the four.
+
+Every run that shows camera-derived boxes or names in the headset holds the
+presence watch (owner decision of 2026-11-25), so no record is written for a
+camera step without it: ``--presence-watch none`` is refused by name
+(``scope_presence_watch_required``), for either layout. The option stays,
+and stays without a default, so that the person staging the step states the
+requirement instead of inheriting it.
 """
 import argparse
 import json
@@ -87,7 +94,8 @@ def build_parser():
                         help="camera steps on a panel layout, required there: the wearer's alignment, the project's "
                              "own five numbers (neutral is 1,1,0,0,0)")
     parser.add_argument("--presence-watch", choices=sorted(PRESENCE_WATCH),
-                        help="camera steps, required there: whether the run must hold the presence watch")
+                        help="camera steps, required there, and it must be 'required': every displayed camera run "
+                             "holds the presence watch, and 'none' is refused (scope_presence_watch_required)")
     parser.add_argument("--out", required=True, type=Path, metavar="PATH",
                         help="new .json file for the record, outside the checkout or in an ignored directory")
     return parser

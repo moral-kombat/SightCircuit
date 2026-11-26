@@ -2,9 +2,11 @@
 
 `camera_hud` is the fifteenth command (work-order item L9 of the
 [camera display work order](../live-capture.md#camera-display-work-order-adopted-2026-11-16)).
-It drives the three displayed device steps: L-D3 (synthetic rows, no camera),
-L-D4 (first displayed camera labels) and L-D5 (the 60-second acceptance, row
-G10).
+It drives the three displayed device steps: L-D3 (a synthetic picture, no
+camera), L-D4 (first displayed camera labels) and L-D5 (the 60-second
+acceptance, row G10), each on one of the bridge's two fixed layouts: the
+strip of names at the edge of the view, or the
+[box panel](#the-same-steps-on-the-box-panel) in the middle of it.
 
 **This guide is a procedure, not an approval.** Nothing in it authorises a
 device run. Each step needs the owner's explicit approval, staged by the Frame
@@ -29,18 +31,21 @@ against mistakes, not a cryptographic one; the owner's approval in the Frame
 manager's session is the authority. No flag, environment variable,
 configuration value or typed answer opens a gate or creates a record.
 
-## The three modes
+## The modes
 
 | Mode | What it does | Record needed |
 | --- | --- | --- |
-| `--validate` | The helper's fake backend, a scripted detector and the validation bridge, then synthetic rows on the validation bridge with one stop. Nothing is displayed and no camera exists. This is what CI runs | none |
+| `--validate` | The helper's fake backend, a scripted detector and the validation bridge, for the strip and for the box panel through a region, each with a presence watch armed on a stand-in for the watcher; a run that the watch ends; then the synthetic rows and the synthetic boxes on the validation bridge with one stop each. Nothing is displayed and no camera exists. This is what CI runs | none |
 | `--synthetic-rows` | Step L-D3: one row, `count NNNN`, five times a second on the bridge's `--fixed-hud` mode, with scheduled stops in which no frame and no hide request is sent (the client's keepalive writes one show request per stop, which the bridge answers `no_image`) so that the bridge's own expiry is observed. The camera is never opened and no detector is loaded | source `synthetic`, step L-D3 |
-| `--camera` | Steps L-D4 and L-D5: the left camera through the stage (detector, rows, tile, one observed frame per result), at most 90 s | source `arcturus_camera_left`, step L-D4 or L-D5 |
+| `--synthetic-boxes` | Step L-D3 on the box panel: five named boxes (the orientation scene) five times a second, with the same scheduled stops. The camera is never opened, no detector is loaded and no presence watch is held | source `synthetic`, step L-D3, naming the panel |
+| `--camera` | Steps L-D4 and L-D5: the left camera through the stage (detector, rows or boxes, one observed frame per result), at most 90 s, with the [presence watch](#the-presence-watch) held for the whole run | source `arcturus_camera_left`, step L-D4 or L-D5, presence watch required |
 
-A device mode has no option to name another bridge, helper, camera or source.
-It launches only the two files the checkpoint manifest hashes:
-`artifacts/overlay-bridge/sightcircuit-overlay-bridge` and
-`artifacts/camera-helper/sightcircuit-camera-helper`. The left camera
+A device mode has no option to name another bridge, helper, watcher, camera
+or source, and none that turns the presence watch off. It launches only the
+files the checkpoint manifest hashes:
+`artifacts/overlay-bridge/sightcircuit-overlay-bridge`,
+`artifacts/camera-helper/sightcircuit-camera-helper` and, for a camera run,
+`artifacts/presence-watcher/sightcircuit-presence-watcher`. The left camera
 (index 0) is the only camera.
 
 ## Validate in the cloud or on the Frame
@@ -67,9 +72,16 @@ All of this is preparation. None of it opens the camera or shows anything.
 2. Rebuild the helper, the bridge and the presence watcher on the Frame from
    that revision. The helper speaks camera export v2, and the bridge on the
    Frame predates `--fixed-hud`, so both must be rebuilt; the watcher is
-   pinned by the manifest of step 4 since its schema version 4, whether or
-   not the step's record requires the watch. The SDK directory `DIR` is the
-   operator's own copy, outside the checkout, as in the
+   pinned by the manifest of step 4 since its schema version 4, and every
+   camera run launches it. **A helper built before 2026-11-25 must be
+   rebuilt before its next use**, for any command: one clause of the
+   export notice the helper prints changed that day (a display command
+   "shows the names of detected objects in the headset, with approximate
+   arrows or as boxes drawn around them"), which moved the camera contract
+   digest; an older helper prints the earlier notice and reports the
+   earlier digest ([the helper's reference](../reference/camera-helper.md#build)).
+   The SDK directory `DIR` is the operator's own copy, outside the
+   checkout, as in the
    [probe guide's preparation](camera-probe.md#preparation):
 
    ```bash
@@ -121,8 +133,8 @@ it), a duration bound (at most 120 s for L-D3, 30 s for L-D4, 90 s for L-D5),
 the source, the step, and since its schema version 2 exactly what the run
 shows and through which view: the layout (`--layout`, which has no default),
 and for a camera step the region and rotation, the alignment where the
-layout takes one, and whether the presence watch is required
-(`--presence-watch required` or `none`, which has no default either;
+layout takes one, and that the presence watch is required
+(`--presence-watch required`, which has no default either;
 [the reference](../reference/camera-hud.md#the-one-run-scope-record) lists
 them). Any rebuild, edit or new commit after staging makes the record
 refuse; so do a second run, a run for another step, a run with another
@@ -131,20 +143,22 @@ record's creation, and a start after the deadline. A record written before
 schema version 2 is refused by name. `camera_hud --camera` takes the same
 four things as options (`--layout`, `--region`, `--rotation`,
 `--alignment`; [below](#the-layout-and-the-view)) and runs only under a
-record that names exactly what it was asked to show. It holds no presence
-watch yet, so it runs only under a record staged with `--presence-watch
-none`; the watch on the displayed path, and with it the panel's steps, is
-the last part of work-order item L17.
+record that names exactly what it was asked to show.
 
-A camera step's record needs one option more than L-D3's: whether the
-presence watch is required, which has no default. For L-D4 as `camera_hud`
-runs it today (the same for L-D5 with its own step and file names):
+A camera step's record needs one option more than L-D3's:
+`--presence-watch required`. Every run that shows camera-derived names or
+boxes in the headset holds the presence watch (owner decision of
+2026-11-25), so the staging tool writes no camera record without it:
+`--presence-watch none` is refused, `scope_presence_watch_required`, for
+either layout. The option has no default, so whoever stages the step states
+the requirement. For L-D4 on the strip (the same for L-D5 with its own step
+and file names):
 
 ```bash
 .venv-replay/bin/python scripts/checkpoint_manifest.py \
   --verify artifacts/camera-hud/checkpoint-manifest.json &&
 .venv-replay/bin/python scripts/stage_scope_record.py --step L-D4 \
-  --layout fixed-edge-hud-v1 --presence-watch none \
+  --layout fixed-edge-hud-v1 --presence-watch required \
   --approval OWNER-APPROVAL-IDENTIFIER --valid-minutes 60 \
   --checkpoint-manifest artifacts/camera-hud/checkpoint-manifest.json \
   --out artifacts/camera-hud/scope-L-D4.json
@@ -154,9 +168,7 @@ Without `--region` and `--rotation` the record states the whole frame,
 unturned. A record staged with a region, a rotation or the panel's layout
 (which also needs `--alignment`) serves only a run given the same options;
 any difference is refused with the record unspent, because the run would
-not do what the record says. A record staged with `--presence-watch
-required` is a valid record that today's `camera_hud` refuses, unspent, for
-the same reason: it holds no watch.
+not do what the record says.
 
 The duration is not only a number in the record. The command's client ends
 real output by itself when the run's seconds are over, whatever else is
@@ -189,8 +201,9 @@ the bridge's start, so `--seconds` may be at most 110 under an L-D3 record.
 
 A device mode prints its notices on the terminal and waits for the operator's
 exact typed `yes` on an interactive terminal: the helper's export notice and
-the display notice for `--camera`, the synthetic-rows notice for
-`--synthetic-rows`. A pipe, a flag or any other answer starts nothing.
+the display notice for `--camera` (the strip's or the panel's), the
+synthetic-rows notice for `--synthetic-rows`, the synthetic-boxes notice
+for `--synthetic-boxes`. A pipe, a flag or any other answer starts nothing.
 
 The typed `yes` starts this one run. It is not an approval, it creates no
 record and it opens nothing. If the record does not verify the run is
@@ -202,10 +215,11 @@ when a permission site refused before the record was consulted, which leaves
 the record unspent). A record that names another layout than the run shows
 ends `status: refused`, `reason: fixed_hud_layout_not_approved` and
 `command.refusal: scope_layout_mismatch`, also with the record unspent; a
-record that names another region, rotation or presence-watch requirement
-ends `reason: fixed_hud_output_not_approved` with `scope_region_mismatch`,
-`scope_rotation_mismatch` or `scope_presence_watch_mismatch`. Read
-`command.refusal` first.
+record that names another region, rotation or alignment ends
+`reason: fixed_hud_output_not_approved` with `scope_region_mismatch`,
+`scope_rotation_mismatch` or `scope_alignment_mismatch`, and a camera record
+that does not require the presence watch with
+`scope_presence_watch_required`. Read `command.refusal` first.
 
 ## The passthrough watch
 
@@ -354,12 +368,8 @@ is read, and the record must name the same values.
   turn), never the SDK's calibration. It has no default; the neutral value
   is `1,1,0,0,0`.
 
-No command block for a camera run on the panel is given here yet. Such a
-run is to be staged with the presence watch required, and the watch on the
-displayed path is not built; the staging command and the run command for
-each of the panel's steps are added, tested against the tools, with it.
-`--validate` runs the panel through a region on the fake path in the
-meantime (`camera_panel` in its report).
+The staging command and the run command for the panel's steps are in
+[the same steps on the box panel](#the-same-steps-on-the-box-panel).
 
 Expect `report_kind: camera_hud_stage`. A run that ends on its bound is
 `status: completed` (reason `output_bound` when the client's own bound ended
@@ -368,16 +378,189 @@ it); a run ended by the headset's removal is
 exit 0 when `cleanup.ok` is true. `cancelled` exits 130; everything else
 exits 1.
 
+### The presence watch
+
+Every `--camera` run holds the presence watch, on either layout; there is
+no option for it and none against it. Beside the bridge and the helper the
+command runs `sightcircuit-presence-watcher`, the
+[watcher of the run without display](camera-recognize.md#the-presence-stop---presence-watcher):
+a background SteamVR application that reads SteamVR's events and the
+headset's activity level, nothing of the camera, and needs SteamVR already
+running. Its standby signal ends the run and takes the tile down at once.
+
+| What happens | The report says | Exit |
+| --- | --- | --- |
+| The watch is armed and the run ends on its own bound | `status: completed`; `presence_watch.armed: true`, `ended_run: false` | 0 |
+| The watcher's standby signal arrives during the run | `status: presence_ended`, `reason: standby`; `presence_watch.ended_run: true`, with `hide_written_after_signal_ms` and `bridge_hide_after_signal_ms`, the hide's times from the signal | 0 |
+| The watcher dies or goes silent during the run | `status: presence_watch_lost` and the loss's reason; the tile is hidden and the run ends | 1 |
+| The watch cannot be armed: the watcher reports no SteamVR or a headset already in standby, does not say ready in time, cannot be launched, or was changed between the record's check and its launch | `status: error`, `reason: presence_watch_not_armed`; `presence_watch.refusal` has the watcher's own word. Neither the bridge nor the helper was launched and nothing was shown | 1 |
+| The headset comes off, the watcher is lost or the run is stopped while the helper is still starting, before the first frame | `cleanup.ok: false`: the helper was ended before it had started and its cleanup is not confirmed. Nothing was shown | 1 |
+
+**The order, as the owner accepted it for now on 2026-11-25: the record is
+verified and used up first, and only then is the watch armed. A run whose
+watch cannot be armed has therefore spent its record**, and it shows
+nothing. That is so whatever
+the cause: SteamVR not running, the headset asleep, the watcher changed
+since the record's check. It is a run that ended, and a re-run is a new
+approval with a new record.
+
+So start the run only with SteamVR running and **the headset worn and
+awake**. A headset nobody wears is the likely standby case: the watcher
+then reports `headset_in_standby_at_start`, and that refusal uses up the
+one-run record like any other. The wearer puts the headset on first; the
+operator types the `yes` afterwards. A watcher file that is missing is
+found before the record is consulted (`presence_watcher_not_found`), and
+one that is not the file the manifest hashes is refused with the record
+unspent; neither costs a record.
+
+A preflight that costs no record: `camera_recognize`, the
+[run without display](camera-recognize.md#the-presence-stop---presence-watcher),
+arms the same watcher the same way and asks for no scope record. Run just
+before the typed `yes` of the displayed run, with the headset already worn,
+it shows whether the watch can be armed now:
+
+```bash
+.venv-replay/bin/python scripts/camera_recognize.py --allow-camera-input \
+  --helper artifacts/camera-helper/sightcircuit-camera-helper \
+  --presence-watcher artifacts/presence-watcher/sightcircuit-presence-watcher \
+  --seconds 2 --max-frames 5 --fps 5 --cameras 0
+```
+
+Its report must say `presence_watch.armed: true`; otherwise
+`presence_watch.refusal` has the watcher's word and no record was touched.
+**It is a camera run of its own, not a free check**: it asks for its own
+typed `yes`, reads the left camera for at most 2 seconds and shows nothing,
+so it needs whatever approval a run without display needs, and nothing here
+gives it. It proves the watch could be armed a moment earlier, not that it
+will be: the headset must stay worn and awake until the displayed run.
+
 ### The removal sub-step
 
 At the end of L-D4 the wearer removes the headset while the run is still
 going, so the presence stop is seen on the displayed path. The operator
-presses Enter for the `remove` mark once the headset is off, not before. The
-helper ends the run on removal; the stage takes the tile down, and the
-report's `end` block gives when the hide was written and when the bridge's
-hide returned. The run is never resumed or retried. The wearer puts the
+presses Enter for the `remove` mark once the headset is off, not before.
+Two things can end the run on removal, and whichever comes first does: the
+helper's own end (`reason: headset_removed` or `standby`) or the presence
+watch's standby signal (`reason: standby`, `presence_watch.ended_run:
+true`). The stage takes the tile down, and the report's `end` block gives
+when the hide was written and when the bridge's hide returned; when the
+watch ended the run, `presence_watch` also gives both times from the
+signal. No mark is recorded after the watch's signal. Which of the two ends
+a run on the Frame, and how long after the removal, is not known from the
+cloud. The run is never resumed or retried. The wearer puts the
 headset back on, confirms that no tile is shown, and the passthrough watch
 resumes from then for 30 seconds.
+
+## The same steps on the box panel
+
+The box panel (`head-fixed-box-panel-v1`) is the second fixed layout: a
+transparent 512 × 512 panel fixed in front of the head, on which a camera
+run draws a box with a name around each detected object. Its steps are the
+strip's steps with another layout in the record and on the command line.
+Everything above applies unchanged: the preparation, one record per run,
+the informed start, the passthrough watch, Ctrl-C, the removal sub-step and
+the report. Nothing on the panel has run on the Frame either.
+
+### The synthetic step (L-D3, no camera)
+
+Staged by the Frame manager after the owner's approval, with the panel as
+the layout and nothing else: the synthetic step has no view and no watch.
+
+```bash
+.venv-replay/bin/python scripts/checkpoint_manifest.py \
+  --verify artifacts/camera-hud/checkpoint-manifest.json &&
+.venv-replay/bin/python scripts/stage_scope_record.py --step L-D3 \
+  --layout head-fixed-box-panel-v1 \
+  --approval OWNER-APPROVAL-IDENTIFIER --valid-minutes 60 \
+  --checkpoint-manifest artifacts/camera-hud/checkpoint-manifest.json \
+  --out artifacts/camera-hud/scope-L-D3-panel.json
+```
+
+```bash
+.venv-replay/bin/python scripts/camera_hud.py --synthetic-boxes --allow-hud-output \
+  --scope-record artifacts/camera-hud/scope-L-D3-panel.json \
+  --manifest artifacts/camera-hud/checkpoint-manifest.json \
+  --seconds 90 --stops 3 --stop-seconds 3 \
+  --report artifacts/camera-hud/l-d3-panel.json
+```
+
+The picture is five named boxes, drawn here and derived from nothing: one
+in each corner and one in the centre, each named by where it is in the
+picture. The corner boxes differ in size and shape so that a flipped or
+turned panel is visible without reading: **the largest box, wider than
+tall, is the picture's top left.** Until the first stop the picture does
+not change; after it the centre box's name is the update's counter
+(`count NNNN`), so a picture that has stopped updating can be told from one
+that has not. The wearer says where the largest box is and how it lies,
+whether the names read left to right, whether the room is visible between
+and inside the boxes, whether the panel goes blank in each stop and returns,
+and whether the counter advances.
+
+The schedule, the stops and their bounds are the synthetic rows'
+([step L-D3](#step-l-d3-synthetic-rows-row-g9)): 405 updates in four
+segments, each stop observed as the bridge's own expiry. The run ends by
+itself at its bound and on Ctrl-C exactly as `--synthetic-rows` does, and in
+both cases the panel is taken down and the overlay retired. It holds no
+presence watch, because nothing it shows came from a camera; the camera is
+never opened and no detector is loaded. Expect
+`report_kind: camera_hud_synthetic_boxes`, `status: completed`,
+`complete: true` and exit 0. A record that names the strip does not run it,
+nor does the panel's record run `--synthetic-rows`
+(`scope_layout_mismatch`, the record unspent).
+
+### A camera step (L-D4)
+
+The record names the panel, the region of the frame, the rotation, the
+alignment and the presence watch, and the run is given the same four
+values. The rotation is a parameter in both commands, not a finding: E103
+left open which quarter turn is upright for the left camera, so it may be
+90 or 270 (or another), and the staged record and the run must agree on
+it. The region below is the centre half of the frame; the alignment is the
+neutral one.
+
+```bash
+ROTATION=90
+.venv-replay/bin/python scripts/checkpoint_manifest.py \
+  --verify artifacts/camera-hud/checkpoint-manifest.json &&
+.venv-replay/bin/python scripts/stage_scope_record.py --step L-D4 \
+  --layout head-fixed-box-panel-v1 --presence-watch required \
+  --region 0.25,0.25,0.75,0.75 --rotation "$ROTATION" --alignment 1,1,0,0,0 \
+  --approval OWNER-APPROVAL-IDENTIFIER --valid-minutes 60 \
+  --checkpoint-manifest artifacts/camera-hud/checkpoint-manifest.json \
+  --out artifacts/camera-hud/scope-L-D4-panel.json
+```
+
+```bash
+ROTATION=90
+.venv-replay/bin/python scripts/camera_hud.py --camera \
+  --allow-camera-input --allow-hud-output \
+  --scope-record artifacts/camera-hud/scope-L-D4-panel.json \
+  --manifest artifacts/camera-hud/checkpoint-manifest.json \
+  --step L-D4 --seconds 30 --fps 5 \
+  --layout head-fixed-box-panel-v1 \
+  --region 0.25,0.25,0.75,0.75 --rotation "$ROTATION" --alignment 1,1,0,0,0 \
+  --target-label bottle \
+  --mark-labels out_of_view,in_view,out_of_view,in_view,out_of_view,in_view,remove \
+  --report artifacts/camera-hud/l-d4-panel.json
+```
+
+A run with another rotation, region or alignment than its record is refused
+before anything is launched, with the record unspent
+(`scope_rotation_mismatch`, `scope_region_mismatch`,
+`scope_alignment_mismatch`). The panel takes no `--directions`,
+`--names-only` or `--orientation`. The [presence watch](#the-presence-watch)
+is held as on the strip. The informed start shows the panel's display
+notice: a box sits on its object only while the head is still and trails
+when the head turns, and it is taken down about one second after the camera
+frame it came from unless a newer frame shows it again. L-D5 on the panel is
+the same pair of commands with `--step L-D5`, its own file names and
+`--seconds 90`; the numbers its acceptance asks for on the panel are not
+settled here (work-order item B6).
+
+Expect `report_kind: camera_hud_stage` with `config.hud_config_id:
+head-fixed-box-panel-v1`, the `view` block (the region, the rotation and
+where the region lay in the frame), the `boxes` block (what was selected,
+drawn and sent) and `presence_watch.armed: true`.
 
 ## The report
 
@@ -403,6 +586,7 @@ labels, boxes, timings and format metadata.
 | the stage's blocks | Everything in the [stage report](../reference/camera-hud.md#the-report): the helper's ready and end records, every `frame_expired` record with its hide times, per-label intervals, the timings with their timebases, the cleanup verdicts |
 | `command` | The mode, the exit code, `confirmation` (`operator_terminal`), the requested bounds, the detector, `refusal`, whether the report was saved |
 | `scope_record` | Identifiers and format metadata only: the step, the source, the run id, the revision, the manifest digest, the deadline, the bound, the approval reference, whether it was granted and consumed, and the refusal; and what the record binds since its schema version 2: the layout the run asked for (`requested_layout`), the record's layout id and digest, the region as `{x0, y0, x1, y1}`, the rotation, the alignment's five numbers and whether the presence watch is required |
+| `presence_watch` | A camera run's [presence watch](#the-presence-watch): whether it was armed, the watcher's refusal if not, whether its signal or its loss ended the run, the hide's two times from the signal, and whether the watcher was cleaned up. Identifiers, counts and times only |
 | `marks`, `timebase` | The cues and key marks with monotonic and UTC times (the first 32; the count covers all) |
 | `target` | Row G10's rule for `--target-label` |
 

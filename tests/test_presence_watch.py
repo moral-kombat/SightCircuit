@@ -408,6 +408,24 @@ class PresenceWatchTests(WatchCase):
         watch.close()
         self.assertFalse(alive(pid))
 
+    def test_a_watcher_that_trickles_bytes_without_a_line_is_lost_on_its_heartbeat_like_a_silent_one(self):
+        # Bytes that end no line are not a heartbeat. The age of the last line is checked on every pass of the
+        # reader, not only when the pipe is quiet: one byte every 30 ms keeps the pipe readable at every 50 ms
+        # poll, and would otherwise hold the watch until 8192 bytes had come, about four minutes.
+        watch = self.watch("200:trickle", heartbeat_timeout=0.5)
+        self.assertIsNone(watch.start())
+        self.assertTrue(self.stop.wait(3.0))
+        lost_s = (watch.lost["monotonic_ns"] - watch.last_line_ns) / 1e9
+        self.assertEqual((watch.lost["reason"], watch.stop_set_by, watch.lost_ended_run()),
+                         ("heartbeat_missed", "lost", True))
+        # Within the timeout plus one poll of the last line (and this host's margin for one more pass).
+        self.assertGreater(lost_s, 0.5)
+        self.assertLess(lost_s, 0.5 + presence.POLL_SECONDS + 0.15)
+        self.assertTrue(alive(self.watcher_pid()))  # Still running and still writing: the close ends it.
+        watch.close()
+        self.assertTrue(watch.cleanup_ok)
+        self.assert_no_watcher_left()
+
     def test_a_loss_after_the_run_ended_sets_no_stop(self):
         watch = self.watch("200:die")
         self.assertIsNone(watch.start())
@@ -1032,6 +1050,80 @@ class RecognitionPresenceTests(WatchCase):
         self.assertEqual(seen["presence_watcher"], self.watcher)
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             command.main(["--validate", "--presence-watcher", str(self.watcher)])
+
+
+
+class StandInTests(unittest.TestCase):
+    """``camera.presence_standin``: the watcher's protocol for ``camera_hud --validate``; it asks nothing of SteamVR."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.directory = Path(directory.name)
+
+    def watch(self, **options):
+        from sightcircuit.camera import presence_standin
+        watch = presence.PresenceWatch(presence_standin.install(self.directory, **options), 5, threading.Event())
+        self.addCleanup(watch.close)
+        return watch
+
+    def test_the_stand_in_arms_a_watch_says_what_it_is_and_leaves_on_the_stop(self):
+        watch = self.watch()
+        self.assertIsNone(watch.start())
+        self.assertEqual((watch.armed, watch.ready["hmd_activity"], watch.ready["interface"]),
+                         (True, "user_interaction", "IVRSystem_026"))
+        # Its own ``ready`` line says what it is: the watcher's facts, and a tool name no watcher has.
+        import subprocess
+        process = subprocess.Popen([watch.path, "--watch", "--seconds", "1"], stdout=subprocess.PIPE, text=True)
+        self.addCleanup(process.stdout.close)
+        self.addCleanup(process.kill)
+        ready = json.loads(process.stdout.readline())
+        self.assertEqual({name: ready[name] for name in presence.READY_FACTS}, presence.READY_FACTS)
+        self.assertEqual((ready["event"], ready["tool"], ready["pid"], ready["max_seconds"]),
+                         ("ready", "stand_in", process.pid, 1))
+        self.assertEqual((process.wait(5), json.loads(process.stdout.read().splitlines()[-1])["reason"]),
+                         (0, "max_seconds"))  # Left alone, it ends at its own bound.
+        self.assertTrue(wait_until(lambda: watch.heartbeats >= 3, 2.0))
+        self.assertEqual((watch.stop.is_set(), watch.ending, watch.lost), (False, None, None))
+        pid = watch.process.pid
+        watch.run_ended()
+        watch.close()
+        self.assertEqual((watch.exit_code, watch.forced_kill, watch.cleanup_ok, watch.end["reason"], alive(pid)),
+                         (0, False, True, "stop_signal", False))
+
+    def test_the_stand_ins_standby_signal_ends_the_run_once_and_its_bound_ends_it_by_itself(self):
+        watch = self.watch(standby_after_ms=300)
+        self.assertIsNone(watch.start())
+        self.assertTrue(watch.stop.wait(3.0))
+        self.assertEqual((watch.stop_set_by, watch.ending["signal"], watch.ending["end_reason"], watch.ended_run(),
+                          watch.signal_counts["enter_standby_event"]), ("signal", "enter_standby_event", "standby", True, 1))
+        self.assertGreaterEqual(watch.ending["monotonic_ns"] - watch.armed_ns, 250_000_000)
+        watch.run_ended()
+        watch.close()
+        self.assertEqual((watch.exit_code, watch.forced_kill, watch.cleanup_ok), (0, False, True))
+        # It takes the watcher's arguments and nothing else, and no argument makes it do more.
+        from sightcircuit.camera import presence_standin
+        # Scripted by a trigger instead of a delay: nothing until the file exists, then the signal within a
+        # heartbeat; the two scripts are not combined.
+        trigger = self.directory / "standby-now"
+        watch = self.watch(standby_trigger=trigger)
+        self.assertIsNone(watch.start())
+        self.assertFalse(watch.stop.wait(0.6))
+        trigger.write_bytes(b"")
+        asked = time.monotonic_ns()
+        self.assertTrue(watch.stop.wait(3.0))
+        self.assertEqual((watch.stop_set_by, watch.ending["signal"], watch.signal_counts["enter_standby_event"]),
+                         ("signal", "enter_standby_event", 1))
+        self.assertGreaterEqual(watch.ending["received_monotonic_ns"], asked)
+        watch.run_ended()
+        watch.close()
+        self.assertEqual((watch.exit_code, watch.forced_kill, watch.cleanup_ok), (0, False, True))
+        with self.assertRaisesRegex(ValueError, "^presence_standin_one_standby_script$"):
+            presence_standin.install(self.directory, standby_after_ms=1, standby_trigger=trigger)
+        for argv in ((), ("--watch",), ("--watch", "--seconds", "x"), ("--describe",), ("--watch", "--seconds", "5", "--more")):
+            self.assertEqual(presence_standin.main(list(argv)), 64)
+        self.assertEqual((presence_standin.install(self.directory).parent, presence_standin.NAME),
+                         (self.directory, "sightcircuit-presence-watcher-standin"))
 
 
 if __name__ == "__main__":

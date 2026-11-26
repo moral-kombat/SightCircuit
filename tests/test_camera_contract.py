@@ -22,8 +22,9 @@ EXPORT_NOTICE_V2 = (
     "sightcircuit-camera-helper --export-frames: activates this client's frame reader for the selected passthrough "
     "cameras and exports their frames, within the frame and time bounds shown below, to the parent process, which runs "
     "object detection on them. Detections are Camera Data. A recognition command saves counts, labels, boxes and "
-    "timings only to the report you name and shows nothing; a display command shows labels and approximate arrows in "
-    "the headset and saves only the report you name (counts, labels, boxes and timings). Neither saves an image and "
+    "timings only to the report you name and shows nothing; a display command shows the names of detected objects in "
+    "the headset, with approximate arrows or as boxes drawn around them, and saves only the report you name (counts, "
+    "labels, boxes and timings). Neither saves an image and "
     "neither shows a camera image. No camera control is "
     "written and the recording LED is untouched. The export ends on its bound, on a stop signal, when the headset is "
     "removed or on standby. Watch passthrough during the run and for 30 seconds afterwards. Type yes to continue.")

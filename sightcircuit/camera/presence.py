@@ -243,6 +243,9 @@ class PresenceWatch:
         self.armed = self.closing = self.closed = self.forced_kill = False
         self.refusal = self.ready = self.end = self.ending = self.lost = self.exit_code = None
         self.on_signal = on_signal  # Called once, on the reader thread, when the ending signal sets the stop.
+        # A caller that pins the watcher (a displayed run under a scope record) sets the digest it must have;
+        # a watcher with any other is refused before it is launched (``watcher_not_pinned``).
+        self.expected_sha256 = None
         self.events_first, self.events_last = [], collections.deque(maxlen=EVENTS_KEPT_EACH_END)
         self.signal_counts = dict.fromkeys(SIGNALS, 0)
         self.event_count, self.heartbeats, self.frames_after_signal = 0, 0, 0
@@ -276,6 +279,8 @@ class PresenceWatch:
         except SightCircuitError as error:
             return self._refuse("watcher_" + error.reason.removeprefix("helper_"))
         self.sha256 = camera_helper.helper_digest(self.path)
+        if self.expected_sha256 is not None and self.sha256 != self.expected_sha256:
+            return self._refuse("watcher_not_pinned")
         self.launched_ns = time.monotonic_ns()
         try:
             self.process = subprocess.Popen([self.path, "--watch", "--seconds", str(self.max_seconds)],
@@ -396,29 +401,30 @@ class PresenceWatch:
             except (OSError, ValueError):
                 break
             now = time.monotonic_ns()
-            if not readable:
-                last = self.last_line_ns
-                if self.armed and last is not None and now - last > self.heartbeat_timeout * 1e9:
-                    self._lose("heartbeat_missed", now)
-                continue
-            try:
-                chunk = os.read(descriptor, 65536)
-            except InterruptedError:
-                continue
-            except OSError:
-                break
-            if not chunk:
-                break
-            pending.extend(chunk)
-            while True:
-                line, newline, rest = pending.partition(b"\n")
-                if not newline:
+            if readable:
+                try:
+                    chunk = os.read(descriptor, 65536)
+                except InterruptedError:
+                    continue
+                except OSError:
                     break
-                pending = bytearray(rest)
-                self._line(bytes(line), time.monotonic_ns())
-            if len(pending) > MAX_LINE_BYTES:
-                pending = bytearray()
-                self._lose("line_too_long", now)
+                if not chunk:
+                    break
+                pending.extend(chunk)
+                while True:
+                    line, newline, rest = pending.partition(b"\n")
+                    if not newline:
+                        break
+                    pending = bytearray(rest)
+                    self._line(bytes(line), time.monotonic_ns())
+                if len(pending) > MAX_LINE_BYTES:
+                    pending = bytearray()
+                    self._lose("line_too_long", now)
+            # On every pass, after the lines just read, and not only when the pipe is quiet: bytes that complete
+            # no line are not a heartbeat, so a watcher that trickles them is lost as soon as a silent one.
+            last = self.last_line_ns
+            if self.armed and last is not None and now - last > self.heartbeat_timeout * 1e9:
+                self._lose("heartbeat_missed", now)
         now = time.monotonic_ns()
         if pending:
             self._lose("line_unterminated", now)

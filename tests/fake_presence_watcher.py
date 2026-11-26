@@ -12,7 +12,8 @@ in the environment scripts it, as comma-separated items. Flags:
 signals), ``exit=<code>`` (the exit code at the end). Timed steps,
 ``<ms>:<action>`` from ``ready``: a signal name of
 ``sightcircuit.camera.presence.SIGNALS`` (one presence line), ``die`` (exit 3
-with no end line), ``silent`` (stop writing, stay alive), ``garbage`` (a line
+with no end line), ``silent`` (stop writing, stay alive), ``trickle`` (stop writing lines and write one byte that ends no
+line every 30 ms), ``garbage`` (a line
 that is not JSON), ``skip`` (a heartbeat with a wrong sequence number),
 ``future`` (a heartbeat stamped ten seconds ahead), ``nokey``, ``listsignal``
 and ``hugeage`` (a standby line that is valid JSON but lacks ``event_age_ms``,
@@ -95,7 +96,7 @@ def main(argv=None):
     origin = time.monotonic_ns()
     deadline = origin + int(argv[2]) * 1_000_000_000
     next_heartbeat = origin + HEARTBEAT_NS
-    silent = False
+    silent, trickle_at = False, None
     exit_code = int(flags.get("exit", 0))
     while True:
         now = time.monotonic_ns()
@@ -130,6 +131,8 @@ def main(argv=None):
                 os._exit(3)
             elif action == "silent":
                 silent = True
+            elif action == "trickle":
+                silent, trickle_at = True, now
             elif action == "garbage":
                 sys.stdout.write("Unable to read VR Path Registry\n")
                 sys.stdout.flush()
@@ -143,6 +146,10 @@ def main(argv=None):
         if not silent and now >= next_heartbeat:
             writer.line("heartbeat")
             next_heartbeat = now + HEARTBEAT_NS
+        if trickle_at is not None and now >= trickle_at:
+            sys.stdout.write(" ")
+            sys.stdout.flush()
+            trickle_at = now + 30_000_000
         time.sleep(0.005)
 
 

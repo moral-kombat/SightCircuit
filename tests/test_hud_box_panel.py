@@ -289,7 +289,10 @@ class BoxPanelContractTests(unittest.TestCase):
         panel_files = {"sightcircuit/hud/contract.py", "sightcircuit/hud/box_render.py", "sightcircuit/hud/boxes.py",
                        "sightcircuit/hud/box_font.py", "sightcircuit/hud/__init__.py", "sightcircuit/hud/native.py",
                        "sightcircuit/hud/box_scenes.py", "tools/hud_contract.hpp", "tools/overlay_frame.hpp",
-                       "sightcircuit/hud/camera_stage.py"}  # Since B5's second part: the stage draws the panel.
+                       "sightcircuit/hud/camera_stage.py",  # Since B5's second part: the stage draws the panel,
+                       # and the synthetic step's driver draws its orientation scene (no camera, a record that
+                       # names the panel like any other run).
+                       "sightcircuit/hud/synthetic_boxes.py"}
         panel_words = ("BOX_PANEL_CONFIG", "BoxPanelConfig", "box_render", "draw_boxes", "camera_boxes", "PanelBox",
                        "head-fixed-box-panel", "box_font", "kBoxPanel", "box_scenes", "orientation_scene")
         # The panel as "the second fixed layout": the contract's list, the bridge's table and the units that read

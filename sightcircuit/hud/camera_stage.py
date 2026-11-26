@@ -73,9 +73,13 @@ import operator
 import re
 import threading
 import time
+import types
 
 from .. import gates
 from ..camera import contract as camera_contract
+from ..camera import presence as presence_defaults
+from ..camera.presence import PROTOCOL as PRESENCE_PROTOCOL
+from ..camera.presence import REASON_NOT_ARMED, STATUS_PRESENCE_ENDED, STATUS_WATCH_LOST, STOPPED_WHILE_ARMING, PresenceWatch
 from ..camera import region as regions
 from ..convert import to_bgr
 from ..detection import POC_THRESHOLD
@@ -85,6 +89,7 @@ from ..observed_frames import BRIDGE_COUNTS, MAX_ACKNOWLEDGEMENTS, ObservedFrame
 from ..overlay import BRIDGE_INPUT_POLL_NS, CLOSE_REPORT_FIELDS, rgba_from_bgr
 from ..pipeline import PERCENTILE_METHOD, TIMINGS, Pipeline, TimingSample
 from ..runtime.manifest import CAMERA_HELPER as PINNED_HELPER
+from ..runtime.manifest import PRESENCE_WATCHER as PINNED_WATCHER
 from ..runtime.scope import CAMERA_INPUT, CAMERA_LEFT, WHOLE_FRAME, RunScope, pinned_binary, view_value
 from ..sources.camera_helper import LEFT_CAMERA, CameraHelperSource
 from .box_render import draw_boxes
@@ -99,7 +104,7 @@ __all__ = ("CAMERA_INPUT_REFUSAL", "MAX_REPORT_BYTES", "REPORT_KIND", "CameraHud
            "camera_display_input_permitted", "check_report", "named_in_window", "report_value", "window_verdict")
 
 REPORT_KIND = "camera_hud_stage"
-STATUSES = ("not_run", "completed", "stopped", "presence_ended", "cancelled", "error")
+STATUSES = ("not_run", "completed", "stopped", "presence_ended", "presence_watch_lost", "cancelled", "error")
 WATCHER_JOIN_SECONDS = 5.0
 WATCHER_POLL_SECONDS = 0.02  # How often the watcher looks at the client between stops.
 
@@ -127,6 +132,10 @@ MAX_TARGET_SPELLS = 128
 MAX_REPORTED_EXPIRIES = 32  # ``frame_expired`` events repeated in the report; the count covers them all.
 # Keys of the embedded source and bridge reports that hold prose, paths or argument vectors: left out by name.
 WITHHELD_KEYS = ("error", "detail", "path", "arguments", "definition", "scope", "observed_ns_clock")
+PRESENCE_KEYS = ("requested", "armed", "refusal", "protocol", "watcher_sha256", "ended_run", "run_end_reason",
+                 "ending_signal", "signal_ns", "signal_received_ns", "hide_written_after_signal_ms",
+                 "bridge_hide_after_signal_ms", "frames_received_after_signal", "lost", "lost_ended_run",
+                 "event_count", "heartbeats", "exit_code", "forced_kill", "cleanup_ok", "camera_data_read")
 BOXES_BLOCK = (*("boxes_selected" if name == "boxes_shown" else name for name in BOX_REPORT_KEYS),
                "boxes_sent", "results_counted", "results_sent")
 # Every top-level field of the report, and for each block the keys it may hold (None: a scalar field).
@@ -174,6 +183,9 @@ REPORT_BLOCKS = {
                "frames_expired_before_send", "frames_retransmitted", "take_downs", "shows", "keepalives",
                "visibility_requests", "settings_sent", "frames_presented", "frames_refused", "error", "lines",
                "first_frame", "final_report"),
+    # The presence watch on the displayed path (item L17): SteamVR's headset-off signal beside the bridge and the
+    # helper. Counts, closed names and times on the host's monotonic clock; no text from the watcher.
+    "presence_watch": PRESENCE_KEYS,
     "cleanup": ("source_ok", "bridge_ok", "sinks_ok", "ok"),
 }
 
@@ -603,6 +615,36 @@ def valid_detections(detections, input_size, plain):
     return valid, len(detections) - len(valid)
 
 
+# What the stage itself refuses of the watch it holds; the watcher's own refusals are the watch's words.
+WATCH_NOT_UNUSED, WATCH_NOT_LIVE, WATCH_START_FAILED = "watch_not_unused", "watch_not_live", "watch_start_failed"
+
+
+def watch_unused(watch):
+    """Whether ``watch`` is a watch a stage may hold and arm; True or False, and it changes nothing.
+
+    A ``PresenceWatch`` of that exact type (a subclass could arm without a
+    watcher), never started, never closed, never told its run had ended
+    (either would leave its signal ending nothing), and with the module's
+    own waits (a longer heartbeat bound would not notice a silent watcher).
+    """
+    return (type(watch) is PresenceWatch and watch.process is None and watch.reader is None
+            and watch.launched_ns is None and watch.armed is False and watch.closing is False
+            and watch.closed is False and watch.run_over_ns is None and watch.refusal is None and watch.lost is None
+            and watch.ending is None and type(watch.ready_wait) in (int, float)
+            and type(watch.heartbeat_timeout) in (int, float)
+            and watch.ready_wait == presence_defaults.READY_WAIT_SECONDS
+            and watch.heartbeat_timeout == presence_defaults.HEARTBEAT_TIMEOUT_SECONDS)
+
+
+def watch_live(watch):
+    """Whether ``watch`` is armed with a watcher that is running and a reader that is listening, its run not ended."""
+    process, reader = watch.process, watch.reader
+    return (type(watch) is PresenceWatch and watch.armed is True and watch.closing is False and watch.closed is False
+            and watch.run_over_ns is None and watch.refusal is None and process is not None
+            and process.poll() is None and reader is not None and reader.is_alive()
+            and watch.heartbeat_timeout == presence_defaults.HEARTBEAT_TIMEOUT_SECONDS)
+
+
 def stage_bound(stage):
     """``(layout, view)`` of what ``stage`` runs: the layout it draws for and its view as a scope record states it.
 
@@ -656,6 +698,13 @@ def _camera_preconditions(stage, scope):
     if (type(scope) is not RunScope or scope.source != CAMERA_LEFT or not isinstance(source, CameraHelperSource)
             or source.source_id != camera_contract.source_id(LEFT_CAMERA)
             or not pinned_binary(source.binary, PINNED_HELPER) or not stage_view_bound(scope, stage)):
+        return False
+    # The watch the stage holds launches the checkout's own watcher, at the path the manifest hashes.
+    watcher = getattr(stage, "watcher_binary", None)
+    if watcher is not None and not pinned_binary(watcher, PINNED_WATCHER):
+        return False
+    # And it is a watch that can end the run: not yet used before the arming, armed and running after it.
+    if getattr(stage, "watch_sound", True) is not True:
         return False
     permitted, seconds, limits = scope.seconds, getattr(stage, "seconds", None), source.limits
     if type(permitted) not in (int, float) or type(seconds) not in (int, float) or not 0 < seconds <= permitted:
@@ -722,6 +771,16 @@ class CameraHudStage:
     ``signalled``, when given, is a callable that says whether the caller
     recorded a stop signal for this run; with the source's own
     ``cancelled`` it is how the stage knows a signal ended the run.
+    ``watch``, when given, is the run's ``PresenceWatch`` (that exact type,
+    never started or closed, with the default waits: ``watch_unused``); the
+    stage arms it on the main thread after the permission checks and before
+    the bridge or the helper is launched, runs with the watch's stop event
+    as its own, and closes it at the end. A watch that cannot be armed, or
+    is not armed with a running watcher once ``start`` has answered, ends
+    the run there with nothing launched (``presence_watch_not_armed``); its
+    ending signal ends the run ``presence_ended`` and a watch lost while
+    armed ends it ``presence_watch_lost``, in both cases through the same
+    end as any stop: the tile is taken down at once.
 
     ``run(stop)`` must be called on the main thread (the supervision
     primitive takes the process's signals). It refuses real output first
@@ -741,9 +800,11 @@ class CameraHudStage:
 
     def __init__(self, source, detector, client, *, threshold=POC_THRESHOLD, directions=True, orientation="identity",
                  max_fps=5, max_frames=0, seconds=None, config=HUD_CONFIG, convert=to_bgr, target_label=None,
-                 signalled=None, region=None, alignment=None, on_frame=None):
+                 signalled=None, region=None, alignment=None, on_frame=None, watch=None):
         if not isinstance(source, CameraHelperSource):
             raise ValueError("camera_hud_requires_camera_helper_source")
+        if watch is not None and not watch_unused(watch):  # That exact type, unused, with the default waits.
+            raise ValueError("camera_hud_presence_watch_invalid")
         if not isinstance(client, ObservedFrameClient):
             raise ValueError("camera_hud_requires_observed_frame_client")
         if not any(config is known for known in FIXED_LAYOUTS):  # The contract's own object, never a copy.
@@ -757,7 +818,11 @@ class CameraHudStage:
             raise ValueError("camera_hud_alignment_invalid")
         # What the permission sites compare with the scope record: set here, read through properties without setters.
         self._config, self._region, self._alignment = config, regions.Region() if region is None else region, alignment
-        self._presence = None  # The presence watch the stage holds: none (the displayed path's watch is item L17's).
+        self._presence = watch  # The presence watch the stage holds, or None: what ``presence_watch`` answers from.
+        self._watch_end = None  # "signal" or "lost" when the watch is what ended the run.
+        self._watch_armed = False  # ``_arm`` armed the watch and found it live.
+        self._watch_refusal = None  # The stage's own word for a watch it would not run with (``WATCH_NOT_LIVE``, ...).
+        self._nothing_launched = False  # The run ended while arming the watch: no bridge and no helper to clean up.
         self.on_frame = on_frame
         if type(directions) is not bool:
             raise ValueError("hud_camera_directions_invalid")
@@ -831,6 +896,17 @@ class CameraHudStage:
         return self._presence is not None
 
     @property
+    def watch_sound(self):
+        """Whether the held watch can end this run: unused until the stage arms it, live from then; True without one."""
+        watch = self._presence
+        return watch is None or (watch_live(watch) if self._watch_armed else watch_unused(watch))
+
+    @property
+    def watcher_binary(self):
+        """The watcher the held watch launches, or None without a watch: what the camera site checks is pinned."""
+        return None if self._presence is None else self._presence.binary
+
+    @property
     def boxed(self):
         """Whether the layout is the box panel."""
         return isinstance(self._config, BoxPanelConfig)
@@ -857,6 +933,8 @@ class CameraHudStage:
         """The pipeline's conversion: the frame as the detector sees it, through the region when there is one."""
         if self.on_frame is not None:
             self.on_frame(frame)
+        if self._presence is not None:
+            self._presence.frame()  # A frame after the ending signal is counted as one.
         if not self.prepares:
             self._mapping = None
             return self.convert(frame)
@@ -1087,6 +1165,11 @@ class CameraHudStage:
         """Run once, on the main thread; returns ``report()``. Real output is refused before anything is launched."""
         if self._ran:
             raise ValueError("camera_hud_stage_already_run")
+        watch = self._presence
+        if watch is not None:  # The watch sets its own stop event: that event is the run's.
+            if stop is not None and stop is not watch.stop:
+                raise ValueError("camera_hud_presence_stop_mismatch")
+            stop = watch.stop
         self._ran = True
         real_output = self.client.validation_only is not True  # Fixed at the client's construction.
         if real_output:
@@ -1100,10 +1183,15 @@ class CameraHudStage:
                 # The launcher hashes the helper once more and ends the run if it is not the manifest's.
                 self.source.expected_sha256 = self.client.scope.pins.get(PINNED_HELPER) if type(
                     self.client.scope) is RunScope else None
+                if watch is not None:  # Likewise the watcher: no digest pinned is no watcher launched.
+                    watch.expected_sha256 = (self.client.scope.pins.get(PINNED_WATCHER) or "") if type(
+                        self.client.scope) is RunScope else ""
         except ValueError:
             self.client.withdraw()  # A refused run gives its scope back: nothing can start under it later.
             raise
         stop = threading.Event() if stop is None else stop
+        if watch is not None and not self._arm(watch, stop):
+            return self.report()  # Not armed, or ended while arming: nothing was launched.
         self.pipeline = Pipeline(self.source, self.detector, [self], threshold=self.threshold, max_fps=self.max_fps,
                                  latest_only=True, max_input_age_ms=MAX_DISPLAY_AGE_MS, max_frames=self.max_frames,
                                  seconds=self.seconds, convert=self._convert, annotator=self._tile)
@@ -1115,11 +1203,76 @@ class CameraHudStage:
             self.failure = error
         finally:
             stop.set()
+            if watch is not None:
+                watch.run_ended()  # From here a signal or a loss is recorded and ends nothing.
             watcher.join(WATCHER_JOIN_SECONDS)
             self.client.withdraw()  # A run that failed before the bridge started gives its scope back.
             self.close()  # The pipeline closed it with its sinks; this covers a run that never opened them.
+            if watch is not None:
+                watch.close()  # Whatever happened: no watcher outlives the run.
         self.status, self.reason = self._outcome()
         return self.report()
+
+    def _arm(self, watch, stop):
+        """Arm the presence watch before anything else is launched; False when the run ends here instead.
+
+        Fail closed, as the run without display is: a watcher that cannot be
+        launched, is not the pinned one, does not say ``ready`` in time,
+        reports no headset or one already in standby, or is lost again
+        before the launch, is no watch, and a run that holds one does not
+        start without it. Nor does it start on a watch that was used before
+        the stage armed it, that says it is armed without a running watcher,
+        or whose arming raised: each is ``presence_watch_not_armed`` with
+        the stage's own word as the refusal. A stop, a recorded signal or SteamVR's own signal
+        during the arming ends the run here too. Nothing was launched: no
+        bridge, no helper; the scope is given back.
+        """
+        try:
+            refusal = self._start_watch(watch, stop)
+        except Exception:  # Whatever arming raised (the watcher unreadable, ...): no watch, and a reported end.
+            refusal = WATCH_START_FAILED
+        if refusal is None:
+            self._watch_armed = True
+            return True
+        try:
+            watch.run_ended()
+            watch.close()
+        except Exception:  # The watch's ``cleanup_ok`` says what is known of the watcher.
+            pass
+        self.client.withdraw()
+        self.close()
+        self._nothing_launched = True
+        if refusal != STOPPED_WHILE_ARMING and watch.refusal is None:
+            self._watch_refusal = refusal  # The stage's refusal, not the watcher's: the report gives it by name.
+        if refusal != STOPPED_WHILE_ARMING:
+            self.status, self.reason = "error", REASON_NOT_ARMED
+        elif self._signalled():
+            self.status, self.reason = "cancelled", "signal"
+        elif watch.ended_run():
+            self._watch_end = "signal"
+            self.status, self.reason = STATUS_PRESENCE_ENDED, _identifier(watch.ending["end_reason"], "presence_ended")
+        elif watch.lost_ended_run():
+            self._watch_end = "lost"
+            self.status, self.reason = STATUS_WATCH_LOST, _identifier(watch.lost["reason"], STATUS_WATCH_LOST)
+        else:
+            self.status, self.reason = "stopped", "stopped_before_launch"
+        return False
+
+    def _start_watch(self, watch, stop):
+        """Start ``watch``; None when it is armed, live and nothing asked to stop, else the refusal.
+
+        Only a watch not used before is started, and what ``start`` says is
+        not taken on trust: the watch must then be armed with its watcher
+        running and its reader listening.
+        """
+        if not watch_unused(watch):  # Started, closed or changed since the stage took it.
+            return WATCH_NOT_UNUSED
+        refusal = watch.start(abort=types.SimpleNamespace(is_set=lambda: stop.is_set() or self._signalled()))
+        if refusal is not None:
+            return refusal
+        if stop.is_set() or self._signalled():
+            return STOPPED_WHILE_ARMING
+        return None if watch_live(watch) else WATCH_NOT_LIVE
 
     def _client_reason(self):
         """A code for the client's error: the bridge's own word when it is one, else which side failed."""
@@ -1170,6 +1323,15 @@ class CameraHudStage:
             return "completed", "seconds"
         if source.status == "completed":
             return "completed", _identifier(source.end_reason, "helper_bound")
+        # The run ended on its stop event and no bound of its own had ended it: if the watch set that event,
+        # the end is the watch's, by name.
+        watch = self._presence
+        if watch is not None and watch.ended_run():
+            self._watch_end = "signal"
+            return STATUS_PRESENCE_ENDED, _identifier(watch.ending["end_reason"], "presence_ended")
+        if watch is not None and watch.lost_ended_run():
+            self._watch_end = "lost"
+            return STATUS_WATCH_LOST, _identifier(watch.lost["reason"], STATUS_WATCH_LOST)
         return "stopped", "stop_requested"
 
     # -- the report ----------------------------------------------------------------------------------------------
@@ -1238,6 +1400,35 @@ class CameraHudStage:
                 # The client's error is only the bridge having retired cleanly on the signal that ended the run.
                 "bridge_left_on_signal": self._excused()}
 
+    def _presence_block(self, end):
+        """The presence watch's block: whether it was armed, what ended, and how long the hide took from the signal."""
+        watch = self._presence
+        block = dict.fromkeys(PRESENCE_KEYS)
+        block.update(requested=watch is not None, armed=False, protocol=PRESENCE_PROTOCOL, ended_run=False,
+                     lost_ended_run=False, event_count=0, heartbeats=0, forced_kill=False, cleanup_ok=True,
+                     camera_data_read=False)
+        if watch is None:
+            return block
+        ending, lost = watch.ending, watch.lost
+        block.update(armed=watch.armed is True and self._watch_refusal is None,
+                     refusal=_identifier(watch.refusal, None) or self._watch_refusal, watcher_sha256=watch.sha256,
+                     ended_run=self._watch_end == "signal", lost_ended_run=self._watch_end == "lost",
+                     lost=None if lost is None else _identifier(lost["reason"], "watcher_lost"),
+                     event_count=watch.event_count, heartbeats=watch.heartbeats, exit_code=watch.exit_code,
+                     forced_kill=watch.forced_kill, cleanup_ok=watch.cleanup_ok)
+        if ending is not None:
+            signal_ns = ending["monotonic_ns"]
+
+            def after(at):
+                return None if at is None or self._watch_end != "signal" else round((at - signal_ns) / 1e6, 3)
+            block.update(ending_signal=_identifier(ending["signal"], None), signal_ns=signal_ns,
+                         signal_received_ns=ending.get("received_monotonic_ns"),
+                         run_end_reason=_identifier(ending["end_reason"], None) if self._watch_end == "signal" else None,
+                         hide_written_after_signal_ms=after(end["hide_written_ns"]),
+                         bridge_hide_after_signal_ms=after(end["bridge_hide_returned_ns"]),
+                         frames_received_after_signal=watch.frames_after_signal)
+        return block
+
     def report(self):
         """The run's report: counts, labels, timings and format metadata, checked against ``check_report``."""
         client, source, pipeline = self.client, self.source, self.pipeline
@@ -1266,6 +1457,8 @@ class CameraHudStage:
                 "geometry_constant": None if geometry is None else self._geometry_constant,
                 "invalid_detections": invalid_detections}
         stats = pipeline.stats.report() if pipeline is not None else None
+        end = self._end()
+        presence_block = self._presence_block(end)
         native = (bridge or {}).get("native_report") or {}
         bridge_counts = {name: native.get(name) for name in BRIDGE_COUNTS}
         source_report = source.report()
@@ -1290,7 +1483,7 @@ class CameraHudStage:
             bridge_block["first_frame"] = None if first is None else {
                 "event": first["event"], "width": first["width"], "height": first["height"], "read_ns": first["read_ns"]}
             bridge_block["final_report"] = report_value({**native, "bridge_error": native.get("error")}, withheld)
-        source_ok = source_report.get("cleanup_ok") is True
+        source_ok = source_report.get("cleanup_ok") is True or self._nothing_launched
         # Confirmed by the client, or the bridge retired itself cleanly on the signal that ended the run.
         bridge_ok = bridge is not None and (bridge.get("cleanup_confirmed") is True or self._excused())
         expiry = self._expiry(client.validation_only)
@@ -1336,7 +1529,7 @@ class CameraHudStage:
             "deadlines": {"cap_ms": MAX_DISPLAY_AGE_MS,
                           "max_deadline_after_observation_ms": round(self.max_deadline_span_ns / 1e6, 3),
                           "within_cap": self.max_deadline_span_ns <= MAX_DISPLAY_AGE_NS},
-            "end": self._end(),
+            "end": end,
             "timings": self._timings(stats),
             # ``pack`` is timed for every result packed and ``queue`` for every one the client accepted; the
             # others for every result drawn.
@@ -1351,9 +1544,11 @@ class CameraHudStage:
             "pipeline": pipeline_block,
             "source": report_value(source_report, withheld),
             "bridge": bridge_block,
+            "presence_watch": presence_block,
+            # A watcher that is not proven gone is a cleanup failure of the run (``presence_watch.cleanup_ok``).
             "cleanup": {"source_ok": source_ok, "bridge_ok": bridge_ok,
-                        "sinks_ok": pipeline is not None and pipeline.stats.sink_cleanup_ok,
-                        "ok": source_ok and bridge_ok},
+                        "sinks_ok": (pipeline is not None and pipeline.stats.sink_cleanup_ok) or self._nothing_launched,
+                        "ok": source_ok and bridge_ok and presence_block["cleanup_ok"]},
         }
         report["fields_withheld"] = withheld[0]
         return check_report(report)
