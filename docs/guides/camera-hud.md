@@ -396,9 +396,10 @@ running. Its standby signal ends the run and takes the tile down at once.
 | The watch cannot be armed: the watcher reports no SteamVR or a headset already in standby, does not say ready in time, cannot be launched, or was changed between the record's check and its launch | `status: error`, `reason: presence_watch_not_armed`; `presence_watch.refusal` has the watcher's own word. Neither the bridge nor the helper was launched and nothing was shown | 1 |
 | The headset comes off, the watcher is lost or the run is stopped while the helper is still starting, before the first frame | `cleanup.ok: false`: the helper was ended before it had started and its cleanup is not confirmed. Nothing was shown | 1 |
 
-**The order, as it is accepted for now: the record is verified and used up
-first, and only then is the watch armed. A run whose watch cannot be armed
-has therefore spent its record**, and it shows nothing. That is so whatever
+**The order, as the owner accepted it for now on 2026-11-25: the record is
+verified and used up first, and only then is the watch armed. A run whose
+watch cannot be armed has therefore spent its record**, and it shows
+nothing. That is so whatever
 the cause: SteamVR not running, the headset asleep, the watcher changed
 since the record's check. It is a run that ended, and a re-run is a new
 approval with a new record.

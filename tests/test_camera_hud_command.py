@@ -248,8 +248,8 @@ class SyntheticBoxesTests(unittest.TestCase):
             counted = (*corners, PanelBox(synthetic_rows.counter_label(number), centre.confidence, centre.box_xyxy))
             self.assertEqual(rgba, draw_boxes(counted, PANEL).tobytes())
         self.assertEqual(len({item[3] for item in sent}), 6)
-        # What the wearer is told (``SYNTHETIC_BOXES_NOTICE``): five boxes, and the largest, wider than tall, is
-        # the picture's top left.
+        # What the wearer is told (``SYNTHETIC_BOXES_NOTICE``): five boxes, and the largest, which is wider than
+        # tall, should appear at the top left.
         def area(box):
             x0, y0, x1, y1 = box.box_xyxy
             return (x1 - x0) * (y1 - y0)
@@ -257,8 +257,18 @@ class SyntheticBoxesTests(unittest.TestCase):
         self.assertEqual((len(scene), scene[0].label, max(scene, key=area), x1 - x0 > y1 - y0),
                          (5, "top left", scene[0], True))
         self.assertLess(max(x1, y1), PANEL.width_px // 2)
-        for phrase in ("five named boxes", "top left", "No camera is opened and nothing is detected"):
-            self.assertIn(phrase, confirmation.SYNTHETIC_BOXES_NOTICE)
+        # The notice as the owner accepted it on 2026-11-25, with the clearer sentence about the largest box,
+        # sentence for sentence: a change to any of them is a change the owner is asked about.
+        self.assertEqual([sentence.strip() for sentence in confirmation.SYNTHETIC_BOXES_NOTICE.split(". ")], [
+            "camera_hud --synthetic-boxes: shows five named boxes on a transparent panel in the middle of the view "
+            "in the headset, for the bounds shown below, with scheduled pauses in which the panel must go blank "
+            "within about a second",
+            "The largest box, which is wider than tall, should appear at the top left",
+            "No camera is opened and nothing is detected",
+            "Nothing is saved but the report of counts and timings, printed on this terminal and written to a file "
+            "only if you named --report",
+            "Stop with Ctrl-C at any passthrough change, any green input, or when the wearer asks",
+            "Typing yes starts this one run; it is not an approval and creates no scope record."])
         # The driver is the rows' driver with another picture: only for a client that names the panel, and the
         # rows' driver never draws on it.
         self.assertTrue(issubclass(synthetic_boxes.SyntheticBoxes, synthetic_rows.SyntheticRows))

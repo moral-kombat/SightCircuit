@@ -47,13 +47,16 @@ BOX_DISPLAY_NOTICE = (
     "counts, labels, timings and format metadata, printed on this terminal and written to a file only if you named "
     "--report. Stop with Ctrl-C at any passthrough change, any green input, or when the wearer asks. Typing yes "
     "starts this one run; it is not an approval and creates no scope record.")
-# The synthetic boxes on the panel (work-order item B5): what the wearer will see is the orientation scene. New
-# wearer-facing wording, the owner's to accept or change.
+# The synthetic boxes on the panel (work-order item B5): what the wearer will see is the orientation scene. The
+# owner accepted this wording on 2026-11-25 with one sentence changed, relayed by the coordinator ("Yes, with the
+# clearer sentence"): "The largest box, which is wider than tall, should appear at the top left." in place of
+# "The largest box, wider than tall, is the picture's top left." ``tests/test_camera_hud_command.py`` pins it
+# sentence for sentence, so a change to it is a change the owner is asked about.
 SYNTHETIC_BOXES_NOTICE = (
     "camera_hud --synthetic-boxes: shows five named boxes on a transparent panel in the middle of the view in the "
     "headset, for the bounds shown below, with scheduled pauses in which the panel must go blank within about a "
-    "second. The largest box, wider than tall, is the picture's top left. No camera is opened and nothing is "
-    "detected. Nothing is saved but the report of counts and timings, printed on this terminal and written to a "
+    "second. The largest box, which is wider than tall, should appear at the top left. No camera is opened and "
+    "nothing is detected. Nothing is saved but the report of counts and timings, printed on this terminal and written to a "
     "file only if you named --report. Stop with Ctrl-C at any passthrough change, any green input, or when the "
     "wearer asks. Typing yes starts this one run; it is not an approval and creates no scope record.")
 SYNTHETIC_NOTICE = (
