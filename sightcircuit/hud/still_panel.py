@@ -1,4 +1,4 @@
-"""Still panel for device step L-D2: one public seed image at the HUD position and size, on a timer.
+"""Still panel for device step L-D2: one public seed image at a fixed layout's position and size, on a timer.
 
 The step's canary shows a picture of a class absent from the room where the
 HUD tile will sit and re-submits it at 5 Hz, so that a camera recognition run
@@ -13,6 +13,15 @@ contract's 320x128 tile and feeds it to the bridge's existing stream mode
 
 Nothing here is camera-derived and nothing here can be: the only input is an
 image id of the seed manifest, verified by its SHA-256 before it is decoded.
+``--layout`` names one of the contract's fixed layouts (``FIXED_LAYOUTS``):
+the edge strip (``fixed-edge-hud-v1``, the default and exactly the driver it
+always was) or the box panel (512x512, 0.9 m wide at 0.75 m, centred in the
+view), whose placement is then the stream mode's settings. The driver reaches
+layouts only through the contract's list and never names the panel. On any
+layout but the strip the letterbox bars are transparent (alpha 0, RGB 0, the
+panel's transparent pixel) and the picture is fully opaque; on the box panel
+it covers the middle of the wearer's view, about 62 degrees wide, so that step
+is run seated (docs/reference/overlay.md has the command).
 There is no path, source or device argument. It never sends an expiring frame
 and never uses ``--fixed-hud``; real output is the replay panel's own path
 (``--stdin``) and needs ``allow_device_output``, which only an approved device
@@ -32,7 +41,7 @@ if __name__ == "__main__":
     # Run as a file: import the checkout's packages, never siblings of this file.
     sys.path[0] = str(Path(__file__).resolve().parents[2])
 from sightcircuit import evaluation  # noqa: E402
-from sightcircuit.hud.contract import HUD_CONFIG, RGBA_BYTES, config_digest  # noqa: E402
+from sightcircuit.hud.contract import FIXED_LAYOUTS, HUD_CONFIG, RGBA_BYTES, config_digest, fixed_layout  # noqa: E402
 from sightcircuit.overlay import OverlayClient, PanelSettings  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -44,24 +53,41 @@ MIN_SECONDS, MAX_SECONDS = 1, 180
 REPORT_KIND = "sightcircuit_still_panel"
 
 
-def hud_placement(visible=True):
-    """The fixed HUD placement as the stream mode's settings."""
-    c = HUD_CONFIG
+def known_layout(layout):
+    """``layout`` if it is one of the contract's fixed layouts (the object itself); ``ValueError`` otherwise."""
+    if not any(layout is config for config in FIXED_LAYOUTS):
+        raise ValueError("still_panel_layout_unknown")
+    return layout
+
+
+def layout_placement(layout, visible=True):
+    """The placement of fixed layout ``layout``, from the contract's own numbers, as the stream mode's settings."""
+    c = known_layout(layout)
     return PanelSettings(width=c.panel_width_m, distance=c.distance_m, x=c.x_m, y=c.y_m, opacity=c.opacity,
                          visible=visible)
 
 
-def seed_tile(image_id=DEFAULT_IMAGE_ID, *, directory=SEED_DOWNLOADS):
-    """``(rgba, source)``: seed image ``image_id`` letterboxed into the HUD tile, and the record of what it is.
+def hud_placement(visible=True):
+    """The fixed HUD placement as the stream mode's settings."""
+    return layout_placement(HUD_CONFIG, visible)
+
+
+def seed_tile(image_id=DEFAULT_IMAGE_ID, *, directory=SEED_DOWNLOADS, layout=HUD_CONFIG):
+    """``(rgba, source)``: seed image ``image_id`` letterboxed into ``layout``'s tile, and the record of what it is.
 
     The image must be an entry of the committed seed manifest and the file in
     ``directory`` must match the manifest's SHA-256; anything else raises
     before a byte is decoded. The whole picture is kept (scaled to fit, centred
-    on black), so what the panel shows is the fixture, not a crop of it.
+    on black), so what the panel shows is the fixture, not a crop of it. The
+    picture is fully opaque. The bars are opaque black on the strip, as they
+    always were, and transparent on every other layout, the box panel (alpha 0
+    with RGB 0, its transparent pixel): that panel draws nothing outside what
+    it shows.
     """
     import cv2
     import numpy as np
 
+    layout = known_layout(layout)
     manifest = evaluation.load_manifest(SEED_MANIFEST)
     entries = {entry["id"]: entry for entry in manifest["images"]}
     entry = entries.get(image_id)
@@ -78,14 +104,18 @@ def seed_tile(image_id=DEFAULT_IMAGE_ID, *, directory=SEED_DOWNLOADS):
     image = cv2.imdecode(np.frombuffer(encoded, dtype=np.uint8), cv2.IMREAD_COLOR)
     if image is None:
         raise ValueError("still_panel_seed_image_undecodable")
-    width, height = HUD_CONFIG.width_px, HUD_CONFIG.height_px
+    width, height = layout.width_px, layout.height_px
     scale = min(width / image.shape[1], height / image.shape[0])
     fitted = cv2.resize(image, (max(1, round(image.shape[1] * scale)), max(1, round(image.shape[0] * scale))),
                         interpolation=cv2.INTER_AREA)
     tile = np.zeros((height, width, 3), dtype=np.uint8)
     top, left = (height - fitted.shape[0]) // 2, (width - fitted.shape[1]) // 2
     tile[top:top + fitted.shape[0], left:left + fitted.shape[1]] = fitted
-    rgba = cv2.cvtColor(tile, cv2.COLOR_BGR2RGBA).tobytes()
+    rgba = cv2.cvtColor(tile, cv2.COLOR_BGR2RGBA)
+    if layout is not HUD_CONFIG:  # Transparent bars everywhere but on the strip, which keeps its black ones.
+        rgba[..., 3] = 0
+        rgba[top:top + fitted.shape[0], left:left + fitted.shape[1], 3] = 255
+    rgba = rgba.tobytes()
     source = {"kind": "public_seed_fixture", "manifest": "evaluation/seed.json", "id": image_id,
               "sha256": entry["sha256"], "present_labels": list(entry.get("present", ())),
               "fit": "letterbox", "picture_px": [fitted.shape[1], fitted.shape[0]],
@@ -93,9 +123,13 @@ def seed_tile(image_id=DEFAULT_IMAGE_ID, *, directory=SEED_DOWNLOADS):
     return rgba, source
 
 
-def run_still_panel(image_id=DEFAULT_IMAGE_ID, *, seconds, validation_only=True, allow_device_output=False,
-                    directory=SEED_DOWNLOADS, client_factory=OverlayClient, stop=None, clock=time.monotonic):
-    """Show seed image ``image_id`` at the HUD placement, re-submitted ``UPDATE_HZ`` times a second; the report.
+def run_still_panel(image_id=DEFAULT_IMAGE_ID, *, seconds, layout=HUD_CONFIG, validation_only=True,
+                    allow_device_output=False, directory=SEED_DOWNLOADS, client_factory=OverlayClient, stop=None,
+                    clock=time.monotonic):
+    """Show seed image ``image_id`` at ``layout``'s placement, re-submitted ``UPDATE_HZ`` times a second; the report.
+
+    ``layout`` is one of the contract's fixed layouts, the strip by default;
+    its pixel size is the tile's and its placement the client's settings.
 
     The tile is built here, by ``seed_tile``, from the image id: a caller
     cannot hand in pixels or a label for them, so what is shown is the verified
@@ -111,18 +145,19 @@ def run_still_panel(image_id=DEFAULT_IMAGE_ID, *, seconds, validation_only=True,
         raise ValueError("still_panel_seconds_out_of_range")
     if not validation_only and not allow_device_output:
         raise ValueError("still_panel_device_output_not_allowed")
-    rgba, source = seed_tile(image_id, directory=directory)
-    if len(rgba) != HUD_CONFIG.width_px * HUD_CONFIG.height_px * RGBA_BYTES:
+    layout = known_layout(layout)
+    rgba, source = seed_tile(image_id, directory=directory, layout=layout)
+    if len(rgba) != layout.width_px * layout.height_px * RGBA_BYTES:
         raise ValueError("still_panel_tile_size")
     stop = stop or threading.Event()
     updates = seconds * UPDATE_HZ
-    placement = hud_placement()
+    placement = layout_placement(layout)
     report = {"report_kind": REPORT_KIND, "schema_version": 1, "status": "error", "source": source,
               "camera_derived": False, "live_source_accepted": False, "images_saved": False,
               "validation_only": validation_only, "bridge_mode": "--validate-stdin" if validation_only else "--stdin",
               "frames_carry_deadline": False,
-              "geometry": {"layout_id": HUD_CONFIG.layout_id, "config_sha256": config_digest(HUD_CONFIG),
-                           "width_px": HUD_CONFIG.width_px, "height_px": HUD_CONFIG.height_px,
+              "geometry": {"layout_id": layout.layout_id, "config_sha256": config_digest(layout),
+                           "width_px": layout.width_px, "height_px": layout.height_px,
                            "panel_width_m": placement.width, "distance_m": placement.distance, "x_m": placement.x,
                            "y_m": placement.y, "opacity": placement.opacity},
               "update_hz": UPDATE_HZ, "seconds_requested": seconds, "updates_requested": updates,
@@ -130,7 +165,7 @@ def run_still_panel(image_id=DEFAULT_IMAGE_ID, *, seconds, validation_only=True,
               "scope": "software counts from the bridge's report; not headset evidence",
               "physical_display_verified": False}
     client = client_factory(validation_only=validation_only)
-    client.set_settings(placement)  # before start: the first settings packet is already the HUD placement
+    client.set_settings(placement)  # before start: the first settings packet is already the layout's placement
     try:
         client.start()
         started = clock()
@@ -144,7 +179,7 @@ def run_still_panel(image_id=DEFAULT_IMAGE_ID, *, seconds, validation_only=True,
                 raise RuntimeError(client.error)
             with client.condition:
                 report["updates_replaced"] += client.pending_frame is not None
-            client.submit_frame(HUD_CONFIG.width_px, HUD_CONFIG.height_px, rgba)
+            client.submit_frame(layout.width_px, layout.height_px, rgba)
             report["updates_submitted"] += 1
         # The last update's period: it stays up as long as every other, and the writer has time to send it.
         while not stop.is_set() and (remaining := started + updates / UPDATE_HZ - clock()) > 0:
@@ -168,6 +203,10 @@ def run_still_panel(image_id=DEFAULT_IMAGE_ID, *, seconds, validation_only=True,
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--image-id", default=DEFAULT_IMAGE_ID, help="An image id of evaluation/seed.json")
+    parser.add_argument("--layout", choices=[layout.layout_id for layout in FIXED_LAYOUTS],
+                        default=HUD_CONFIG.layout_id,
+                        help=f"The fixed layout shown at its position and size (default {HUD_CONFIG.layout_id}; "
+                             "the box panel's picture covers the middle of the view and is opaque: run seated)")
     parser.add_argument("--seconds", type=int, required=True, help=f"{MIN_SECONDS} to {MAX_SECONDS}")
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--validate", action="store_true", help="Validation bridge: no OpenVR call, nothing displayed")
@@ -177,7 +216,8 @@ def main(argv=None):
     from sightcircuit.runtime.guard import stop_on_signals
 
     try:
-        report = run_still_panel(args.image_id, seconds=args.seconds, validation_only=args.validate,
+        report = run_still_panel(args.image_id, seconds=args.seconds, layout=fixed_layout(args.layout),
+                                 validation_only=args.validate,
                                  allow_device_output=args.allow_device_output, stop=stop_on_signals())
     except (OSError, RuntimeError, ValueError) as error:
         report = {"report_kind": REPORT_KIND, "schema_version": 1, "status": "error", "error": str(error),

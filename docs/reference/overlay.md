@@ -404,6 +404,23 @@ has not run. The JSON report counts `updates_submitted`,
 were acknowledged and the bridge closed cleanly. Those are software counts,
 not a picture anyone saw. `tests/test_still_panel.py` covers it.
 
+`--layout` takes the contract's fixed layout ids. The default,
+`fixed-edge-hud-v1`, is the strip and the command above unchanged. Since
+2026-11-24 the box panel is the phase's display and L-D2 shows its panel at
+the box panel's position and size:
+
+```bash
+.venv-replay/bin/python -m sightcircuit.hud.still_panel --layout head-fixed-box-panel-v1 --validate --seconds 120
+```
+
+The image is then letterboxed into the panel's 512 × 512 pixels and placed
+where `BOX_PANEL_CONFIG` places the box panel (0.9 m wide at 0.75 m, centred);
+the report's `geometry` names that layout, its digest, pixel size and
+placement. The picture is fully opaque and the letterbox bars are transparent
+(alpha 0, the panel's transparent pixel). The picture then covers the middle
+of the wearer's view, about 62 degrees wide, and is opaque, so the step is run
+seated.
+
 ## Visibility cycle API (fallback item F2, 2026-11-08)
 
 The Python side of one [fallback cycle](hud-fallback.md#bridge-events), in

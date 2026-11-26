@@ -2179,14 +2179,20 @@ class LayoutBindingTests(ScopeCase):
                  and getattr(node.func, "id", None) == "require_real_output"]
         self.assertEqual(sorted(calls), ["require_real_output(self, layout)", "require_real_output(self, self._layout)"])
         # And one launcher: nothing else in the package or the scripts builds a bridge command line with a layout.
-        # (The staging tool and the camera HUD command each have an option spelled ``--layout``; neither builds a
-        # bridge command line: the command hands the client a layout object and the client launches.)
-        options = {"scripts/stage_scope_record.py", "sightcircuit/commands/camera_hud.py"}
+        # (The staging tool, the camera HUD command and L-D2's still panel each have an option spelled
+        # ``--layout``; none builds a bridge command line: the command hands the client a layout object and the
+        # client launches, and the still panel sends the layout's placement as settings of the stream mode,
+        # which is not the fixed-HUD mode and carries no layout.)
+        options = {"scripts/stage_scope_record.py", "sightcircuit/commands/camera_hud.py",
+                   "sightcircuit/hud/still_panel.py"}
         for word, allowed in (("LAYOUT_ARGUMENT", set()), ("launch_arguments(", set()), ('"--layout"', options)):
             users = [path.relative_to(ROOT).as_posix() for folder in ("sightcircuit", "scripts")
                      for path in sorted((ROOT / folder).rglob("*.py")) if word in path.read_text()]
             self.assertLessEqual(set(users), {"sightcircuit/observed_frames.py"} | allowed, word)
         self.assertNotIn("Popen", (ROOT / "scripts/stage_scope_record.py").read_text())
+        still = (ROOT / "sightcircuit/hud/still_panel.py").read_text()
+        for absent in ("Popen", "\"--fixed-hud\"", "ObservedFrameClient", "submit_observed"):
+            self.assertNotIn(absent, still)  # The stream mode through ``OverlayClient``: no launch of its own.
         self.assertNotIn("--fixed-hud\"", (ROOT / "sightcircuit/commands/camera_hud.py").read_text().replace(
             '("bridge_mode", "--fixed-hud")', ""))
 

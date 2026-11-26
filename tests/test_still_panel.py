@@ -5,6 +5,7 @@ connects to a runtime, and a count from the bridge's report is not a picture
 anyone saw.
 """
 import ast
+import dataclasses
 import hashlib
 import importlib.util
 import json
@@ -17,8 +18,9 @@ import threading
 import unittest
 
 from sightcircuit.hud import still_panel
-from sightcircuit.hud.contract import (FRAME_PREFIX_FORMAT, HUD_CONFIG, OPCODE_FRAME, PACKET_HEADER_FORMAT,
-                                       RGBA_BYTES)
+from sightcircuit.hud.contract import (BOX_PANEL_CONFIG, FIXED_LAYOUTS, FRAME_PREFIX_FORMAT, HUD_CONFIG,
+                                       OPCODE_FRAME, PACKET_HEADER_FORMAT, RGBA_BYTES, BoxPanelConfig,
+                                       config_digest)
 from sightcircuit.overlay import DEFAULT_BRIDGE, OverlayClient, PanelSettings
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,6 +29,7 @@ HORSES = still_panel.SEED_DOWNLOADS / "darknet-horses.jpg"
 TILE_BYTES = HUD_CONFIG.width_px * HUD_CONFIG.height_px * RGBA_BYTES
 FIXTURE = CV2 and HORSES.is_file()
 NEEDS_FIXTURE = "Needs OpenCV and the fetched seed images (scripts/evaluate_detectors.py --fetch)"
+PANEL = next(layout for layout in FIXED_LAYOUTS if isinstance(layout, BoxPanelConfig))  # by what it is
 
 
 class Ticking:
@@ -191,6 +194,47 @@ class StillPanelDriverTests(unittest.TestCase):
         self.assertEqual((report["status"], report["updates_submitted"], report["complete"]), ("stopped", 2, False))
         self.assertTrue(report["cleanup_confirmed"])
 
+    def test_the_box_panel_is_shown_at_the_contracts_placement_and_pixel_size(self):
+        self.assertIs(PANEL, BOX_PANEL_CONFIG)
+        report, client, _ = self.run_scripted(2, layout=PANEL)
+        self.assertEqual((report["status"], report["complete"], report["updates_submitted"]), ("completed", True, 10))
+        placement = PanelSettings(width=PANEL.panel_width_m, distance=PANEL.distance_m, x=PANEL.x_m, y=PANEL.y_m,
+                                  opacity=PANEL.opacity, visible=True)
+        self.assertEqual(still_panel.layout_placement(PANEL), placement)
+        self.assertEqual((placement.width, placement.distance, placement.x, placement.y), (0.9, 0.75, 0.0, 0.0))
+        placement.encode()  # within the stream mode's panel limits
+        self.assertEqual(client.calls[:2], [("settings", placement), ("start",)])
+        self.assertEqual(set(client.calls[2:-1]), {("frame",)})
+        rgba, source = still_panel.seed_tile(layout=PANEL)
+        self.assertEqual(set(client.frames), {(PANEL.width_px, PANEL.height_px, rgba, ())})
+        self.assertEqual(len(rgba), 512 * 512 * RGBA_BYTES)
+        self.assertEqual(report["source"], source)
+        self.assertEqual(report["geometry"], {
+            "layout_id": "head-fixed-box-panel-v1", "config_sha256": config_digest(PANEL), "width_px": 512,
+            "height_px": 512, "panel_width_m": 0.9, "distance_m": 0.75, "x_m": 0.0, "y_m": 0.0,
+            "opacity": PANEL.opacity})
+        self.assertEqual((report["camera_derived"], report["frames_carry_deadline"], report["bridge_mode"]),
+                         (False, False, "--validate-stdin"))
+
+    def test_the_strip_is_the_default_and_unchanged(self):
+        default, default_client, _ = self.run_scripted(1)
+        strip, strip_client, _ = self.run_scripted(1, layout=HUD_CONFIG)
+        self.assertEqual(default_client.calls, strip_client.calls)
+        self.assertEqual(default_client.frames, strip_client.frames)
+        self.assertEqual(default, strip)
+        self.assertEqual(default_client.calls[0], ("settings", still_panel.hud_placement()))
+        self.assertEqual(still_panel.layout_placement(HUD_CONFIG), still_panel.hud_placement())
+        self.assertEqual(default["geometry"]["config_sha256"], config_digest(HUD_CONFIG))
+        self.assertEqual(default_client.frames[0][:2], (320, 128))
+
+    def test_only_the_contracts_own_layouts_are_taken(self):
+        made = []
+        factory = lambda validation_only: made.append(1) or ScriptedClient(validation_only)  # noqa: E731
+        for layout in (dataclasses.replace(PANEL), dataclasses.replace(HUD_CONFIG), PANEL.layout_id, None):
+            with self.subTest(layout=layout), self.assertRaisesRegex(ValueError, "still_panel_layout_unknown"):
+                still_panel.run_still_panel(seconds=1, layout=layout, client_factory=factory)
+        self.assertEqual(made, [])
+
 
 class StillPanelCommandLineTests(unittest.TestCase):
     def test_the_command_line_takes_a_seed_image_id_and_nothing_that_could_name_a_live_source(self):
@@ -198,10 +242,13 @@ class StillPanelCommandLineTests(unittest.TestCase):
         flags = sorted(argument.value for node in ast.walk(ast.parse(source))
                        if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "add_argument"
                        for argument in node.args)
-        self.assertEqual(flags, ["--allow-device-output", "--image-id", "--seconds", "--validate"])
+        self.assertEqual(flags, ["--allow-device-output", "--image-id", "--layout", "--seconds", "--validate"])
         for argv in (["--seconds", "2"], ["--validate"], ["--validate", "--allow-device-output", "--seconds", "2"],
                      ["--validate", "--seconds", "2", "--source", "mirror"],
-                     ["--validate", "--seconds", "2", "/dev/video99"]):
+                     ["--validate", "--seconds", "2", "/dev/video99"],
+                     ["--validate", "--seconds", "2", "--layout", "unknown-layout-v1"],
+                     ["--validate", "--seconds", "2", "--layout", ""],
+                     ["--validate", "--seconds", "2", "--layout", "1"]):
             with self.subTest(argv=argv):
                 result = subprocess.run([sys.executable, "-m", "sightcircuit.hud.still_panel", *argv], cwd=ROOT,
                                         capture_output=True, timeout=30)
@@ -247,6 +294,29 @@ class SeedTileTests(unittest.TestCase):
         self.assertFalse(tile[:, left + width:, :3].any())
         self.assertGreater(tile[:, left:left + width, :3].std(), 20)  # a picture, not a blank
 
+    @unittest.skipUnless(HORSES.is_file(), "Run scripts/evaluate_detectors.py --fetch for the seed images")
+    def test_on_the_box_panel_the_picture_is_opaque_and_the_bars_transparent(self):
+        import numpy as np
+
+        rgba, source = still_panel.seed_tile(layout=PANEL)
+        tile = np.frombuffer(rgba, dtype=np.uint8).reshape(PANEL.height_px, PANEL.width_px, RGBA_BYTES)
+        width, height = source["picture_px"]
+        self.assertEqual(width, PANEL.width_px)  # the full width; bars above and below
+        self.assertLess(height, PANEL.height_px)
+        top = (PANEL.height_px - height) // 2
+        picture = tile[top:top + height]
+        self.assertTrue((picture[..., 3] == 255).all())
+        self.assertGreater(picture[..., :3].std(), 20)
+        for bar in (tile[:top], tile[top + height:]):
+            self.assertGreater(bar.shape[0], 0)
+            self.assertFalse(bar.any())  # alpha 0 with RGB 0: the panel's transparent pixel
+        self.assertEqual(set(np.unique(tile[..., 3])), {0, 255})
+        self.assertEqual(source["tile_sha256"], hashlib.sha256(rgba).hexdigest())
+        # The strip's tile is the one it always was: opaque everywhere, black bars.
+        strip, _ = still_panel.seed_tile(layout=HUD_CONFIG)
+        self.assertEqual(strip, still_panel.seed_tile()[0])
+        self.assertTrue((np.frombuffer(strip, dtype=np.uint8)[3::4] == 255).all())
+
 
 @unittest.skipUnless(CV2 and HORSES.is_file() and DEFAULT_BRIDGE.is_file(),
                      "Needs OpenCV, the fetched seed images and scripts/build_overlay_bridge.sh")
@@ -272,6 +342,46 @@ class StillPanelValidationBridgeTests(unittest.TestCase):
                           native["frames_submitted"], native["expiring_frames_received"], native["expired_frames"]),
                          ("--validate-stdin", "validated", False, 15, 0, 0, 0))
         self.assertGreaterEqual(native["settings_received"], 1)
+
+    def test_the_box_panel_invocation_against_the_validation_bridge(self):
+        result = subprocess.run([sys.executable, "-m", "sightcircuit.hud.still_panel", "--layout",
+                                 "head-fixed-box-panel-v1", "--validate", "--seconds", "2"],
+                                cwd=ROOT, capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        lines = result.stdout.splitlines()
+        self.assertEqual(len(lines), 1)
+        report = json.loads(lines[0])
+        self.assertEqual((report["status"], report["complete"], report["camera_derived"]), ("completed", True, False))
+        self.assertEqual((report["updates_requested"], report["updates_submitted"], report["updates_acknowledged"],
+                          report["updates_replaced"]), (10, 10, 10, 0))
+        geometry = report["geometry"]
+        self.assertEqual((geometry["layout_id"], geometry["config_sha256"], geometry["width_px"],
+                          geometry["height_px"], geometry["panel_width_m"], geometry["distance_m"], geometry["x_m"],
+                          geometry["y_m"]),
+                         (PANEL.layout_id, config_digest(PANEL), PANEL.width_px, PANEL.height_px,
+                          PANEL.panel_width_m, PANEL.distance_m, PANEL.x_m, PANEL.y_m))
+        native = report["bridge"]["native_report"]
+        self.assertEqual((native["mode"], native["status"], native["runtime_initialized"], native["frames_received"],
+                          native["expiring_frames_received"]), ("--validate-stdin", "validated", False, 10, 0))
+
+    def test_the_bridge_receives_the_box_panel_placement_and_its_tile_as_plain_frames(self):
+        sent = []
+
+        class Recording(OverlayClient):
+            def _send(self, data):
+                sent.append(bytes(data))
+                super()._send(data)
+
+        rgba, _ = still_panel.seed_tile(layout=PANEL)
+        report = still_panel.run_still_panel(seconds=1, layout=PANEL, client_factory=Recording)
+        self.assertTrue(report["complete"], report)
+        header = struct.calcsize(PACKET_HEADER_FORMAT)
+        self.assertEqual(sent[0], still_panel.layout_placement(PANEL).encode())
+        frames = [data for data in sent if struct.unpack_from(PACKET_HEADER_FORMAT, data)[1] == OPCODE_FRAME]
+        self.assertEqual(len(frames), 5)
+        for data in frames:
+            self.assertEqual(struct.unpack_from(FRAME_PREFIX_FORMAT, data, header), (512, 512))
+            self.assertEqual(data[header + struct.calcsize(FRAME_PREFIX_FORMAT):], rgba)
 
     def test_the_bridge_receives_the_hud_placement_and_the_tile_as_plain_frames(self):
         # The bytes on the pipe, through the real client: the first packet is the HUD placement, and every
